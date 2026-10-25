@@ -43,7 +43,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["max_realized_loss_pct"] = max_loss_pct
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     candles = candles.copy()
     candles[:, :, :3] = (101.0, 99.0, 100.4)
     for side in sides:
@@ -60,7 +60,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=3,
-        needed_metrics={"adg_strategy_eq", "fills_per_day"},
+        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
     )
     return proxy, inputs
 
@@ -110,7 +110,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=2,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     _, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(candles, markets, config, exchange, btc, timestamps)
@@ -138,11 +138,11 @@ def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
     original, inputs = make_proxy(sides, memory_span, coins=coins)
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
-    config["live"]["max_realized_loss_pct"] = max_loss_pct
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=2,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     _, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(candles, markets, config, exchange, btc, timestamps)
@@ -229,7 +229,7 @@ def test_native_tm_loss_admission_never_replays_on_cpu(monkeypatch, sides, coins
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_strategy_eq", "fills_per_day"}) as dataset:
+                         {"adg_fraction_strategy_equity", "fills_per_day"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("tm-loss", dataset)
             pending = [service.submit(BacktestRequest(str(i), "tm-loss", values))

@@ -1848,7 +1848,7 @@ def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
     balance_floor = _data_float(data, "balance_floor")
     if balance_floor:
         parts.append(f"floor={balance_floor}")
-    max_loss = _data_number(data, "max_realized_loss_pct")
+    max_loss = _data_number(data, "loss_gate_max_drawdown_fraction")
     if max_loss is not None:
         parts.append(f"max_loss={max_loss * 100.0:.4f}%")
     return parts
@@ -2104,7 +2104,7 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
 def format_memory_snapshot_console(data: Mapping[str, Any]) -> str:
     """Project a bounded memory snapshot without retaining diagnostic samples."""
     rss_bytes = _data_int(data, "rss_bytes")
-    delta_pct = _data_number(data, "rss_delta_pct")
+    delta_pct = _data_number(data, "rss_delta_percent")
     cache = data.get("cache") if isinstance(data.get("cache"), Mapping) else {}
     timeframe_cache = (
         data.get("timeframe_cache")
@@ -2196,7 +2196,7 @@ def _console_hsl_transition_summary(event: LiveEvent) -> list[str]:
     for label, key in (
         ("dist_to_red", "dist_to_red"),
         ("drawdown_score", "drawdown_score"),
-        ("red_threshold", "red_threshold"),
+        ("drawdown_threshold_fraction", "drawdown_threshold_fraction"),
     ):
         value = _format_console_ratio(_data_float(data, key))
         if value is not None:
@@ -2522,7 +2522,7 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
     for label, key in (
         ("dist_to_red", "dist_to_red"),
         ("drawdown_score", "drawdown_score"),
-        ("red_threshold", "red_threshold"),
+        ("drawdown_threshold_fraction", "drawdown_threshold_fraction"),
     ):
         value = _format_console_ratio(_data_float(data, key))
         if value is not None:
@@ -2675,10 +2675,10 @@ def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
             target_price = _data_number(info, "next_target_price")
             if target_price:
                 bit += f" target={target_price:g}"
-            target_dist = _data_number(info, "next_target_distance_ratio")
+            target_dist = _data_number(info, "next_target_price_offset_fraction")
             if target_dist is not None:
                 bit += f" target_dist={target_dist * 100.0:.4f}%"
-            trigger_dist = _data_number(info, "next_unstuck_trigger_distance_ratio")
+            trigger_dist = _data_number(info, "next_unstuck_trigger_price_offset_fraction")
             if trigger_dist is not None:
                 bit += f" ema_gate_dist={trigger_dist * 100.0:.4f}%"
             side_parts.append(bit)
@@ -2701,7 +2701,7 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"current={current_price:g}")
-    diff_pct = _data_number(data, "price_diff_pct")
+    diff_pct = _data_number(data, "price_change_percent")
     if diff_pct is not None:
         parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
     allowance = _data_number(data, "allowance")

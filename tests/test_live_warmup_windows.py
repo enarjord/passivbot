@@ -15,13 +15,13 @@ def test_compute_live_warmup_windows_forager_toggle():
     values = {
         ("long", "ema_span_0_minutes", "BTC"): 1000.0,
         ("long", "ema_span_1_minutes", "BTC"): 1500.0,
-        ("long", "forager_volume_ema_span_1m", "BTC"): 2000.0,
-        ("long", "forager_volatility_ema_span_1m", "BTC"): 1800.0,
+        ("long", "forager_volume_ema_span_minutes", "BTC"): 2000.0,
+        ("long", "forager_log_range_ema_span_minutes", "BTC"): 1800.0,
         ("long", "entry_log_range_ema_span_1h_candles", "BTC"): 48.0,
         ("short", "ema_span_0_minutes", "ETH"): 900.0,
         ("short", "ema_span_1_minutes", "ETH"): 800.0,
-        ("short", "forager_volume_ema_span_1m", "ETH"): 4000.0,
-        ("short", "forager_volatility_ema_span_1m", "ETH"): 3000.0,
+        ("short", "forager_volume_ema_span_minutes", "ETH"): 4000.0,
+        ("short", "forager_log_range_ema_span_minutes", "ETH"): 3000.0,
         ("short", "entry_log_range_ema_span_1h_candles", "ETH"): 24.0,
     }
 
@@ -32,7 +32,7 @@ def test_compute_live_warmup_windows_forager_toggle():
         symbols_by_side,
         bp,
         forager_enabled={"long": True, "short": False},
-        warmup_ratio=0.5,
+        activation_span_fraction=0.5,
     )
 
     assert wins["BTC"] == 3000
@@ -90,7 +90,7 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
         forager_enabled={"long": True},
         strategy_lookup=strategy,
         forager_lookup=forager,
-        warmup_ratio=0.3,
+        activation_span_fraction=0.3,
     )
 
     assert wins["HYPE"] == 988
@@ -205,7 +205,7 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
 
     with pytest.raises(ValueError, match="invalid live warmup value"):
         pb_mod.Passivbot._live_forager_warmup_value(
-            FakeBot(), "long", "forager_volume_ema_span_1m", ""
+            FakeBot(), "long", "forager_volume_ema_span_minutes", ""
         )
 
 
@@ -218,10 +218,10 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
         "panic",
         "unstuck_enabled",
         "unstuck_ema_gating_enabled",
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
+        "total_wallet_exposure_limit_ratio",
     ],
 )
 def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
@@ -231,14 +231,14 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
     values = {
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
-        "unstuck_ema_span_0": 400_000.0,
-        "unstuck_ema_span_1": 500_000.0,
+        "unstuck_ema_span_0_minutes": 400_000.0,
+        "unstuck_ema_span_1_minutes": 500_000.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_loss_allowance_pct": 0.1,
-        "unstuck_close_pct": 0.1,
-        "unstuck_threshold": 0.2,
-        "total_wallet_exposure_limit": 1.0,
+        "unstuck_loss_allowance_fraction": 0.1,
+        "unstuck_close_fraction": 0.1,
+        "unstuck_exposure_trigger_ratio": 0.2,
+        "total_wallet_exposure_limit_ratio": 1.0,
     }
     if inactive in values:
         values[inactive] = 0.0
@@ -254,7 +254,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
             bot, side, symbol, mode
         ),
         forager_enabled={pside: True},
-        warmup_ratio=0.0,
+        activation_span_fraction=0.0,
         span_buffer=1.0,
     )
     assert windows["FLAT"] == 20

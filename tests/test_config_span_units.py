@@ -54,11 +54,11 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("native,group,public", [
-    ("forager_volume_ema_span_1m", "forager", "volume_ema_span_minutes"),
-    ("forager_volatility_ema_span_1m", "forager", "log_range_ema_span_minutes"),
-    ("unilateralness_ema_span_1m", "forager", "unilateralness_ema_span_minutes"),
-    ("unstuck_ema_span_0", "unstuck", "ema_span_0_minutes"),
-    ("unstuck_ema_span_1", "unstuck", "ema_span_1_minutes"),
+    ("forager_volume_ema_span_minutes", "forager", "volume_ema_span_minutes"),
+    ("forager_log_range_ema_span_minutes", "forager", "log_range_ema_span_minutes"),
+    ("unilateralness_ema_span_minutes", "forager", "unilateralness_ema_span_minutes"),
+    ("unstuck_ema_span_0_minutes", "unstuck", "ema_span_0_minutes"),
+    ("unstuck_ema_span_1_minutes", "unstuck", "ema_span_1_minutes"),
     ("hsl_cooldown_minutes_after_red", "hsl", "cooldown_after_red_minutes"),
 ])
 def test_shared_minute_fields_keep_native_optimizer_and_runtime_bindings(side, native, group, public):
@@ -114,7 +114,7 @@ def test_independent_coin_minute_span_pins_reach_unchanged_native_columns(kind, 
     )
     prefix = "TRAILING_MARTINGALE" if kind == "trailing_martingale" else "EMA_ANCHOR"
     start = getattr(model, prefix + "_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN")
-    assert bots[0][side]["unstuck_ema_span_0"] == 123.75
+    assert bots[0][side]["unstuck_ema_span_0_minutes"] == 123.75
     assert matrix[0, start] == 123.75
     assert np.isnan(matrix[0, start + 1])  # The other span still inherits the global value.
     assert np.isnan(matrix[1, start:start + 2]).all()

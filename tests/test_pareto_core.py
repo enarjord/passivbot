@@ -30,10 +30,10 @@ def test_extract_objectives_respects_scoring_order():
 
 
 def test_extract_objectives_resolves_canonical_metric_alias_keys():
-    entry = {"metrics": {"objectives": {"adg": 0.1}}}
-    obj, keys = extract_objectives(entry, scoring_keys=["adg"])
+    entry = {"metrics": {"objectives": {"adg_fraction": 0.1}}}
+    obj, keys = extract_objectives(entry, scoring_keys=["adg_fraction"])
     assert obj == (0.1,)
-    assert keys == ["adg_usd"]
+    assert keys == ["adg_fraction_usd"]
 
 
 def test_prune_preserves_extremes_and_uses_crowding():
@@ -79,7 +79,7 @@ def test_compute_ideal_weighted_respects_mixed_objective_goals():
         ]
     )
     specs = [
-        ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"),
+        ObjectiveSpec(metric="adg_fraction_strategy_equity", goal="max"),
         ObjectiveSpec(metric="peak_recovery_hours", goal="min"),
     ]
 

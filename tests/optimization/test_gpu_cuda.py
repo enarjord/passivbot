@@ -377,7 +377,7 @@ def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
         runners = [replay.fused_runner] if replay.fused_runner is not None else replay.runners.values()
         for runner in runners:
             runner.max_dispatch_candidate_bars = 2 * 31
-    candidates = [{}, {f"{side}_total_wallet_exposure_limit": 0.5 for side in replay.sides}, {}]
+    candidates = [{}, {f"{side}_total_wallet_exposure_limit_ratio": 0.5 for side in replay.sides}, {}]
     expected = [replay.evaluate([candidate])[0] for candidate in candidates]
     assert expected[0]["fills_per_day"] > 0
     with GpuBacktestService(batch_size=2, max_pending=3) as service:
@@ -705,7 +705,7 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
     strategy = bot["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=1.0, ema_gate_mode="disabled")
     strategy["close"]["threshold_base_fraction"] = 1.0
-    parameters = [{}, {"long_total_wallet_exposure_limit": 0.1, "long_entry_initial_qty_fraction": 0.01}]
+    parameters = [{}, {"long_total_wallet_exposure_limit_ratio": 0.1, "long_entry_initial_qty_fraction": 0.01}]
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -782,17 +782,17 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     ]))
     config["optimize"]["bounds"] = {"long_entry_initial_qty_fraction": [0.01, 0.03]}
     for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit"):
+        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max", "scenario": "base"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min", "scenario": None, "aggregate": "max"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": "base"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
     ]
     config["optimize"]["limits"] = [
-        {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
+        {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
     ]
-    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_ratio")
+    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction")
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -870,7 +870,7 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     ]))
     config["optimize"]["bounds"] = {}
     for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit"):
+        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
         config["optimize"]["bounds"][f"{side}_entry_initial_qty_fraction"] = [0.01, 0.05]
@@ -879,8 +879,8 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     }
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
     scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}

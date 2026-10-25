@@ -37,18 +37,18 @@ def validate_hourly_bootstrap_inputs(
         strategy = model.EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS
         hour = "offset_log_range_ema_span_1h_candles"
         weights = ("offset_log_range_1h_coefficient",)
-        wel_column = model.EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+        wel_column = model.EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     elif keys == model.TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS:
         strategy = tuple(key for key, _ in model.TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
         hour = "log_range_ema_span_1h_candles"
         weights = tuple(key for key in strategy if key.endswith("log_range_1h_coefficient"))
-        wel_column = model.TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+        wel_column = model.TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     else:
         raise ValueError("Unsupported GPU hourly EMA parameter layout")
     ends = effective_end_steps(end_steps, candidates=len(matrix), available=available)
     for side, overrides in enumerate(coin_overrides):
         policy = matrix[:, side * width:(side + 1) * width]
-        enabled = ((policy[:, keys.index("total_wallet_exposure_limit")] > 0.0)
+        enabled = ((policy[:, keys.index("total_wallet_exposure_limit_ratio")] > 0.0)
                    & (np.rint(policy[:, keys.index("n_positions")]) > 0.0))
         for coin, pins in enumerate(overrides):
             if pins[wel_column] == 0.0:
@@ -100,8 +100,8 @@ def pack_bootstrap_counts(params, keys, coin_overrides, *, interval_minutes, ava
         unstuck_start = model.TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
     else:
         raise ValueError("Unsupported GPU EMA bootstrap parameter layout")
-    leaves = (*price_keys, "unstuck_ema_span_0", "unstuck_ema_span_1",
-              minute, hour, "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m")
+    leaves = (*price_keys, "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes",
+              minute, hour, "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes")
     pins = (strategy_keys.index(price_keys[0]), strategy_keys.index(price_keys[1]),
             unstuck_start, unstuck_start + 1, strategy_keys.index(minute),
             strategy_keys.index(hour), None, None)

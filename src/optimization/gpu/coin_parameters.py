@@ -94,11 +94,11 @@ def build_coin_override_parameters(
                 effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0,
             )
         if not bool(effective_bot.get("entry_eligible", True)) or "wallet_exposure_limit_ratio" in side_patch:
-            matrix[row, column("WALLET_EXPOSURE_COLUMN")] = float(effective_bot["wallet_exposure_limit"])
+            matrix[row, column("WALLET_EXPOSURE_LIMIT_RATIO_COLUMN")] = float(effective_bot["wallet_exposure_limit_ratio"])
         risk_patch = side_patch.get("risk", {}) or {}
         if "we_excess_allowance_fraction" in risk_patch:
-            matrix[row, column("ALLOWANCE_PCT_COLUMN")] = float(
-                effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0,
+            matrix[row, column("ALLOWANCE_FRACTION_COLUMN")] = float(
+                effective_bot.get("risk_we_excess_allowance_fraction", 0.0) or 0.0,
             )
         if strategy_kind == "trailing_martingale":
             if "enabled" in risk_patch.get("position_exposure_enforcer", {}):
@@ -106,18 +106,18 @@ def build_coin_override_parameters(
                     bool(effective_bot.get("risk_wel_enforcer_enabled", False)),
                 )
             if "threshold_ratio" in risk_patch.get("position_exposure_enforcer", {}):
-                matrix[row, column("WEL_ENFORCER_THRESHOLD_COLUMN")] = float(
-                    effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0,
+                matrix[row, column("WEL_ENFORCER_THRESHOLD_RATIO_COLUMN")] = float(
+                    effective_bot.get("risk_wel_enforcer_threshold_ratio", 0.0) or 0.0,
                 )
 
         unstuck_patch = side_patch.get("unstuck", {}) or {}
         unstuck_keys = (
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-            ("close_fraction", "unstuck_close_pct"),
-            ("ema_distance_fraction", "unstuck_ema_dist"),
-            ("loss_allowance_fraction", "unstuck_loss_allowance_pct"),
-            ("exposure_trigger_ratio", "unstuck_threshold"),
+            ("close_fraction", "unstuck_close_fraction"),
+            ("ema_distance_fraction", "unstuck_ema_distance_fraction"),
+            ("loss_allowance_fraction", "unstuck_loss_allowance_fraction"),
+            ("exposure_trigger_ratio", "unstuck_exposure_trigger_ratio"),
         )
         for offset, (key, runtime_key) in enumerate(unstuck_keys):
             if key in unstuck_patch:

@@ -28,9 +28,9 @@ def loss_gate_proxy(
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["max_realized_loss_pct"] = 0.003 if unstuck else 0.0003
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
-        config["live"]["max_realized_loss_pct"] = max_loss_pct
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     if not unstuck:
         # Each flat-price close loses only its fee. Entry fees initially exhaust
         # the gate; continuous decay later admits ordinary closes without unstuck.
@@ -42,7 +42,7 @@ def loss_gate_proxy(
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=3,
-        needed_metrics={"adg_strategy_eq", "fills_per_day"},
+        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
     )
     return proxy, inputs
 
@@ -79,11 +79,11 @@ def test_shared_gate_production_consumers_and_transport(
         original, inputs = make_proxy(sides, span, strategy=strategy)
         del original
         candles, markets, config, exchange, btc, timestamps = inputs
-        config["live"]["max_realized_loss_pct"] = fraction
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = fraction
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,
-            needed_metrics={"adg_strategy_eq", "fills_per_day"},
+            needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
         )
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
@@ -204,7 +204,7 @@ def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_strategy_eq", "fills_per_day"}) as dataset:
+                         {"adg_fraction_strategy_equity", "fills_per_day"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("finite-loss", dataset)
             pending = [service.submit(BacktestRequest(str(i), "finite-loss", values))

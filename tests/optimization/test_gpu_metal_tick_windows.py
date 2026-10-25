@@ -16,10 +16,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TICK_WINDOW_METRICS = (
-    "adg_strategy_eq", "adg_strategy_eq_ew", "drawdown_worst_strategy_eq",
-    "drawdown_worst_strategy_eq_long", "drawdown_worst_strategy_eq_short",
-    "backtest_completion_ratio", "strategy_eq_recovery_days_p95",
-    "hard_stop_time_in_red_pct", "entry_interval_hours_p99", "fills_per_day",
+    "adg_fraction_strategy_equity", "adg_fraction_strategy_equity_ew", "drawdown_max_fraction_strategy_equity",
+    "drawdown_max_fraction_strategy_equity_long", "drawdown_max_fraction_strategy_equity_short",
+    "backtest_completion_fraction", "recovery_p95_days_strategy_equity",
+    "hsl_red_time_fraction", "entry_interval_p99_hours", "fills_per_day",
 )
 
 
@@ -352,7 +352,7 @@ def _tick_window_fixture(sides, hsl):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--coins", "2", "--sides", sides,
         "--bars", "1537", "--seed", "43", "--hsl", hsl, "--unstuck",
-        "--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "120", "--hsl-memory-ema-span-minutes", "1440",
         "--price-shock", "0", "701", ".7", "--price-shock", "1", "911", "1.3",
     ]))

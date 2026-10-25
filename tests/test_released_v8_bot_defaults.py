@@ -41,13 +41,13 @@ def test_root_omitted_side_is_pinned_to_the_complete_frozen_profile(kind, side):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_missing_unstuck_spans_still_derive_from_the_authored_strategy(kind):
     source = released(kind)
-    for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
+    for key in ("ema_span_0", "ema_span_1"):
         source["bot"]["long"]["unstuck"].pop(key)
         source["optimize"]["bounds"]["long"]["unstuck"].pop(key)
     strategy = source["bot"]["long"]["strategy"][kind]
     if kind == "trailing_martingale":
         strategy = strategy["entry"]
-    strategy["ema_span_0_minutes"] = 403.5
+    strategy["ema_span_0"] = 403.5
     original = deepcopy(source)
     output = migrate_v8_to_v9(source, memory_span_minutes=123.5).config
     assert output["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 403.5
@@ -76,7 +76,7 @@ def test_omitted_strategy_kind_still_uses_the_released_default():
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("span", ["ema_span_0_minutes", "ema_span_1_minutes"])
+@pytest.mark.parametrize("span", ["ema_span_0", "ema_span_1"])
 def test_inactive_zero_span_uses_the_frozen_positive_strategy_fallback(kind, side, span):
     source = released(kind)
     strategy = source["bot"][side]["strategy"][kind]
@@ -85,7 +85,7 @@ def test_inactive_zero_span_uses_the_frozen_positive_strategy_fallback(kind, sid
     historical_fallback = strategy[span]
     strategy[span] = 0.0
     source["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
-    for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
+    for key in ("ema_span_0", "ema_span_1"):
         source["bot"][side]["unstuck"].pop(key)
         source["optimize"]["bounds"][side]["unstuck"].pop(key)
     original = deepcopy(source)

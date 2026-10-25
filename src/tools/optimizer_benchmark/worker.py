@@ -374,8 +374,8 @@ def search_run(entry, arrays, args):
         set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']["portfolio"]['strategy_kind'],
             spec["key"], [spec["low"], spec["high"]]
             + ([spec["step"]] if spec["step"] is not None else []))
-    config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
-                                        dict(metric="drawdown_worst_strategy_eq", goal="min")]
+    config["optimize"]["scoring"] = [dict(metric="adg_fraction_strategy_equity", goal="max"),
+                                        dict(metric="drawdown_max_fraction_strategy_equity", goal="min")]
     config["optimize"]["limits"] = []
     config["optimize"]["pymoo"]["algorithm"] = "nsga2"
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
@@ -441,7 +441,7 @@ def search_run(entry, arrays, args):
                 recorder.close()
         from .report import numerical_comparison
         reference_start = time.perf_counter()
-        names = ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+        names = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
         reference_rows, observed_rows = [], []
         for record_row in records:
             saved = record_row["result"]
@@ -452,8 +452,8 @@ def search_run(entry, arrays, args):
         verification = numerical_comparison(
             dict(status="completed", samples=[dict(results=reference_rows)]),
             dict(status="completed", samples=[dict(results=observed_rows)]), names,
-            {"adg_strategy_eq": dict(absolute=1e-7, relative=1e-4),
-             "drawdown_worst_strategy_eq": dict(absolute=1e-5, relative=1e-4)})
+            {"adg_fraction_strategy_equity": dict(absolute=1e-7, relative=1e-4),
+             "drawdown_max_fraction_strategy_equity": dict(absolute=1e-5, relative=1e-4)})
         verification["seconds_outside_search_timing"] = time.perf_counter() - reference_start
         return dict(engine="prepared_production_optimizer", backend=backend,
             samples=[dict(seconds=seconds, completed=len(records), results=records)],

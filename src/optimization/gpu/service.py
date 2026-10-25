@@ -22,7 +22,7 @@ from optimization.gpu.parameters import (
     prepare_candidate_parameters,
 )
 from optimization.gpu.coin_parameters import build_coin_override_parameters
-from config.validate import validate_limit_order_fill_buffer_pct
+from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
@@ -40,7 +40,7 @@ from optimization.gpu.metric_registry import (
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
     FORAGER_HYSTERESIS_ABI,
-    validate_market_order_slippage_pct,
+    validate_market_order_slippage_fraction,
     adaptive_params,
     ADAPTIVE_OVERRIDE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
@@ -49,12 +49,12 @@ from optimization.gpu.model import (
     COUPLED_UNSTUCK_EMA_SOURCE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GLOBAL_RISK_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
@@ -66,16 +66,16 @@ from optimization.gpu.model import (
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     UNSTUCK_PARAM_KEYS,
     build_mps_multicoin_data,
@@ -104,14 +104,14 @@ CORE_OUTPUT_KEYS = {
     "btc_day_end_eq",
     "btc_day_min_eq",
     "btc_day_max_dd",
-    "equity_balance_diff_neg_max",
-    "equity_balance_diff_neg_mean",
-    "equity_balance_diff_pos_max",
-    "equity_balance_diff_pos_mean",
-    "equity_balance_diff_neg_max_btc",
-    "equity_balance_diff_neg_mean_btc",
-    "equity_balance_diff_pos_max_btc",
-    "equity_balance_diff_pos_mean_btc",
+    "equity_balance_gap_negative_max_fraction",
+    "equity_balance_gap_negative_mean_fraction",
+    "equity_balance_gap_positive_max_fraction",
+    "equity_balance_gap_positive_mean_fraction",
+    "equity_balance_gap_negative_max_fraction_btc",
+    "equity_balance_gap_negative_mean_fraction_btc",
+    "equity_balance_gap_positive_max_fraction_btc",
+    "equity_balance_gap_positive_mean_fraction_btc",
     "day_end_eq",
     "day_min_eq",
     "day_max_dd",
@@ -153,14 +153,14 @@ CORE_OUTPUT_KEYS = {
     "profit_sum_short",
     "loss_sum_short",
     "entry_initial_balance_pct",
-    "entry_initial_balance_pct_long",
-    "entry_initial_balance_pct_short",
+    "initial_entry_balance_fraction_long",
+    "initial_entry_balance_fraction_short",
     "entry_interval_sum_steps",
     "entry_interval_count",
     "entry_interval_max_steps",
     "entry_interval_hist",
-    "total_wallet_exposure_max",
-    "total_wallet_exposure_mean",
+    "absolute_net_wallet_exposure_max_ratio",
+    "absolute_net_wallet_exposure_mean_ratio",
 }
 
 
@@ -674,20 +674,20 @@ def _gpu_proxy_execution_checkpoint_contract(
         "last_valid_indices",
         "trade_start_indices",
         "global_warmup_bars",
-        "liquidation_threshold",
-        "limit_order_fill_buffer_pct",
+        "equity_floor_fraction",
+        "limit_order_fill_buffer_fraction",
         "filter_by_min_effective_cost",
         "side_activation",
         "minimum_coin_age_days",
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
         "unstuck_memory_ema_span_minutes",
         "loss_gate_memory_ema_span_minutes",
-        "market_order_slippage_pct",
+        "market_order_slippage_fraction",
         "market_orders_allowed",
-        "market_order_near_touch_threshold",
+        "market_order_near_touch_fraction",
         "forager_score_hysteresis",
     )
     market_keys = (
@@ -696,8 +696,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "min_qty",
         "min_cost",
         "c_mult",
-        "maker_fee",
-        "taker_fee",
+        "maker_fee_fraction",
+        "taker_fee_fraction",
     )
     contract = {
         "version": 10,
@@ -881,33 +881,33 @@ def _log_mps_dispatch_cap(
 
 
 _ACCOUNT_EQUITY_RECOVERY_METRICS = {
-    "peak_recovery_days_equity_usd",
-    "peak_recovery_hours_equity_usd",
+    "peak_recovery_max_days_usd",
+    "peak_recovery_max_hours_usd",
 }
 
 _HSL_EMA_TAIL_METRICS = {
-    "drawdown_worst_mean_1pct_ema_strategy_eq",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+    "hsl_signal_ema_worst_1pct_mean_fraction",
+    "hsl_signal_ema_worst_1pct_mean_fraction_long",
+    "hsl_signal_ema_worst_1pct_mean_fraction_short",
 }
 _HSL_EMA_DRAWDOWN_METRICS = {
-    "drawdown_worst_ema_strategy_eq",
-    "drawdown_worst_ema_strategy_eq_long",
-    "drawdown_worst_ema_strategy_eq_short",
+    "hsl_signal_ema_max_fraction",
+    "hsl_signal_ema_max_fraction_long",
+    "hsl_signal_ema_max_fraction_short",
 }
 _HSL_RAW_DRAWDOWN_METRICS = {
-    "drawdown_worst_strategy_eq_long",
-    "drawdown_worst_strategy_eq_short",
+    "drawdown_max_fraction_strategy_equity_long",
+    "drawdown_max_fraction_strategy_equity_short",
 }
 _HSL_RAW_TAIL_METRICS = {
-    "drawdown_worst_mean_1pct_strategy_eq_long",
-    "drawdown_worst_mean_1pct_strategy_eq_short",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short",
 }
 _HSL_STRATEGY_EQ_RECOVERY_METRICS = {
-    "peak_recovery_hours_strategy_eq_long",
-    "peak_recovery_hours_strategy_eq_short",
-    "peak_recovery_days_strategy_eq_long",
-    "peak_recovery_days_strategy_eq_short",
+    "recovery_max_hours_strategy_equity_long",
+    "recovery_max_hours_strategy_equity_short",
+    "recovery_max_days_strategy_equity_long",
+    "recovery_max_days_strategy_equity_short",
 }
 
 
@@ -927,12 +927,12 @@ def _hsl_diagnostics_needed(needed_metrics) -> bool:
 
 
 _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
-    "strategy_eq_recovery_days_mean",
-    "strategy_eq_recovery_days_median",
-    "strategy_eq_recovery_days_p95",
-    "strategy_eq_recovery_days_p99",
-    "strategy_eq_recovery_days_mean_worst_5pct",
-    "strategy_eq_recovery_days_mean_worst_1pct",
+    "recovery_mean_days_strategy_equity",
+    "recovery_median_days_strategy_equity",
+    "recovery_p95_days_strategy_equity",
+    "recovery_p99_days_strategy_equity",
+    "recovery_worst_5pct_mean_days_strategy_equity",
+    "recovery_worst_1pct_mean_days_strategy_equity",
 }
 
 
@@ -963,7 +963,7 @@ def mps_requested_metric_features(
         "hsl_raw_tail": bool(metrics & _HSL_RAW_TAIL_METRICS),
         "hsl_diagnostics": _hsl_diagnostics_needed(metrics),
         "coin_fill_counts": bool(
-            metrics & {"fills_active_symbols_count", "fills_top_symbol_share"}
+            metrics & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
         ),
     }
     return frozenset(name for name, enabled in features.items() if enabled)
@@ -1064,7 +1064,7 @@ def _multicoin_exposure_eligible_coins(
     return eligible
 
 
-def _candidate_wallet_exposure_limit_outputs(
+def _candidate_wallet_exposure_limit_ratio_outputs(
     candidates: list[dict],
     base_limits: dict[str, float],
     *,
@@ -1076,12 +1076,12 @@ def _candidate_wallet_exposure_limit_outputs(
     for side in ("long", "short"):
         if side not in base_limits:
             raise ValueError(f"GPU candidate TWEL context is missing {side}")
-        key = f"{side}_total_wallet_exposure_limit"
+        key = f"{side}_total_wallet_exposure_limit_ratio"
         values = np.asarray(
             [float(candidate.get(key, base_limits[side])) for candidate in candidates],
             dtype=np.float64,
         )
-        outputs[f"candidate_total_wallet_exposure_limit_{side}"] = torch.from_numpy(
+        outputs[f"candidate_total_wallet_exposure_limit_ratio_{side}"] = torch.from_numpy(
             values
         )
     return outputs
@@ -1101,7 +1101,7 @@ def _candidate_position_slot_outputs(
         if side not in base_n_positions or side not in base_limits:
             raise ValueError(f"GPU candidate position-slot context is missing {side}")
         n_positions_key = f"{side}_n_positions"
-        limit_key = f"{side}_total_wallet_exposure_limit"
+        limit_key = f"{side}_total_wallet_exposure_limit_ratio"
         values = []
         for candidate in candidates:
             n_positions = float(candidate.get(n_positions_key, base_n_positions[side]))
@@ -1336,8 +1336,8 @@ def _directional_entry_initial_metrics(side: str, entry_pct):
         raise ValueError(f"expected long or short entry metric side, got {side!r}")
     zeros = entry_pct.new_zeros(entry_pct.shape)
     return {
-        "entry_initial_balance_pct_long": entry_pct if side == "long" else zeros,
-        "entry_initial_balance_pct_short": entry_pct if side == "short" else zeros,
+        "initial_entry_balance_fraction_long": entry_pct if side == "long" else zeros,
+        "initial_entry_balance_fraction_short": entry_pct if side == "short" else zeros,
     }
 
 
@@ -1408,7 +1408,7 @@ def _candidate_parameter_matrix(
             offset = side_index * len(param_keys)
             matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
                 20.0
-                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_minutes")]
             )
     return matrix
 
@@ -1430,14 +1430,14 @@ def _prepared_multicoin_data(
     cache=None,
     stream_tick_inputs=False,
     compact_hourly_ranges=False,
-    limit_order_fill_buffer_pct=0.0,
-    market_order_slippage_pct=0.0,
+    limit_order_fill_buffer_fraction=0.0,
+    market_order_slippage_fraction=0.0,
 ):
     """Share immutable suite tensors only for identical validated packing inputs."""
-    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-        limit_order_fill_buffer_pct
+    limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+        limit_order_fill_buffer_fraction
     )
-    market_order_slippage_pct = validate_market_order_slippage_pct(market_order_slippage_pct)
+    market_order_slippage_fraction = validate_market_order_slippage_fraction(market_order_slippage_fraction)
     candles = checkpoint_contract["hlcvs"]
     timeline = checkpoint_contract["timestamps"]
     key = (
@@ -1451,9 +1451,9 @@ def _prepared_multicoin_data(
         timeline["sha256"],
         tuple(runs),
         tuple(markets),
-        limit_order_fill_buffer_pct,
+        limit_order_fill_buffer_fraction,
         MARKET_EXECUTION_TICKS_ABI,
-        market_order_slippage_pct,
+        market_order_slippage_fraction,
         bool(stream_tick_inputs),
         bool(compact_hourly_ranges),
     )
@@ -1475,8 +1475,8 @@ def _prepared_multicoin_data(
             kwargs["compact_hourly_ranges"] = bool(compact_hourly_ranges)
         return build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct, **kwargs,
-            market_order_slippage_pct=market_order_slippage_pct,
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction, **kwargs,
+            market_order_slippage_fraction=market_order_slippage_fraction,
         )
     data = (
         residency.prepare(key, build)
@@ -1663,8 +1663,8 @@ class SharedAccountReplay:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
-        limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-            backtest_params.get("limit_order_fill_buffer_pct", 0.0)
+        limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+            backtest_params.get("limit_order_fill_buffer_fraction", 0.0)
         )
         from optimization.gpu.hsl import project_bot
 
@@ -1691,15 +1691,15 @@ class SharedAccountReplay:
         )
 
         comparable_bot_keys = (
-            "total_wallet_exposure_limit",
-            "filter_volume_ema_span_1m",
-            "filter_volatility_ema_span_1m",
+            "total_wallet_exposure_limit_ratio",
+            "forager_volume_ema_span_minutes",
+            "forager_log_range_ema_span_minutes",
             "forager_score_weights",
             "n_positions",
             "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold",
+            "risk_twel_enforcer_threshold_ratio",
         )
         signal_mode = self.hsl_signal_mode
         hsl_enabled_sides = [
@@ -1726,8 +1726,8 @@ class SharedAccountReplay:
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
             )
-        self.base_total_wallet_exposure_limits = {
-            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit"])
+        self.base_total_wallet_exposure_limit_ratios = {
+            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit_ratio"])
             for side in ("long", "short")
         }
         self.base_n_positions = {
@@ -1823,8 +1823,8 @@ class SharedAccountReplay:
                 min_qty=float(item["min_qty"]),
                 min_cost=float(item["min_cost"]),
                 c_mult=float(item["c_mult"]),
-                maker_fee=float(item["maker_fee"]),
-                taker_fee=float(item["taker_fee"]),
+                maker_fee_fraction=float(item["maker_fee_fraction"]),
+                taker_fee_fraction=float(item["taker_fee_fraction"]),
             )
             for item in payload.exchange_params
         ]
@@ -1849,8 +1849,8 @@ class SharedAccountReplay:
                 ),
                 first_ts_ms=int(backtest_params["first_timestamp_ms"]),
                 interval_ms=interval_ms,
-                liquidation_threshold=float(
-                    backtest_params.get("liquidation_threshold", 0.05)
+                equity_floor_fraction=float(
+                    backtest_params.get("equity_floor_fraction", 0.05)
                 ),
                 first_valid_idx=int(backtest_params["first_valid_indices"][coin]),
                 last_valid_idx=int(backtest_params["last_valid_indices"][coin]),
@@ -1870,7 +1870,7 @@ class SharedAccountReplay:
                 date_to_ts(format_end_date(config["backtest"]["end_date"]))
             ))
         wallet_exposure_column = (
-            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
             if self.strategy_kind == "ema_anchor"
             else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
         )
@@ -1909,8 +1909,8 @@ class SharedAccountReplay:
             cache=prepared_data_cache,
             stream_tick_inputs=stream_tick_inputs,
             compact_hourly_ranges=stream_tick_inputs and runs[0].interval_ms == 60_000,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
-            market_order_slippage_pct=backtest_params.get("market_order_slippage_pct", 0.0),
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
+            market_order_slippage_fraction=backtest_params.get("market_order_slippage_fraction", 0.0),
         )
         if stream_tick_inputs:
             discard_readonly_file_pages(values)
@@ -1948,24 +1948,24 @@ class SharedAccountReplay:
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis": self.forager_score_hysteresis,
-            "max_realized_loss_pct": float(
-                backtest_params.get("max_realized_loss_pct", 1.0)
+            "loss_gate_max_drawdown_fraction": float(
+                backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
             ),
             "collect_coin_fill_counts": bool(
                 self.needed_metrics
-                & {"fills_active_symbols_count", "fills_top_symbol_share"}
+                & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
             ),
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
             ),
-            "market_order_slippage_pct": float(
-                backtest_params.get("market_order_slippage_pct", 0.0)
+            "market_order_slippage_fraction": float(
+                backtest_params.get("market_order_slippage_fraction", 0.0)
             ),
             "market_orders_allowed": bool(
                 backtest_params.get("market_orders_allowed", False)
             ),
-            "market_order_near_touch_threshold": float(
-                backtest_params.get("market_order_near_touch_threshold", 0.001)
+            "market_order_near_touch_fraction": float(
+                backtest_params.get("market_order_near_touch_fraction", 0.001)
             ),
             "hsl_ema_tail_enabled": bool(self.needed_metrics & _HSL_EMA_TAIL_METRICS),
             "hsl_raw_drawdown_enabled": bool(
@@ -2110,8 +2110,8 @@ class SharedAccountReplay:
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
-                    "hsl_red_threshold",
-                    "hsl_drawdown_ratio_ema_span_minutes",
+                    "hsl_drawdown_threshold_fraction",
+                    "hsl_drawdown_fraction_ema_span_minutes",
                     "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:
@@ -2186,8 +2186,8 @@ class SharedAccountReplay:
             # Metric normalization also reads defaults for the disabled side.
             for pside in ("long", "short"):
                 expanded.setdefault(
-                    f"{pside}_total_wallet_exposure_limit",
-                    self.base_total_wallet_exposure_limits[pside],
+                    f"{pside}_total_wallet_exposure_limit_ratio",
+                    self.base_total_wallet_exposure_limit_ratios[pside],
                 )
                 expanded.setdefault(
                     f"{pside}_n_positions", self.base_n_positions[pside]
@@ -2383,11 +2383,11 @@ class SharedAccountReplay:
                 output[key] = torch.where(
                     torch.isfinite(values), values + timestamp_origin, values
                 )
-            if any("_per_exposure_" in name for name in self.needed_metrics):
+            if any("_per_twel_ratio_" in name for name in self.needed_metrics):
                 output.update(
-                    _candidate_wallet_exposure_limit_outputs(
+                    _candidate_wallet_exposure_limit_ratio_outputs(
                         chunk,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )
@@ -2396,7 +2396,7 @@ class SharedAccountReplay:
                     _candidate_position_slot_outputs(
                         chunk,
                         self.base_n_positions,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )
@@ -2410,7 +2410,7 @@ class SharedAccountReplay:
             }.issubset(output):
                 raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
             if (getattr(self, "native_factual_hsl", False)
-                    and any(name.startswith("drawdown_worst_ema_strategy_eq") for name in self.needed_metrics)
+                    and any(name.startswith("hsl_signal_ema_max_fraction") for name in self.needed_metrics)
                     and "hsl_drawdown_ema_max_portfolio" not in output):
                 raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
             if (getattr(self, "native_factual_hsl", False)
@@ -2419,7 +2419,7 @@ class SharedAccountReplay:
                     and "entry_interval_native_metrics" not in output):
                 raise RuntimeError("native entry intervals require compact exact metrics")
             if (
-                "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
+                "hsl_signal_ema_worst_1pct_mean_fraction" in self.needed_metrics
                 and (fused_runner is not None or len(self.sides) == 1)
                 and "hsl_drawdown_ema_mean_worst_1pct_portfolio" not in output
             ):

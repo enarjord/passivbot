@@ -18,7 +18,7 @@ from optimization.gpu.exponential_equity import exponential_equity_metrics
 from optimization.gpu.model import GAP_BINS
 
 
-def _backtest_completion_ratio(out, run, data, has_equity):
+def _backtest_completion_fraction(out, run, data, has_equity):
     """Coverage from the authoritative native candle endpoint, without epsilon.
 
     Legacy replay retains its timestamp contract. Native replay must not infer
@@ -59,40 +59,40 @@ from optimization.gpu.metric_registry import (
 )
 
 _USD_STRATEGY_EQ_ALIASES = {
-    "adg_usd": "adg_strategy_eq",
-    "calmar_ratio_usd": "calmar_ratio_strategy_eq",
-    "drawdown_worst_mean_1pct_usd": "drawdown_worst_mean_1pct_strategy_eq",
-    "drawdown_worst_usd": "drawdown_worst_strategy_eq",
-    "expected_shortfall_1pct_usd": "expected_shortfall_1pct_strategy_eq",
-    "gain_usd": "gain_strategy_eq",
-    "mdg_usd": "mdg_strategy_eq",
-    "omega_ratio_usd": "omega_ratio_strategy_eq",
-    "sharpe_ratio_usd": "sharpe_ratio_strategy_eq",
-    "sortino_ratio_usd": "sortino_ratio_strategy_eq",
-    "sterling_ratio_usd": "sterling_ratio_strategy_eq",
+    "adg_fraction_usd": "adg_fraction_strategy_equity",
+    "calmar_ratio_usd": "calmar_ratio_strategy_equity",
+    "drawdown_daily_worst_1pct_mean_fraction_usd": "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
+    "drawdown_max_fraction_usd": "drawdown_max_fraction_strategy_equity",
+    "expected_shortfall_1pct_fraction_usd": "expected_shortfall_1pct_fraction_strategy_equity",
+    "gain_multiplier_usd": "gain_multiplier_strategy_equity",
+    "mdg_fraction_usd": "mdg_fraction_strategy_equity",
+    "omega_ratio_usd": "omega_ratio_strategy_equity",
+    "sharpe_ratio_usd": "sharpe_ratio_strategy_equity",
+    "sortino_ratio_usd": "sortino_ratio_strategy_equity",
+    "sterling_ratio_usd": "sterling_ratio_strategy_equity",
 }
 
 _USD_PER_EXPOSURE_METRICS = {
-    "adg_per_exposure_long_usd": ("adg_strategy_eq", "long"),
-    "adg_per_exposure_short_usd": ("adg_strategy_eq", "short"),
-    "gain_per_exposure_long_usd": ("gain_strategy_eq", "long"),
-    "gain_per_exposure_short_usd": ("gain_strategy_eq", "short"),
-    "mdg_per_exposure_long_usd": ("mdg_strategy_eq", "long"),
-    "mdg_per_exposure_short_usd": ("mdg_strategy_eq", "short"),
+    "adg_fraction_per_twel_ratio_usd_long": ("adg_fraction_strategy_equity", "long"),
+    "adg_fraction_per_twel_ratio_usd_short": ("adg_fraction_strategy_equity", "short"),
+    "gain_multiplier_per_twel_ratio_usd_long": ("gain_multiplier_strategy_equity", "long"),
+    "gain_multiplier_per_twel_ratio_usd_short": ("gain_multiplier_strategy_equity", "short"),
+    "mdg_fraction_per_twel_ratio_usd_long": ("mdg_fraction_strategy_equity", "long"),
+    "mdg_fraction_per_twel_ratio_usd_short": ("mdg_fraction_strategy_equity", "short"),
 }
 
 _BTC_ACCOUNT_METRICS = {
-    "adg_btc",
-    "equity_choppiness_btc",
-    "equity_jerkiness_btc",
-    "exponential_fit_error_btc",
-    "exposure_mean_ratio_btc",
-    "exposure_ratio_btc",
-    "gain_btc",
-    "mdg_btc",
+    "adg_fraction_btc",
+    "equity_choppiness_ratio_btc",
+    "equity_jerkiness_ratio_btc",
+    "exponential_fit_mse_log_ratio_squared_btc",
+    "adg_to_absolute_net_exposure_mean_ratio_btc",
+    "adg_to_absolute_net_exposure_max_ratio_btc",
+    "gain_multiplier_btc",
+    "mdg_fraction_btc",
     "omega_ratio_btc",
-    "peak_recovery_days_equity_btc",
-    "peak_recovery_hours_equity_btc",
+    "peak_recovery_max_days_btc",
+    "peak_recovery_max_hours_btc",
 }
 
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
@@ -101,8 +101,8 @@ _BTC_ACCOUNT_METRICS.update(
 )
 
 _BTC_PER_EXPOSURE_METRICS = {
-    f"{metric}_per_exposure_{side}_btc"
-    for metric in ("adg", "gain", "mdg")
+    f"{metric}_per_twel_ratio_btc_{side}"
+    for metric in ("adg_fraction", "gain_multiplier", "mdg_fraction")
     for side in ("long", "short")
 }
 
@@ -113,94 +113,94 @@ BTC_ACCOUNT_METRICS = frozenset(_BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS
 # metrics may guide Metal screening or proxy-side limits.
 _GPU_PROXY_METRIC_CANDIDATES = (
     *sorted(EXPONENTIAL_EQUITY_METRICS),
-    "adg_rolling_hmean_strategy_eq",
-    "adg_strategy_eq",
-    "adg_time_integrated_strategy_eq",
-    "backtest_completion_ratio",
-    "calmar_ratio_strategy_eq",
-    "drawdown_worst_mean_1pct_strategy_eq",
-    "drawdown_worst_mean_1pct_strategy_eq_long",
-    "drawdown_worst_mean_1pct_strategy_eq_short",
-    "drawdown_worst_strategy_eq_long",
-    "drawdown_worst_strategy_eq_short",
-    "drawdown_worst_mean_1pct_ema_strategy_eq",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
-    "drawdown_worst_ema_strategy_eq",
-    "drawdown_worst_ema_strategy_eq_long",
-    "drawdown_worst_ema_strategy_eq_short",
-    "drawdown_worst_strategy_eq",
-    "equity_choppiness_usd",
-    "equity_jerkiness_usd",
-    "expected_shortfall_1pct_strategy_eq",
-    "entry_initial_balance_pct_long",
-    "entry_initial_balance_pct_short",
+    "adg_rolling_hmean_fraction_strategy_equity",
+    "adg_fraction_strategy_equity",
+    "adg_time_integrated_fraction_strategy_equity",
+    "backtest_completion_fraction",
+    "calmar_ratio_strategy_equity",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short",
+    "drawdown_max_fraction_strategy_equity_long",
+    "drawdown_max_fraction_strategy_equity_short",
+    "hsl_signal_ema_worst_1pct_mean_fraction",
+    "hsl_signal_ema_worst_1pct_mean_fraction_long",
+    "hsl_signal_ema_worst_1pct_mean_fraction_short",
+    "hsl_signal_ema_max_fraction",
+    "hsl_signal_ema_max_fraction_long",
+    "hsl_signal_ema_max_fraction_short",
+    "drawdown_max_fraction_strategy_equity",
+    "equity_choppiness_ratio_usd",
+    "equity_jerkiness_ratio_usd",
+    "expected_shortfall_1pct_fraction_strategy_equity",
+    "initial_entry_balance_fraction_long",
+    "initial_entry_balance_fraction_short",
     *sorted(ENTRY_INTERVAL_METRICS),
-    "exponential_fit_error_usd",
-    "exposure_mean_ratio_usd",
-    "exposure_ratio_usd",
-    "fills_active_days_ratio",
+    "exponential_fit_mse_log_ratio_squared_usd",
+    "adg_to_absolute_net_exposure_mean_ratio_usd",
+    "adg_to_absolute_net_exposure_max_ratio_usd",
+    "fills_active_day_fraction",
     "fills_active_symbols_count",
-    "fills_entry_per_close",
-    "fills_gap_longest_days",
+    "entry_to_close_fill_count_ratio",
+    "fills_gap_max_days",
     "fills_gap_p95_hours",
     "fills_gap_time_weighted_mean_hours",
     "fills_per_day",
     "fills_per_day_per_position_slot",
-    "fills_top_symbol_share",
-    "hard_stop_duration_minutes_max",
-    "hard_stop_duration_minutes_mean",
-    "hard_stop_halt_to_restart_equity_loss_pct",
-    "hard_stop_panic_close_loss_drawdown_pct_max",
-    "hard_stop_panic_close_loss_drawdown_pct_mean",
-    "hard_stop_post_restart_retrigger_pct",
-    "hard_stop_restarts_per_year",
-    "hard_stop_restarts_per_year_long",
-    "hard_stop_restarts_per_year_short",
-    "hard_stop_time_in_red_pct",
-    "hard_stop_trigger_drawdown_mean",
-    "hard_stop_triggers_per_year",
+    "fills_top_symbol_fraction",
+    "hsl_red_duration_max_minutes",
+    "hsl_red_duration_mean_minutes",
+    "hsl_panic_loss_starting_balance_fraction",
+    "hsl_panic_episode_loss_max_fraction",
+    "hsl_panic_episode_loss_mean_fraction",
+    "hsl_restart_retrigger_fraction",
+    "hsl_restarts_per_year",
+    "hsl_restarts_per_year_long",
+    "hsl_restarts_per_year_short",
+    "hsl_red_time_fraction",
+    "hsl_trigger_signal_mean_fraction",
+    "hsl_triggers_per_year",
     "loss_profit_ratio",
     "loss_profit_ratio_long",
     "loss_profit_ratio_short",
-    "mdg_strategy_eq",
-    "omega_ratio_strategy_eq",
-    "pnl_ratio_long_short",
-    "position_held_days_mean",
-    "position_held_days_max",
+    "mdg_fraction_strategy_equity",
+    "omega_ratio_strategy_equity",
+    "long_pnl_to_total_pnl_ratio",
+    "position_held_mean_days",
+    "position_held_max_days",
     "position_held_time_weighted_mean_hours",
-    "position_held_hours_mean",
-    "position_held_hours_max",
-    "positions_held_per_day",
-    "positive_gain_participation_strategy_eq",
-    "position_unchanged_days_max",
-    "position_unchanged_hours_max",
-    "peak_recovery_hours_strategy_eq_long",
-    "peak_recovery_hours_strategy_eq_short",
-    "peak_recovery_days_strategy_eq_long",
-    "peak_recovery_days_strategy_eq_short",
-    "sharpe_ratio_strategy_eq",
-    "sortino_ratio_strategy_eq",
-    "sterling_ratio_strategy_eq",
-    "strategy_eq_recovery_days_mean",
-    "strategy_eq_recovery_days_median",
-    "strategy_eq_recovery_days_p95",
-    "strategy_eq_recovery_days_p99",
-    "strategy_eq_recovery_days_mean_worst_5pct",
-    "strategy_eq_recovery_days_mean_worst_1pct",
-    "strategy_eq_recovery_days_max",
-    "pain_index_strategy_eq",
-    "ulcer_index_strategy_eq",
-    "total_wallet_exposure_max",
-    "total_wallet_exposure_mean",
-    "total_wallet_exposure_rms_long",
-    "total_wallet_exposure_rms_short",
-    "total_wallet_exposure_rms_gross",
-    "total_wallet_exposure_utilization_rms_long",
-    "total_wallet_exposure_utilization_rms_short",
-    "position_exposure_utilization_rms_long",
-    "position_exposure_utilization_rms_short",
-    "volume_pct_per_day_avg",
+    "position_held_mean_hours",
+    "position_held_max_hours",
+    "position_episodes_per_day",
+    "positive_log_return_participation_score_strategy_equity",
+    "position_unchanged_max_days",
+    "position_unchanged_max_hours",
+    "recovery_max_hours_strategy_equity_long",
+    "recovery_max_hours_strategy_equity_short",
+    "recovery_max_days_strategy_equity_long",
+    "recovery_max_days_strategy_equity_short",
+    "sharpe_ratio_strategy_equity",
+    "sortino_ratio_strategy_equity",
+    "sterling_ratio_strategy_equity",
+    "recovery_mean_days_strategy_equity",
+    "recovery_median_days_strategy_equity",
+    "recovery_p95_days_strategy_equity",
+    "recovery_p99_days_strategy_equity",
+    "recovery_worst_5pct_mean_days_strategy_equity",
+    "recovery_worst_1pct_mean_days_strategy_equity",
+    "recovery_max_days_strategy_equity",
+    "pain_index_fraction_strategy_equity",
+    "ulcer_index_fraction_strategy_equity",
+    "absolute_net_wallet_exposure_max_ratio",
+    "absolute_net_wallet_exposure_mean_ratio",
+    "wallet_exposure_rms_ratio_long",
+    "wallet_exposure_rms_ratio_short",
+    "gross_wallet_exposure_rms_ratio",
+    "wallet_exposure_utilization_rms_ratio_long",
+    "wallet_exposure_utilization_rms_ratio_short",
+    "position_exposure_utilization_rms_ratio_long",
+    "position_exposure_utilization_rms_ratio_short",
+    "active_day_turnover_proxy_mean_ratio",
     *_USD_STRATEGY_EQ_ALIASES,
     *_USD_PER_EXPOSURE_METRICS,
     *sorted(BTC_ACCOUNT_METRICS),
@@ -249,34 +249,33 @@ def validate_gpu_metric_names(
 EXTRA_KERNEL_METRICS = ("loss_profit_ratio",)
 
 _PNL_METRICS = {
-    "adg_pnl",
-    "mdg_pnl",
-    "sharpe_ratio_pnl",
-    "sortino_ratio_pnl",
+    "daily_realized_pnl_mean_fraction",
+    "daily_realized_pnl_median_fraction",
+    "sharpe_ratio_realized_pnl",
+    "sortino_ratio_realized_pnl",
 }
 
 
 _FILL_ACTIVITY_METRICS = {
-    "fills_analysis_duration_days",
-    "n_days",
+    "analysis_duration_days",
     "fills_active_days_count",
-    "fills_active_days_ratio",
+    "fills_active_day_fraction",
     "fills_active_symbols_count",
     "fills_count",
-    "fills_count_close",
-    "fills_count_entry",
+    "fills_close_count",
+    "fills_entry_count",
     "fills_count_long",
     "fills_count_short",
-    "fills_entry_per_close",
+    "entry_to_close_fill_count_ratio",
     "fills_per_day",
-    "fills_per_day_close",
-    "fills_per_day_entry",
+    "fills_close_per_day",
+    "fills_entry_per_day",
     "fills_per_day_long",
     "fills_per_day_per_position_slot",
     "fills_per_day_per_position_slot_long",
     "fills_per_day_per_position_slot_short",
     "fills_per_day_short",
-    "fills_top_symbol_share",
+    "fills_top_symbol_fraction",
 }
 
 
@@ -292,34 +291,34 @@ _FILL_GAP_HISTOGRAM_METRICS = {
 _HARD_STOP_LIFECYCLE_METRICS = HARD_STOP_LIFECYCLE_METRICS
 _HARD_STOP_PANIC_LOSS_METRICS = HARD_STOP_PANIC_LOSS_METRICS
 _HARD_STOP_EMA_DRAWDOWN_METRICS = {
-    "drawdown_worst_ema_strategy_eq",
-    "drawdown_worst_ema_strategy_eq_long",
-    "drawdown_worst_ema_strategy_eq_short",
+    "hsl_signal_ema_max_fraction",
+    "hsl_signal_ema_max_fraction_long",
+    "hsl_signal_ema_max_fraction_short",
 }
 _HARD_STOP_RAW_DRAWDOWN_METRICS = {
-    "drawdown_worst_strategy_eq_long",
-    "drawdown_worst_strategy_eq_short",
-    "drawdown_worst_mean_1pct_strategy_eq_long",
-    "drawdown_worst_mean_1pct_strategy_eq_short",
+    "drawdown_max_fraction_strategy_equity_long",
+    "drawdown_max_fraction_strategy_equity_short",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short",
 }
 _HARD_STOP_EMA_TAIL_METRICS = {
-    "drawdown_worst_mean_1pct_ema_strategy_eq",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+    "hsl_signal_ema_worst_1pct_mean_fraction",
+    "hsl_signal_ema_worst_1pct_mean_fraction_long",
+    "hsl_signal_ema_worst_1pct_mean_fraction_short",
 }
 _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS = {
-    "peak_recovery_hours_strategy_eq_long",
-    "peak_recovery_hours_strategy_eq_short",
-    "peak_recovery_days_strategy_eq_long",
-    "peak_recovery_days_strategy_eq_short",
+    "recovery_max_hours_strategy_equity_long",
+    "recovery_max_hours_strategy_equity_short",
+    "recovery_max_days_strategy_equity_long",
+    "recovery_max_days_strategy_equity_short",
 }
 _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
-    "strategy_eq_recovery_days_mean",
-    "strategy_eq_recovery_days_median",
-    "strategy_eq_recovery_days_p95",
-    "strategy_eq_recovery_days_p99",
-    "strategy_eq_recovery_days_mean_worst_5pct",
-    "strategy_eq_recovery_days_mean_worst_1pct",
+    "recovery_mean_days_strategy_equity",
+    "recovery_median_days_strategy_equity",
+    "recovery_p95_days_strategy_equity",
+    "recovery_p99_days_strategy_equity",
+    "recovery_worst_5pct_mean_days_strategy_equity",
+    "recovery_worst_1pct_mean_days_strategy_equity",
 }
 
 
@@ -363,7 +362,7 @@ def _directional_pnl_metrics(out: dict) -> dict:
         long_pnl / pnl_sum,
         torch.full_like(pnl_sum, 0.5),
     )
-    values["pnl_ratio_long_short"] = long_short_ratio
+    values["long_pnl_to_total_pnl_ratio"] = long_short_ratio
     return values
 
 
@@ -395,7 +394,7 @@ def _daily_series_masks(day_min_eq):
     return torch.isfinite(day_min_eq) & (day_min_eq < float("inf"))
 
 
-def _pct_change(values, active):
+def _simple_returns(values, active):
     previous = values[:, :-1]
     current = values[:, 1:]
     both = active[:, :-1] & active[:, 1:]
@@ -446,13 +445,13 @@ def _smoothed_gain_adg(day_eq, active):
         gather_index = sorted_indices[:, offset].clamp(min=0)
         tail_values += take * day_eq.gather(1, gather_index.unsqueeze(1)).squeeze(1)
     end = tail_values / tail_count.to(day_eq.dtype)
-    gain = torch.where(
+    gain_multiplier = torch.where(
         start > 0.0,
         torch.where(end > 0.0, end / start, torch.full_like(end, -1.0)),
         torch.full_like(end, float("inf")),
     )
     duration_days = counts.clamp(min=1).to(day_eq.dtype)
-    bases = gain.clamp(min=1e-12)
+    bases = gain_multiplier.clamp(min=1e-12)
     exponents = 1.0 / duration_days
     if day_eq.device.type == "cpu" and day_eq.dtype == torch.float64:
         # CPU tensor pow may select different scalar/vector math for a batch
@@ -466,13 +465,13 @@ def _smoothed_gain_adg(day_eq, active):
         )
     else:
         powers = bases ** exponents
-    adg = torch.where(
-        (gain > 0) & (counts >= 2),
+    adg_fraction = torch.where(
+        (gain_multiplier > 0) & (counts >= 2),
         powers - 1.0,
-        torch.where(counts >= 2, torch.full_like(gain, -1.0), torch.zeros_like(gain)),
+        torch.where(counts >= 2, torch.full_like(gain_multiplier, -1.0), torch.zeros_like(gain_multiplier)),
     )
-    gain = torch.where(counts >= 2, gain, torch.zeros_like(gain))
-    return gain, adg
+    gain_multiplier = torch.where(counts >= 2, gain_multiplier, torch.zeros_like(gain_multiplier))
+    return gain_multiplier, adg_fraction
 
 
 def _smoothed_adg(day_eq, active):
@@ -483,9 +482,9 @@ def _gain_quality_metrics(day_eq, active, requested):
     """Reduce compact daily closes into path-sensitive gain-quality metrics."""
 
     names = {
-        "adg_rolling_hmean_strategy_eq",
-        "adg_time_integrated_strategy_eq",
-        "positive_gain_participation_strategy_eq",
+        "adg_rolling_hmean_fraction_strategy_equity",
+        "adg_time_integrated_fraction_strategy_equity",
+        "positive_log_return_participation_score_strategy_equity",
     }
     requested = set(requested) & names
     if not requested:
@@ -519,7 +518,7 @@ def _gain_quality_metrics(day_eq, active, requested):
     n_intervals = (counts - 1).clamp(min=1)
     result = {}
 
-    if "positive_gain_participation_strategy_eq" in requested:
+    if "positive_log_return_participation_score_strategy_equity" in requested:
         adjacent = compact_active[:, :-1] & compact_active[:, 1:]
         positive = torch.where(
             adjacent,
@@ -538,9 +537,9 @@ def _gain_quality_metrics(day_eq, active, requested):
             ),
             zeros,
         )
-        result["positive_gain_participation_strategy_eq"] = participation
+        result["positive_log_return_participation_score_strategy_equity"] = participation
 
-    if "adg_time_integrated_strategy_eq" in requested:
+    if "adg_time_integrated_fraction_strategy_equity" in requested:
         relative_log_eq = log_eq - log_eq[:, :1]
         trapezoid_weights = compact_active.to(day_eq.dtype)
         trapezoid_weights[:, 0] *= 0.5
@@ -549,13 +548,13 @@ def _gain_quality_metrics(day_eq, active, requested):
         trapezoid_weights.scatter_(1, last_indices.unsqueeze(1), last_weights * 0.5)
         area = (relative_log_eq * trapezoid_weights).sum(dim=1)
         daily_log_growth = 2.0 * area / n_intervals.to(day_eq.dtype).square()
-        result["adg_time_integrated_strategy_eq"] = torch.where(
+        result["adg_time_integrated_fraction_strategy_equity"] = torch.where(
             valid_equity,
             torch.expm1(daily_log_growth),
             torch.where(counts >= 2, torch.full_like(zeros, -1.0), zeros),
         )
 
-    if "adg_rolling_hmean_strategy_eq" in requested:
+    if "adg_rolling_hmean_fraction_strategy_equity" in requested:
         daily_log_growth_sum = zeros.clone()
         horizon_count = torch.zeros_like(counts)
         prior_horizons = []
@@ -603,7 +602,7 @@ def _gain_quality_metrics(day_eq, active, requested):
             daily_log_growth_sum / horizon_count.clamp(min=1).to(day_eq.dtype),
             fallback,
         )
-        result["adg_rolling_hmean_strategy_eq"] = torch.where(
+        result["adg_rolling_hmean_fraction_strategy_equity"] = torch.where(
             valid_equity,
             torch.expm1(rolling_daily_log_growth),
             torch.where(counts >= 2, torch.full_like(zeros, -1.0), zeros),
@@ -619,9 +618,9 @@ def _equity_shape_metrics(day_eq, active):
     zeros = torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
     if day_count == 0:
         return {
-            "equity_choppiness_usd": zeros,
-            "equity_jerkiness_usd": zeros,
-            "exponential_fit_error_usd": torch.full_like(zeros, float("inf")),
+            "equity_choppiness_ratio_usd": zeros,
+            "equity_jerkiness_ratio_usd": zeros,
+            "exponential_fit_mse_log_ratio_squared_usd": torch.full_like(zeros, float("inf")),
         }
 
     indices = (
@@ -702,16 +701,16 @@ def _equity_shape_metrics(day_eq, active):
     )
 
     return {
-        "equity_choppiness_usd": choppiness,
-        "equity_jerkiness_usd": jerkiness,
-        "exponential_fit_error_usd": fit_error,
+        "equity_choppiness_ratio_usd": choppiness,
+        "equity_jerkiness_ratio_usd": jerkiness,
+        "exponential_fit_mse_log_ratio_squared_usd": fit_error,
     }
 
 
-def _sharpe_sortino(changes, mask, adg):
+def _sharpe_sortino(changes, mask, adg_fraction):
     count = mask.sum(dim=1).clamp(min=1).to(changes.dtype)
     difference = torch.where(
-        mask, changes - adg.unsqueeze(1), torch.zeros_like(changes)
+        mask, changes - adg_fraction.unsqueeze(1), torch.zeros_like(changes)
     )
     standard_deviation = torch.sqrt((difference * difference).sum(dim=1) / count)
     sharpe_denominator = torch.where(
@@ -721,8 +720,8 @@ def _sharpe_sortino(changes, mask, adg):
     )
     sharpe = torch.where(
         standard_deviation != 0.0,
-        adg / sharpe_denominator,
-        torch.zeros_like(adg),
+        adg_fraction / sharpe_denominator,
+        torch.zeros_like(adg_fraction),
     )
     downside = mask & (changes < 0)
     downside_count = downside.sum(dim=1).to(changes.dtype)
@@ -737,8 +736,8 @@ def _sharpe_sortino(changes, mask, adg):
     )
     sortino = torch.where(
         downside_deviation != 0.0,
-        adg / sortino_denominator,
-        torch.zeros_like(adg),
+        adg_fraction / sortino_denominator,
+        torch.zeros_like(adg_fraction),
     )
     return sharpe, sortino
 
@@ -1000,11 +999,11 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
     )
     maximum = torch.where(counts > 0, max_steps * interval_hours, zeros)
     return {
-        "entry_interval_hours_mean": mean,
-        "entry_interval_hours_median": _weighted_percentile(values, histogram, 0.50),
-        "entry_interval_hours_p95": _weighted_percentile(values, histogram, 0.95),
-        "entry_interval_hours_p99": _weighted_percentile(values, histogram, 0.99),
-        "entry_interval_hours_max": maximum,
+        "entry_interval_mean_hours": mean,
+        "entry_interval_median_hours": _weighted_percentile(values, histogram, 0.50),
+        "entry_interval_p95_hours": _weighted_percentile(values, histogram, 0.95),
+        "entry_interval_p99_hours": _weighted_percentile(values, histogram, 0.99),
+        "entry_interval_max_hours": maximum,
     }
 
 
@@ -1031,11 +1030,11 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
         torch.zeros_like(day_net_pnl),
     )
     count = finite_mask.sum(dim=1)
-    adg = ratios.sum(dim=1) / count.clamp(min=1).to(ratios.dtype)
-    adg = torch.where(count > 0, adg, torch.zeros_like(adg))
-    mdg = _masked_median(ratios, finite_mask)
-    sharpe, sortino = _sharpe_sortino(ratios, finite_mask, adg)
-    return adg, mdg, sharpe, sortino, count
+    adg_fraction = ratios.sum(dim=1) / count.clamp(min=1).to(ratios.dtype)
+    adg_fraction = torch.where(count > 0, adg_fraction, torch.zeros_like(adg_fraction))
+    mdg_fraction = _masked_median(ratios, finite_mask)
+    sharpe, sortino = _sharpe_sortino(ratios, finite_mask, adg_fraction)
+    return adg_fraction, mdg_fraction, sharpe, sortino, count
 
 
 def _analysis_duration_days(out: dict, run) -> torch.Tensor:
@@ -1066,9 +1065,9 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     """Match Rust's full-run fill count and timestamp-span rate contract."""
 
     fill_count = out["fill_count"].to(torch.float64)
-    fills_count_entry = out["fill_count_entry"].to(torch.float64)
+    fills_entry_count = out["fill_count_entry"].to(torch.float64)
     fills_count_long = out["fill_count_long"].to(torch.float64)
-    fills_count_close = (fill_count - fills_count_entry).clamp(min=0.0)
+    fills_close_count = (fill_count - fills_entry_count).clamp(min=0.0)
     fills_count_short = (fill_count - fills_count_long).clamp(min=0.0)
     fills_active_days_count = out["fills_active_days_count"].to(torch.float64)
     coin_fill_counts = out.get("coin_fill_counts")
@@ -1077,7 +1076,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     else:
         coin_fill_counts = coin_fill_counts.to(torch.float64)
     fills_active_symbols_count = (coin_fill_counts > 0.0).sum(dim=1).to(torch.float64)
-    fills_top_symbol_share = torch.where(
+    fills_top_symbol_fraction = torch.where(
         fill_count > 0.0,
         coin_fill_counts.max(dim=1).values / fill_count.clamp(min=1.0),
         torch.zeros_like(fill_count),
@@ -1096,29 +1095,28 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
             torch.zeros_like(count),
         )
 
-    fills_per_day_entry = per_day(fills_count_entry)
-    fills_per_day_close = per_day(fills_count_close)
+    fills_entry_per_day = per_day(fills_entry_count)
+    fills_close_per_day = per_day(fills_close_count)
     fills_per_day_long = per_day(fills_count_long)
     fills_per_day_short = per_day(fills_count_short)
     metrics = {
         "fills_active_days_count": fills_active_days_count,
-        "fills_active_days_ratio": fills_active_days_count
+        "fills_active_day_fraction": fills_active_days_count
         / duration_days.ceil().clamp(min=1.0),
         "fills_active_symbols_count": fills_active_symbols_count,
-        "fills_analysis_duration_days": duration_days,
-        "n_days": duration_days,
+        "analysis_duration_days": duration_days,
         "fills_count": fill_count,
-        "fills_count_close": fills_count_close,
-        "fills_count_entry": fills_count_entry,
+        "fills_close_count": fills_close_count,
+        "fills_entry_count": fills_entry_count,
         "fills_count_long": fills_count_long,
         "fills_count_short": fills_count_short,
-        "fills_entry_per_close": fills_count_entry / fills_count_close.clamp(min=1.0),
+        "entry_to_close_fill_count_ratio": fills_entry_count / fills_close_count.clamp(min=1.0),
         "fills_per_day": fills_per_day,
-        "fills_per_day_close": fills_per_day_close,
-        "fills_per_day_entry": fills_per_day_entry,
+        "fills_close_per_day": fills_close_per_day,
+        "fills_entry_per_day": fills_entry_per_day,
         "fills_per_day_long": fills_per_day_long,
         "fills_per_day_short": fills_per_day_short,
-        "fills_top_symbol_share": fills_top_symbol_share,
+        "fills_top_symbol_fraction": fills_top_symbol_fraction,
     }
     slot_metrics = {
         "fills_per_day_per_position_slot",
@@ -1207,35 +1205,35 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     minutes_per_step = float(run.interval_ms) / 60_000.0
 
     return {
-        "hard_stop_triggers": triggers,
-        "hard_stop_triggers_per_year": triggers * per_year_scale,
-        "hard_stop_triggers_long": triggers_long,
-        "hard_stop_triggers_short": triggers_short,
-        "hard_stop_restarts": restarts,
-        "hard_stop_restarts_per_year": restarts * per_year_scale,
-        "hard_stop_restarts_per_year_long": restarts_long * per_year_scale,
-        "hard_stop_restarts_per_year_short": restarts_short * per_year_scale,
-        "hard_stop_restarts_long": restarts_long,
-        "hard_stop_restarts_short": restarts_short,
-        "hard_stop_time_in_red_pct": value("hsl_tier_samples_red") / total_samples,
-        "hard_stop_duration_minutes_mean": torch.where(
+        "hsl_trigger_count": triggers,
+        "hsl_triggers_per_year": triggers * per_year_scale,
+        "hsl_trigger_count_long": triggers_long,
+        "hsl_trigger_count_short": triggers_short,
+        "hsl_restart_count": restarts,
+        "hsl_restarts_per_year": restarts * per_year_scale,
+        "hsl_restarts_per_year_long": restarts_long * per_year_scale,
+        "hsl_restarts_per_year_short": restarts_short * per_year_scale,
+        "hsl_restart_count_long": restarts_long,
+        "hsl_restart_count_short": restarts_short,
+        "hsl_red_time_fraction": value("hsl_tier_samples_red") / total_samples,
+        "hsl_red_duration_mean_minutes": torch.where(
             duration_count > 0.0,
             value("hsl_duration_sum_steps") / duration_count * minutes_per_step,
             zeros,
         ),
-        "hard_stop_duration_minutes_max": value("hsl_duration_max_steps")
+        "hsl_red_duration_max_minutes": value("hsl_duration_max_steps")
         * minutes_per_step,
-        "hard_stop_trigger_drawdown_mean": torch.where(
+        "hsl_trigger_signal_mean_fraction": torch.where(
             trigger_drawdown_count > 0.0,
             value("hsl_trigger_drawdown_sum") / trigger_drawdown_count,
             zeros,
         ),
-        "hard_stop_flatten_time_minutes_mean": torch.where(
+        "hsl_flatten_time_mean_minutes": torch.where(
             flatten_count > 0.0,
             value("hsl_flatten_time_sum_steps") / flatten_count * minutes_per_step,
             zeros,
         ),
-        "hard_stop_post_restart_retrigger_pct": torch.where(
+        "hsl_restart_retrigger_fraction": torch.where(
             restarts > 0.0,
             value("hsl_restart_retrigger_count") / restarts,
             zeros,
@@ -1260,21 +1258,21 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
     return {
         # Rust Report::metrics normalizes all panic-close loss, including an
         # unfinished halt. The legacy halt-loss scalar has no kernel producer.
-        "hard_stop_halt_to_restart_equity_loss_pct": value(
+        "hsl_panic_loss_starting_balance_fraction": value(
             "hsl_panic_close_loss_sum"
         )
         / max(float(run.starting_balance), 1.0e-12),
-        "hard_stop_panic_close_loss_sum": value("hsl_panic_close_loss_sum"),
-        "hard_stop_panic_close_loss_max": value("hsl_panic_close_loss_max"),
-        "hard_stop_panic_close_loss_drawdown_pct_min": value(
+        "hsl_panic_fill_loss_sum_usd": value("hsl_panic_close_loss_sum"),
+        "hsl_panic_fill_loss_max_usd": value("hsl_panic_close_loss_max"),
+        "hsl_panic_episode_loss_min_fraction": value(
             "hsl_panic_loss_drawdown_min"
         ),
-        "hard_stop_panic_close_loss_drawdown_pct_mean": torch.where(
+        "hsl_panic_episode_loss_mean_fraction": torch.where(
             drawdown_count > 0.0,
             value("hsl_panic_loss_drawdown_sum") / drawdown_count,
             zeros,
         ),
-        "hard_stop_panic_close_loss_drawdown_pct_max": value(
+        "hsl_panic_episode_loss_max_fraction": value(
             "hsl_panic_loss_drawdown_max"
         ),
     }
@@ -1295,13 +1293,13 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     long_ema_max = out["hsl_drawdown_ema_max_long"].to(torch.float64)
     short_ema_max = out["hsl_drawdown_ema_max_short"].to(torch.float64)
     return {
-        "drawdown_worst_ema_strategy_eq": (
+        "hsl_signal_ema_max_fraction": (
             out["hsl_drawdown_ema_max_portfolio"].to(torch.float64)
             if "hsl_drawdown_ema_max_portfolio" in out
             else long_ema_max.maximum(short_ema_max)
         ),
-        "drawdown_worst_ema_strategy_eq_long": long_ema_max,
-        "drawdown_worst_ema_strategy_eq_short": short_ema_max,
+        "hsl_signal_ema_max_fraction_long": long_ema_max,
+        "hsl_signal_ema_max_fraction_short": short_ema_max,
     }
 
 
@@ -1320,16 +1318,16 @@ def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
             "results: " + ", ".join(sorted(missing))
         )
     return {
-        "drawdown_worst_strategy_eq_long": out["hsl_drawdown_raw_max_long"].to(
+        "drawdown_max_fraction_strategy_equity_long": out["hsl_drawdown_raw_max_long"].to(
             torch.float64
         ),
-        "drawdown_worst_strategy_eq_short": out["hsl_drawdown_raw_max_short"].to(
+        "drawdown_max_fraction_strategy_equity_short": out["hsl_drawdown_raw_max_short"].to(
             torch.float64
         ),
-        "drawdown_worst_mean_1pct_strategy_eq_long": out[
+        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long": out[
             "hsl_drawdown_raw_mean_worst_1pct_long"
         ].to(torch.float64),
-        "drawdown_worst_mean_1pct_strategy_eq_short": out[
+        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short": out[
             "hsl_drawdown_raw_mean_worst_1pct_short"
         ].to(torch.float64),
     }
@@ -1352,13 +1350,13 @@ def _hard_stop_ema_tail_metrics(out: dict) -> dict:
     return {
         # Retained directional single-coin proxy lacks a joint observation.
         # Native service requires the portfolio output at its replay boundary.
-        "drawdown_worst_mean_1pct_ema_strategy_eq": (
+        "hsl_signal_ema_worst_1pct_mean_fraction": (
             out["hsl_drawdown_ema_mean_worst_1pct_portfolio"].to(torch.float64)
             if "hsl_drawdown_ema_mean_worst_1pct_portfolio" in out
             else long_tail.maximum(short_tail)
         ),
-        "drawdown_worst_mean_1pct_ema_strategy_eq_long": long_tail,
-        "drawdown_worst_mean_1pct_ema_strategy_eq_short": short_tail,
+        "hsl_signal_ema_worst_1pct_mean_fraction_long": long_tail,
+        "hsl_signal_ema_worst_1pct_mean_fraction_short": short_tail,
     }
 
 
@@ -1377,10 +1375,10 @@ def _hard_stop_strategy_eq_recovery_metrics(out: dict) -> dict:
     long_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_long"].to(torch.float64)
     short_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_short"].to(torch.float64)
     return {
-        "peak_recovery_hours_strategy_eq_long": long_recovery_ms / 3_600_000.0,
-        "peak_recovery_hours_strategy_eq_short": short_recovery_ms / 3_600_000.0,
-        "peak_recovery_days_strategy_eq_long": long_recovery_ms / 86_400_000.0,
-        "peak_recovery_days_strategy_eq_short": short_recovery_ms / 86_400_000.0,
+        "recovery_max_hours_strategy_equity_long": long_recovery_ms / 3_600_000.0,
+        "recovery_max_hours_strategy_equity_short": short_recovery_ms / 3_600_000.0,
+        "recovery_max_days_strategy_equity_long": long_recovery_ms / 86_400_000.0,
+        "recovery_max_days_strategy_equity_short": short_recovery_ms / 86_400_000.0,
     }
 
 
@@ -1393,12 +1391,12 @@ def _strategy_eq_recovery_distribution_metrics(out: dict) -> dict:
         )
     values = out["strategy_eq_recovery_distribution"].to(torch.float64)
     names = (
-        "strategy_eq_recovery_days_mean",
-        "strategy_eq_recovery_days_median",
-        "strategy_eq_recovery_days_p95",
-        "strategy_eq_recovery_days_p99",
-        "strategy_eq_recovery_days_mean_worst_5pct",
-        "strategy_eq_recovery_days_mean_worst_1pct",
+        "recovery_mean_days_strategy_equity",
+        "recovery_median_days_strategy_equity",
+        "recovery_p95_days_strategy_equity",
+        "recovery_p99_days_strategy_equity",
+        "recovery_worst_5pct_mean_days_strategy_equity",
+        "recovery_worst_1pct_mean_days_strategy_equity",
     )
     return {name: values[:, index] for index, name in enumerate(names)}
 
@@ -1444,10 +1442,10 @@ def _daily_peak_recovery_ms(day_end_eq, active):
 
 def _equity_balance_diff_values(out: dict, *, suffix: str = "") -> dict:
     base_names = (
-        "equity_balance_diff_pos_max",
-        "equity_balance_diff_pos_mean",
-        "equity_balance_diff_neg_max",
-        "equity_balance_diff_neg_mean",
+        "equity_balance_gap_positive_max_fraction",
+        "equity_balance_gap_positive_mean_fraction",
+        "equity_balance_gap_negative_max_fraction",
+        "equity_balance_gap_negative_mean_fraction",
     )
     names = tuple(f"{name}{suffix}" for name in base_names)
     missing = [name for name in names if name not in out]
@@ -1551,17 +1549,17 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     day_end_btc = torch.where(
         active, day_end_usd / day_end_price, torch.zeros_like(day_end_usd)
     )
-    gain, adg = _smoothed_gain_adg(day_end_btc, active)
-    daily_changes, change_mask = _pct_change(day_end_btc, active)
-    mdg = _masked_median(daily_changes, change_mask)
+    gain_multiplier, adg_fraction = _smoothed_gain_adg(day_end_btc, active)
+    daily_changes, change_mask = _simple_returns(day_end_btc, active)
+    mdg_fraction = _masked_median(daily_changes, change_mask)
     omega = _omega_ratio(daily_changes, change_mask)
     has_fill = out["fill_count"].to(torch.float64) > 0.0
-    zeros = torch.zeros_like(adg)
+    zeros = torch.zeros_like(adg_fraction)
 
     values = {
-        "adg_btc": adg,
-        "gain_btc": gain,
-        "mdg_btc": mdg,
+        "adg_fraction_btc": adg_fraction,
+        "gain_multiplier_btc": gain_multiplier,
+        "mdg_fraction_btc": mdg_fraction,
         "omega_ratio_btc": omega,
     }
     btc_equity_balance_metrics = {
@@ -1571,15 +1569,15 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         differences = _equity_balance_diff_values(out, suffix="_btc")
         for name, value in differences.items():
             values[f"{name}_btc"] = value
-        values["paper_loss_ratio_btc"] = adg / differences[
-            "equity_balance_diff_neg_max"
+        values["adg_to_paper_loss_max_ratio_btc"] = adg_fraction / differences[
+            "equity_balance_gap_negative_max_fraction"
         ].clamp(min=1e-12)
-        values["paper_loss_mean_ratio_btc"] = adg / differences[
-            "equity_balance_diff_neg_mean"
+        values["adg_to_paper_loss_mean_ratio_btc"] = adg_fraction / differences[
+            "equity_balance_gap_negative_mean_fraction"
         ].clamp(min=1e-12)
     if risk_requested:
         _risk_gain, risk_adg = _smoothed_gain_adg(risk_day_end_btc, active)
-        min_changes, min_change_mask = _pct_change(risk_day_min_btc, active)
+        min_changes, min_change_mask = _simple_returns(risk_day_min_btc, active)
         sharpe, sortino = _sharpe_sortino(min_changes, min_change_mask, risk_adg)
         expected_shortfall = _mean_worst_one_pct_abs(min_changes, min_change_mask)
         max_dd = risk_day_max_dd_btc.max(dim=1).values
@@ -1587,78 +1585,78 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         values.update(
             {
                 "calmar_ratio_btc": risk_adg / max_dd.clamp(min=1e-12),
-                "drawdown_worst_btc": max_dd,
-                "drawdown_worst_mean_1pct_btc": worst_one_pct,
-                "expected_shortfall_1pct_btc": expected_shortfall,
+                "drawdown_max_fraction_btc": max_dd,
+                "drawdown_daily_worst_1pct_mean_fraction_btc": worst_one_pct,
+                "expected_shortfall_1pct_fraction_btc": expected_shortfall,
                 "sharpe_ratio_btc": sharpe,
                 "sortino_ratio_btc": sortino,
                 "sterling_ratio_btc": risk_adg / worst_one_pct.clamp(min=1e-12),
             }
         )
     drawdown_defaults = {
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
+        "drawdown_max_fraction_btc",
+        "drawdown_daily_worst_1pct_mean_fraction_btc",
     }
     equity_balance_diff_defaults = {
-        f"equity_balance_diff_{sign}_{stat}_btc"
-        for sign in ("neg", "pos")
+        f"equity_balance_gap_{sign}_{stat}_fraction_btc"
+        for sign in ("negative", "positive")
         for stat in ("max", "mean")
     }
     for name in tuple(values):
         default = (
-            torch.ones_like(adg)
+            torch.ones_like(adg_fraction)
             if name in drawdown_defaults | equity_balance_diff_defaults
             else zeros
         )
         values[name] = torch.where(has_fill, values[name], default)
 
     shape_names = {
-        "equity_choppiness_btc",
-        "equity_jerkiness_btc",
-        "exponential_fit_error_btc",
+        "equity_choppiness_ratio_btc",
+        "equity_jerkiness_ratio_btc",
+        "exponential_fit_mse_log_ratio_squared_btc",
     }
     if requested & shape_names:
         shape = _equity_shape_metrics(day_end_btc, active)
         shape_sources = {
-            "equity_choppiness_btc": "equity_choppiness_usd",
-            "equity_jerkiness_btc": "equity_jerkiness_usd",
-            "exponential_fit_error_btc": "exponential_fit_error_usd",
+            "equity_choppiness_ratio_btc": "equity_choppiness_ratio_usd",
+            "equity_jerkiness_ratio_btc": "equity_jerkiness_ratio_usd",
+            "exponential_fit_mse_log_ratio_squared_btc": "exponential_fit_mse_log_ratio_squared_usd",
         }
         for name, source in shape_sources.items():
-            values[name] = torch.where(has_fill, shape[source], torch.ones_like(adg))
+            values[name] = torch.where(has_fill, shape[source], torch.ones_like(adg_fraction))
 
     recovery_names = {
-        "peak_recovery_hours_equity_btc",
-        "peak_recovery_days_equity_btc",
+        "peak_recovery_max_hours_btc",
+        "peak_recovery_max_days_btc",
     }
     if requested & recovery_names:
         recovery_ms = _daily_peak_recovery_ms(day_end_btc, active)
-        values["peak_recovery_hours_equity_btc"] = torch.where(
+        values["peak_recovery_max_hours_btc"] = torch.where(
             has_fill, recovery_ms / 3_600_000.0, zeros
         )
-        values["peak_recovery_days_equity_btc"] = torch.where(
+        values["peak_recovery_max_days_btc"] = torch.where(
             has_fill, recovery_ms / 86_400_000.0, zeros
         )
     exposure_denominators = {
-        "exposure_ratio_btc": "total_wallet_exposure_max",
-        "exposure_mean_ratio_btc": "total_wallet_exposure_mean",
+        "adg_to_absolute_net_exposure_max_ratio_btc": "absolute_net_wallet_exposure_max_ratio",
+        "adg_to_absolute_net_exposure_mean_ratio_btc": "absolute_net_wallet_exposure_mean_ratio",
     }
     for name, denominator in exposure_denominators.items():
         if name in requested:
-            ratio = adg / out[denominator].to(torch.float64).abs().clamp(min=1e-12)
+            ratio = adg_fraction / out[denominator].to(torch.float64).abs().clamp(min=1e-12)
             values[name] = torch.where(has_fill, ratio, zeros)
 
     per_exposure_sources = {
-        "adg": adg,
-        "gain": gain,
-        "mdg": mdg,
+        "adg_fraction": adg_fraction,
+        "gain_multiplier": gain_multiplier,
+        "mdg_fraction": mdg_fraction,
     }
     for metric, source in per_exposure_sources.items():
         for side in ("long", "short"):
-            name = f"{metric}_per_exposure_{side}_btc"
+            name = f"{metric}_per_twel_ratio_btc_{side}"
             if name not in requested:
                 continue
-            denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+            denominator = out[f"candidate_total_wallet_exposure_limit_ratio_{side}"].to(
                 torch.float64
             )
             values[name] = torch.where(
@@ -1693,7 +1691,7 @@ def _with_native_equity_timestamps(
 
 
 def _strategy_drawdown_indices(out: dict, active, requested) -> dict:
-    names = {"pain_index_strategy_eq", "ulcer_index_strategy_eq"} & set(requested)
+    names = {"pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"} & set(requested)
     if not names:
         return {}
     fields = ("raw_strategy_day_dd_sum", "raw_strategy_day_dd_squared_sum",
@@ -1714,10 +1712,10 @@ def _strategy_drawdown_indices(out: dict, active, requested) -> dict:
     drawdown_sum, squared_sum, count = totals
     denominator = count.clamp(min=1)
     result = {}
-    if "pain_index_strategy_eq" in names:
-        result["pain_index_strategy_eq"] = drawdown_sum / denominator
-    if "ulcer_index_strategy_eq" in names:
-        result["ulcer_index_strategy_eq"] = (squared_sum / denominator).sqrt()
+    if "pain_index_fraction_strategy_equity" in names:
+        result["pain_index_fraction_strategy_equity"] = drawdown_sum / denominator
+    if "ulcer_index_fraction_strategy_equity" in names:
+        result["ulcer_index_fraction_strategy_equity"] = (squared_sum / denominator).sqrt()
     return result
 
 
@@ -1763,18 +1761,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         }
     )
 
-    gain, adg = _smoothed_gain_adg(day_end_eq, active)
+    gain_multiplier, adg_fraction = _smoothed_gain_adg(day_end_eq, active)
     gain_quality_metrics = _gain_quality_metrics(day_end_eq, active, requested_sources)
-    daily_changes, change_mask = _pct_change(day_end_eq, active)
-    mdg = _masked_median(daily_changes, change_mask)
+    daily_changes, change_mask = _simple_returns(day_end_eq, active)
+    mdg_fraction = _masked_median(daily_changes, change_mask)
     omega = _omega_ratio(daily_changes, change_mask)
-    daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
-    sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
+    daily_min_changes, min_change_mask = _simple_returns(day_min_eq, active)
+    sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg_fraction)
     expected_shortfall = _mean_worst_one_pct_abs(daily_min_changes, min_change_mask)
     shape_metric_names = {
-        "equity_choppiness_usd",
-        "equity_jerkiness_usd",
-        "exponential_fit_error_usd",
+        "equity_choppiness_ratio_usd",
+        "equity_jerkiness_ratio_usd",
+        "exponential_fit_mse_log_ratio_squared_usd",
     }
     equity_shape_metrics = {}
     if requested & shape_metric_names:
@@ -1786,18 +1784,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             )
 
     worst_one_pct = _mean_worst_one_pct_largest(day_max_dd, active)
-    calmar = adg / out["max_dd"].to(torch.float64).clamp(min=1e-12)
-    sterling = adg / worst_one_pct.clamp(min=1e-12)
+    calmar = adg_fraction / out["max_dd"].to(torch.float64).clamp(min=1e-12)
+    sterling = adg_fraction / worst_one_pct.clamp(min=1e-12)
 
     volume_days = day_has_fill.sum(dim=1).clamp(min=1).to(torch.float64)
     volume_pct = day_volume.sum(dim=1) / volume_days
-    zeros = torch.zeros_like(adg)
-    adg_pnl = mdg_pnl = sharpe_pnl = sortino_pnl = zeros
+    zeros = torch.zeros_like(adg_fraction)
+    daily_realized_pnl_mean_fraction = daily_realized_pnl_median_fraction = sharpe_pnl = sortino_pnl = zeros
     if requested & _PNL_METRICS:
         day_net_pnl = out["day_net_pnl"].to(torch.float64)
         day_last_fill_balance = out["day_last_fill_balance"].to(torch.float64)
         if requested & _PNL_METRICS:
-            adg_pnl, mdg_pnl, sharpe_pnl, sortino_pnl, _ = _daily_pnl_stats(
+            daily_realized_pnl_mean_fraction, daily_realized_pnl_median_fraction, sharpe_pnl, sortino_pnl, _ = _daily_pnl_stats(
                 day_net_pnl,
                 day_last_fill_balance,
                 day_has_fill & active,
@@ -1819,8 +1817,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         torch.maximum(out["recovery_max_ms"], final_recovery) / 86_400_000.0
     )
     account_recovery_metrics = {
-        "peak_recovery_days_equity_usd",
-        "peak_recovery_hours_equity_usd",
+        "peak_recovery_max_days_usd",
+        "peak_recovery_max_hours_usd",
     }
     if requested & account_recovery_metrics:
         if "account_recovery_max_ms" not in out:
@@ -1835,8 +1833,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     else:
         account_recovery_max_ms = torch.zeros_like(recovery_max_days)
     pnl_recovery_metrics = {
-        "peak_recovery_days_pnl",
-        "peak_recovery_hours_pnl",
+        "peak_recovery_max_days_realized_pnl",
+        "peak_recovery_max_hours_realized_pnl",
     }
     if requested & pnl_recovery_metrics:
         if "pnl_recovery_max_ms" not in out:
@@ -1848,11 +1846,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         pnl_recovery_max_ms = torch.zeros_like(recovery_max_days)
     held_days = out["held_max_ms"] / 86_400_000.0
     position_duration_metrics = {
-        "position_held_days_mean",
-        "position_held_hours_mean",
-        "positions_held_per_day",
+        "position_held_mean_days",
+        "position_held_mean_hours",
+        "position_episodes_per_day",
     }
-    held_hours_mean = positions_held_per_day = zeros
+    held_hours_mean = position_episodes_per_day = zeros
     if requested & position_duration_metrics:
         held_count = out["held_count"].to(torch.float64)
         held_hours_mean = torch.where(
@@ -1863,7 +1861,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             torch.zeros_like(held_count),
         )
         duration_days = _analysis_duration_days(out, run)
-        positions_held_per_day = torch.where(
+        position_episodes_per_day = torch.where(
             duration_days > 0.0,
             held_count / duration_days.clamp(min=1.0e-9),
             torch.zeros_like(held_count),
@@ -1951,40 +1949,39 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
 
-    completion = _backtest_completion_ratio(out, run, data, has_equity)
+    completion = _backtest_completion_fraction(out, run, data, has_equity)
 
     objectives = {
-        "adg_pnl": adg_pnl,
-        "adg_strategy_eq": adg,
-        "backtest_completion_ratio": completion,
-        "calmar_ratio_strategy_eq": calmar,
-        "drawdown_worst_mean_1pct_strategy_eq": worst_one_pct,
-        "drawdown_worst_strategy_eq": out["max_dd"],
-        "expected_shortfall_1pct_strategy_eq": expected_shortfall,
-        "fills_gap_longest_days": gap_longest_days,
-        "gain_strategy_eq": gain,
-        "mdg_strategy_eq": mdg,
-        "mdg_pnl": mdg_pnl,
-        "omega_ratio_strategy_eq": omega,
-        "position_held_days_mean": held_hours_mean / 24.0,
-        "position_held_days_max": held_days,
+        "daily_realized_pnl_mean_fraction": daily_realized_pnl_mean_fraction,
+        "adg_fraction_strategy_equity": adg_fraction,
+        "backtest_completion_fraction": completion,
+        "calmar_ratio_strategy_equity": calmar,
+        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity": worst_one_pct,
+        "drawdown_max_fraction_strategy_equity": out["max_dd"],
+        "expected_shortfall_1pct_fraction_strategy_equity": expected_shortfall,
+        "fills_gap_max_days": gap_longest_days,
+        "gain_multiplier_strategy_equity": gain_multiplier,
+        "mdg_fraction_strategy_equity": mdg_fraction,
+        "daily_realized_pnl_median_fraction": daily_realized_pnl_median_fraction,
+        "omega_ratio_strategy_equity": omega,
+        "position_held_mean_days": held_hours_mean / 24.0,
+        "position_held_max_days": held_days,
         "position_held_time_weighted_mean_hours": held_time_weighted_hours,
-        "position_held_hours_mean": held_hours_mean,
-        "position_held_hours_max": held_days * 24.0,
-        "positions_held_per_day": positions_held_per_day,
-        "sharpe_ratio_strategy_eq": sharpe,
-        "sharpe_ratio_pnl": sharpe_pnl,
-        "sortino_ratio_strategy_eq": sortino,
-        "sortino_ratio_pnl": sortino_pnl,
-        "sterling_ratio_strategy_eq": sterling,
-        "strategy_eq_recovery_days_max": recovery_max_days,
-        "peak_recovery_hours_strategy_eq": recovery_max_days * 24.0,
-        "peak_recovery_days_strategy_eq": recovery_max_days,
-        "peak_recovery_hours_equity_usd": account_recovery_max_ms / 3_600_000.0,
-        "peak_recovery_days_equity_usd": account_recovery_max_ms / 86_400_000.0,
-        "peak_recovery_hours_pnl": pnl_recovery_max_ms / 3_600_000.0,
-        "peak_recovery_days_pnl": pnl_recovery_max_ms / 86_400_000.0,
-        "volume_pct_per_day_avg": volume_pct,
+        "position_held_mean_hours": held_hours_mean,
+        "position_held_max_hours": held_days * 24.0,
+        "position_episodes_per_day": position_episodes_per_day,
+        "sharpe_ratio_strategy_equity": sharpe,
+        "sharpe_ratio_realized_pnl": sharpe_pnl,
+        "sortino_ratio_strategy_equity": sortino,
+        "sortino_ratio_realized_pnl": sortino_pnl,
+        "sterling_ratio_strategy_equity": sterling,
+        "recovery_max_days_strategy_equity": recovery_max_days,
+        "recovery_max_hours_strategy_equity": recovery_max_days * 24.0,
+        "peak_recovery_max_hours_usd": account_recovery_max_ms / 3_600_000.0,
+        "peak_recovery_max_days_usd": account_recovery_max_ms / 86_400_000.0,
+        "peak_recovery_max_hours_realized_pnl": pnl_recovery_max_ms / 3_600_000.0,
+        "peak_recovery_max_days_realized_pnl": pnl_recovery_max_ms / 86_400_000.0,
+        "active_day_turnover_proxy_mean_ratio": volume_pct,
     }
     usd_equity_balance_metrics = {
         metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_usd")
@@ -1996,15 +1993,15 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             objectives[f"{name}_usd"] = torch.where(
                 has_fills, value, torch.ones_like(value)
             )
-        objectives["paper_loss_ratio_usd"] = torch.where(
+        objectives["adg_to_paper_loss_max_ratio_usd"] = torch.where(
             has_fills,
-            adg / differences["equity_balance_diff_neg_max"].clamp(min=1e-12),
-            torch.zeros_like(adg),
+            adg_fraction / differences["equity_balance_gap_negative_max_fraction"].clamp(min=1e-12),
+            torch.zeros_like(adg_fraction),
         )
-        objectives["paper_loss_mean_ratio_usd"] = torch.where(
+        objectives["adg_to_paper_loss_mean_ratio_usd"] = torch.where(
             has_fills,
-            adg / differences["equity_balance_diff_neg_mean"].clamp(min=1e-12),
-            torch.zeros_like(adg),
+            adg_fraction / differences["equity_balance_gap_negative_mean_fraction"].clamp(min=1e-12),
+            torch.zeros_like(adg_fraction),
         )
     objectives.update(hard_stop_ema_drawdown_metrics)
     objectives.update(hard_stop_raw_drawdown_metrics)
@@ -2018,8 +2015,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     directional_pnl_metrics = {
         "loss_profit_ratio_long",
         "loss_profit_ratio_short",
-        "long_short_profit_ratio",
-        "pnl_ratio_long_short",
+        "long_pnl_to_total_pnl_ratio",
+        "long_pnl_to_total_pnl_ratio",
     }
     if requested & directional_pnl_metrics:
         objectives.update(
@@ -2029,24 +2026,24 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
                 if name in requested
             }
         )
-    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean", *EXPOSURE_RMS_METRICS):
+    for name in ("absolute_net_wallet_exposure_max_ratio", "absolute_net_wallet_exposure_mean_ratio", *EXPOSURE_RMS_METRICS):
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
     exposure_ratio_denominators = {
-        "exposure_ratio_usd": "total_wallet_exposure_max",
-        "exposure_mean_ratio_usd": "total_wallet_exposure_mean",
+        "adg_to_absolute_net_exposure_max_ratio_usd": "absolute_net_wallet_exposure_max_ratio",
+        "adg_to_absolute_net_exposure_mean_ratio_usd": "absolute_net_wallet_exposure_mean_ratio",
     }
     for name, denominator in exposure_ratio_denominators.items():
         if name in requested:
-            objectives[name] = adg / out[denominator].to(torch.float64).abs().clamp(
+            objectives[name] = adg_fraction / out[denominator].to(torch.float64).abs().clamp(
                 min=1e-12
             )
-    if {"position_unchanged_days_max", "position_unchanged_hours_max"} & requested:
-        position_unchanged_hours_max = out["position_unchanged_max_ms"] / 3_600_000.0
-        objectives["position_unchanged_hours_max"] = position_unchanged_hours_max
-        objectives["position_unchanged_days_max"] = position_unchanged_hours_max / 24.0
+    if {"position_unchanged_max_days", "position_unchanged_max_hours"} & requested:
+        position_unchanged_max_hours = out["position_unchanged_max_ms"] / 3_600_000.0
+        objectives["position_unchanged_max_hours"] = position_unchanged_max_hours
+        objectives["position_unchanged_max_days"] = position_unchanged_max_hours / 24.0
     for side in ("long", "short"):
-        name = f"entry_initial_balance_pct_{side}"
+        name = f"initial_entry_balance_fraction_{side}"
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
     objectives.update(fill_gap_metrics)
@@ -2062,7 +2059,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
-        denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+        denominator = out[f"candidate_total_wallet_exposure_limit_ratio_{side}"].to(
             torch.float64
         )
         objectives[name] = torch.where(
@@ -2078,8 +2075,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     if "raw_strategy_day_max_dd" in out:
         raw_daily_dd = out["raw_strategy_day_max_dd"].to(torch.float64)
         raw_daily_dd = torch.where(active, raw_daily_dd, torch.zeros_like(raw_daily_dd))
-        objectives["drawdown_worst_strategy_eq"] = raw_daily_dd.max(dim=1).values
-        objectives["drawdown_worst_mean_1pct_strategy_eq"] = (
+        objectives["drawdown_max_fraction_strategy_equity"] = raw_daily_dd.max(dim=1).values
+        objectives["drawdown_daily_worst_1pct_mean_fraction_strategy_equity"] = (
             _mean_worst_one_pct_largest(raw_daily_dd, active)
         )
     objectives.update(_strategy_drawdown_indices(out, active, requested))
@@ -2104,40 +2101,40 @@ def _raw_strategy_equity_metrics(out, requested):
     active = torch.isfinite(minima)
     result = {}
     growth_names = names - {
-        "mdg_strategy_eq", "omega_ratio_strategy_eq", "expected_shortfall_1pct_strategy_eq",
-        "adg_rolling_hmean_strategy_eq", "adg_time_integrated_strategy_eq",
-        "positive_gain_participation_strategy_eq",
+        "mdg_fraction_strategy_equity", "omega_ratio_strategy_equity", "expected_shortfall_1pct_fraction_strategy_equity",
+        "adg_rolling_hmean_fraction_strategy_equity", "adg_time_integrated_fraction_strategy_equity",
+        "positive_log_return_participation_score_strategy_equity",
     }
     if growth_names:
-        adg = _smoothed_adg(ends, active)
-        if "adg_strategy_eq" in names:
-            result["adg_strategy_eq"] = adg
-    if names & {"mdg_strategy_eq", "omega_ratio_strategy_eq"}:
-        returns, return_mask = _pct_change(ends, active)
-        if "mdg_strategy_eq" in names:
-            result["mdg_strategy_eq"] = _masked_median(returns, return_mask)
-        if "omega_ratio_strategy_eq" in names:
-            result["omega_ratio_strategy_eq"] = _omega_ratio(returns, return_mask)
-    if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq",
-                "expected_shortfall_1pct_strategy_eq"}:
-        changes, change_mask = _pct_change(minima, active)
-        if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq"}:
-            sharpe, sortino = _sharpe_sortino(changes, change_mask, adg)
-            if "sharpe_ratio_strategy_eq" in names:
-                result["sharpe_ratio_strategy_eq"] = sharpe
-            if "sortino_ratio_strategy_eq" in names:
-                result["sortino_ratio_strategy_eq"] = sortino
-        if "expected_shortfall_1pct_strategy_eq" in names:
-            result["expected_shortfall_1pct_strategy_eq"] = _mean_worst_one_pct_abs(
+        adg_fraction = _smoothed_adg(ends, active)
+        if "adg_fraction_strategy_equity" in names:
+            result["adg_fraction_strategy_equity"] = adg_fraction
+    if names & {"mdg_fraction_strategy_equity", "omega_ratio_strategy_equity"}:
+        returns, return_mask = _simple_returns(ends, active)
+        if "mdg_fraction_strategy_equity" in names:
+            result["mdg_fraction_strategy_equity"] = _masked_median(returns, return_mask)
+        if "omega_ratio_strategy_equity" in names:
+            result["omega_ratio_strategy_equity"] = _omega_ratio(returns, return_mask)
+    if names & {"sharpe_ratio_strategy_equity", "sortino_ratio_strategy_equity",
+                "expected_shortfall_1pct_fraction_strategy_equity"}:
+        changes, change_mask = _simple_returns(minima, active)
+        if names & {"sharpe_ratio_strategy_equity", "sortino_ratio_strategy_equity"}:
+            sharpe, sortino = _sharpe_sortino(changes, change_mask, adg_fraction)
+            if "sharpe_ratio_strategy_equity" in names:
+                result["sharpe_ratio_strategy_equity"] = sharpe
+            if "sortino_ratio_strategy_equity" in names:
+                result["sortino_ratio_strategy_equity"] = sortino
+        if "expected_shortfall_1pct_fraction_strategy_equity" in names:
+            result["expected_shortfall_1pct_fraction_strategy_equity"] = _mean_worst_one_pct_abs(
                 changes, change_mask
             )
-    if names & {"calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq"}:
+    if names & {"calmar_ratio_strategy_equity", "sterling_ratio_strategy_equity"}:
         dd = out["raw_strategy_day_max_dd"].to(torch.float64)
         dd = torch.where(active, dd, torch.zeros_like(dd))
-        if "calmar_ratio_strategy_eq" in names:
-            result["calmar_ratio_strategy_eq"] = adg / dd.max(dim=1).values.clamp(min=1e-12)
-        if "sterling_ratio_strategy_eq" in names:
-            result["sterling_ratio_strategy_eq"] = adg / _mean_worst_one_pct_largest(
+        if "calmar_ratio_strategy_equity" in names:
+            result["calmar_ratio_strategy_equity"] = adg_fraction / dd.max(dim=1).values.clamp(min=1e-12)
+        if "sterling_ratio_strategy_equity" in names:
+            result["sterling_ratio_strategy_equity"] = adg_fraction / _mean_worst_one_pct_largest(
                 dd, active
             ).clamp(min=1e-12)
     result.update(_gain_quality_metrics(ends, active, names))

@@ -48,7 +48,7 @@ def facts(minute, *, start=None, slots=1, size=1.0, mark=90.0):
         },
         "slots": slots, "scale_budget_with_excess_allowance": False,
         "exposure_budget": None, "memory_ema_span_minutes": 7.0,
-        "drawdown_ratio_ema_span_minutes": 1.0, "threshold": 0.001,
+        "drawdown_fraction_ema_span_minutes": 1.0, "drawdown_threshold_fraction": 0.001,
         "cooldown_ms": HORIZON,
         "budget_observations": [{
             "timestamp": 0, "order": -1, "balance": 1000.0, "slots": slots,
@@ -68,12 +68,12 @@ def test_long_active_episode_matches_independent_f32_decay_and_bounded_counts():
     # Establish the actually observed exposed seed in minute zero. Historical
     # marks before a first account observation do not prove earlier exposure.
     initial = evaluate(replay, facts(0))
-    assert initial["risk"]["drawdown"] == expected
+    assert initial["risk"]["drawdown_memory_usd"] == expected
     for minute in range(1, 81):
         value = facts(minute)
         expected = f32(expected * f32(0.75))
         output = evaluate(replay, value)
-        assert output["risk"]["drawdown"] == expected
+        assert output["risk"]["drawdown_memory_usd"] == expected
         assert output["continuity"]["bootstrap_origin_ms"] == 0
         assert output["continuity"]["reconstruction"] == "bounded_bootstrap"
         before = replay.cache_info()["advanced_events"]
@@ -99,13 +99,13 @@ def test_discarded_prefix_reconstruction_is_visible_and_current_loss_has_no_warm
     boundary = evaluate(replay, old)["continuity"]["boundary_at_ms"]
     old["snapshot"]["start"] = boundary - MINUTE
     old["snapshot"]["pairs"][0]["prices"] = {}
-    old["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
+    old["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     output = evaluate(replay, old)
     assert output["continuity"]["reconstruction"] == "policy_changed_beyond_retained_support"
     assert output["continuity"]["boundary_at_ms"] is None
     assert output["continuity"]["bootstrap_origin_ms"] == boundary - MINUTE
-    assert output["risk"]["drawdown"] > 0
-    assert output["risk"]["ema"] >= output["risk"]["raw"]
+    assert output["risk"]["drawdown_memory_usd"] > 0
+    assert output["risk"]["signal_ema_fraction"] >= output["risk"]["signal_raw_fraction"]
     assert output["risk"]["action"] == "panic"
     assert "unknown_prefix_current_basis_seed" in output["reasons"]
 

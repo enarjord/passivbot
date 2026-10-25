@@ -15,7 +15,7 @@ def _base_config():
             "end_date": "2025-01-01",
             "start_date": "2024-01-01",
             "exchanges": ["binance"],
-            "btc_collateral_cap": 1.0,
+            "btc_collateral_target_ratio": 1.0,
             "gap_tolerance_ohlcvs_minutes": 120,
         },
         "bot": {
@@ -27,7 +27,7 @@ def _base_config():
                 "risk": {"max_positions": 4},
                 "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.2, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.2, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {"account": {}, "candles": {}},
         "optimize": {"bounds": {}, "scoring": []},

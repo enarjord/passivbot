@@ -25,11 +25,11 @@ def test_native_coin_hsl_forager_preserves_unfilled_incumbents(tmp_path):
            for config in entry["configs"]]
     gpu = gpu_runs(entry, arrays, "8", 1, 0, 0, 50_000_000)["samples"][0]["results"]
     for expected, actual in zip(cpu, gpu, strict=True):
-        assert expected["metrics"]["hard_stop_triggers_per_year"] > 0
+        assert expected["metrics"]["hsl_triggers_per_year"] > 0
         assert actual["liquidated"] == expected["liquidated"]
         for metric in entry["metrics"]:
             # Drawdown needs float32 slack; discrete HSL/fill chronology does not.
-            tolerance = 2e-6 if metric == "drawdown_worst_strategy_eq" else 1e-9
+            tolerance = 2e-6 if metric == "drawdown_max_fraction_strategy_equity" else 1e-9
             assert actual["metrics"][metric] == pytest.approx(
                 expected["metrics"][metric], abs=tolerance, rel=0), metric
 

@@ -12,37 +12,37 @@ def _single_violation(entry, value, weights=None, penalty_weight=1000.0):
 
 
 def test_greater_than_limit_penalizes_excess():
-    entry = {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.5}
+    entry = {"metric": "drawdown_max_fraction", "penalize_if": "greater_than", "value": 0.5}
     violation = _single_violation(entry, value=0.6, penalty_weight=10)
     assert violation == (0.6 - 0.5) * 10
 
 
 def test_less_than_limit_penalizes_deficit_with_custom_stat():
-    entry = {"metric": "adg", "penalize_if": "less_than", "value": 0.001, "stat": "min"}
+    entry = {"metric": "adg_fraction", "penalize_if": "less_than", "value": 0.001, "stat": "min"}
     violation = _single_violation(entry, value=0.0002, penalty_weight=5)
     assert violation == (0.001 - 0.0002) * 5
 
 
 def test_greater_than_or_equal_limit_penalizes_boundary_hit():
-    entry = {"metric": "drawdown_worst", "penalize_if": "greater_than_or_equal", "value": 0.5}
+    entry = {"metric": "drawdown_max_fraction", "penalize_if": "greater_than_or_equal", "value": 0.5}
     assert _single_violation(entry, value=0.49, penalty_weight=10) == 0.0
     assert _single_violation(entry, value=0.5, penalty_weight=10) > 0.0
 
 
 def test_less_than_or_equal_limit_penalizes_boundary_hit():
-    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
+    entry = {"metric": "adg_fraction", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
     assert _single_violation(entry, value=0.0011, penalty_weight=5) == 0.0
     assert _single_violation(entry, value=0.001, penalty_weight=5) > 0.0
 
 
 def test_equal_to_limit_penalizes_exact_match_only():
-    entry = {"metric": "adg", "penalize_if": "equal_to", "value": 0.001, "stat": "mean"}
+    entry = {"metric": "adg_fraction", "penalize_if": "equal_to", "value": 0.001, "stat": "mean"}
     assert _single_violation(entry, value=0.001, penalty_weight=5) > 0.0
     assert _single_violation(entry, value=0.0011, penalty_weight=5) == 0.0
 
 
 def test_not_equal_limit_penalizes_non_matching_values_only():
-    entry = {"metric": "adg", "penalize_if": "not_equal", "value": 0.001, "stat": "mean"}
+    entry = {"metric": "adg_fraction", "penalize_if": "not_equal", "value": 0.001, "stat": "mean"}
     assert _single_violation(entry, value=0.001, penalty_weight=5) == 0.0
     assert _single_violation(entry, value=0.0011, penalty_weight=5) > 0.0
 
@@ -64,14 +64,14 @@ def test_inside_range_penalty_hits_inside_band_only():
 
 
 def test_auto_penalize_if_respects_scoring_weight_sign():
-    entry = {"metric": "adg", "penalize_if": "auto", "value": 0.0005}
-    weights = {"adg": -1.0}
+    entry = {"metric": "adg_fraction", "penalize_if": "auto", "value": 0.0005}
+    weights = {"adg_fraction": -1.0}
     violation = _single_violation(entry, value=0.0001, weights=weights, penalty_weight=3)
     assert violation == (0.0005 - 0.0001) * 3
 
 
 def test_auto_limit_without_scoring_weight_is_ignored_after_validation():
-    entry = {"metric": "adg", "penalize_if": "auto", "value": 0.0005}
+    entry = {"metric": "adg_fraction", "penalize_if": "auto", "value": 0.0005}
     assert expand_limit_checks([entry], {}, penalty_weight=1000.0) == []
 
 
@@ -94,7 +94,7 @@ def test_disabled_unknown_auto_limit_is_skipped():
 
 def test_disabled_limit_entry_is_skipped():
     entry = {
-        "metric": "drawdown_worst",
+        "metric": "drawdown_max_fraction",
         "penalize_if": "greater_than",
         "value": 0.5,
         "enabled": False,
@@ -116,19 +116,19 @@ def test_unknown_limit_metric_raises_with_suggestion():
     message = str(exc_info.value)
     assert "unknown optimizer limit metric 'drawdown_worst_mean_strategy_eq'" in message
     assert "Did you mean:" in message
-    assert "drawdown_worst_mean_1pct_strategy_eq" in message
+    assert "drawdown_daily_worst_1pct_mean_fraction_strategy_equity" in message
 
 
 def test_deprecated_limit_metric_alias_is_validated_after_canonicalization():
-    entry = {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8}
+    entry = {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.8}
     checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
 
-    assert checks[0]["metric"] == "drawdown_worst_strategy_eq"
-    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
+    assert checks[0]["metric"] == "drawdown_max_fraction_strategy_equity"
+    assert checks[0]["metric_key"] == "drawdown_max_fraction_strategy_equity_mean"
 
 
 def test_omitted_reducer_uses_default_instead_of_operator_direction():
-    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001}
+    entry = {"metric": "adg_fraction", "penalize_if": "less_than_or_equal", "value": 0.001}
     checks = expand_limit_checks(
         [entry],
         {},
@@ -136,48 +136,48 @@ def test_omitted_reducer_uses_default_instead_of_operator_direction():
         reducer_cfg={"default": "mean"},
     )
     assert checks[0]["reducer"] == "mean"
-    assert checks[0]["metric_key"] == "adg_mean"
+    assert checks[0]["metric_key"] == "adg_fraction_mean"
 
 
 def test_omitted_reducer_uses_metric_specific_override():
-    entry = {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8}
+    entry = {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.8}
     checks = expand_limit_checks(
         [entry],
         {},
         penalty_weight=1000.0,
-        reducer_cfg={"default": "mean", "drawdown_worst_hsl": "max"},
+        reducer_cfg={"default": "mean", "drawdown_max_fraction_strategy_equity": "max"},
     )
     assert checks[0]["reducer"] == "max"
-    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"
+    assert checks[0]["metric_key"] == "drawdown_max_fraction_strategy_equity_max"
 
 
 def test_metric_value_resolution_accepts_deprecated_stat_suffix_aliases():
     metrics = {
-        "adg_strategy_pnl_rebased_mean": 0.001,
-        "drawdown_worst_hsl_max": 0.42,
+        "adg_fraction_strategy_equity_mean": 0.001,
+        "drawdown_max_fraction_strategy_equity_max": 0.42,
     }
 
-    assert resolve_metric_value(metrics, "adg_strategy_eq_mean") == 0.001
-    assert resolve_metric_value(metrics, "drawdown_worst_strategy_eq_max") == 0.42
+    assert resolve_metric_value(metrics, "adg_fraction_strategy_equity_mean") == 0.001
+    assert resolve_metric_value(metrics, "drawdown_max_fraction_strategy_equity_max") == 0.42
 
 
 def test_explicit_reducer_alias_overrides_reducer_config():
-    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
+    entry = {"metric": "adg_fraction", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
     checks = expand_limit_checks(
         [entry],
         {},
         penalty_weight=1000.0,
-        reducer_cfg={"default": "mean", "adg": "max"},
+        reducer_cfg={"default": "mean", "adg_fraction": "max"},
     )
     assert checks[0]["reducer"] == "min"
-    assert checks[0]["metric_key"] == "adg_min"
+    assert checks[0]["metric_key"] == "adg_fraction_min"
 
 
 def test_legacy_reducer_helpers_accept_legacy_keyword_arguments():
-    assert resolve_aggregate_mode("adg", aggregate_cfg={"default": "max"}) == "max"
+    assert resolve_aggregate_mode("adg_fraction", aggregate_cfg={"default": "max"}) == "max"
     assert (
         resolve_limit_stat(
-            {"metric": "adg", "stat": "min"},
+            {"metric": "adg_fraction", "stat": "min"},
             aggregate_cfg={"default": "max"},
         )
         == "min"
@@ -186,7 +186,7 @@ def test_legacy_reducer_helpers_accept_legacy_keyword_arguments():
 
 def test_named_scenario_limit_uses_scenario_mean():
     entry = {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than",
         "scenario": "base",
         "value": 0.5,
@@ -200,12 +200,12 @@ def test_named_scenario_limit_uses_scenario_mean():
 
     assert checks[0]["scenario"] == "base"
     assert checks[0]["reducer"] == "mean"
-    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
+    assert checks[0]["metric_key"] == "drawdown_max_fraction_strategy_equity_mean"
 
 
 def test_explicit_null_scenario_uses_suite_stat():
     entry = {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than",
         "scenario": None,
         "stat": "max",
@@ -220,4 +220,4 @@ def test_explicit_null_scenario_uses_suite_stat():
 
     assert checks[0]["scenario"] is None
     assert checks[0]["reducer"] == "max"
-    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"
+    assert checks[0]["metric_key"] == "drawdown_max_fraction_strategy_equity_max"

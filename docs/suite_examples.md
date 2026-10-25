@@ -172,10 +172,10 @@ Good defaults:
 {
   "reducer": {
     "default": "mean",
-    "drawdown_worst_strategy_eq": "max",
-    "drawdown_worst_mean_1pct_strategy_eq": "max",
-    "strategy_eq_recovery_days_max": "max",
-    "position_held_days_max": "max"
+    "drawdown_max_fraction_strategy_equity": "max",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity": "max",
+    "recovery_max_days_strategy_equity": "max",
+    "position_held_max_days": "max"
   }
 }
 ```
@@ -194,9 +194,9 @@ reduction, and optionally set an objective-only `reducer`. For example:
   "optimize": {
     "objective_scenario": "base",
     "scoring": [
-      {"metric": "adg_strategy_eq", "goal": "max"},
+      {"metric": "adg_fraction_strategy_equity", "goal": "max"},
       {
-        "metric": "pain_index_strategy_eq",
+        "metric": "pain_index_fraction_strategy_equity",
         "goal": "min",
         "scenario": null
       }
@@ -215,13 +215,13 @@ base scenario and a looser worst-scenario threshold across the whole suite:
   "optimize": {
     "limits": [
       {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than",
         "scenario": "base",
         "value": 0.5
       },
       {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than",
         "reducer": "max",
         "value": 0.7

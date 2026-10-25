@@ -461,7 +461,7 @@ config = {
         "exchanges": ["binance"],
         "reducer": {
             "default": "mean",
-            "mdg": "min",
+            "mdg_fraction": "min",
             "sharpe_ratio": "median"
         },
         "scenarios": [
@@ -471,7 +471,7 @@ config = {
     }
 }
 ```
-**Expected:** mdg uses min, sharpe uses median, others use mean.
+**Expected:** mdg_fraction uses min, sharpe uses median, others use mean.
 
 ---
 
@@ -555,7 +555,7 @@ config = {
             "enabled": True,
             "include_base_scenario": True,
             "base_label": "combined",
-            "aggregate": {"default": "mean", "mdg": "min"},
+            "aggregate": {"default": "mean", "mdg_fraction": "min"},
             "scenarios": [
                 {"label": "binance", "exchanges": ["binance"]},
                 {"label": "bybit", "exchanges": ["bybit"]}
@@ -568,7 +568,7 @@ config = {
 - `combine_ohlcvs` removed
 - `suite` removed
 - `scenarios` = [{"label": "combined"}, {"label": "binance", ...}, {"label": "bybit", ...}]
-- `aggregate` = {"default": "mean", "mdg": "min"}
+- `aggregate` = {"default": "mean", "mdg_fraction": "min"}
 
 ---
 

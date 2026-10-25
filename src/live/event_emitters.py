@@ -1384,7 +1384,7 @@ def emit_memory_snapshot_event(
     bot: Any,
     *,
     rss_bytes: Any,
-    rss_delta_pct: Any = None,
+    rss_delta_percent: Any = None,
     cache_bytes: Any = None,
     cache_candles: Any = None,
     cache_symbols: Any = None,
@@ -1408,9 +1408,9 @@ def emit_memory_snapshot_event(
         if bounded_rss is None:
             return None
         data["rss_bytes"] = bounded_rss
-        delta = _bounded_memory_snapshot_delta(rss_delta_pct)
+        delta = _bounded_memory_snapshot_delta(rss_delta_percent)
         if delta is not None:
-            data["rss_delta_pct"] = delta
+            data["rss_delta_percent"] = delta
         cache: dict[str, Any] = {}
         for key, raw_value, maximum in (
             ("bytes", cache_bytes, _MEMORY_SNAPSHOT_MAX_BYTES),
@@ -2451,7 +2451,7 @@ def _forager_top_score_sample(
         for key in (
             "volume_component",
             "ema_readiness_component",
-            "volatility_component",
+            "log_range_component",
             "unilateralness_component",
         ):
             value = _safe_float(item.get(key))
@@ -3012,7 +3012,7 @@ def _emit_forager_selection_event_unchecked(
     fetch_budget: int | None,
     incumbent_symbols: list[str] | tuple[str, ...] | None = None,
     slots_to_fill: int | None = None,
-    score_hysteresis_pct: float | None = None,
+    score_hysteresis_margin: float | None = None,
     top_scores: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     hysteresis_event_count: int = 0,
     source: str = "python_filter",
@@ -3038,8 +3038,8 @@ def _emit_forager_selection_event_unchecked(
         "volatility_drop_pct": (
             float(volatility_drop_pct) if volatility_drop_pct is not None else None
         ),
-        "score_hysteresis_pct": (
-            float(score_hysteresis_pct) if score_hysteresis_pct is not None else None
+        "score_hysteresis_margin": (
+            float(score_hysteresis_margin) if score_hysteresis_margin is not None else None
         ),
         "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
         "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
@@ -3973,13 +3973,13 @@ def emit_order_churn_admission_event(
             "reason_counts": dict(sorted(reasons.items())[:16]),
             "rolling_count": max(0, int(rolling_count)),
             "activation_count": max(0, int(activation_count)),
-            "market_distance_threshold_pct": _safe_float(
+            "market_distance_threshold_percent": _safe_float(
                 float(market_distance_threshold) * 100.0
             ),
             "symbols": symbols[:12],
             "symbols_count": len(symbols),
             "symbols_truncated": len(symbols) > 12,
-            "distance_pct_sample": [
+            "distance_percent_sample": [
                 float(distance) * 100.0 for distance in sorted(distances)[:8]
             ],
         }
@@ -4069,7 +4069,7 @@ def _order_event_data(
     if isinstance(delta, dict):
         compact_delta = {
             key: delta.get(key)
-            for key in ("price_pct_diff", "qty_pct_diff")
+            for key in ("price_difference_percent", "qty_difference_percent")
             if delta.get(key) is not None
         }
         if compact_delta:
@@ -4167,7 +4167,7 @@ def emit_execution_connector_call_started_event(
         if isinstance(delta, dict):
             safe_delta = {
                 key: safe_value
-                for key in ("price_pct_diff", "qty_pct_diff")
+                for key in ("price_difference_percent", "qty_difference_percent")
                 if (safe_value := _safe_finite_float(delta.get(key))) is not None
             }
             if safe_delta:
@@ -4692,7 +4692,7 @@ def emit_realized_loss_gate_blocked_event(
     projected_pnl: float,
     projected_balance: float,
     balance_floor: float,
-    max_realized_loss_pct: float,
+    loss_gate_max_drawdown_fraction: float,
 ) -> None:
     try:
         bot._emit_live_event(
@@ -4712,7 +4712,7 @@ def emit_realized_loss_gate_blocked_event(
                 "projected_pnl": _safe_float(projected_pnl),
                 "projected_balance_after": _safe_float(projected_balance),
                 "balance_floor": _safe_float(balance_floor),
-                "max_realized_loss_pct": _safe_float(max_realized_loss_pct),
+                "loss_gate_max_drawdown_fraction": _safe_float(loss_gate_max_drawdown_fraction),
             },
         )
     except Exception as exc:
@@ -4813,25 +4813,25 @@ def _unstuck_status_side_summary(
 ) -> dict[str, Any]:
     status = str(info.get("status") or "unknown")
     out: dict[str, Any] = {"status": status}
-    for key in ("allowance", "peak", "pct_from_peak", "loss_allowance_pct"):
+    for key in ("allowance", "peak", "change_from_peak_percent", "loss_allowance_fraction"):
         value = _safe_float(info.get(key))
         if value is not None:
             out[key] = value
     allowance = _safe_float(info.get("allowance"))
     if allowance is not None:
         out["over_budget"] = allowance < 0.0
-    override_pcts = info.get("override_loss_allowance_pcts")
-    if isinstance(override_pcts, dict):
+    override_fractions = info.get("override_loss_allowance_fractions")
+    if isinstance(override_fractions, dict):
         items = sorted(
-            (str(symbol), _safe_float(pct)) for symbol, pct in override_pcts.items()
+            (str(symbol), _safe_float(fraction)) for symbol, fraction in override_fractions.items()
         )
-        clean_items = [(symbol, pct) for symbol, pct in items if pct is not None]
+        clean_items = [(symbol, fraction) for symbol, fraction in items if fraction is not None]
         if clean_items:
-            out["override_loss_allowance_pct_count"] = len(clean_items)
-            out["override_loss_allowance_pcts"] = {
-                symbol: pct for symbol, pct in clean_items[:override_limit]
+            out["override_loss_allowance_fraction_count"] = len(clean_items)
+            out["override_loss_allowance_fractions"] = {
+                symbol: fraction for symbol, fraction in clean_items[:override_limit]
             }
-            out["override_loss_allowance_pcts_truncated"] = max(
+            out["override_loss_allowance_fractions_truncated"] = max(
                 0, len(clean_items) - override_limit
             )
     override_allowances = info.get("override_allowances")
@@ -4854,8 +4854,8 @@ def _unstuck_status_side_summary(
     for key in (
         "next_symbol",
         "next_target_price",
-        "next_target_distance_ratio",
-        "next_unstuck_trigger_distance_ratio",
+        "next_target_price_offset_fraction",
+        "next_unstuck_trigger_price_offset_fraction",
     ):
         value = info.get(key)
         if value is None:
@@ -4925,11 +4925,11 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "current_price": _safe_float(payload.get("current_price")),
         "position_price": _safe_float(payload.get("position_price")),
         "position_size": _safe_float(payload.get("position_size")),
-        "current_vs_threshold_ratio": _safe_float(
-            payload.get("current_vs_threshold_ratio")
+        "current_price_change_from_threshold_fraction": _safe_float(
+            payload.get("current_price_change_from_threshold_fraction")
         ),
-        "current_vs_retracement_ratio": _safe_float(
-            payload.get("current_vs_retracement_ratio")
+        "current_price_change_from_retracement_fraction": _safe_float(
+            payload.get("current_price_change_from_retracement_fraction")
         ),
         "unsupported_reason": str(payload.get("unsupported_reason") or "") or None,
         "changed": bool(payload.get("changed", False)),
@@ -5038,14 +5038,14 @@ def emit_unstuck_selection_event(
     try:
         entry = _safe_float(entry_price)
         current = _safe_float(current_price)
-        price_diff_pct = None
+        price_change_percent = None
         if entry is not None and current is not None and entry > 0.0 and current > 0.0:
-            price_diff_pct = (current / entry - 1.0) * 100.0
+            price_change_percent = (current / entry - 1.0) * 100.0
         data = {
             "changed": bool(changed),
             "entry_price": entry,
             "current_price": current,
-            "price_diff_pct": price_diff_pct,
+            "price_change_percent": price_change_percent,
             "allowance": _safe_float(allowance),
         }
         bot._emit_live_event(

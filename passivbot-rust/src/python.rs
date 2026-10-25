@@ -207,10 +207,10 @@ fn attach_ew_analysis(
     curve: &crate::ew::EwAnalysis,
     strategy: &crate::ew::EwAnalysis,
 ) -> PyResult<()> {
-    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_eq_ew")] {
+    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_equity_ew")] {
         if let Some(metrics) = analysis.metrics {
             for (key, value) in [
-                ("adg", metrics.adg),
+                ("adg_fraction", metrics.adg_fraction),
                 ("sharpe_ratio", metrics.sharpe_ratio),
                 ("sortino_ratio", metrics.sortino_ratio),
                 ("omega_ratio", metrics.omega_ratio),
@@ -221,40 +221,43 @@ fn attach_ew_analysis(
     }
     let metadata = PyDict::new_bound(py);
     metadata.set_item(curve_name, struct_to_py_dict(py, &curve.metadata)?)?;
-    metadata.set_item("strategy_eq", struct_to_py_dict(py, &strategy.metadata)?)?;
+    metadata.set_item(
+        "strategy_equity",
+        struct_to_py_dict(py, &strategy.metadata)?,
+    )?;
     dict.bind(py).set_item("_ew_metadata", metadata)?;
     Ok(())
 }
 
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
     analysis.fills_active_days_count = metrics.fills_active_days_count;
-    analysis.fills_active_days_ratio = metrics.fills_active_days_ratio;
+    analysis.fills_active_day_fraction = metrics.fills_active_day_fraction;
     analysis.fills_active_symbols_count = metrics.fills_active_symbols_count;
-    analysis.fills_analysis_duration_days = metrics.fills_analysis_duration_days;
+    analysis.analysis_duration_days = metrics.analysis_duration_days;
     analysis.fills_count = metrics.fills_count;
-    analysis.fills_count_close = metrics.fills_count_close;
-    analysis.fills_count_entry = metrics.fills_count_entry;
+    analysis.fills_close_count = metrics.fills_close_count;
+    analysis.fills_entry_count = metrics.fills_entry_count;
     analysis.fills_count_long = metrics.fills_count_long;
     analysis.fills_count_short = metrics.fills_count_short;
-    analysis.fills_entry_per_close = metrics.fills_entry_per_close;
-    analysis.fills_gap_longest_days = metrics.fills_gap_longest_days;
+    analysis.entry_to_close_fill_count_ratio = metrics.entry_to_close_fill_count_ratio;
+    analysis.fills_gap_max_days = metrics.fills_gap_max_days;
     analysis.fills_gap_mean_hours = metrics.fills_gap_mean_hours;
     analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
     analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
     analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
     analysis.fills_gap_time_weighted_mean_hours = metrics.fills_gap_time_weighted_mean_hours;
     analysis.fills_per_day = metrics.fills_per_day;
-    analysis.fills_per_day_close = metrics.fills_per_day_close;
-    analysis.fills_per_day_entry = metrics.fills_per_day_entry;
+    analysis.fills_close_per_day = metrics.fills_close_per_day;
+    analysis.fills_entry_per_day = metrics.fills_entry_per_day;
     analysis.fills_per_day_long = metrics.fills_per_day_long;
     analysis.fills_per_day_per_position_slot = metrics.fills_per_day_per_position_slot;
     analysis.fills_per_day_per_position_slot_long = metrics.fills_per_day_per_position_slot_long;
     analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
     analysis.fills_per_day_short = metrics.fills_per_day_short;
-    analysis.fills_top_symbol_share = metrics.fills_top_symbol_share;
+    analysis.fills_top_symbol_fraction = metrics.fills_top_symbol_fraction;
 }
 
-fn calc_backtest_completion_ratio(
+fn calc_backtest_completion_fraction(
     equities: &Equities,
     backtest_params: &BacktestParams,
     n_timesteps: usize,
@@ -413,6 +416,13 @@ fn get_u64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u64> {
 }
 
 fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<CoinMeta> {
+    for retired in ["maker_fee", "taker_fee"] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native coin metadata field '{retired}'; rebuild the current metadata"
+            )));
+        }
+    }
     let index = dict
         .get_item("index")?
         .map(|val| val.extract::<usize>())
@@ -474,8 +484,8 @@ fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<C
         min_qty: fval!("min_qty"),
         min_cost: fval!("min_cost"),
         c_mult: fval!("c_mult"),
-        maker_fee: fval!("maker_fee"),
-        taker_fee: fval!("taker_fee"),
+        maker_fee_fraction: fval!("maker_fee_fraction"),
+        taker_fee_fraction: fval!("taker_fee_fraction"),
         first_valid_index: usize_val!("first_valid_index"),
         last_valid_index: usize_val!("last_valid_index"),
         warmup_minutes: usize_val!("warmup_minutes"),
@@ -496,8 +506,8 @@ fn coin_meta_to_dict<'py>(py: Python<'py>, meta: &CoinMeta) -> PyResult<Bound<'p
     dict.set_item("min_qty", meta.min_qty)?;
     dict.set_item("min_cost", meta.min_cost)?;
     dict.set_item("c_mult", meta.c_mult)?;
-    dict.set_item("maker_fee", meta.maker_fee)?;
-    dict.set_item("taker_fee", meta.taker_fee)?;
+    dict.set_item("maker_fee_fraction", meta.maker_fee_fraction)?;
+    dict.set_item("taker_fee_fraction", meta.taker_fee_fraction)?;
     dict.set_item("first_valid_index", meta.first_valid_index)?;
     dict.set_item("last_valid_index", meta.last_valid_index)?;
     dict.set_item("warmup_minutes", meta.warmup_minutes)?;
@@ -879,7 +889,7 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
 pub fn gate_entries_by_twel_py(
     side: &str,
     balance: f64,
-    total_wallet_exposure_limit: f64,
+    total_wallet_exposure_limit_ratio: f64,
     positions: &Bound<'_, PyList>,
     entries: &Bound<'_, PyList>,
 ) -> PyResult<Vec<(usize, f64, f64, u16)>> {
@@ -894,7 +904,7 @@ pub fn gate_entries_by_twel_py(
             ))
         }
     };
-    if balance <= 0.0 || total_wallet_exposure_limit <= 0.0 {
+    if balance <= 0.0 || total_wallet_exposure_limit_ratio <= 0.0 {
         return Ok(vec![]);
     }
 
@@ -987,7 +997,7 @@ pub fn gate_entries_by_twel_py(
     let gated = gate_entries_by_twel(
         side_code,
         balance,
-        total_wallet_exposure_limit,
+        total_wallet_exposure_limit_ratio,
         &positions_vec,
         &entries_vec,
     );
@@ -1044,27 +1054,29 @@ pub fn calc_unstucking_close_py(
             .get_item("position_price")?
             .ok_or_else(|| PyValueError::new_err("position missing 'position_price'"))?
             .extract::<f64>()?;
-        let wallet_exposure_limit = dict
-            .get_item("wallet_exposure_limit")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit'"))?
+        let wallet_exposure_limit_ratio = dict
+            .get_item("wallet_exposure_limit_ratio")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit_ratio'"))?
             .extract::<f64>()?;
-        let effective_we_excess_allowance_pct =
-            if let Some(value) = dict.get_item("effective_we_excess_allowance_pct")? {
+        let effective_we_excess_allowance_fraction =
+            if let Some(value) = dict.get_item("effective_we_excess_allowance_fraction")? {
                 value.extract::<f64>()?
             } else {
-                dict.get_item("risk_we_excess_allowance_pct")?
+                dict.get_item("risk_we_excess_allowance_fraction")?
                     .ok_or_else(|| {
-                        PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
+                        PyValueError::new_err("position missing 'risk_we_excess_allowance_fraction'")
                     })?
                     .extract::<f64>()?
             };
-        let unstuck_threshold = dict
-            .get_item("unstuck_threshold")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_threshold'"))?
+        let unstuck_exposure_trigger_ratio = dict
+            .get_item("unstuck_exposure_trigger_ratio")?
+            .ok_or_else(|| {
+                PyValueError::new_err("position missing 'unstuck_exposure_trigger_ratio'")
+            })?
             .extract::<f64>()?;
-        let unstuck_close_pct = dict
-            .get_item("unstuck_close_pct")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_pct'"))?
+        let unstuck_close_fraction = dict
+            .get_item("unstuck_close_fraction")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_fraction'"))?
             .extract::<f64>()?;
         let unstuck_ema_gating_enabled =
             if let Some(value) = dict.get_item("unstuck_ema_gating_enabled")? {
@@ -1072,9 +1084,11 @@ pub fn calc_unstucking_close_py(
             } else {
                 true
             };
-        let unstuck_ema_dist = dict
-            .get_item("unstuck_ema_dist")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_dist'"))?
+        let unstuck_ema_distance_fraction = dict
+            .get_item("unstuck_ema_distance_fraction")?
+            .ok_or_else(|| {
+                PyValueError::new_err("position missing 'unstuck_ema_distance_fraction'")
+            })?
             .extract::<f64>()?;
         let ema_band_upper = dict
             .get_item("ema_band_upper")?
@@ -1114,14 +1128,14 @@ pub fn calc_unstucking_close_py(
             side,
             position_size,
             position_price,
-            wallet_exposure_limit,
-            effective_we_excess_allowance_pct,
-            unstuck_threshold,
-            unstuck_close_pct,
+            wallet_exposure_limit_ratio,
+            effective_we_excess_allowance_fraction,
+            unstuck_exposure_trigger_ratio,
+            unstuck_close_fraction,
             unstuck_ema_gating_enabled,
-            unstuck_ema_dist,
-            unstuck_loss_allowance_pct: 0.0,
-            total_wallet_exposure_limit: 0.0,
+            unstuck_ema_distance_fraction,
+            unstuck_loss_allowance_fraction: 0.0,
+            total_wallet_exposure_limit_ratio: 0.0,
             ema_band_upper,
             ema_band_lower,
             current_price,
@@ -1346,8 +1360,8 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
             n_positions: 1,
             ..Default::default()
         };
@@ -1358,7 +1372,7 @@ mod tests {
         };
         let trailing = TrailingPriceBundle::default();
         let runtime = RuntimeOrderContext {
-            effective_wallet_exposure_limit: 1.0,
+            effective_wallet_exposure_limit_ratio: 1.0,
         };
         for (side, name, size) in [
             (StrategySide::Long, "long", 5.0),
@@ -1368,8 +1382,8 @@ mod tests {
             let input = serde_json::json!({
                 "pside": name, "exchange": exchange, "state": state,
                 "position": position, "trailing": trailing, "close_params": close,
-                "bot_params": {"wallet_exposure_limit":1.0,"total_wallet_exposure_limit":1.0,"n_positions":1},
-                "runtime": {"effective_wallet_exposure_limit":1.0},
+                "bot_params": {"wallet_exposure_limit_ratio":1.0,"total_wallet_exposure_limit_ratio":1.0,"n_positions":1},
+                "runtime": {"effective_wallet_exposure_limit_ratio":1.0},
             });
             let actual: Value = serde_json::from_str(
                 &calc_trailing_martingale_close_diagnostic_py(&input.to_string()).unwrap(),
@@ -1626,7 +1640,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     let metrics_only = backtest_params.metrics_only;
     let skip_btc_analysis = metrics_only
         && backtest_params.skip_btc_analysis
-        && backtest_params.btc_collateral_cap <= 0.0;
+        && backtest_params.btc_collateral_target_ratio <= 0.0;
     let init_start = profile_start(profile_enabled);
     let mut backtest = BacktestEngine::<ORGANILLO>::new_with_strategy_params(
         hlcvs_rust,
@@ -1694,15 +1708,15 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         };
         backtest.exposure_rms.apply(&mut analysis_usd);
         backtest.exposure_rms.apply(&mut analysis_btc);
-        analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
-        analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
-        analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
-        analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        analysis_usd.initial_entry_balance_fraction_long = entry_pct_long;
+        analysis_usd.initial_entry_balance_fraction_short = entry_pct_short;
+        analysis_btc.initial_entry_balance_fraction_long = entry_pct_long;
+        analysis_btc.initial_entry_balance_fraction_short = entry_pct_short;
         let completion_start = profile_start(profile_enabled);
         let completion_ratio =
-            calc_backtest_completion_ratio(&equities, &backtest_params, n_timesteps);
-        analysis_usd.backtest_completion_ratio = completion_ratio;
-        analysis_btc.backtest_completion_ratio = completion_ratio;
+            calc_backtest_completion_fraction(&equities, &backtest_params, n_timesteps);
+        analysis_usd.backtest_completion_fraction = completion_ratio;
+        analysis_btc.backtest_completion_fraction = completion_ratio;
         profile_add(
             &mut rust_profile,
             "rust_completion_ratio_ms",
@@ -1732,193 +1746,218 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
             "rust_strategy_equity_metrics_ms",
             strategy_metrics_start,
         );
-        analysis_usd.hard_stop_triggers = hs.triggers;
-        analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
-        analysis_usd.hard_stop_triggers_long = hs.triggers_long;
-        analysis_usd.hard_stop_triggers_short = hs.triggers_short;
-        analysis_usd.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
-        analysis_usd.hard_stop_restarts = hs.restarts;
-        analysis_usd.hard_stop_restarts_per_year = hs.restarts_per_year;
-        analysis_usd.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_usd.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_usd.hard_stop_restarts_long = hs.restarts_long;
-        analysis_usd.hard_stop_restarts_short = hs.restarts_short;
-        analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
-        analysis_usd.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
-        analysis_usd.hard_stop_duration_minutes_max = hs.duration_minutes_max;
-        analysis_usd.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
-        analysis_usd.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
-        analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_min =
-            hs.panic_close_loss_drawdown_pct_min;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_mean =
-            hs.panic_close_loss_drawdown_pct_mean;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_max =
-            hs.panic_close_loss_drawdown_pct_max;
-        analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
-        analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_usd.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_ema_strategy_eq = strategy
+        analysis_usd.hsl_trigger_count = hs.triggers;
+        analysis_usd.hsl_triggers_per_year = hs.triggers_per_year;
+        analysis_usd.hsl_trigger_count_long = hs.triggers_long;
+        analysis_usd.hsl_trigger_count_short = hs.triggers_short;
+        analysis_usd.hsl_panic_loss_starting_balance_fraction =
+            hs.panic_loss_starting_balance_fraction;
+        analysis_usd.hsl_restart_count = hs.restarts;
+        analysis_usd.hsl_restarts_per_year = hs.restarts_per_year;
+        analysis_usd.hsl_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_usd.hsl_restarts_per_year_short = hs.restarts_per_year_short;
+        analysis_usd.hsl_restart_count_long = hs.restarts_long;
+        analysis_usd.hsl_restart_count_short = hs.restarts_short;
+        analysis_usd.hsl_red_time_fraction = hs.red_time_fraction;
+        analysis_usd.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
+        analysis_usd.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
+        analysis_usd.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
+        analysis_usd.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
+        analysis_usd.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
+        analysis_usd.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
+        analysis_usd.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
+        analysis_usd.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
+        analysis_usd.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
+        analysis_usd.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
+        analysis_usd.drawdown_max_fraction_strategy_equity =
+            strategy.overall.drawdown_max_fraction_strategy_equity;
+        analysis_usd.drawdown_max_fraction_strategy_equity_long =
+            strategy.long.drawdown_max_fraction_strategy_equity;
+        analysis_usd.drawdown_max_fraction_strategy_equity_short =
+            strategy.short.drawdown_max_fraction_strategy_equity;
+        analysis_usd.hsl_signal_ema_max_fraction = strategy
             .long
-            .drawdown_worst_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_ema_strategy_eq);
-        analysis_usd.drawdown_worst_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_ema_strategy_eq;
-        analysis_usd.drawdown_worst_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_ema_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq =
-            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .hsl_signal_ema_max_fraction
+            .max(strategy.short.hsl_signal_ema_max_fraction);
+        analysis_usd.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
+        analysis_usd.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
+            .overall
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
             .long
-            .drawdown_worst_mean_1pct_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_usd.pain_index_strategy_eq = strategy.overall.pain_index_strategy_eq;
-        analysis_usd.ulcer_index_strategy_eq = strategy.overall.ulcer_index_strategy_eq;
-        analysis_usd.strategy_eq_recovery_days_mean =
-            strategy.overall.strategy_eq_recovery_days_mean;
-        analysis_usd.strategy_eq_recovery_days_median =
-            strategy.overall.strategy_eq_recovery_days_median;
-        analysis_usd.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
-        analysis_usd.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
-        analysis_usd.strategy_eq_recovery_days_mean_worst_5pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
-        analysis_usd.strategy_eq_recovery_days_mean_worst_1pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
-        analysis_usd.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
-        analysis_usd.peak_recovery_hours_strategy_eq =
-            strategy.overall.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_hours_strategy_eq_long =
-            strategy.long.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_hours_strategy_eq_short =
-            strategy.short.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq =
-            strategy.overall.peak_recovery_days_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq_long =
-            strategy.long.peak_recovery_days_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq_short =
-            strategy.short.peak_recovery_days_strategy_eq;
-        analysis_usd.gain_strategy_eq = strategy.overall.gain_strategy_eq;
-        analysis_usd.adg_strategy_eq = strategy.overall.adg_strategy_eq;
-        analysis_usd.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
-        analysis_usd.adg_time_integrated_strategy_eq =
-            strategy.overall.adg_time_integrated_strategy_eq;
-        analysis_usd.positive_gain_participation_strategy_eq =
-            strategy.overall.positive_gain_participation_strategy_eq;
-        analysis_usd.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
-        analysis_usd.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
-        analysis_usd.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
-        analysis_usd.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
-        analysis_usd.expected_shortfall_1pct_strategy_eq =
-            strategy.overall.expected_shortfall_1pct_strategy_eq;
-        analysis_usd.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
-        analysis_usd.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
-        analysis_btc.hard_stop_triggers = hs.triggers;
-        analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
-        analysis_btc.hard_stop_triggers_long = hs.triggers_long;
-        analysis_btc.hard_stop_triggers_short = hs.triggers_short;
-        analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
-        analysis_btc.hard_stop_restarts = hs.restarts;
-        analysis_btc.hard_stop_restarts_per_year = hs.restarts_per_year;
-        analysis_btc.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_btc.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_btc.hard_stop_restarts_long = hs.restarts_long;
-        analysis_btc.hard_stop_restarts_short = hs.restarts_short;
-        analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;
-        analysis_btc.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
-        analysis_btc.hard_stop_duration_minutes_max = hs.duration_minutes_max;
-        analysis_btc.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
-        analysis_btc.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
-        analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_min =
-            hs.panic_close_loss_drawdown_pct_min;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_mean =
-            hs.panic_close_loss_drawdown_pct_mean;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_max =
-            hs.panic_close_loss_drawdown_pct_max;
-        analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
-        analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_btc.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_ema_strategy_eq = strategy
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
+            .short
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction = strategy
             .long
-            .drawdown_worst_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_ema_strategy_eq);
-        analysis_btc.drawdown_worst_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_ema_strategy_eq;
-        analysis_btc.drawdown_worst_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_ema_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq =
-            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .hsl_signal_ema_worst_1pct_mean_fraction
+            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_long =
+            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_short =
+            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_usd.pain_index_fraction_strategy_equity =
+            strategy.overall.pain_index_fraction_strategy_equity;
+        analysis_usd.ulcer_index_fraction_strategy_equity =
+            strategy.overall.ulcer_index_fraction_strategy_equity;
+        analysis_usd.recovery_mean_days_strategy_equity =
+            strategy.overall.recovery_mean_days_strategy_equity;
+        analysis_usd.recovery_median_days_strategy_equity =
+            strategy.overall.recovery_median_days_strategy_equity;
+        analysis_usd.recovery_p95_days_strategy_equity =
+            strategy.overall.recovery_p95_days_strategy_equity;
+        analysis_usd.recovery_p99_days_strategy_equity =
+            strategy.overall.recovery_p99_days_strategy_equity;
+        analysis_usd.recovery_worst_5pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_5pct_mean_days_strategy_equity;
+        analysis_usd.recovery_worst_1pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_1pct_mean_days_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity =
+            strategy.overall.recovery_max_days_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity =
+            strategy.overall.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity_long =
+            strategy.long.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity_short =
+            strategy.short.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity_long =
+            strategy.long.recovery_max_days_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity_short =
+            strategy.short.recovery_max_days_strategy_equity;
+        analysis_usd.gain_multiplier_strategy_equity =
+            strategy.overall.gain_multiplier_strategy_equity;
+        analysis_usd.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
+        analysis_usd.adg_rolling_hmean_fraction_strategy_equity =
+            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
+        analysis_usd.adg_time_integrated_fraction_strategy_equity = strategy
+            .overall
+            .adg_time_integrated_fraction_strategy_equity;
+        analysis_usd.positive_log_return_participation_score_strategy_equity = strategy
+            .overall
+            .positive_log_return_participation_score_strategy_equity;
+        analysis_usd.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
+        analysis_usd.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
+        analysis_usd.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
+        analysis_usd.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
+        analysis_usd.expected_shortfall_1pct_fraction_strategy_equity = strategy
+            .overall
+            .expected_shortfall_1pct_fraction_strategy_equity;
+        analysis_usd.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
+        analysis_usd.sterling_ratio_strategy_equity =
+            strategy.overall.sterling_ratio_strategy_equity;
+        analysis_btc.hsl_trigger_count = hs.triggers;
+        analysis_btc.hsl_triggers_per_year = hs.triggers_per_year;
+        analysis_btc.hsl_trigger_count_long = hs.triggers_long;
+        analysis_btc.hsl_trigger_count_short = hs.triggers_short;
+        analysis_btc.hsl_panic_loss_starting_balance_fraction =
+            hs.panic_loss_starting_balance_fraction;
+        analysis_btc.hsl_restart_count = hs.restarts;
+        analysis_btc.hsl_restarts_per_year = hs.restarts_per_year;
+        analysis_btc.hsl_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_btc.hsl_restarts_per_year_short = hs.restarts_per_year_short;
+        analysis_btc.hsl_restart_count_long = hs.restarts_long;
+        analysis_btc.hsl_restart_count_short = hs.restarts_short;
+        analysis_btc.hsl_red_time_fraction = hs.red_time_fraction;
+        analysis_btc.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
+        analysis_btc.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
+        analysis_btc.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
+        analysis_btc.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
+        analysis_btc.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
+        analysis_btc.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
+        analysis_btc.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
+        analysis_btc.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
+        analysis_btc.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
+        analysis_btc.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
+        analysis_btc.drawdown_max_fraction_strategy_equity =
+            strategy.overall.drawdown_max_fraction_strategy_equity;
+        analysis_btc.drawdown_max_fraction_strategy_equity_long =
+            strategy.long.drawdown_max_fraction_strategy_equity;
+        analysis_btc.drawdown_max_fraction_strategy_equity_short =
+            strategy.short.drawdown_max_fraction_strategy_equity;
+        analysis_btc.hsl_signal_ema_max_fraction = strategy
             .long
-            .drawdown_worst_mean_1pct_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_btc.pain_index_strategy_eq = strategy.overall.pain_index_strategy_eq;
-        analysis_btc.ulcer_index_strategy_eq = strategy.overall.ulcer_index_strategy_eq;
-        analysis_btc.strategy_eq_recovery_days_mean =
-            strategy.overall.strategy_eq_recovery_days_mean;
-        analysis_btc.strategy_eq_recovery_days_median =
-            strategy.overall.strategy_eq_recovery_days_median;
-        analysis_btc.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
-        analysis_btc.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
-        analysis_btc.strategy_eq_recovery_days_mean_worst_5pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
-        analysis_btc.strategy_eq_recovery_days_mean_worst_1pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
-        analysis_btc.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
-        analysis_btc.peak_recovery_hours_strategy_eq =
-            strategy.overall.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_hours_strategy_eq_long =
-            strategy.long.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_hours_strategy_eq_short =
-            strategy.short.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq =
-            strategy.overall.peak_recovery_days_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq_long =
-            strategy.long.peak_recovery_days_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq_short =
-            strategy.short.peak_recovery_days_strategy_eq;
-        analysis_btc.gain_strategy_eq = strategy.overall.gain_strategy_eq;
-        analysis_btc.adg_strategy_eq = strategy.overall.adg_strategy_eq;
-        analysis_btc.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
-        analysis_btc.adg_time_integrated_strategy_eq =
-            strategy.overall.adg_time_integrated_strategy_eq;
-        analysis_btc.positive_gain_participation_strategy_eq =
-            strategy.overall.positive_gain_participation_strategy_eq;
-        analysis_btc.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
-        analysis_btc.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
-        analysis_btc.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
-        analysis_btc.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
-        analysis_btc.expected_shortfall_1pct_strategy_eq =
-            strategy.overall.expected_shortfall_1pct_strategy_eq;
-        analysis_btc.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
-        analysis_btc.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
+            .hsl_signal_ema_max_fraction
+            .max(strategy.short.hsl_signal_ema_max_fraction);
+        analysis_btc.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
+        analysis_btc.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
+            .overall
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
+            .long
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
+            .short
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction = strategy
+            .long
+            .hsl_signal_ema_worst_1pct_mean_fraction
+            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_long =
+            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_short =
+            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_btc.pain_index_fraction_strategy_equity =
+            strategy.overall.pain_index_fraction_strategy_equity;
+        analysis_btc.ulcer_index_fraction_strategy_equity =
+            strategy.overall.ulcer_index_fraction_strategy_equity;
+        analysis_btc.recovery_mean_days_strategy_equity =
+            strategy.overall.recovery_mean_days_strategy_equity;
+        analysis_btc.recovery_median_days_strategy_equity =
+            strategy.overall.recovery_median_days_strategy_equity;
+        analysis_btc.recovery_p95_days_strategy_equity =
+            strategy.overall.recovery_p95_days_strategy_equity;
+        analysis_btc.recovery_p99_days_strategy_equity =
+            strategy.overall.recovery_p99_days_strategy_equity;
+        analysis_btc.recovery_worst_5pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_5pct_mean_days_strategy_equity;
+        analysis_btc.recovery_worst_1pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_1pct_mean_days_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity =
+            strategy.overall.recovery_max_days_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity =
+            strategy.overall.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity_long =
+            strategy.long.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity_short =
+            strategy.short.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity_long =
+            strategy.long.recovery_max_days_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity_short =
+            strategy.short.recovery_max_days_strategy_equity;
+        analysis_btc.gain_multiplier_strategy_equity =
+            strategy.overall.gain_multiplier_strategy_equity;
+        analysis_btc.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
+        analysis_btc.adg_rolling_hmean_fraction_strategy_equity =
+            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
+        analysis_btc.adg_time_integrated_fraction_strategy_equity = strategy
+            .overall
+            .adg_time_integrated_fraction_strategy_equity;
+        analysis_btc.positive_log_return_participation_score_strategy_equity = strategy
+            .overall
+            .positive_log_return_participation_score_strategy_equity;
+        analysis_btc.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
+        analysis_btc.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
+        analysis_btc.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
+        analysis_btc.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
+        analysis_btc.expected_shortfall_1pct_fraction_strategy_equity = strategy
+            .overall
+            .expected_shortfall_1pct_fraction_strategy_equity;
+        analysis_btc.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
+        analysis_btc.sterling_ratio_strategy_equity =
+            strategy.overall.sterling_ratio_strategy_equity;
 
         if backtest_params.equity_hard_stop_loss.hsl.is_some() {
             for analysis in [&mut analysis_usd, &mut analysis_btc] {
-                analysis.drawdown_worst_ema_strategy_eq =
-                    strategy.overall.drawdown_worst_ema_strategy_eq;
-                analysis.drawdown_worst_mean_1pct_ema_strategy_eq =
-                    strategy.overall.drawdown_worst_mean_1pct_ema_strategy_eq;
+                analysis.hsl_signal_ema_max_fraction = strategy.overall.hsl_signal_ema_max_fraction;
+                analysis.hsl_signal_ema_worst_1pct_mean_fraction =
+                    strategy.overall.hsl_signal_ema_worst_1pct_mean_fraction;
             }
         }
         let analysis_dict_start = profile_start(profile_enabled);
@@ -2075,7 +2114,19 @@ pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
     let samples = PyList::empty_bound(py);
     for row in backtest.hsl_samples() {
         let dict = PyDict::new_bound(py);
-        fields!(dict, row, sequence, timestamp, side, coin, raw, ema, red_at, flat_at, reasons);
+        fields!(
+            dict,
+            row,
+            sequence,
+            timestamp,
+            side,
+            coin,
+            signal_raw_fraction,
+            signal_ema_fraction,
+            red_at,
+            flat_at,
+            reasons
+        );
         dict.set_item(
             pyo3::intern!(py, "phase"),
             pyo3::types::PyString::intern_bound(py, row.phase),
@@ -2177,9 +2228,9 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
             &[
                 "enabled",
                 "scale_budget_with_excess_allowance",
-                "red_threshold",
+                "drawdown_threshold_fraction",
                 "memory_ema_span_minutes",
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
                 "cooldown_minutes_after_red",
                 "panic_close_order_type",
             ],
@@ -2192,11 +2243,11 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 Some(value) => value.extract::<bool>()?,
                 None => false,
             },
-            red_threshold: extract_value(dict, "red_threshold")?,
+            drawdown_threshold_fraction: extract_value(dict, "drawdown_threshold_fraction")?,
             memory_ema_span_minutes: extract_value(dict, "memory_ema_span_minutes")?,
-            drawdown_ratio_ema_span_minutes: extract_value(
+            drawdown_fraction_ema_span_minutes: extract_value(
                 dict,
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
             )?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
             panic_close_order_type: extract_value(dict, "panic_close_order_type")?,
@@ -2328,6 +2379,26 @@ fn forager_score_hysteresis_from_dict(
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    // Missing optional policy retains its default. An obsolete authored key
+    // must not disappear into that default, including when its new key exists.
+    for retired in [
+        "liquidation_threshold",
+        "market_order_near_touch_threshold",
+        "market_order_slippage_pct",
+        "limit_order_fill_buffer_pct",
+        "max_realized_loss_pct",
+        "maker_fee",
+        "taker_fee",
+        "btc_collateral_cap",
+        "btc_collateral_ltv_cap",
+        "max_usd_debt_to_equity_ratio",
+    ] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native backtest field '{retired}'; rebuild the current backtest payload"
+            )));
+        }
+    }
     if dict.contains("calculate_legacy_w")? {
         return Err(PyValueError::new_err(
             "calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain",
@@ -2367,8 +2438,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 
     let params = BacktestParams {
         starting_balance: extract_value(dict, "starting_balance")?,
-        maker_fee: extract_value(dict, "maker_fee")?,
-        taker_fee: extract_value(dict, "taker_fee")?,
+        maker_fee_fraction: extract_value(dict, "maker_fee_fraction")?,
+        taker_fee_fraction: extract_value(dict, "taker_fee_fraction")?,
         coins: extract_value(dict, "coins")?,
         active_coin_indices: match dict.get_item("active_coin_indices")? {
             Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
@@ -2381,8 +2452,10 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         warmup_minutes: extract_value(dict, "warmup_minutes")?,
         trade_start_indices: extract_value(dict, "trade_start_indices")?,
         global_warmup_bars: extract_value(dict, "global_warmup_bars")?,
-        btc_collateral_cap: extract_value(dict, "btc_collateral_cap")?,
-        btc_collateral_ltv_cap: match dict.get_item("btc_collateral_ltv_cap")? {
+        btc_collateral_target_ratio: extract_value(dict, "btc_collateral_target_ratio")?,
+        max_usd_debt_to_wallet_value_ratio: match dict
+            .get_item("max_usd_debt_to_wallet_value_ratio")?
+        {
             Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
             _ => None,
         },
@@ -2459,8 +2532,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(true),
-        max_realized_loss_pct: dict
-            .get_item("max_realized_loss_pct")?
+        loss_gate_max_drawdown_fraction: dict
+            .get_item("loss_gate_max_drawdown_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(1.0),
@@ -2469,8 +2542,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             dict,
             "loss_gate_memory_ema_span_minutes",
         )?,
-        liquidation_threshold: dict
-            .get_item("liquidation_threshold")?
+        equity_floor_fraction: dict
+            .get_item("equity_floor_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.05),
@@ -2480,20 +2553,20 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
-        market_order_near_touch_threshold: dict
-            .get_item("market_order_near_touch_threshold")?
+        market_order_near_touch_fraction: dict
+            .get_item("market_order_near_touch_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.001),
-        // Legacy native payloads predate this optional simulation setting.
+        // Native packets may omit this optional simulation setting.
         // Default only absence; explicit malformed values still fail below.
-        limit_order_fill_buffer_pct: dict
-            .get_item("limit_order_fill_buffer_pct")?
+        limit_order_fill_buffer_fraction: dict
+            .get_item("limit_order_fill_buffer_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0),
-        market_order_slippage_pct: dict
-            .get_item("market_order_slippage_pct")?
+        market_order_slippage_fraction: dict
+            .get_item("market_order_slippage_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),
@@ -2525,7 +2598,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             "inception_timestamps_ms must match coins",
         ));
     }
-    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
+    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_fraction)
         .map_err(PyValueError::new_err)?;
     if let Some(hsl) = &params.equity_hard_stop_loss.hsl {
         hsl.validate(&params.coins, params.candle_interval_minutes)
@@ -2535,14 +2608,21 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 }
 
 fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
+    for retired in ["maker_fee", "taker_fee"] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native exchange field '{retired}'; rebuild the current exchange payload"
+            )));
+        }
+    }
     let params = ExchangeParams {
         qty_step: extract_value(dict, "qty_step")?,
         price_step: extract_value(dict, "price_step")?,
         min_qty: extract_value(dict, "min_qty")?,
         min_cost: extract_value(dict, "min_cost")?,
         c_mult: extract_value(dict, "c_mult")?,
-        maker_fee: extract_value(dict, "maker_fee")?,
-        taker_fee: extract_value(dict, "taker_fee")?,
+        maker_fee_fraction: extract_value(dict, "maker_fee_fraction")?,
+        taker_fee_fraction: extract_value(dict, "taker_fee_fraction")?,
     };
     params.validate_required().map_err(PyValueError::new_err)?;
     Ok(params)
@@ -2733,6 +2813,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         "forager_volume_drop_pct",
         "filter_volume_drop_pct",
         "risk_twel_entry_gate_enabled",
+        "unilateralness_ema_span_1m",
     ] {
         if dict.contains(key)? {
             return Err(PyValueError::new_err(format!(
@@ -2750,11 +2831,11 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             )));
         }
     }
-    let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
-    let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
-    let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
-    let total_wallet_exposure_limit: f64 = extract_value(dict, "total_wallet_exposure_limit")?;
-    let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
+    let risk_wel_enforcer_threshold_ratio: f64 = extract_value(dict, "risk_wel_enforcer_threshold_ratio")?;
+    let risk_twel_enforcer_threshold_ratio: f64 = extract_value(dict, "risk_twel_enforcer_threshold_ratio")?;
+    let risk_we_excess_allowance_fraction: f64 = extract_value(dict, "risk_we_excess_allowance_fraction")?;
+    let total_wallet_exposure_limit_ratio: f64 = extract_value(dict, "total_wallet_exposure_limit_ratio")?;
+    let wallet_exposure_limit_ratio_raw: f64 = extract_value(dict, "wallet_exposure_limit_ratio")?;
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
     let hsl = if hsl {
@@ -2773,7 +2854,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
     };
     // Callers resolve live fixed denominators before building orchestrator input.
     // Preserve zero here: per-symbol zero is the explicit side-disable sentinel.
-    let wallet_exposure_limit = wallet_exposure_limit_raw;
+    let wallet_exposure_limit_ratio = wallet_exposure_limit_ratio_raw;
 
     let params = BotParams {
         close_grid_qty_fraction: extract_optional_f64(dict, "close_grid_qty_fraction")?,
@@ -2809,23 +2890,8 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "entry_trailing_retracement_base_fraction",
         )?,
         entry_trailing_threshold_base_fraction: extract_optional_f64(dict, "entry_trailing_threshold_base_fraction")?,
-        filter_volatility_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volatility_ema_span_1m",
-            "filter_volatility_ema_span_1m",
-        )
-        .or_else(|_| {
-            extract_value_with_fallback(
-                dict,
-                "filter_volatility_ema_span_1m",
-                "filter_log_range_ema_span",
-            )
-        })?,
-        filter_volume_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volume_ema_span_1m",
-            "filter_volume_ema_span_1m",
-        )?,
+        forager_log_range_ema_span_minutes: extract_value(dict, "forager_log_range_ema_span_minutes")?,
+        forager_volume_ema_span_minutes: extract_value(dict, "forager_volume_ema_span_minutes")?,
         _legacy_filter_volatility_drop_pct: 0.0,
         forager_score_weights: dict
             .get_item("forager_score_weights")
@@ -2860,39 +2926,39 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             }
             None => Default::default(),
         },
-        unilateralness_ema_span_1m: match dict.get_item("unilateralness_ema_span_1m")? {
+        unilateralness_ema_span_minutes: match dict.get_item("unilateralness_ema_span_minutes")? {
             Some(v) => v.extract()?,
             None => 60.0,
         },
         risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
-        total_wallet_exposure_limit,
-        wallet_exposure_limit,
+        total_wallet_exposure_limit_ratio,
+        wallet_exposure_limit_ratio,
         risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
-        risk_wel_enforcer_threshold,
+        risk_wel_enforcer_threshold_ratio,
         risk_twel_enforcer_enabled: extract_optional_bool(
             dict,
             "risk_twel_enforcer_enabled",
             true,
         )?,
         risk_twel_enforcer_policy: extract_optional_twel_enforcer_policy(dict)?,
-        risk_twel_enforcer_threshold,
-        risk_we_excess_allowance_pct,
+        risk_twel_enforcer_threshold_ratio,
+        risk_we_excess_allowance_fraction,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_ema_gating_enabled: extract_optional_bool(
             dict,
             "unstuck_ema_gating_enabled",
             true,
         )?,
-        unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
-        unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
-        unstuck_ema_span_0: extract_value(dict, "unstuck_ema_span_0")?,
-        unstuck_ema_span_1: extract_value(dict, "unstuck_ema_span_1")?,
-        unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
-        unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
+        unstuck_close_fraction: extract_value(dict, "unstuck_close_fraction")?,
+        unstuck_ema_distance_fraction: extract_value(dict, "unstuck_ema_distance_fraction")?,
+        unstuck_ema_span_0_minutes: extract_value(dict, "unstuck_ema_span_0_minutes")?,
+        unstuck_ema_span_1_minutes: extract_value(dict, "unstuck_ema_span_1_minutes")?,
+        unstuck_loss_allowance_fraction: extract_value(dict, "unstuck_loss_allowance_fraction")?,
+        unstuck_exposure_trigger_ratio: extract_value(dict, "unstuck_exposure_trigger_ratio")?,
     };
     crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
-    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_1m)
+    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_minutes)
         .map_err(PyValueError::new_err)?;
     Ok(params)
 }
@@ -2912,7 +2978,7 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
     let weights = ForagerScoreWeights {
         volume: extract_value(weights_dict, "volume")?,
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
-        volatility: extract_value(weights_dict, "volatility")?,
+        log_range: extract_value(weights_dict, "log_range")?,
         unilateralness: extract_optional_f64(weights_dict, "unilateralness")?,
     };
     weights.canonicalize().map_err(PyValueError::new_err)
@@ -2995,64 +3061,70 @@ fn validate_hsl_risk_unstuck_bot_params(
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.total_wallet_exposure_limit"),
-        params.total_wallet_exposure_limit,
+        &format!("{path_prefix}.total_wallet_exposure_limit_ratio"),
+        params.total_wallet_exposure_limit_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.wallet_exposure_limit"),
-        params.wallet_exposure_limit,
+        &format!("{path_prefix}.wallet_exposure_limit_ratio"),
+        params.wallet_exposure_limit_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_wel_enforcer_threshold"),
-        params.risk_wel_enforcer_threshold,
+        &format!("{path_prefix}.risk_wel_enforcer_threshold_ratio"),
+        params.risk_wel_enforcer_threshold_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_twel_enforcer_threshold"),
-        params.risk_twel_enforcer_threshold,
+        &format!("{path_prefix}.risk_twel_enforcer_threshold_ratio"),
+        params.risk_twel_enforcer_threshold_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_we_excess_allowance_pct"),
-        params.risk_we_excess_allowance_pct,
+        &format!("{path_prefix}.risk_we_excess_allowance_fraction"),
+        params.risk_we_excess_allowance_fraction,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_close_pct"),
-        params.unstuck_close_pct,
+        &format!("{path_prefix}.unstuck_close_fraction"),
+        params.unstuck_close_fraction,
         0.0,
         Some(1.0),
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_loss_allowance_pct"),
-        params.unstuck_loss_allowance_pct,
+        &format!("{path_prefix}.unstuck_loss_allowance_fraction"),
+        params.unstuck_loss_allowance_fraction,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_threshold"),
-        params.unstuck_threshold,
+        &format!("{path_prefix}.unstuck_exposure_trigger_ratio"),
+        params.unstuck_exposure_trigger_ratio,
         0.0,
         None,
         true,
     )?;
     for (key, span) in [
-        ("unstuck_ema_span_0", params.unstuck_ema_span_0),
-        ("unstuck_ema_span_1", params.unstuck_ema_span_1),
+        (
+            "unstuck_ema_span_0_minutes",
+            params.unstuck_ema_span_0_minutes,
+        ),
+        (
+            "unstuck_ema_span_1_minutes",
+            params.unstuck_ema_span_1_minutes,
+        ),
     ] {
         if !span.is_finite() || span <= 0.0 {
             return Err(PyValueError::new_err(format!(
@@ -3060,19 +3132,19 @@ fn validate_hsl_risk_unstuck_bot_params(
             )));
         }
     }
-    if !params.unstuck_ema_dist.is_finite() {
+    if !params.unstuck_ema_distance_fraction.is_finite() {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be finite"
+            "{path_prefix}.unstuck_ema_distance_fraction must be finite"
         )));
     }
-    if pside == "long" && params.unstuck_ema_dist <= -1.0 {
+    if pside == "long" && params.unstuck_ema_distance_fraction <= -1.0 {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be > -1.0"
+            "{path_prefix}.unstuck_ema_distance_fraction must be > -1.0"
         )));
     }
-    if pside == "short" && params.unstuck_ema_dist >= 1.0 {
+    if pside == "short" && params.unstuck_ema_distance_fraction >= 1.0 {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be < 1.0"
+            "{path_prefix}.unstuck_ema_distance_fraction must be < 1.0"
         )));
     }
     Ok(())
@@ -3113,8 +3185,8 @@ fn validate_orchestrator_account_risk_inputs(
     };
     validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
     validate_finite_range(
-        "global.max_realized_loss_pct",
-        input.global.max_realized_loss_pct,
+        "global.loss_gate_max_drawdown_fraction",
+        input.global.loss_gate_max_drawdown_fraction,
         0.0,
         None,
         true,
@@ -3148,23 +3220,6 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
             ))
         })
         .and_then(pyo3::FromPyObject::extract)
-}
-
-fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
-    dict: &'a PyDict,
-    primary: &str,
-    fallback: &str,
-) -> PyResult<T> {
-    if let Some(item) = dict.get_item(primary)? {
-        return item.extract::<T>();
-    }
-    if let Some(item) = dict.get_item(fallback)? {
-        return item.extract::<T>();
-    }
-    Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
-        "Keys '{}' or '{}' not found",
-        primary, fallback
-    )))
 }
 
 fn make_trailing_martingale_entry_params(
@@ -3220,9 +3275,9 @@ fn make_trailing_martingale_close_params(
     }
 }
 
-fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext {
+fn make_runtime_order_context(wallet_exposure_limit_ratio: f64) -> RuntimeOrderContext {
     RuntimeOrderContext {
-        effective_wallet_exposure_limit: wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: wallet_exposure_limit_ratio,
     }
 }
 
@@ -3244,12 +3299,12 @@ fn json_bool(value: &Value, key: &str, default: bool) -> bool {
 
 fn bot_params_for_close_diagnostic_json(value: &Value) -> PyResult<BotParams> {
     let mut bot = BotParams::default();
-    bot.wallet_exposure_limit = json_f64(value, "wallet_exposure_limit", 0.0);
-    bot.total_wallet_exposure_limit = json_f64(value, "total_wallet_exposure_limit", 0.0);
+    bot.wallet_exposure_limit_ratio = json_f64(value, "wallet_exposure_limit_ratio", 0.0);
+    bot.total_wallet_exposure_limit_ratio = json_f64(value, "total_wallet_exposure_limit_ratio", 0.0);
     bot.n_positions = json_usize(value, "n_positions", 1);
-    bot.risk_we_excess_allowance_pct = json_f64(value, "risk_we_excess_allowance_pct", 0.0);
+    bot.risk_we_excess_allowance_fraction = json_f64(value, "risk_we_excess_allowance_fraction", 0.0);
     bot.risk_wel_enforcer_enabled = json_bool(value, "risk_wel_enforcer_enabled", true);
-    bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
+    bot.risk_wel_enforcer_threshold_ratio = json_f64(value, "risk_wel_enforcer_threshold_ratio", 0.0);
     Ok(bot)
 }
 
@@ -3310,11 +3365,11 @@ pub fn calc_trailing_martingale_close_diagnostic_py(input_json: &str) -> PyResul
             .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,
     )?;
     let runtime = RuntimeOrderContext {
-        effective_wallet_exposure_limit: input
+        effective_wallet_exposure_limit_ratio: input
             .get("runtime")
-            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit"))
+            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit_ratio"))
             .and_then(Value::as_f64)
-            .unwrap_or(bot.wallet_exposure_limit),
+            .unwrap_or(bot.wallet_exposure_limit_ratio),
     };
     let out = calc_trailing_martingale_close_diagnostic(
         side,
@@ -3347,8 +3402,8 @@ pub fn calc_next_entry_long_py(
     entry_log_range_1h_coefficient: f64,
     entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3394,8 +3449,8 @@ pub fn calc_next_entry_long_py(
         entry_log_range_1h_coefficient,
         entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3414,7 +3469,7 @@ pub fn calc_next_entry_long_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3448,9 +3503,9 @@ pub fn calc_next_entry_long_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -3475,9 +3530,9 @@ pub fn calc_next_close_long_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3521,9 +3576,9 @@ pub fn calc_next_close_long_py(
         close_trailing_threshold_base_fraction,
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -3533,7 +3588,7 @@ pub fn calc_next_close_long_py(
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -3577,8 +3632,8 @@ pub fn calc_next_entry_short_py(
     entry_log_range_1h_coefficient: f64,
     entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3624,8 +3679,8 @@ pub fn calc_next_entry_short_py(
         entry_log_range_1h_coefficient,
         entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3644,7 +3699,7 @@ pub fn calc_next_entry_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3678,9 +3733,9 @@ pub fn calc_next_entry_short_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -3705,9 +3760,9 @@ pub fn calc_next_close_short_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3751,9 +3806,9 @@ pub fn calc_next_close_short_py(
         close_trailing_threshold_base_fraction,
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -3767,7 +3822,7 @@ pub fn calc_next_close_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3807,8 +3862,8 @@ pub fn calc_entries_long_py(
     entry_log_range_1h_coefficient: f64,
     entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3856,8 +3911,8 @@ pub fn calc_entries_long_py(
         entry_log_range_1h_coefficient,
         entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3877,7 +3932,7 @@ pub fn calc_entries_long_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3918,8 +3973,8 @@ pub fn calc_entries_short_py(
     entry_log_range_1h_coefficient: f64,
     entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3967,8 +4022,8 @@ pub fn calc_entries_short_py(
         entry_log_range_1h_coefficient,
         entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3988,7 +4043,7 @@ pub fn calc_entries_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -4041,9 +4096,9 @@ pub fn calc_min_entry_qty_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -4068,9 +4123,9 @@ pub fn calc_closes_long_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -4116,9 +4171,9 @@ pub fn calc_closes_long_py(
         close_trailing_threshold_base_fraction,
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -4128,7 +4183,7 @@ pub fn calc_closes_long_py(
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
 
     let position = Position {
         size: position_size,
@@ -4167,9 +4222,9 @@ pub fn calc_closes_long_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -4194,9 +4249,9 @@ pub fn calc_closes_short_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -4242,9 +4297,9 @@ pub fn calc_closes_short_py(
         close_trailing_threshold_base_fraction,
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -4254,7 +4309,7 @@ pub fn calc_closes_short_py(
         close_log_range_1h_coefficient,
         close_log_range_1m_coefficient,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -4285,8 +4340,8 @@ pub fn calc_closes_short_py(
 #[pyfunction]
 #[pyo3(signature = (
     side,
-    red_threshold,
-    total_wallet_exposure_limit,
+    exposure_threshold_ratio,
+    total_wallet_exposure_limit_ratio,
     effective_n_positions,
     balance,
     positions,
@@ -4295,8 +4350,8 @@ pub fn calc_closes_short_py(
 ))]
 pub fn calc_twel_enforcer_orders_py(
     side: &str,
-    red_threshold: f64,
-    total_wallet_exposure_limit: f64,
+    exposure_threshold_ratio: f64,
+    total_wallet_exposure_limit_ratio: f64,
     effective_n_positions: usize,
     balance: f64,
     positions: &Bound<'_, PyList>,
@@ -4382,8 +4437,8 @@ pub fn calc_twel_enforcer_orders_py(
 
     let actions = calc_twel_enforcer_actions(
         side_code,
-        red_threshold,
-        total_wallet_exposure_limit,
+        exposure_threshold_ratio,
+        total_wallet_exposure_limit_ratio,
         effective_n_positions,
         balance,
         &parsed_positions,
@@ -4453,7 +4508,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     for symbol in &input.symbols {
         for side in [&symbol.long, &symbol.short] {
             crate::entry_cooldown::validate(&side.bot_params).map_err(PyValueError::new_err)?;
-            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_1m)
+            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_minutes)
                 .map_err(PyValueError::new_err)?;
         }
     }

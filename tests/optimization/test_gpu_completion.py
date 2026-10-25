@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from optimization.gpu.metrics import _backtest_completion_ratio
+from optimization.gpu.metrics import _backtest_completion_fraction
 
 
 @pytest.mark.parametrize("count", [126143, 238463, 2749823])
@@ -19,7 +19,7 @@ def test_long_native_full_replay_is_exactly_one_and_one_candle_short_is_not(coun
     output = {"last_eq_step": step,
               "last_eq_ts": (step.float() * interval).double() + origin,
               "alive": torch.tensor([True, True, False, True])}
-    ratio = _backtest_completion_ratio(output, run, {"ts0": origin, "n": count}, step >= 0)
+    ratio = _backtest_completion_fraction(output, run, {"ts0": origin, "n": count}, step >= 0)
     assert ratio.dtype == torch.float64
     assert ratio[0].item() == 1.0
     assert 0 < ratio[1].item() < 1.0  # surviving but explicitly truncated
@@ -33,18 +33,18 @@ def test_long_native_full_replay_is_exactly_one_and_one_candle_short_is_not(coun
 def test_native_malformed_endpoint_does_not_fall_back_to_timestamp(step):
     run = SimpleNamespace(interval_ms=60_000, requested_start_ts_ms=0)
     with pytest.raises(RuntimeError, match="completion candle endpoint"):
-        _backtest_completion_ratio({"last_eq_step": step, "last_eq_ts": torch.tensor([99 * 60_000.])},
+        _backtest_completion_fraction({"last_eq_step": step, "last_eq_ts": torch.tensor([99 * 60_000.])},
                                    run, {"ts0": 0, "n": 100}, torch.tensor([True]))
 
 
 def test_requested_boundary_candle_is_not_an_extra_required_interval():
     run = SimpleNamespace(interval_ms=60_000, requested_start_ts_ms=0, requested_end_ts_ms=99 * 60_000)
     output = {"last_eq_step": torch.tensor([98, 97], dtype=torch.int64)}
-    ratio = _backtest_completion_ratio(output, run, {"ts0": 0, "n": 100}, torch.tensor([True, True]))
+    ratio = _backtest_completion_fraction(output, run, {"ts0": 0, "n": 100}, torch.tensor([True, True]))
     assert ratio[0].item() == 1.0
     assert ratio[1].item() == 98 / 99
     run.requested_end_ts_ms = 100 * 60_000
-    assert _backtest_completion_ratio(output, run, {"ts0": 0, "n": 100}, torch.tensor([True, True]))[0] < 1.0
+    assert _backtest_completion_fraction(output, run, {"ts0": 0, "n": 100}, torch.tensor([True, True]))[0] < 1.0
 
 
 def test_native_decoder_preserves_integer_endpoint_and_rejects_retired_layout():
@@ -78,9 +78,9 @@ def test_native_hardware_full_completion_matches_exact_rust(strategy, sides):
     inputs[1] = np.concatenate([inputs[1], inputs[1][-1:]], axis=0)
     inputs[3] = np.concatenate([inputs[3], inputs[3][-1:]], axis=0)
     inputs[4] = np.concatenate([inputs[4], [int(inputs[4][-1]) + 60_000]])
-    report = run_comparison(inputs, "binance", ["backtest_completion_ratio"], DEFAULT_TOLERANCES, diagnostics=True)
+    report = run_comparison(inputs, "binance", ["backtest_completion_fraction"], DEFAULT_TOLERANCES, diagnostics=True)
     assert report["status"] == "passed", report
-    assert report["metrics"]["backtest_completion_ratio"]["gpu"] == 1.0
+    assert report["metrics"]["backtest_completion_fraction"]["gpu"] == 1.0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -97,7 +97,7 @@ def test_native_hardware_early_liquidation_remains_incomplete(strategy, terminal
     inputs[0]["backtest"].update(start_date=datetime.fromtimestamp(first / 1000, timezone.utc).isoformat(),
                                 end_date=datetime.fromtimestamp(end / 1000, timezone.utc).isoformat())
     report = run_comparison(inputs, "bybit",
-                            ["backtest_completion_ratio"], DEFAULT_TOLERANCES, diagnostics=True)
+                            ["backtest_completion_fraction"], DEFAULT_TOLERANCES, diagnostics=True)
     assert report["status"] == "passed", report
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
-    assert 0 <= report["metrics"]["backtest_completion_ratio"]["gpu"] < 1.0
+    assert 0 <= report["metrics"]["backtest_completion_fraction"]["gpu"] < 1.0

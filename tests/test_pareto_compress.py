@@ -18,27 +18,27 @@ def _write_candidate(
     pareto_dir: Path,
     name: str,
     *,
-    adg: float,
+    adg_fraction: float,
     drawdown: float,
 ) -> None:
     payload = {
         "config_version": "v8.0.0",
         "backtest": {"aggregate": {"default": "mean"}, "starting_balance": 100000},
-        "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg}}},
+        "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg_fraction}}},
         "optimize": {
             "scoring": [
-                {"metric": "adg_strategy_eq", "goal": "max"},
-                {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "metrics": {
             "objectives": {
-                "adg_strategy_eq": adg,
-                "drawdown_worst_strategy_eq": drawdown,
+                "adg_fraction_strategy_equity": adg_fraction,
+                "drawdown_max_fraction_strategy_equity": drawdown,
             },
             "stats": {
-                "adg_strategy_eq": _metric_stats(adg),
-                "drawdown_worst_strategy_eq": _metric_stats(drawdown),
+                "adg_fraction_strategy_equity": _metric_stats(adg_fraction),
+                "drawdown_max_fraction_strategy_equity": _metric_stats(drawdown),
             },
         },
     }
@@ -50,10 +50,10 @@ def _write_candidate(
 def sample_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir = tmp_path / "run" / "pareto"
     pareto_dir.mkdir(parents=True)
-    _write_candidate(pareto_dir, "low_drawdown_anchor", adg=0.001, drawdown=0.10)
-    _write_candidate(pareto_dir, "adg_anchor", adg=0.004, drawdown=0.40)
-    _write_candidate(pareto_dir, "middle", adg=0.002, drawdown=0.25)
-    _write_candidate(pareto_dir, "diverse_fill", adg=0.003, drawdown=0.15)
+    _write_candidate(pareto_dir, "low_drawdown_anchor", adg_fraction=0.001, drawdown=0.10)
+    _write_candidate(pareto_dir, "adg_anchor", adg_fraction=0.004, drawdown=0.40)
+    _write_candidate(pareto_dir, "middle", adg_fraction=0.002, drawdown=0.25)
+    _write_candidate(pareto_dir, "diverse_fill", adg_fraction=0.003, drawdown=0.15)
     return pareto_dir
 
 
@@ -71,8 +71,8 @@ def test_compress_includes_ideal_then_objective_anchors(sample_pareto_dir: Path)
     ]
     assert members[0].reason_details == ["closest to ideal point"]
     assert {item["metric"] for item in objective_ranges} == {
-        "adg_strategy_eq",
-        "drawdown_worst_strategy_eq",
+        "adg_fraction_strategy_equity",
+        "drawdown_max_fraction_strategy_equity",
     }
     assert truncated == []
 
@@ -99,7 +99,7 @@ def test_compress_truncates_to_ideal_when_count_is_small(sample_pareto_dir: Path
 
     assert [member.candidate.path.name for member in members] == ["diverse_fill.json"]
     assert members[0].reason == "ideal_anchor"
-    assert truncated == ["best adg_strategy_eq", "best drawdown_worst_strategy_eq"]
+    assert truncated == ["best adg_fraction_strategy_equity", "best drawdown_max_fraction_strategy_equity"]
 
 
 def test_compress_from_args_writes_selected_json_and_manifest(sample_pareto_dir: Path, tmp_path: Path):
@@ -140,7 +140,7 @@ def test_compress_writes_to_non_empty_output_dir_without_deleting_files(
     assert payload["selected_count"] == 2
     assert json.loads(stale_file.read_text()) == {"keep": True}
     selected_payload = json.loads(selected_file.read_text())
-    assert selected_payload["metrics"]["objectives"]["adg_strategy_eq"] == 0.003
+    assert selected_payload["metrics"]["objectives"]["adg_fraction_strategy_equity"] == 0.003
     manifest = json.loads((out_dir / "selection.json").read_text())
     assert manifest["selected_count"] == 2
     assert "Output directory is non-empty" in caplog.text
@@ -155,7 +155,7 @@ def test_compress_applies_limits_before_selection(sample_pareto_dir: Path):
             str(sample_pareto_dir),
             "2",
             "--limit",
-            "drawdown_worst_strategy_eq<=0.30",
+            "drawdown_max_fraction_strategy_equity<=0.30",
         ]
     )
 

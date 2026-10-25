@@ -26,7 +26,7 @@ BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "fee_pct_fallback",
     "fee_pct_sanity_abs_max",
     "market_orders_allowed",
-    "market_order_near_touch_threshold",
+    "market_order_near_touch_fraction",
     "lookback_ema_span_minutes",
 )
 
@@ -52,7 +52,7 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
             "fee_pct_fallback": "live.fills.fallback_fee_fraction",
             "fee_pct_sanity_abs_max": "live.fills.max_abs_fee_fraction",
             "market_orders_allowed": "bot.portfolio.execution.market_orders_allowed",
-            "market_order_near_touch_threshold": "bot.portfolio.execution.market_order_near_touch_fraction",
+            "market_order_near_touch_fraction": "bot.portfolio.execution.market_order_near_touch_fraction",
         }
         owner_paths = ", ".join(owners.get(key, f"live.{key}") for key in invalid)
         raise ValueError(

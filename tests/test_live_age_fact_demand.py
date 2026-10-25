@@ -61,7 +61,7 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
     if planning:
         bot.update_effective_min_cost = AsyncMock()
         bot.refresh_approved_ignored_coins_lists = lambda: None
-        bot.set_wallet_exposure_limits = lambda: None
+        bot.set_wallet_exposure_limit_ratios = lambda: None
         bot._assert_supported_live_state = lambda: None
         bot._build_live_symbol_universe = lambda: []
         await bot.prepare_planning_universe()

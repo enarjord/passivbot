@@ -1445,8 +1445,8 @@ def _expected_rust_execution_type(
     if (qty > 0.0 and price >= market_price) or (qty < 0.0 and price <= market_price):
         return "market"
     threshold = _validated_rust_finite_number(
-        global_input.get("market_order_near_touch_threshold", 0.001),
-        "global input has invalid market_order_near_touch_threshold",
+        global_input.get("market_order_near_touch_fraction", 0.001),
+        "global input has invalid market_order_near_touch_fraction",
     )
     price_diff = abs(price / market_price - 1.0)
     return "market" if price_diff <= max(threshold, 0.0) else "limit"
@@ -1529,9 +1529,9 @@ def _submitted_rust_input_context(
             raise FatalBotException(
                 f"Rust orchestrator global input has invalid {pside} bot params"
             )
-        total_wallet_exposure_limit = _validated_rust_finite_number(
-            side_params.get("total_wallet_exposure_limit"),
-            f"global input has invalid {pside} total_wallet_exposure_limit",
+        total_wallet_exposure_limit_ratio = _validated_rust_finite_number(
+            side_params.get("total_wallet_exposure_limit_ratio"),
+            f"global input has invalid {pside} total_wallet_exposure_limit_ratio",
         )
         n_positions = side_params.get("n_positions")
         if (
@@ -1541,7 +1541,7 @@ def _submitted_rust_input_context(
         ):
             raise FatalBotException(f"global input has invalid {pside} n_positions")
         global_side_enablement[pside] = (
-            activation[pside] and total_wallet_exposure_limit > 0.0 and n_positions > 0
+            activation[pside] and total_wallet_exposure_limit_ratio > 0.0 and n_positions > 0
         )
         global_side_n_positions[pside] = n_positions
         twel_enabled = side_params.get("risk_twel_enforcer_enabled", True)
@@ -1550,7 +1550,7 @@ def _submitted_rust_input_context(
                 f"Rust orchestrator global input has invalid {pside} TWEL enforcer flag"
             )
         twel_threshold = _validated_rust_finite_number(
-            side_params.get("risk_twel_enforcer_threshold", 0.0),
+            side_params.get("risk_twel_enforcer_threshold_ratio", 0.0),
             f"global input has invalid {pside} TWEL enforcer threshold",
         )
         global_twel_enforcer_enablement[pside] = twel_enabled and twel_threshold > 0.0
@@ -1756,12 +1756,12 @@ def _submitted_rust_input_context(
                 entry_cooldown_active[(symbol_idx, pside)] = False
             if cooldown_unavailable:
                 entry_cooldown_active[(symbol_idx, pside)] = True
-            wallet_exposure_limit = _validated_rust_finite_number(
-                bot_params.get("wallet_exposure_limit"),
-                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
+            wallet_exposure_limit_ratio = _validated_rust_finite_number(
+                bot_params.get("wallet_exposure_limit_ratio"),
+                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit_ratio",
             )
             symbol_side_eligibility[(symbol_idx, pside)] = (
-                tradable and wallet_exposure_limit != 0.0
+                tradable and wallet_exposure_limit_ratio != 0.0
             )
             wel_enabled = bot_params.get("risk_wel_enforcer_enabled", True)
             if not isinstance(wel_enabled, bool):
@@ -1769,7 +1769,7 @@ def _submitted_rust_input_context(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} WEL enforcer flag"
                 )
             wel_threshold = _validated_rust_finite_number(
-                bot_params.get("risk_wel_enforcer_threshold", 0.0),
+                bot_params.get("risk_wel_enforcer_threshold_ratio", 0.0),
                 f"symbol input {input_idx} has invalid {pside} WEL enforcer threshold",
             )
             unstuck_enabled = bot_params.get("unstuck_enabled", True)
@@ -1783,9 +1783,9 @@ def _submitted_rust_input_context(
                     f"symbol input {input_idx} has invalid {pside} {field}",
                 )
                 for field in (
-                    "unstuck_loss_allowance_pct",
-                    "unstuck_close_pct",
-                    "unstuck_threshold",
+                    "unstuck_loss_allowance_fraction",
+                    "unstuck_close_fraction",
+                    "unstuck_exposure_trigger_ratio",
                 )
             }
             enabled_families: set[str] = set()
@@ -2491,17 +2491,17 @@ def validate_rust_orchestrator_output(
     loss_gate_blocks = diagnostics["loss_gate_blocks"]
     if not isinstance(loss_gate_blocks, list):
         raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
-    submitted_max_realized_loss_pct: float | None = None
+    submitted_loss_gate_max_drawdown_fraction: float | None = None
     if loss_gate_blocks:
-        submitted_max_realized_loss_pct = _validated_rust_finite_number(
-            global_input.get("max_realized_loss_pct"),
-            "submitted global input has invalid max_realized_loss_pct",
+        submitted_loss_gate_max_drawdown_fraction = _validated_rust_finite_number(
+            global_input.get("loss_gate_max_drawdown_fraction"),
+            "submitted global input has invalid loss_gate_max_drawdown_fraction",
         )
-        if submitted_max_realized_loss_pct < 0.0:
+        if submitted_loss_gate_max_drawdown_fraction < 0.0:
             raise FatalBotException(
-                "Rust orchestrator submitted global input has invalid max_realized_loss_pct"
+                "Rust orchestrator submitted global input has invalid loss_gate_max_drawdown_fraction"
             )
-        if submitted_max_realized_loss_pct >= 1.0:
+        if submitted_loss_gate_max_drawdown_fraction >= 1.0:
             raise FatalBotException(
                 "Rust orchestrator loss_gate_blocks present while submitted "
                 "realized-loss gate is disabled"
@@ -2514,7 +2514,7 @@ def validate_rust_orchestrator_output(
         "projected_balance_after",
         "balance_peak",
         "balance_floor",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
     )
     for block_idx, block in enumerate(loss_gate_blocks):
         if not isinstance(block, dict):
@@ -2636,7 +2636,7 @@ def validate_rust_orchestrator_output(
         projected_balance_after = finite_values["projected_balance_after"]
         balance_peak = finite_values["balance_peak"]
         balance_floor = finite_values["balance_floor"]
-        max_realized_loss_pct = finite_values["max_realized_loss_pct"]
+        loss_gate_max_drawdown_fraction = finite_values["loss_gate_max_drawdown_fraction"]
         if projected_pnl >= 0.0:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} must have negative projected_pnl"
@@ -2645,13 +2645,13 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid balance state"
             )
-        if not 0.0 <= max_realized_loss_pct < 1.0:
+        if not 0.0 <= loss_gate_max_drawdown_fraction < 1.0:
             raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} has invalid max_realized_loss_pct"
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid loss_gate_max_drawdown_fraction"
             )
-        if max_realized_loss_pct != submitted_max_realized_loss_pct:
+        if loss_gate_max_drawdown_fraction != submitted_loss_gate_max_drawdown_fraction:
             raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} max_realized_loss_pct "
+                f"Rust orchestrator loss_gate_block {block_idx} loss_gate_max_drawdown_fraction "
                 "is inconsistent with submitted policy"
             )
         if not math.isclose(
@@ -2665,7 +2665,7 @@ def validate_rust_orchestrator_output(
             )
         if not math.isclose(
             balance_floor,
-            balance_peak * (1.0 - max_realized_loss_pct),
+            balance_peak * (1.0 - loss_gate_max_drawdown_fraction),
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
@@ -2740,7 +2740,7 @@ def validate_rust_orchestrator_output(
         "score",
         "volume_component",
         "ema_readiness_component",
-        "volatility_component",
+        "log_range_component",
         "unilateralness_component",
     )
     event_finite_fields = (
@@ -2768,7 +2768,7 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator {context} has invalid ranking_required"
             )
-        validate_diagnostic_finite_fields(selection, ("score_hysteresis_pct",), context)
+        validate_diagnostic_finite_fields(selection, ("score_hysteresis_margin",), context)
         for field in ("selected_symbol_indices", "incumbent_symbol_indices"):
             validate_diagnostic_symbol_idx_list(
                 selection.get(field), f"{context} {field}"
@@ -3098,7 +3098,7 @@ def prepare_order_churn_evidence(bot, ideal_orders: dict, *, generation: int) ->
     decisions = state.evaluate_and_record(
         complete_ideals,
         now_monotonic=time.monotonic(),
-        tolerance=float(bot.live_value("order_match_tolerance_pct")),
+        tolerance=float(bot.live_value("order_match_tolerance_fraction")),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
         max_sample_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
@@ -3685,7 +3685,7 @@ def annotate_order_deltas(
         cancel_order.setdefault("_context", "retire")
         cancel_order.setdefault("_reason", "retire")
 
-    def pct(a: float, b: float) -> float:
+    def relative_difference_percent(a: float, b: float) -> float:
         if a == 0 and b == 0:
             return 0.0
         if a == 0:
@@ -3708,11 +3708,11 @@ def annotate_order_deltas(
                 float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))
             ),
         )
-        raw_price_diff = pct(
+        raw_price_diff = relative_difference_percent(
             float(cancel_order.get("price", 0.0)),
             float(best_order.get("price", 0.0)),
         )
-        raw_qty_diff = pct(
+        raw_qty_diff = relative_difference_percent(
             float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0))
         )
         price_diff = (
@@ -3732,20 +3732,20 @@ def annotate_order_deltas(
         cancel_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         cancel_order["_context"] = "replace"
         cancel_order["_reason"] = reason
         best_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         best_order["_context"] = "replace"
         best_order["_reason"] = reason
@@ -3764,7 +3764,7 @@ def apply_order_match_tolerance(
 
     Returns (remaining_cancel, remaining_create, skipped_pairs)
     """
-    tolerance = float(bot.live_value("order_match_tolerance_pct"))
+    tolerance = float(bot.live_value("order_match_tolerance_fraction"))
     if tolerance <= 0.0:
         return to_cancel, to_create, 0
 

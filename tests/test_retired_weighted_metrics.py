@@ -31,8 +31,8 @@ def test_retired_formula_rejected_at_every_authored_metric_boundary(metric, surf
 
 
 @pytest.mark.parametrize("metric", [
-    "adg_strategy_eq_ew", "adg_ew_usd", "fills_gap_time_weighted_mean_hours",
-    "position_held_time_weighted_mean_hours", "strategy_eq_recovery_days_mean_worst_1pct",
+    "adg_fraction_strategy_equity_ew", "adg_fraction_usd_ew", "fills_gap_time_weighted_mean_hours",
+    "position_held_time_weighted_mean_hours", "recovery_worst_1pct_mean_days_strategy_equity",
 ])
 def test_explicit_exponential_and_ordinary_time_weighted_metrics_remain_supported(metric):
     specs, _ = normalize_scoring_entries([{"metric": metric, "goal": "max"}])

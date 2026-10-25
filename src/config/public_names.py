@@ -15,6 +15,18 @@ from .migrations.released_v8_strategy import (
 
 
 PUBLIC_PATH_RENAMES = {
+    ("backtest", "btc_collateral_cap"): ("backtest", "btc_collateral_target_ratio"),
+    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_wallet_value_ratio"),
+    ("backtest", "maker_fee_override"): ("backtest", "maker_fee_override_fraction"),
+    ("backtest", "taker_fee_override"): ("backtest", "taker_fee_override_fraction"),
+    ("backtest", "equity_floor_ratio"): ("backtest", "equity_floor_fraction"),
+    ("bot", "portfolio", "warmup", "span_multiplier"): ("bot", "portfolio", "warmup", "activation_span_fraction"),
+
+    ("optimize", "pymoo", "shared", "crossover_eta"): ("optimize", "pymoo", "shared", "crossover_distribution_index"),
+    ("optimize", "pymoo", "shared", "crossover_prob_var"): ("optimize", "pymoo", "shared", "crossover_probability_per_variable"),
+    ("optimize", "pymoo", "shared", "mutation_eta"): ("optimize", "pymoo", "shared", "mutation_distribution_index"),
+    ("optimize", "pymoo", "shared", "mutation_prob"): ("optimize", "pymoo", "shared", "mutation_probability"),
+    ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),

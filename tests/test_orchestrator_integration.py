@@ -147,23 +147,23 @@ def bot_params(**overrides):
         "entry_trailing_reentry_qty_multiplier": 0.0,
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
-        "filter_volatility_ema_span_1m": 10.0,
+        "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span_1m": 10.0,
+        "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0,
-        "risk_wel_enforcer_threshold": 0.0,
-        "risk_twel_enforcer_threshold": 0.0,
-        "risk_we_excess_allowance_pct": 0.0,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "risk_twel_enforcer_threshold_ratio": 0.0,
+        "risk_we_excess_allowance_fraction": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     base.update(overrides)
     return base
@@ -177,7 +177,7 @@ def bot_params_pair(long_overrides=None, short_overrides=None):
             **(
                 {
                     "n_positions": 0,
-                    "total_wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit_ratio": 0.0,
                 }
                 | (short_overrides or {})
             )
@@ -203,8 +203,8 @@ def exchange_params(**overrides):
         "min_qty": 0.0,
         "min_cost": 0.0,
         "c_mult": 1.0,
-        "maker_fee": 0.0002,
-        "taker_fee": 0.00055,
+        "maker_fee_fraction": 0.0002,
+        "taker_fee_fraction": 0.00055,
     }
     base.update(overrides)
     return base
@@ -294,7 +294,7 @@ def make_symbol(
                 **(
                     {
                         "n_positions": 0,
-                        "total_wallet_exposure_limit": 0.0,
+                        "total_wallet_exposure_limit_ratio": 0.0,
                     }
                     | short_bot_overrides
                 )
@@ -318,7 +318,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 0.0,
+            "loss_gate_max_drawdown_fraction": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": "trailing_martingale",
@@ -357,7 +357,7 @@ class TestOrchestratorOrderAccuracy:
                         "entry_initial_ema_distance_fraction": -0.01,  # Enter 1% below EMA
                         "entry_grid_threshold_base_fraction": 0.02,  # 2% spacing
                         "entry_initial_qty_fraction": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -385,7 +385,7 @@ class TestOrchestratorOrderAccuracy:
             global_bp=bot_params_pair(
                 short_overrides={
                     "n_positions": 1,
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                 }
             ),
             symbols=[
@@ -397,7 +397,7 @@ class TestOrchestratorOrderAccuracy:
                         "entry_initial_ema_distance_fraction": 0.01,  # Enter 1% above EMA
                         "entry_grid_threshold_base_fraction": 0.02,  # 2% spacing
                         "entry_initial_qty_fraction": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -459,10 +459,10 @@ class TestOrchestratorOrderAccuracy:
                     long_pos_size=5.0,  # Large position
                     long_pos_price=100.0,  # Original entry
                     long_bp={
-                        "unstuck_threshold": 0.1,  # Trigger at 10% loss
-                        "unstuck_loss_allowance_pct": 0.05,  # Allow 5% loss
-                        "unstuck_close_pct": 0.5,  # Close 50%
-                        "unstuck_ema_dist": -0.05,  # Unstuck entry 5% below EMA
+                        "unstuck_exposure_trigger_ratio": 0.1,  # Trigger at 10% loss
+                        "unstuck_loss_allowance_fraction": 0.05,  # Allow 5% loss
+                        "unstuck_close_fraction": 0.5,  # Close 50%
+                        "unstuck_ema_distance_fraction": -0.05,  # Unstuck entry 5% below EMA
                     },
                 )
             ],
@@ -493,16 +493,16 @@ class TestOrchestratorOrderAccuracy:
                         long_pos_size=5.0,
                         long_pos_price=100.0,
                         long_bp={
-                            "unstuck_threshold": 0.1,
-                            "unstuck_loss_allowance_pct": 0.05,
-                            "unstuck_close_pct": 0.5,
-                            "unstuck_ema_dist": -0.05,
+                            "unstuck_exposure_trigger_ratio": 0.1,
+                            "unstuck_loss_allowance_fraction": 0.05,
+                            "unstuck_close_fraction": 0.5,
+                            "unstuck_ema_distance_fraction": -0.05,
                         },
                     )
                 ],
             )
             inp["global"]["unstuck_allowance_long"] = 50.0
-            inp["global"]["max_realized_loss_pct"] = 1.0
+            inp["global"]["loss_gate_max_drawdown_fraction"] = 1.0
             return inp
 
         baseline = compute(pbr, stuck_input())
@@ -657,7 +657,7 @@ class TestOrchestratorEdgeCases:
                     long_pos_size=10.0,  # Position worth 1000 (100% exposure)
                     long_pos_price=100.0,
                     long_bp={
-                        "wallet_exposure_limit": 1.0,  # Max 100% WEL
+                        "wallet_exposure_limit_ratio": 1.0,  # Max 100% WEL
                         "entry_initial_ema_distance_fraction": -0.01,
                         "entry_initial_qty_fraction": 0.1,
                     },
@@ -688,7 +688,7 @@ class TestOrchestratorMultiSymbol:
         inp = make_input(
             balance=10_000.0,
             global_bp=bot_params_pair(
-                long_overrides={"total_wallet_exposure_limit": 2.0}  # 200% TWEL
+                long_overrides={"total_wallet_exposure_limit_ratio": 2.0}  # 200% TWEL
             ),
             symbols=[
                 make_symbol(
@@ -698,7 +698,7 @@ class TestOrchestratorMultiSymbol:
                     long_bp={
                         "entry_initial_ema_distance_fraction": -0.01,
                         "entry_initial_qty_fraction": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
                 make_symbol(
@@ -708,7 +708,7 @@ class TestOrchestratorMultiSymbol:
                     long_bp={
                         "entry_initial_ema_distance_fraction": -0.01,
                         "entry_initial_qty_fraction": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
             ],
@@ -739,7 +739,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volatility_ema_span_1m": 1.0,
+                        "forager_log_range_ema_span_minutes": 1.0,
                     },
                 )
             ],
@@ -764,7 +764,7 @@ class TestOrchestratorMultiSymbol:
                     index, bid=100.0, ask=100.0,
                     emas=ema_bundle(m1_volume=[[10.0, volume]]),
                     long_bp={"forager_score_weights": weights,
-                             "filter_volume_ema_span_1m": 10.0},
+                             "forager_volume_ema_span_minutes": 10.0},
                 )
                 for index, volume in [(0, 100.0), (1, 1000.0)]
             ],
@@ -896,7 +896,7 @@ class TestSignedQuantitiesConvention:
                         "entry_initial_ema_distance_fraction": 0.01,
                         "entry_initial_qty_fraction": 0.1,
                         "n_positions": 1,
-                        "total_wallet_exposure_limit": 1.0,
+                        "total_wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],

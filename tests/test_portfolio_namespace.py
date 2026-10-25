@@ -23,7 +23,7 @@ from tools.migrate_config_v9 import migrate
 
 PORTFOLIO_PATHS = (
     "strategy_kind", "hedge_mode", "execution.market_orders_allowed",
-    "execution.market_order_near_touch_fraction", "warmup.span_multiplier",
+    "execution.market_order_near_touch_fraction", "warmup.activation_span_fraction",
     "warmup.max_minutes", "loss_gate.max_drawdown_fraction",
     "loss_gate.memory_ema_span_minutes", "unstuck.memory_ema_span_minutes",
     "hsl.scope", "hsl.enabled", "hsl.drawdown_threshold_fraction",
@@ -166,7 +166,7 @@ def test_exports_retain_explicit_portfolio_policy_values_and_side_independence(m
 def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported(owner):
     source = released_v8_policy()
     old = {"live.hedge_mode": True, "live.warmup_ratio": 0.625,
-           "live.market_order_near_touch_threshold": 0.0125}
+           "live.market_order_near_touch_fraction": 0.0125}
     if owner == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = old
     else:
@@ -175,7 +175,7 @@ def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported
     migration = migrate(source, memory_span_minutes=123.5)
     patch = (migration.config["optimize"]["fixed_runtime_overrides"] if owner == "fixed" else
              migration.config["backtest"]["scenarios"][0]["overrides"])
-    expected = {"bot.portfolio.hedge_mode": True, "bot.portfolio.warmup.span_multiplier": 0.625,
+    expected = {"bot.portfolio.hedge_mode": True, "bot.portfolio.warmup.activation_span_fraction": 0.625,
                 "bot.portfolio.execution.market_order_near_touch_fraction": 0.0125}
     assert patch == expected
     for path in expected:

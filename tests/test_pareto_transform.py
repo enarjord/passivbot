@@ -4,18 +4,18 @@ from tools.pareto_transform import convert_entry, select_prune_indices
 def test_convert_entry_creates_metrics():
     entry = {
         "analyses_combined": {
-            "adg_btc_mean": 0.1,
-            "adg_btc_min": 0.05,
-            "adg_btc_max": 0.2,
-            "adg_btc_std": 0.01,
+            "adg_fraction_btc_mean": 0.1,
+            "adg_fraction_btc_min": 0.05,
+            "adg_fraction_btc_max": 0.2,
+            "adg_fraction_btc_std": 0.01,
             "w_0": -0.001,
         }
     }
     changed = convert_entry(entry)
     assert changed is True
     metrics = entry["metrics"]
-    assert metrics["stats"]["adg_btc"]["mean"] == 0.1
-    assert metrics["stats"]["adg_btc"]["max"] == 0.2
+    assert metrics["stats"]["adg_fraction_btc"]["mean"] == 0.1
+    assert metrics["stats"]["adg_fraction_btc"]["max"] == 0.2
     assert metrics["objectives"]["w_0"] == -0.001
     assert "analyses_combined" not in entry
 

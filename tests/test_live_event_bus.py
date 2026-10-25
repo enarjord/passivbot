@@ -2200,7 +2200,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
     live_event_emitters.emit_memory_snapshot_event(
         bot,
         rss_bytes=198 * 1024 * 1024,
-        rss_delta_pct=91.0,
+        rss_delta_percent=91.0,
         cache_bytes=5 * 1024 * 1024,
         cache_candles=100,
         cache_symbols=39,
@@ -2240,7 +2240,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
     )
     data = kwargs["data"]
     assert data["rss_bytes"] == 198 * 1024 * 1024
-    assert data["rss_delta_pct"] == 91.0
+    assert data["rss_delta_percent"] == 91.0
     assert data["cache"]["bytes"] == 5 * 1024 * 1024
     assert len(data["cache"]["samples"]) == 3
     assert data["cache"]["samples"][0]["bytes"] == (1 << 63) - 1
@@ -2261,7 +2261,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
 def test_memory_snapshot_console_formatter_is_compact_and_omits_samples():
     data = {
         "rss_bytes": 198 * 1024 * 1024,
-        "rss_delta_pct": 91.0,
+        "rss_delta_percent": 91.0,
         "cache": {
             "bytes": 5 * 1024 * 1024,
             "symbols": 39,
@@ -3240,7 +3240,7 @@ def test_console_format_summarizes_hsl_status_distance_to_red():
             "tier": "green",
             "dist_to_red": 0.02,
             "drawdown_score": 0.03,
-            "red_threshold": 0.05,
+            "drawdown_threshold_fraction": 0.05,
             "cooldown_remaining": "none",
             "last_red_ts": 1_600_000,
             "has_open_position": True,
@@ -3249,7 +3249,7 @@ def test_console_format_summarizes_hsl_status_distance_to_red():
 
     assert format_console_event(event) == (
         "[risk] succeeded cycle=cy_hsl mode=coin tier=green "
-        "dist_to_red=0.020000 drawdown_score=0.030000 red_threshold=0.050000 "
+        "dist_to_red=0.020000 drawdown_score=0.030000 drawdown_threshold_fraction=0.050000 "
         "cooldown=none last_red_ts=1600000 symbol=ZEC/USDT:USDT "
         "pside=long reason=green"
     )
@@ -3309,7 +3309,7 @@ def test_console_format_summarizes_realized_loss_gate_block():
             "projected_pnl": -12.5,
             "projected_balance_after": 987.5,
             "balance_floor": 990.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         },
     )
 
@@ -3341,8 +3341,8 @@ def test_console_format_summarizes_trailing_status():
             "retracement_price": 99_145.0,
             "threshold_projection_retracement_price": 99_145.0,
             "current_price": 101_000.0,
-            "current_vs_threshold_ratio": 101_000.0 / 98_750.0 - 1.0,
-            "current_vs_retracement_ratio": 101_000.0 / 99_145.0 - 1.0,
+            "current_price_change_from_threshold_fraction": 101_000.0 / 98_750.0 - 1.0,
+            "current_price_change_from_retracement_fraction": 101_000.0 / 99_145.0 - 1.0,
         },
     )
 
@@ -3373,8 +3373,8 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
             "retracement_fraction": 0.000212,
             "retracement_price": 1049.58,
             "current_price": 902.465,
-            "current_vs_threshold_ratio": -0.140163,
-            "current_vs_retracement_ratio": -0.140163,
+            "current_price_change_from_threshold_fraction": -0.140163,
+            "current_price_change_from_retracement_fraction": -0.140163,
             "threshold_projection_retracement_price": 1030.0,
         },
     )
@@ -3386,8 +3386,8 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
         "gates=t:y/r:y threshold=-1.9649%@887.25 retracement=0.0212%@1049.58 cur=902.465"
     )
     assert len(rendered) <= 240
-    assert event.data["current_vs_threshold_ratio"] == -0.140163
-    assert event.data["current_vs_retracement_ratio"] == -0.140163
+    assert event.data["current_price_change_from_threshold_fraction"] == -0.140163
+    assert event.data["current_price_change_from_retracement_fraction"] == -0.140163
     assert event.data["threshold_projection_retracement_price"] == 1030.0
 
 
@@ -3428,8 +3428,8 @@ def test_console_format_summarizes_unstuck_status():
                     "over_budget": True,
                     "next_symbol": "BTC/USDT:USDT",
                     "next_target_price": 101_000.0,
-                    "next_target_distance_ratio": 0.005,
-                    "next_unstuck_trigger_distance_ratio": 0.0125,
+                    "next_target_price_offset_fraction": 0.005,
+                    "next_unstuck_trigger_price_offset_fraction": 0.0125,
                 },
                 "short": {"status": "disabled"},
             },
@@ -3454,7 +3454,7 @@ def test_console_format_summarizes_unstuck_selection():
             "changed": True,
             "entry_price": 1.0,
             "current_price": 1.1,
-            "price_diff_pct": 10.0,
+            "price_change_percent": 10.0,
             "allowance": -12.3,
         },
     )
@@ -4284,7 +4284,7 @@ def test_console_format_summarizes_hsl_transition():
             "tier": "orange",
             "dist_to_red": 0.012345678,
             "drawdown_score": 0.1875,
-            "red_threshold": 0.2,
+            "drawdown_threshold_fraction": 0.2,
             "balance": 1_000.0,
             "strategy_equity": 950.0,
             "metrics": {"balance": 1_000.0},
@@ -4294,7 +4294,7 @@ def test_console_format_summarizes_hsl_transition():
 
     assert format_console_event(event) == (
         "[risk] succeeded cycle=cy_hsl_transition mode=coin tier=yellow->orange "
-        "dist_to_red=0.012346 drawdown_score=0.187500 red_threshold=0.200000 "
+        "dist_to_red=0.012346 drawdown_score=0.187500 drawdown_threshold_fraction=0.200000 "
         "ts=1782946000000 symbol=NEAR/USDT:USDT pside=long reason=yellow_to_orange"
     )
 

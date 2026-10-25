@@ -37,7 +37,7 @@ from optimization.gpu.service import (
     MPS_MAX_DISPATCH_CANDIDATE_BARS,
     SharedAccountReplay,
     _btc_daily_price_context,
-    _candidate_wallet_exposure_limit_outputs,
+    _candidate_wallet_exposure_limit_ratio_outputs,
     _candidate_position_slot_outputs,
     _hsl_lookback_bars,
     _directional_entry_initial_metrics,
@@ -111,17 +111,17 @@ def _complete_hsl_payload(payload):
 
 def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pins():
     payload = SimpleNamespace(bot_params_list=[{
-        "long": {"hsl_red_threshold": 0.27},
+        "long": {"hsl_drawdown_threshold_fraction": 0.27},
         "short": {},
     }])
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
-    assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
+    assert native["coins"]["BTC"][0]["drawdown_threshold_fraction"] == 0.27
     default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_threshold_fraction"]
-    assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
-    assert native["portfolio"]["red_threshold"] == default_threshold
+    assert native["coins"]["BTC"][1]["drawdown_threshold_fraction"] == default_threshold
+    assert native["portfolio"]["drawdown_threshold_fraction"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
-        assert "drawdown_threshold_fraction" not in policy
+        assert "red_threshold" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
@@ -169,16 +169,16 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "last_valid_indices": [2],
         "trade_start_indices": [1],
         "global_warmup_bars": 1,
-        "liquidation_threshold": 0.05,
+        "equity_floor_fraction": 0.05,
         "filter_by_min_effective_cost": {"long": False, "short": False},
         "dynamic_wel_by_tradability": True,
         "hedge_mode": False,
-        "max_realized_loss_pct": 1.0,
+        "loss_gate_max_drawdown_fraction": 1.0,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
-        "market_order_slippage_pct": 0.0005,
+        "market_order_slippage_fraction": 0.0005,
         "market_orders_allowed": False,
-        "market_order_near_touch_threshold": 0.001,
+        "market_order_near_touch_fraction": 0.001,
         "forager_score_hysteresis": {"long": 0.02, "short": 0.02},
     }
     market = {
@@ -187,8 +187,8 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "min_qty": 0.001,
         "min_cost": 5.0,
         "c_mult": 1.0,
-        "maker_fee": 0.0004,
-        "taker_fee": 0.00055,
+        "maker_fee_fraction": 0.0004,
+        "taker_fee_fraction": 0.00055,
     }
     original = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
@@ -200,7 +200,7 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         exchange_params=[market],
         base_params={"long": {"offset_fraction": 0.01}},
     )
-    changed_fee = dict(market, maker_fee=0.0005)
+    changed_fee = dict(market, maker_fee_fraction=0.0005)
     changed = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
         exchange="bybit",
@@ -366,16 +366,16 @@ def test_compact_recovery_output_remains_on_device_and_rejects_bad_transport(mon
     elif malformed == "non_tensor": output["strategy_eq_recovery_distribution"] = object()
     if malformed:
         with pytest.raises(RuntimeError, match="(Invalid compact GPU|Ambiguous GPU) recovery output"):
-            _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"})
+            _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"})
     else:
-        assert _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"}) is stats
-        assert _mps_strategy_eq_recovery_distribution(output, {"adg_strategy_eq"}) is None
+        assert _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"}) is stats
+        assert _mps_strategy_eq_recovery_distribution(output, {"adg_fraction_strategy_equity"}) is None
 
 
 def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
-    needed = {"strategy_eq_recovery_days_p99"}
+    needed = {"recovery_p99_days_strategy_equity"}
 
-    assert _mps_strategy_eq_recovery_distribution({}, {"adg_strategy_eq"}) is None
+    assert _mps_strategy_eq_recovery_distribution({}, {"adg_fraction_strategy_equity"}) is None
     with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
         _mps_strategy_eq_recovery_distribution({}, needed)
 
@@ -670,10 +670,10 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "loss_sum",
         "position_unchanged_max_ms",
         "entry_initial_balance_pct",
-        "entry_initial_balance_pct_long",
-        "entry_initial_balance_pct_short",
-        "total_wallet_exposure_max",
-        "total_wallet_exposure_mean",
+        "initial_entry_balance_fraction_long",
+        "initial_entry_balance_fraction_short",
+        "absolute_net_wallet_exposure_max_ratio",
+        "absolute_net_wallet_exposure_mean_ratio",
         "day_fill_count",
         "fill_count",
         "fill_count_entry",
@@ -709,32 +709,32 @@ def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
 
     metrics = _directional_entry_initial_metrics(side, values)
 
-    assert metrics[f"entry_initial_balance_pct_{side}"].tolist() == values.tolist()
+    assert metrics[f"initial_entry_balance_fraction_{side}"].tolist() == values.tolist()
     other = "short" if side == "long" else "long"
-    assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
-    assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
+    assert metrics[f"initial_entry_balance_fraction_{other}"].shape == values.shape
+    assert metrics[f"initial_entry_balance_fraction_{other}"].tolist() == [0.0, 0.0, 0.0]
 
 
-def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
+def test_candidate_wallet_exposure_limit_ratios_preserve_sides_and_base_fallback():
     torch = pytest.importorskip("torch")
 
-    outputs = _candidate_wallet_exposure_limit_outputs(
+    outputs = _candidate_wallet_exposure_limit_ratio_outputs(
         [
-            {"long_total_wallet_exposure_limit": 1.25},
+            {"long_total_wallet_exposure_limit_ratio": 1.25},
             {
-                "long_total_wallet_exposure_limit": 1.5,
-                "short_total_wallet_exposure_limit": 0.75,
+                "long_total_wallet_exposure_limit_ratio": 1.5,
+                "short_total_wallet_exposure_limit_ratio": 0.75,
             },
         ],
         {"long": 1.0, "short": 0.5},
         torch=torch,
     )
 
-    assert outputs["candidate_total_wallet_exposure_limit_long"].tolist() == [
+    assert outputs["candidate_total_wallet_exposure_limit_ratio_long"].tolist() == [
         1.25,
         1.5,
     ]
-    assert outputs["candidate_total_wallet_exposure_limit_short"].tolist() == [
+    assert outputs["candidate_total_wallet_exposure_limit_ratio_short"].tolist() == [
         0.5,
         0.75,
     ]
@@ -760,7 +760,7 @@ def test_candidate_position_slots_follow_candidate_positions_and_enabledness():
 
     outputs = _candidate_position_slot_outputs(
         [
-            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit": 0.0},
+            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit_ratio": 0.0},
             {"short_n_positions": 2.0},
         ],
         {"long": 2.0, "short": 1.0},
@@ -796,14 +796,14 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
 def test_hsl_diagnostics_are_requested_only_for_hsl_metric_families():
     assert not _hsl_diagnostics_needed(
         {
-            "adg_strategy_eq",
-            "drawdown_worst_strategy_eq",
+            "adg_fraction_strategy_equity",
+            "drawdown_max_fraction_strategy_equity",
             "fills_per_day",
         }
     )
-    assert _hsl_diagnostics_needed({"hard_stop_triggers_per_year"})
-    assert _hsl_diagnostics_needed({"drawdown_worst_ema_strategy_eq_long"})
-    assert _hsl_diagnostics_needed({"peak_recovery_days_strategy_eq_long"})
+    assert _hsl_diagnostics_needed({"hsl_triggers_per_year"})
+    assert _hsl_diagnostics_needed({"hsl_signal_ema_max_fraction_long"})
+    assert _hsl_diagnostics_needed({"recovery_max_days_strategy_equity_long"})
 
 
 
@@ -827,7 +827,7 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     proxy.metrics_data = {"ts0": 0.0}
     proxy.run = SimpleNamespace()
     proxy.sides = ["long"]
-    proxy.needed_metrics = {"hard_stop_panic_close_loss_sum"}
+    proxy.needed_metrics = {"hsl_panic_fill_loss_sum_usd"}
     proxy.weighted_equity_metrics = ()
     proxy._parameter_matrix = lambda candidates, side=None: np.zeros(
         (len(candidates), 0)
@@ -852,11 +852,11 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     def reduce(output, *args, **kwargs):
         assert output["hsl_triggers_long"].item() == 2.0
         assert output["hsl_panic_close_loss_sum"].item() == 37.5
-        return {"hard_stop_panic_close_loss_sum": output["hsl_panic_close_loss_sum"]}
+        return {"hsl_panic_fill_loss_sum_usd": output["hsl_panic_close_loss_sum"]}
 
     proxy._compute_objectives = reduce
 
-    assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
+    assert proxy.evaluate([{}]) == [{"hsl_panic_fill_loss_sum_usd": 37.5}]
 
 
 @pytest.mark.parametrize(
@@ -884,11 +884,11 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     proxy.run = SimpleNamespace()
     proxy.sides = ["long", "short"]
     proxy.needed_metrics = {
-        "none": {"hard_stop_triggers"},
-        "raw": {"drawdown_worst_strategy_eq"},
-        "growth": {"adg_strategy_eq"},
-        "calmar": {"calmar_ratio_strategy_eq"},
-        "portfolio_ema": {"drawdown_worst_mean_1pct_ema_strategy_eq"},
+        "none": {"hsl_trigger_count"},
+        "raw": {"drawdown_max_fraction_strategy_equity"},
+        "growth": {"adg_fraction_strategy_equity"},
+        "calmar": {"calmar_ratio_strategy_equity"},
+        "portfolio_ema": {"hsl_signal_ema_worst_1pct_mean_fraction"},
     }[missing_summary]
     proxy.param_keys = param_keys
     proxy.base_params = {
@@ -924,7 +924,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     def reduce(output, *args, **kwargs):
         assert output["hsl_unified_scope"].tolist() == [True, False]
         return {
-            "hard_stop_triggers": output["hsl_triggers_long"]
+            "hsl_trigger_count": output["hsl_triggers_long"]
             + output["hsl_triggers_short"]
         }
 
@@ -957,8 +957,8 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         return
 
     assert proxy.evaluate(candidates) == [
-        {"hard_stop_triggers": 4.0},
-        {"hard_stop_triggers": 6.0},
+        {"hsl_trigger_count": 4.0},
+        {"hsl_trigger_count": 6.0},
     ]
     assert seen["params"].shape == (
         2,
@@ -1005,13 +1005,13 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "recovery_distribution_enabled",
     ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
-        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
-        ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
-        ({"entry_interval_hours_p95"}, False, False, False, False),
-        ({"fills_top_symbol_share"}, False, False, False, False),
+        ({"hsl_red_time_fraction"}, False, False, False, False),
+        ({"hsl_signal_ema_worst_1pct_mean_fraction"}, True, False, False, False),
+        ({"drawdown_max_fraction_strategy_equity_long"}, False, True, False, False),
+        ({"drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long"}, False, True, True, False),
+        ({"recovery_p99_days_strategy_equity"}, False, False, False, True),
+        ({"entry_interval_p95_hours"}, False, False, False, False),
+        ({"fills_top_symbol_fraction"}, False, False, False, False),
         ({"fills_active_symbols_count"}, False, False, False, False),
     ],
 )
@@ -1079,19 +1079,19 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         entry_eligible = (side, coin) in {("long", "BTC"), ("short", "ETH")}
         return {
             "entry_eligible": entry_eligible,
-            "wallet_exposure_limit": -1.0 if entry_eligible else 0.0,
+            "wallet_exposure_limit_ratio": -1.0 if entry_eligible else 0.0,
             "entry_cooldown_minutes": flat["risk_entry_cooldown_minutes"],
-            "filter_volume_ema_span_1m": flat["forager_volume_ema_span_1m"],
-            "filter_volatility_ema_span_1m": flat["forager_volatility_ema_span_1m"],
+            "forager_volume_ema_span_minutes": flat["forager_volume_ema_span_minutes"],
+            "forager_log_range_ema_span_minutes": flat["forager_log_range_ema_span_minutes"],
             "forager_score_weights": flat["forager_score_weights"],
             "n_positions": flat["n_positions"],
-            "total_wallet_exposure_limit": flat["total_wallet_exposure_limit"],
+            "total_wallet_exposure_limit_ratio": flat["total_wallet_exposure_limit_ratio"],
             "risk_twel_entry_gate_enabled": True,
             "risk_twel_enforcer_enabled": flat["risk_twel_enforcer_enabled"],
             "risk_twel_enforcer_policy": flat["risk_twel_enforcer_policy"],
-            "risk_twel_enforcer_threshold": flat["risk_twel_enforcer_threshold"],
+            "risk_twel_enforcer_threshold_ratio": flat["risk_twel_enforcer_threshold_ratio"],
             "risk_wel_enforcer_enabled": flat["risk_wel_enforcer_enabled"],
-            "risk_wel_enforcer_threshold": flat["risk_wel_enforcer_threshold"],
+            "risk_wel_enforcer_threshold_ratio": flat["risk_wel_enforcer_threshold_ratio"],
             "unstuck_enabled": flat["unstuck_enabled"],
             "hsl_enabled": flat["hsl_enabled"],
         }
@@ -1115,8 +1115,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 "min_qty": 0.001,
                 "min_cost": 5.0,
                 "c_mult": 1.0,
-                "maker_fee": 0.0002,
-                "taker_fee": 0.0006,
+                "maker_fee_fraction": 0.0002,
+                "taker_fee_fraction": 0.0006,
             }
             for _ in range(2)
         ],
@@ -1133,10 +1133,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "trade_start_indices": [1, 1],
             "requested_start_timestamp_ms": 0,
             "first_timestamp_ms": 0,
-            "liquidation_threshold": 0.05,
+            "equity_floor_fraction": 0.05,
             "filter_by_min_effective_cost": {"long": True, "short": True},
-            "max_realized_loss_pct": 1.0,
-            "market_order_slippage_pct": 0.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
+            "market_order_slippage_fraction": 0.0,
             "hedge_mode": config['bot']["portfolio"]['hedge_mode'],
         },
     )
@@ -1210,7 +1210,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert np.isnan(short_overrides[1, wallet_exposure_column])
     assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
     assert constructed["kwargs"]["collect_coin_fill_counts"] is bool(
-        needed_metrics & {"fills_top_symbol_share", "fills_active_symbols_count"}
+        needed_metrics & {"fills_top_symbol_fraction", "fills_active_symbols_count"}
     )
     assert constructed["kwargs"]["hsl_raw_drawdown_enabled"] is raw_drawdown_enabled
     assert constructed["kwargs"]["hsl_raw_tail_enabled"] is raw_tail_enabled
@@ -1227,7 +1227,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
     assert constructed["kwargs"]["entry_interval_enabled"] is (
         strategy_kind == "trailing_martingale"
-        and "entry_interval_hours_p95" in needed_metrics
+        and "entry_interval_p95_hours" in needed_metrics
     )
 
 
@@ -1406,7 +1406,7 @@ def test_gpu_proxy_rejects_all_internal_gaps():
 )
 def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
     packed = _single_coin_exposure_params({"we_excess_allowance_fraction": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {'threshold_ratio': 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
-    assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold": 0.8}
+    assert packed == {"we_excess_allowance_fraction": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold_ratio": 0.8}
 
 
 
@@ -1423,7 +1423,7 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
         side="short",
     ) == {
         "wel_enforcer_enabled": 1.0,
-        "wel_enforcer_threshold": 0.8,
+        "wel_enforcer_threshold_ratio": 0.8,
     }
 
     with pytest.raises(ValueError, match="finite positive"):
@@ -1460,24 +1460,24 @@ def test_tm_total_exposure_repair_packs_exact_rust_inputs(policy, reduce_portfol
 def test_single_coin_unstuck_packs_exact_rust_inputs():
     assert _unstuck_params(
         {
-            "unstuck_ema_span_0": 17.25,
-            "unstuck_ema_span_1": 211.75,
+            "unstuck_ema_span_0_minutes": 17.25,
+            "unstuck_ema_span_1_minutes": 211.75,
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": False,
-            "unstuck_close_pct": 0.125,
-            "unstuck_ema_dist": -0.01,
-            "unstuck_loss_allowance_pct": 0.02,
-            "unstuck_threshold": 0.85,
+            "unstuck_close_fraction": 0.125,
+            "unstuck_ema_distance_fraction": -0.01,
+            "unstuck_loss_allowance_fraction": 0.02,
+            "unstuck_exposure_trigger_ratio": 0.85,
         }
     ) == {
-        "unstuck_ema_span_0": 17.25,
-        "unstuck_ema_span_1": 211.75,
+        "unstuck_ema_span_0_minutes": 17.25,
+        "unstuck_ema_span_1_minutes": 211.75,
         "unstuck_enabled": 1.0,
         "unstuck_ema_gating_enabled": 0.0,
-        "unstuck_close_pct": 0.125,
-        "unstuck_ema_dist": -0.01,
-        "unstuck_loss_allowance_pct": 0.02,
-        "unstuck_threshold": 0.85,
+        "unstuck_close_fraction": 0.125,
+        "unstuck_ema_distance_fraction": -0.01,
+        "unstuck_loss_allowance_fraction": 0.02,
+        "unstuck_exposure_trigger_ratio": 0.85,
     }
 
 
@@ -1486,8 +1486,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         {
             "hsl_enabled": True,
             "hsl_scale_budget_with_excess_allowance": False,
-            "hsl_red_threshold": 0.2,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_threshold_fraction": 0.2,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             "hsl_cooldown_minutes_after_red": 120.0,
             "hsl_memory_ema_span_minutes": 43200.5,
             "n_positions": 4,
@@ -1499,8 +1499,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
     assert packed == {
         "hsl_enabled": 1.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 60.0,
         "hsl_cooldown_ms_lo": 7200000.0,
         "hsl_memory_ema_span_minutes": 43200.5,
         "hsl_signal_mode": 2.0,
@@ -1518,8 +1518,8 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
             "hsl_enabled": False,
             "hsl_scale_budget_with_excess_allowance": False,
             "hsl_memory_ema_span_minutes": 43200.0,
-            "hsl_red_threshold": 0.1,
-            "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+            "hsl_drawdown_threshold_fraction": 0.1,
+            "hsl_drawdown_fraction_ema_span_minutes": 1.0,
             "hsl_cooldown_minutes_after_red": 0.0,
             "hsl_slot_count": 1,
         },
@@ -1600,8 +1600,8 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
         [
             {
                 f"{side}_offset_fraction": 0.125,
-                f"{side}_we_excess_allowance_pct": 0.25,
-                f"{side}_twel_enforcer_threshold": 0.8,
+                f"{side}_we_excess_allowance_fraction": 0.25,
+                f"{side}_twel_enforcer_threshold_ratio": 0.8,
                 f"{other_side}_offset_fraction": 9.0,
             }
         ]
@@ -1611,10 +1611,10 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
     offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset_fraction")
     assert matrix[0, offset_index] == 0.125
     assert matrix[
-        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_pct")
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_fraction")
     ] == pytest.approx(0.25)
     assert matrix[
-        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")
     ] == pytest.approx(0.8)
 
 
@@ -1653,8 +1653,8 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
             {
                 f"{side}_entry_threshold_base_fraction": 0.125,
                 f"{side}_forager_score_weights_volume": 0.25,
-                f"{side}_we_excess_allowance_pct": 0.4,
-                f"{side}_twel_enforcer_threshold": 0.75,
+                f"{side}_we_excess_allowance_fraction": 0.4,
+                f"{side}_twel_enforcer_threshold_ratio": 0.75,
             }
         ]
     )
@@ -1676,11 +1676,11 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
     )
     assert matrix[
         0,
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_pct"),
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_fraction"),
     ] == pytest.approx(0.4)
     assert matrix[
         0,
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold"),
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio"),
     ] == pytest.approx(0.75)
 
 
@@ -1725,22 +1725,22 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 15.0,
-                    "wallet_exposure_limit": 0.4,
-                    "risk_we_excess_allowance_pct": 0.25,
-                    "unstuck_ema_span_0": 17.25,
-                    "unstuck_ema_span_1": 211.75,
+                    "wallet_exposure_limit_ratio": 0.4,
+                    "risk_we_excess_allowance_fraction": 0.25,
+                    "unstuck_ema_span_0_minutes": 17.25,
+                    "unstuck_ema_span_1_minutes": 211.75,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_pct": 0.125,
-                    "unstuck_ema_dist": -0.01,
-                    "unstuck_loss_allowance_pct": 0.02,
-                    "unstuck_threshold": 0.85,
+                    "unstuck_close_fraction": 0.125,
+                    "unstuck_ema_distance_fraction": -0.01,
+                    "unstuck_loss_allowance_fraction": 0.02,
+                    "unstuck_exposure_trigger_ratio": 0.85,
                 }
             },
         ],
@@ -1827,7 +1827,7 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
                 {
                     "long": {
                         "entry_eligible": True,
-                        "wallet_exposure_limit": -1.0,
+                        "wallet_exposure_limit_ratio": -1.0,
                     }
                 }
             ],
@@ -1874,7 +1874,7 @@ def test_coin_override_contract_keeps_backtest_inert_live_values():
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": False,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             }
         ],
@@ -1923,16 +1923,16 @@ def test_multicoin_coin_overrides_pack_forced_normal_active_slot(
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": False,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": True,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
         ],
@@ -1972,21 +1972,21 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
                 "short": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": 0.4,
+                    "wallet_exposure_limit_ratio": 0.4,
                 },
                 "short": {
                     "risk_entry_cooldown_minutes": 30.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
             },
         ],
@@ -2063,15 +2063,15 @@ def test_multicoin_coin_overrides_preserve_side_entry_eligibility(
             {
                 "long": {
                     "entry_eligible": False,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": 0.0,
                 }
             },
             {
                 "long": {
                     "entry_eligible": True,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
         ],
@@ -2098,8 +2098,8 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     strategy = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
     effective_hsl = {
         "hsl_enabled": False,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 5.5,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 5.5,
         "hsl_memory_ema_span_minutes": 7.5,
         "hsl_scale_budget_with_excess_allowance": True,
         "hsl_cooldown_minutes_after_red": 12.5,
@@ -2243,24 +2243,24 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 15.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": 0.4,
-                    "risk_we_excess_allowance_pct": 0.25,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": 0.4,
+                    "risk_we_excess_allowance_fraction": 0.25,
                     "risk_wel_enforcer_enabled": True,
-                    "risk_wel_enforcer_threshold": 0.8,
+                    "risk_wel_enforcer_threshold_ratio": 0.8,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_pct": 0.125,
-                    "unstuck_ema_dist": -0.01,
-                    "unstuck_loss_allowance_pct": 0.02,
-                    "unstuck_threshold": 0.85,
+                    "unstuck_close_fraction": 0.125,
+                    "unstuck_ema_distance_fraction": -0.01,
+                    "unstuck_loss_allowance_fraction": 0.02,
+                    "unstuck_exposure_trigger_ratio": 0.85,
                 }
             },
         ],
@@ -2429,7 +2429,7 @@ def test_trailing_martingale_flattening_preserves_nested_params_and_gates(
     }
     flattened = flatten_trailing_martingale_params(
         strategy,
-        {"entry_cooldown_minutes": 7.0, "total_wallet_exposure_limit": 1.5},
+        {"entry_cooldown_minutes": 7.0, "total_wallet_exposure_limit_ratio": 1.5},
     )
 
     assert tuple(flattened) == TRAILING_MARTINGALE_PARAM_KEYS
@@ -2445,7 +2445,7 @@ def test_trailing_martingale_flattening_rejects_unknown_gate_mode():
                 "entry": {"ema_gate_mode": "mystery"},
                 "close": {},
             },
-            {"total_wallet_exposure_limit": 1.0},
+            {"total_wallet_exposure_limit_ratio": 1.0},
         )
 
 
@@ -2467,7 +2467,7 @@ def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
         strategy,
         {
             "risk_entry_cooldown_minutes": 37.0,
-            "total_wallet_exposure_limit": 1.5,
+            "total_wallet_exposure_limit_ratio": 1.5,
         },
     )
 
@@ -2514,10 +2514,10 @@ def _suite_batch_proxy():
         )
     }
     proxy.checkpoint_contract = dict(
-        base_params={"long": {"n_positions": 4}}, backtest={"max_realized_loss_pct": 1}
+        base_params={"long": {"n_positions": 4}}, backtest={"loss_gate_max_drawdown_fraction": 1}
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
-    proxy.needed_metrics = {"adg_strategy_eq"}
+    proxy.needed_metrics = {"adg_fraction_strategy_equity"}
     proxy.weighted_equity_metrics = ()
     proxy.couple_unstuck_emas = False
     proxy.batch_size = 1024
@@ -2559,14 +2559,14 @@ def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, 
     elif changed == "run":
         second.run = replace(first.run, starting_balance=2000)
     elif changed == "runtime":
-        second.checkpoint_contract["backtest"]["max_realized_loss_pct"] = 0.5
+        second.checkpoint_contract["backtest"]["loss_gate_max_drawdown_fraction"] = 0.5
     elif changed in ("overrides", "btc"):
         second._runner_specs = copy.deepcopy(first._runner_specs)
         second._runner_specs["long"][1][
             "coin_overrides" if changed == "overrides" else "btc_prices"
         ].flat[-1] = 9
     elif changed == "metrics":
-        second.needed_metrics = {"sortino_ratio_strategy_eq"}
+        second.needed_metrics = {"sortino_ratio_strategy_equity"}
     elif changed == "coupling":
         second.couple_unstuck_emas = True
     elif changed == "batch":
@@ -2594,19 +2594,19 @@ def test_suite_batching_rejects_unsupported_topologies(monkeypatch, device):
 
 def test_suite_materialization_preserves_parameter_and_metric_defaults():
     proxy = _suite_batch_proxy()
-    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit", "ema_span_0_minutes"]
+    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit_ratio", "ema_span_0_minutes"]
     proxy.base_params = {"long": dict(zip(proxy.param_keys, [4, 1.5, 32]))}
-    proxy.base_total_wallet_exposure_limits = {"long": 1.5, "short": 0}
+    proxy.base_total_wallet_exposure_limit_ratios = {"long": 1.5, "short": 0}
     proxy.base_n_positions = {"long": 4, "short": 0}
     original = [{"long_ema_span_0_minutes": 64}]
     result = proxy.materialize_suite_candidates(original)
     assert result == [
         dict(
             long_n_positions=4.0,
-            long_total_wallet_exposure_limit=1.5,
+            long_total_wallet_exposure_limit_ratio=1.5,
             long_ema_span_0_minutes=64.0,
             short_n_positions=0,
-            short_total_wallet_exposure_limit=0,
+            short_total_wallet_exposure_limit_ratio=0,
         )
     ]
     np.testing.assert_array_equal(
@@ -2618,12 +2618,12 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
 @pytest.mark.parametrize("fraction", [0.0, 0.1, 0.99999999, 1.0, 1e308])
 def test_realized_gate_fraction_uses_shared_nearest_f32_graph(fraction):
     pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
+    from optimization.gpu.mps_kernel import _encode_loss_gate_max_drawdown_fraction
 
-    assert _encode_max_realized_loss_pct(fraction) == float(np.float32(min(fraction, 1.0)))
+    assert _encode_loss_gate_max_drawdown_fraction(fraction) == float(np.float32(min(fraction, 1.0)))
     if fraction == 0.99999999:
         # The separately packed configured flag must preserve this active gate.
-        assert fraction < 1.0 and _encode_max_realized_loss_pct(fraction) == 1.0
+        assert fraction < 1.0 and _encode_loss_gate_max_drawdown_fraction(fraction) == 1.0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

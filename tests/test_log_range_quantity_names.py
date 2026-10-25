@@ -1,4 +1,4 @@
-"""Authored log-range quantities lower to the unchanged native volatility ABI."""
+"""Authored log-range quantities use canonical native IDs and frozen v8 sources."""
 
 from copy import deepcopy
 import json
@@ -172,21 +172,21 @@ def test_forager_weights_preserve_normalization_order_native_packet_and_exports(
     original = deepcopy(config)
     prepared = prepare_config(config, verbose=False)
     expected = normalize_forager_score_weights(weights, path="weights")
-    native_weights = {("volatility" if key == "log_range" else key): value for key, value in expected.items()}
+    native_weights = dict(expected)
     assert config == original
     for side in (("long", "short") if scope == "global" else (scope,)):
         native = flatten_shared_bot_side(prepared["bot"][side])
         assert native["forager_score_weights"] == native_weights
-        assert native["forager_volatility_ema_span_1m"] == 27.375
-        assert resolve_optimizer_key_path(prepared, f"{side}_forager_score_weights_volatility") == ("bot", side, "forager", "score_weights", "log_range")
+        assert native["forager_log_range_ema_span_minutes"] == 27.375
+        assert resolve_optimizer_key_path(prepared, f"{side}_forager_score_weights_log_range") == ("bot", side, "forager", "score_weights", "log_range")
         assert get_grouped_bot_value(prepared["bot"][side], "forager_score_weights") == native_weights
     for export in (cleanup_config, compact_config, resolved_config):
         reloaded = prepare_config(export(prepared), verbose=False)
         assert reloaded["bot"]["long"]["forager"]["score_weights"] == prepared["bot"]["long"]["forager"]["score_weights"]
 
 
-def test_trusted_shared_native_weight_projection_is_detached_and_bidirectional():
-    weights = {"volume": 1.0, "ema_readiness": 2.0, "volatility": 3.0, "unilateralness": 4.0}
+def test_trusted_shared_matching_native_weights_remain_detached():
+    weights = {"volume": 1.0, "ema_readiness": 2.0, "log_range": 3.0, "unilateralness": 4.0}
     original = deepcopy(weights)
     side = {"forager_score_weights": weights}
     canonicalize_shared_bot_side(side)
@@ -227,8 +227,8 @@ def test_released_forager_log_range_preserves_bounds_selectors_scenarios_and_fin
     assert public["score_weights"]["log_range"] == weights["volatility"]
     assert public["log_range_ema_span_minutes"] == 37.375
     flat = flatten_optimize_bounds(result.config["optimize"]["bounds"], strategy_kind="trailing_martingale")
-    assert flat["long_forager_score_weights_volatility"] == [0.4, 0.4]
-    assert flat["long_forager_volatility_ema_span_1m"] == [31.375, 47.625, 0.25]
+    assert flat["long_forager_score_weights_log_range"] == [0.4, 0.4]
+    assert flat["long_forager_log_range_ema_span_minutes"] == [31.375, 47.625, 0.25]
     expected = ["bot.long.forager.score_weights.log_range", "bot.long.forager.log_range_ema_span_minutes"]
     assert result.config["optimize"]["fixed_params"] == expected
     assert result.config["backtest"]["scenarios"][0]["overrides"] == {

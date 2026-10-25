@@ -47,6 +47,20 @@ without retained causal fill evidence it cannot invent a historical cooldown.
 
 ## Budgets, history and admission
 
+Current HSL observations expose `signal_raw_fraction = D / (E + D)` and its fast
+`signal_ema_fraction`; `trigger_signal_fraction` is their minimum. `D` is the USD drawdown
+memory and `E` is the applicable scope budget plus unrealized PnL. The explicit insolvency
+diagnostic remains `1.0`. The native risk observation names its currency amount
+`drawdown_memory_usd`; the private realized-loss memory is a separate accounting surface.
+`drawdown_threshold_fraction` is the existing configured threshold.
+Detailed report summaries use `signal_raw_max_fraction`, `signal_ema_max_fraction` and
+`panic_fill_loss_sum_usd`, the loss-only sum of net panic-fill PnL.
+Current smoke reports expose `red_threshold_gap_fraction = threshold - trigger_signal`:
+positive is below RED and negative is beyond the threshold. `red_threshold_proximity_percent`
+is `100 * trigger_signal / threshold`; `ema_red_threshold_gap_percent` is
+`100 * (threshold - signal_ema) / threshold`. These are scale-100 observations with unchanged
+rounding, not scale-one fractions. Historical top-level event-tape keys remain isolated readers.
+
 Coin budgets divide raw balance by configured applicable slots. Flat zero-slot scopes
 are inactive; an enabled coin scope holding inventory with zero slots fails explicitly.
 Aggregate budgets use raw balance. Coin-only excess-allowance scaling uses

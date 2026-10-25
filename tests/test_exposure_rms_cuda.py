@@ -23,7 +23,7 @@ def test_native_cuda_rms_matches_cpu_and_temporal_chunks(cuda, strategy, sides, 
     from tools.gpu_parity import _native_dataset
     inputs = fixture_inputs(strategy, sides, scenario)
     _, _, _, analysis = run_cpu(inputs)
-    metrics = (*NAMES, "fills_per_day", "adg_strategy_eq", "backtest_completion_ratio")
+    metrics = (*NAMES, "fills_per_day", "adg_fraction_strategy_equity", "backtest_completion_fraction")
     results = []
     for budget in (500_000_000, 1024):
         with _native_dataset(inputs, "binance", metrics) as dataset:
@@ -34,7 +34,7 @@ def test_native_cuda_rms_matches_cpu_and_temporal_chunks(cuda, strategy, sides, 
                 results.append(result.metrics)
     for name in NAMES:
         assert results[0][name] == pytest.approx(analysis[name], abs=1e-5, rel=1e-4), name
-    assert results[0]["backtest_completion_ratio"] == pytest.approx(analysis["backtest_completion_ratio"], abs=1e-6)
+    assert results[0]["backtest_completion_fraction"] == pytest.approx(analysis["backtest_completion_fraction"], abs=1e-6)
     # Same encoded arithmetic in the same order: dispatch boundaries add no drift.
     assert results[1] == results[0]
 
@@ -97,7 +97,7 @@ def test_native_cuda_omits_unrequested_rms_without_changing_existing_metrics(cud
     from optimization.gpu.native import CudaBacktestService
     from tools.gpu_parity import _native_dataset
     inputs = fixture_inputs(strategy, sides, "ordinary")
-    existing = ("fills_per_day", "adg_strategy_eq", "backtest_completion_ratio")
+    existing = ("fills_per_day", "adg_fraction_strategy_equity", "backtest_completion_fraction")
     results = []
     for metrics in (existing, (*existing, *NAMES)):
         with _native_dataset(inputs, "binance", metrics) as dataset:

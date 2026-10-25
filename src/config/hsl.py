@@ -543,9 +543,9 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
                 f"{metric} is removed for HSL; choose a supported objective/limit"
             )
         signal = (
-            name.startswith("hard_stop_")
-            or name.startswith("drawdown_worst_ema_strategy_eq")
-            or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq")
+            name.startswith("hsl_")
+            or name.startswith("hsl_signal_ema_max_fraction")
+            or name.startswith("hsl_signal_ema_worst_1pct_mean_fraction")
         )
         side_signal = signal and name.endswith(("_long", "_short"))
         if _mode(config) == "portfolio" and side_signal:
@@ -574,10 +574,8 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
 
 
 def native_hsl_policy(policy):
-    """Transport public HSL field names to the stable native HSL ABI."""
+    """Copy a public HSL policy and lower the native cooldown-duration name."""
     result = deepcopy(policy)
-    result["red_threshold"] = result.pop("drawdown_threshold_fraction")
-    result["drawdown_ratio_ema_span_minutes"] = result.pop("drawdown_fraction_ema_span_minutes")
     result["cooldown_minutes_after_red"] = result.pop("cooldown_after_red_minutes")
     return result
 

@@ -20,9 +20,9 @@ def test_canonical_hsl_policy_reaches_shared_native_shader(mode, strategy):
     assert runner.hsl_capacity == 2
     assert runner.hsl_fact_capacity == 0
     for side in proxy.sides:
-        assert proxy.base_params[side]["hsl_drawdown_ratio_ema_span_minutes"] == 2.5
+        assert proxy.base_params[side]["hsl_drawdown_fraction_ema_span_minutes"] == 2.5
         assert proxy.base_params[side]["hsl_memory_ema_span_minutes"] == 1440.0
-        assert proxy.base_params[side]["hsl_red_threshold"] == pytest.approx(.02)
+        assert proxy.base_params[side]["hsl_drawdown_threshold_fraction"] == pytest.approx(.02)
     assert torch.isfinite(result["balance"]).all()
     assert result["fill_count"].item() > 0
 
@@ -32,16 +32,16 @@ def test_portfolio_candidate_and_static_coin_override_precedence():
     from test_gpu_hsl_multicoin import make_proxy
 
     proxy = make_proxy("portfolio", coin_count=1, minutes=128)
-    candidates = [{"hsl_red_threshold": .03}, {"hsl_red_threshold": .06}]
+    candidates = [{"hsl_drawdown_threshold_fraction": .03}, {"hsl_drawdown_threshold_fraction": .06}]
     before = deepcopy(candidates)
     for side in proxy.sides:
         matrix = proxy._parameter_matrix(candidates, side)
-        np.testing.assert_allclose(matrix[:, proxy.param_keys.index("hsl_red_threshold")], [.03, .06])
+        np.testing.assert_allclose(matrix[:, proxy.param_keys.index("hsl_drawdown_threshold_fraction")], [.03, .06])
     assert candidates == before
     coin = make_proxy("coin", coin_count=1, minutes=128,
-                       override={"drawdown_threshold_fraction": .07, "ema_span_minutes": 4.5})
-    matrix = coin._parameter_matrix([{"long_hsl_red_threshold": .03}], "long")
-    assert matrix[0, coin.param_keys.index("hsl_red_threshold")] == pytest.approx(.03)
+                       override={"drawdown_threshold_fraction": .07, "drawdown_fraction_ema_span_minutes": 4.5})
+    matrix = coin._parameter_matrix([{"long_hsl_drawdown_threshold_fraction": .03}], "long")
+    assert matrix[0, coin.param_keys.index("hsl_drawdown_threshold_fraction")] == pytest.approx(.03)
     runner = coin.fused_runner or coin.runners["long"]
     start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
     # The authored coin policy remains a separate override after candidate defaults.

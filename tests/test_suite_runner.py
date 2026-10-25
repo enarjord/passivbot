@@ -266,14 +266,14 @@ def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
 def test_summarize_scenario_metrics_prefers_mean():
     metrics = {
         "stats": {
-            "adg_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
-            "mdg_btc": 0.2,
+            "adg_fraction_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
+            "mdg_fraction_btc": 0.2,
             "drawdown": {"max": -0.1},
         }
     }
     simplified = summarize_scenario_metrics(metrics)
-    assert simplified["adg_btc"] == 0.1
-    assert simplified["mdg_btc"] == 0.2
+    assert simplified["adg_fraction_btc"] == 0.1
+    assert simplified["mdg_fraction_btc"] == 0.2
     assert simplified["drawdown"] == -0.1
 
 
@@ -699,7 +699,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
 
     assert cfg["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(1.0)
     assert cfg["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
-    assert "hsl_red_threshold" not in cfg["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 
 
@@ -1014,7 +1014,7 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
             "end_date": "1970-01-01T00:03:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr(
@@ -1060,7 +1060,7 @@ def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
             "end_date": "1970-01-01T00:05:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
@@ -1111,7 +1111,7 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
         "bot": {
             "long": {"enabled": False},
             "short": {"enabled": False},
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}},
         },
         "optimize": {"bounds": {}},
     }
@@ -1155,23 +1155,21 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
     assert seen["plot_context"].hard_stop_plot_data == {"sample": True}
 
 
-@pytest.mark.parametrize("reducer_name", ["n_days", "fills_analysis_duration_days"])
-def test_reduce_metrics_applies_one_policy_to_duration_aliases(reducer_name):
+def test_reduce_metrics_applies_configured_policy_to_canonical_duration():
+    reducer_name = "analysis_duration_days"
     results = [
         ScenarioResult(
             scenario=SuiteScenario(str(days), None, None, None, None),
             per_exchange={},
             metrics={"stats": {
-                "n_days": {"mean": days},
-                "fills_analysis_duration_days": {"mean": days},
+                "analysis_duration_days": {"mean": days},
             }},
             elapsed_seconds=0.0, output_path=None,
         )
         for days in (1.0, 3.0)
     ]
     summary = reduce_metrics(results, {"default": "mean", reducer_name: "max"})
-    assert summary["aggregated"]["n_days"] == 3.0
-    assert summary["aggregated"]["fills_analysis_duration_days"] == 3.0
+    assert summary["aggregated"]["analysis_duration_days"] == 3.0
 
 
 def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, tmp_path):

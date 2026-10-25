@@ -88,7 +88,7 @@ cd passivbot-rust && cargo check --tests && cd ..
 ```bash
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto optimize_results/.../pareto -s configs/promoted_candidate.local.json
-passivbot tool pareto optimize_results/.../pareto -l 'adg_strategy_eq>0.0' -f optimize_results/filtered_pareto
+passivbot tool pareto optimize_results/.../pareto -l 'adg_fraction_strategy_equity>0.0' -f optimize_results/filtered_pareto
 passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
 passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
@@ -105,6 +105,13 @@ passivbot tool migrate-config-v9 config_v8.json config_v9.json --lookback-ema-sp
 passivbot tool optimizer-bounds input.json search.json --preset recommended
 passivbot tool compare-backtests path/to/v8/result path/to/v9/result
 ```
+
+`compare-backtests --json` reports scale-one fractions: `0.05` means 5%, while the text summary
+formats percentages. Metric `relative_delta_fraction` and final equity changes use the absolute
+base value as denominator; `equity_rmse_initial_equity_fraction` uses absolute initial base
+strategy equity. `max_abs_relative_equity_delta_fraction` uses each common sample's absolute
+base equity, excluding zero denominators. Fill multiset match fractions divide matched row
+multiplicity by the larger input row count (two empty inputs report zero).
 
 ## High-Signal Gotcha
 

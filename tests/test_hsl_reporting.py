@@ -59,14 +59,14 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         lines = {line.get_label(): line for line in signal_ax.lines}
         np.testing.assert_equal(
             lines["Raw drawdown"].get_ydata(),
-            np.array([r["raw"] for r in rows], dtype=float),
+            np.array([r["signal_raw_fraction"] for r in rows], dtype=float),
         )
         np.testing.assert_equal(
             lines["EMA drawdown"].get_ydata(),
-            np.array([r["ema"] for r in rows], dtype=float),
+            np.array([r["signal_ema_fraction"] for r in rows], dtype=float),
         )
         assert (
-            lines["RED threshold"].get_ydata() == [scope["policy"]["red_threshold"]] * 2
+            lines["RED threshold"].get_ydata() == [scope["policy"]["drawdown_threshold_fraction"]] * 2
         )
         assert not any(
             "orange" in key.lower() or "yellow" in key.lower() for key in lines
@@ -94,7 +94,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
                 event["observed_at"], unit="ms"
             )
         if mode == "coin":
-            assert scope["policy"]["red_threshold"] == 0.025
+            assert scope["policy"]["drawdown_threshold_fraction"] == 0.025
             assert "AAA long" in signal_ax.get_title()
         if mode == "portfolio":
             assert scope["side"] is None and scope["coin"] is None
@@ -137,12 +137,12 @@ def test_coin_plots_keep_each_coin_and_side_separate():
         params[key] *= 2
     for pair in args[2]:
         pair["short"]["entry_eligible"] = True
-        pair["short"]["wallet_exposure_limit"] = -1.0
+        pair["short"]["wallet_exposure_limit_ratio"] = -1.0
     policies = params["equity_hard_stop_loss"]["coins"]
     policies["BBB"] = deepcopy(policies["AAA"])
     for coin_policies in policies.values():
         coin_policies[1] = deepcopy(coin_policies[0])
-    policies["BBB"][0]["red_threshold"] = 0.04
+    policies["BBB"][0]["drawdown_threshold_fraction"] = 0.04
     data = run(args)[4]
     figures = create_forager_hard_stop_drawdown_figure(
         pd.DataFrame(),
@@ -163,11 +163,11 @@ def test_coin_plots_keep_each_coin_and_side_separate():
             ]
             np.testing.assert_equal(
                 fig.axes[0].lines[0].get_ydata(),
-                np.array([row["raw"] for row in rows], dtype=float),
+                np.array([row["signal_raw_fraction"] for row in rows], dtype=float),
             )
             assert (
                 fig.axes[0].lines[2].get_ydata()
-                == [scope["policy"]["red_threshold"]] * 2
+                == [scope["policy"]["drawdown_threshold_fraction"]] * 2
             )
     finally:
         for fig in figures.values():
@@ -196,7 +196,7 @@ def test_native_report_saved_even_when_all_plotting_disabled(tmp_path):
     assert report == prepared.hard_stop_plot_data["hsl"]
     assert report["detailed"] is True
     assert report["schema_version"] == 1 and report["engine"] == "hsl"
-    assert report["scopes"][0]["policy"]["red_threshold"] == 0.01
+    assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
     assert report["samples"]
     assert not list(tmp_path.rglob("*.png"))
 
@@ -210,7 +210,7 @@ def test_compact_native_report_is_explicit_and_has_no_plot_trace():
     report = prepared.hard_stop_plot_data["hsl"]
     assert report["detailed"] is False
     assert report["samples"] == []
-    assert report["scopes"][0]["policy"]["red_threshold"] == 0.01
+    assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
     assert (
         create_forager_hard_stop_drawdown_figure(
             pd.DataFrame(),
@@ -281,7 +281,7 @@ def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
     rows = data["hsl"]["samples"]
     assert rows
     assert all(
-        row["action"] is None and row["raw"] is None and row["ema"] is None
+        row["action"] is None and row["signal_raw_fraction"] is None and row["signal_ema_fraction"] is None
         for row in rows
     )
     assert all("inactive_scope" in row["reasons"] for row in rows)
@@ -301,7 +301,7 @@ def test_report_rows_and_reason_lists_are_independent():
     report = run(payload("coin"))[4]["hsl"]
     before = deepcopy(report)
     assert len(report["samples"]) > 2
-    report["samples"][0]["raw"] = -123.0
+    report["samples"][0]["signal_raw_fraction"] = -123.0
     report["samples"][0]["reasons"].append("caller annotation")
     assert report["samples"][1:] == before["samples"][1:]
     assert report["events"] == before["events"]
@@ -343,7 +343,7 @@ def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inac
     # Single-side suite overrides leave the unused side's HSL policy enabled.
     side_index = 0 if inactive == "long" else 1
     for pair in args[2]:
-        pair[inactive]["total_wallet_exposure_limit"] = 0.0
+        pair[inactive]["total_wallet_exposure_limit_ratio"] = 0.0
         pair[inactive]["n_positions"] = 0
     hsl = args[-1]["equity_hard_stop_loss"]
     for policy in [hsl["sides"][side_index], *(pair[side_index] for pair in hsl["coins"].values())]:

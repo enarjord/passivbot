@@ -39,7 +39,7 @@ def test_ew_subset_screening_evolves_with_meaningful_promotion_scores(monkeypatc
         base, original = suite_inputs(manager)
         config = deepcopy(base.config)
         config["backtest"]["ew_half_life_days"] = 30.0
-        config["optimize"].update(scoring=[{"metric": "adg_strategy_eq_ew", "goal": "max"}], limits=[])
+        config["optimize"].update(scoring=[{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}], limits=[])
         base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
                                   config, timestamps=base.timestamps)
         suite = optimize.SuiteEvaluator(base, original.contexts, {"default": "mean"})

@@ -125,7 +125,7 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
     monkeypatch.setattr(metrics, "_entry_interval_metrics", capture_intervals)
     names = (
         "fills_gap_p95_hours", "fills_gap_time_weighted_mean_hours",
-        "entry_interval_hours_p95",
+        "entry_interval_p95_hours",
     )
     baseline = None
     for cache in ((False,True) if cache_interaction else (None,)):
@@ -164,7 +164,7 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
     if strategy == "trailing_martingale":
         assert interval_maxima and max(interval_maxima) > 0
     else:
-        assert first.metrics["entry_interval_hours_p95"] == 0.0
+        assert first.metrics["entry_interval_p95_hours"] == 0.0
 
 
 @pytest.mark.parametrize("seed", [7, 43])

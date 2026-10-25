@@ -85,23 +85,23 @@ def _rust_bot_params(**overrides):
         "entry_trailing_reentry_qty_multiplier": 0.0,
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
-        "filter_volatility_ema_span_1m": 10.0,
+        "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span_1m": 10.0,
+        "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0,
-        "risk_wel_enforcer_threshold": 0.0,
-        "risk_twel_enforcer_threshold": 0.0,
-        "risk_we_excess_allowance_pct": 0.0,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "risk_twel_enforcer_threshold_ratio": 0.0,
+        "risk_we_excess_allowance_fraction": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     params.update(overrides)
     return params
@@ -172,11 +172,11 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "sort_global": True,
             "global_bot_params": {
                 "long": _rust_bot_params(),
-                "short": _rust_bot_params(n_positions=0, total_wallet_exposure_limit=0.0),
+                "short": _rust_bot_params(n_positions=0, total_wallet_exposure_limit_ratio=0.0),
             },
             "hedge_mode": True,
             "strategy_kind": "trailing_martingale",
@@ -191,8 +191,8 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     "min_qty": 0.0,
                     "min_cost": 0.0,
                     "c_mult": 1.0,
-                    "maker_fee": 0.0002,
-                    "taker_fee": 0.00055,
+                    "maker_fee_fraction": 0.0002,
+                    "taker_fee_fraction": 0.00055,
                 },
                 "tradable": True,
                 "next_candle": None,
@@ -217,7 +217,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
                     "bot_params": _rust_bot_params(
-                        n_positions=0, total_wallet_exposure_limit=0.0
+                        n_positions=0, total_wallet_exposure_limit_ratio=0.0
                     ),
                     "strategy_params": _rust_strategy_params(),
                 },
@@ -526,19 +526,19 @@ class _BundleReproBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
         if key in (
             "filter_volume_ema_span",
-            "filter_volume_ema_span_1m",
+            "forager_volume_ema_span_minutes",
             "forager_volume_ema_span",
-            "forager_volume_ema_span_1m",
+            "forager_volume_ema_span_minutes",
         ):
             return 10.0
         if key in (
             "filter_volatility_ema_span",
-            "filter_volatility_ema_span_1m",
-            "forager_volatility_ema_span",
-            "forager_volatility_ema_span_1m",
+            "forager_log_range_ema_span_minutes",
+            "forager_log_range_ema_ema_span",
+            "forager_log_range_ema_span_minutes",
         ):
             return 10.0
         return 0.0
@@ -925,7 +925,7 @@ async def test_disabled_opposite_side_does_not_block_flat_forager_degradation():
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1104,7 +1104,7 @@ async def test_forager_ranking_degradation_authorizes_only_affected_side():
         if key == "forager_score_weights":
             return {
                 "volume": 1.0 if pside == "long" else 0.0,
-                "volatility": 0.0,
+                "log_range": 0.0,
             }
         if key == "forager_volume_drop_pct":
             return 0.0
@@ -1393,7 +1393,7 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1452,7 +1452,7 @@ async def test_candidate_ema_unavailable_event_console_owns_normal_warning(caplo
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1543,7 +1543,7 @@ def _enable_forager_required_ranking(bot):
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1997,7 +1997,7 @@ async def test_cache_only_optional_metric_gaps_are_candidate_unavailable():
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "volatility": 0.0}
+            return {"volume": 0.0, "log_range": 0.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -3070,7 +3070,7 @@ class _PacingProbeBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
         return 0.0
 
 
@@ -3192,12 +3192,12 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
         return {
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": True,
-            "unstuck_ema_span_0": 1000.0,
-            "unstuck_ema_span_1": 2000.0,
-            "unstuck_loss_allowance_pct": 0.1,
-            "unstuck_close_pct": 0.1,
-            "unstuck_threshold": 0.2,
-            "total_wallet_exposure_limit": 1.0,
+            "unstuck_ema_span_0_minutes": 1000.0,
+            "unstuck_ema_span_1_minutes": 2000.0,
+            "unstuck_loss_allowance_fraction": 0.1,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.2,
+            "total_wallet_exposure_limit_ratio": 1.0,
         }.get(key, original_bp(side, key, symbol))
 
     bot.bp = bp
@@ -3249,8 +3249,8 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     sym_input["long"]["position"] = {"size": 10.0 if held else 0.0, "price": 30.0 if held else 0.0}
     sym_input["long"]["bot_params"].update(
         unstuck_enabled=True, unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0, unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1, unstuck_threshold=0.2, unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0, unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1, unstuck_exposure_trigger_ratio=0.2, unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["unstuck_allowance_long"] = 100.0
     import passivbot_rust as pbr
@@ -3272,10 +3272,10 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     [
         "manual",
         "panic",
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
+        "total_wallet_exposure_limit_ratio",
     ],
 )
 async def test_ineligible_unstuck_consumer_does_not_read_emas(
@@ -3295,12 +3295,12 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
     values = {
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_ema_span_0": 1000.0,
-        "unstuck_ema_span_1": 2000.0,
-        "unstuck_loss_allowance_pct": 0.1,
-        "unstuck_close_pct": 0.1,
-        "unstuck_threshold": 0.2,
-        "total_wallet_exposure_limit": 1.0,
+        "unstuck_ema_span_0_minutes": 1000.0,
+        "unstuck_ema_span_1_minutes": 2000.0,
+        "unstuck_loss_allowance_fraction": 0.1,
+        "unstuck_close_fraction": 0.1,
+        "unstuck_exposure_trigger_ratio": 0.2,
+        "total_wallet_exposure_limit_ratio": 1.0,
     }
     if skip_reason in values:
         values[skip_reason] = 0.0
@@ -3338,22 +3338,22 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
     sym[pside]["position"] = {"size": 10.0 if pside == "long" else -10.0, "price": 30.0}
     sym[pside]["bot_params"].update(
         n_positions=1,
-        total_wallet_exposure_limit=0.0,
+        total_wallet_exposure_limit_ratio=0.0,
         unstuck_enabled=True,
         unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0,
-        unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1,
-        unstuck_threshold=0.2,
-        unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0,
+        unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1,
+        unstuck_exposure_trigger_ratio=0.2,
+        unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["global_bot_params"][pside].update(
-        n_positions=1, total_wallet_exposure_limit=1.0
+        n_positions=1, total_wallet_exposure_limit_ratio=1.0
     )
     result = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
     assert any("close" in order["order_type"] for order in result["orders"]), result
-    sym[pside]["bot_params"]["total_wallet_exposure_limit"] = 1.0
-    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit"] = 1.0
+    sym[pside]["bot_params"]["total_wallet_exposure_limit_ratio"] = 1.0
+    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit_ratio"] = 1.0
     with pytest.raises(ValueError, match="MissingEma"):
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
@@ -3369,7 +3369,7 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
     bot.is_forager_mode = lambda side=None: side in (None, "long")
     original = bot.bot_value
     bot.bot_value = lambda side, key: (
-        {"volume": 0.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+        {"volume": 0.0, "log_range": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
         if key == "forager_score_weights" else original(side, key)
     )
     missing = {symbol: {"current": [60.0], "forager": []}}
@@ -3410,7 +3410,7 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
     def bot_value(pside, key):
         if key == "forager_score_weights":
             return {**original_bot_value(pside, key), "unilateralness": 1.0}
-        if key == "unilateralness_ema_span_1m":
+        if key == "unilateralness_ema_span_minutes":
             # The opposite side never ranks or consumes adverse RMS. Its huge
             # configured span must not enlarge an active side's candle request.
             return 1.0 if pside == side else 100000.0
@@ -3480,7 +3480,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     original_bp = bot.bp
     bot.bp = lambda s, key, symbol=None: (
         (0.0 if symbol == names[0] and held_eligibility == "zero_exposure" else 1.0)
-        if key == "wallet_exposure_limit" else original_bp(s, key, symbol)
+        if key == "wallet_exposure_limit_ratio" else original_bp(s, key, symbol)
     )
     slots = 2 if held_eligibility == "outside" else 3
     span = 100000.0 if held_eligibility in {"approved", "age"} else 1.0
@@ -3493,11 +3493,11 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     bot.is_pside_enabled = lambda s: s == side
     bot.get_exchange_time = lambda: 21 * 60000
     original = bot.bot_value
-    weights = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+    weights = {"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
 
     def bot_value(s, key):
-        values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": span,
-                  "total_wallet_exposure_limit": 1.0, "n_positions": slots}
+        values = {"forager_score_weights": weights, "unilateralness_ema_span_minutes": span,
+                  "total_wallet_exposure_limit_ratio": 1.0, "n_positions": slots}
         return values[key] if key in values else original(s, key)
 
     bot.bot_value = bot_value
@@ -3514,12 +3514,12 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         return rows[:-1] if name == missing else rows
 
     bot.cm.get_candles = candles
-    params = {"n_positions": slots, "total_wallet_exposure_limit": 1.0,
-              "forager_score_weights": weights, "unilateralness_ema_span_1m": span}
+    params = {"n_positions": slots, "total_wallet_exposure_limit_ratio": 1.0,
+              "forager_score_weights": weights, "unilateralness_ema_span_minutes": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     symbols[0]["tradable"] = held_eligibility in {"approved", "age", "zero_exposure"}
     if held_eligibility == "zero_exposure":
-        symbols[0][side]["bot_params"]["wallet_exposure_limit"] = 0.0
+        symbols[0][side]["bot_params"]["wallet_exposure_limit_ratio"] = 0.0
     symbols[0][side]["position"] = bot.positions[names[0]][side].copy()
     for symbol in symbols:
         symbol[side]["mode"] = None

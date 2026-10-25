@@ -151,7 +151,7 @@ def test_native_recovery_observes_raw_strategy_liquidation_equity(
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    metrics = (*METRICS, "adg_strategy_eq") if weighted_capture else METRICS
+    metrics = (*METRICS, "adg_fraction_strategy_equity") if weighted_capture else METRICS
     with _native_dataset(inputs, "bybit", metrics) as dataset:
         with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
             service.register_dataset("raw-recovery", dataset)
@@ -236,7 +236,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
 
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "512",
-        "--hsl", "portfolio", "--hsl-red-threshold", ".99",
+        "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".99",
     ]))
     if strategy == "trailing_martingale":
         # Keep factual activity below the retained estimate: this control isolates
@@ -301,7 +301,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    metrics = (*METRICS, "hard_stop_time_in_red_pct")
+    metrics = (*METRICS, "hsl_red_time_fraction")
     with _native_dataset(inputs, "binance", metrics) as dataset:
         with CudaBacktestService(batch_size=24, max_pending=32, max_batch_delay=.1, tuning_mode="off") as service:
             service.register_dataset("policy", dataset)

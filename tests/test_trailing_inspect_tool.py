@@ -36,7 +36,7 @@ def _inspect(pside="long"):
         position_size=150.0,
         position_price=20.0,
         wallet_exposure=0.6,
-        effective_wallet_exposure_limit=0.9,
+        effective_wallet_exposure_limit_ratio=0.9,
         log_range_ema_1m=0.007,
         log_range_ema_1h=0.0033,
         params=_params(),
@@ -65,7 +65,7 @@ def _context(
 ):
     return {
         "active": active,
-        "total_wallet_exposure_limit": 1.0 if active else 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0 if active else 0.0,
         "max_positions": 1,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled,
@@ -163,7 +163,7 @@ def test_non_positive_retracement_reports_passive_mode():
         position_size=None,
         position_price=20.0,
         wallet_exposure=0.6,
-        effective_wallet_exposure_limit=0.9,
+        effective_wallet_exposure_limit_ratio=0.9,
         log_range_ema_1m=0.007,
         log_range_ema_1h=0.0033,
         params=params,
@@ -208,7 +208,7 @@ def test_main_json_applies_parameter_override(monkeypatch, capsys):
                 "20",
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0.9",
                 "--entry-threshold-base-fraction",
                 "0.03",
@@ -237,7 +237,7 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
                 "20",
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0",
             ]
         )
@@ -250,14 +250,14 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
     "state_args",
     (
         ("--wallet-exposure", "0.6"),
-        ("--effective-wallet-exposure-limit", "0.9"),
+        ("--effective-wallet-exposure-limit-ratio", "0.9"),
         ("--log-range-ema-1m", "0.01"),
     ),
 )
 def test_detailed_mode_requires_both_exposure_inputs(state_args, capsys):
     assert trailing_inspect.main([*state_args, "--json"]) == 2
     assert (
-        "requires both --wallet-exposure and --effective-wallet-exposure-limit"
+        "requires both --wallet-exposure and --effective-wallet-exposure-limit-ratio"
         in capsys.readouterr().err
     )
 
@@ -268,7 +268,7 @@ def test_detailed_mode_requires_explicit_position_price(capsys):
             [
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0.9",
                 "--json",
             ]
@@ -946,7 +946,7 @@ def test_inspect_rejects_non_finite_derived_geometry():
             position_size=None,
             position_price=100.0,
             wallet_exposure=0.5,
-            effective_wallet_exposure_limit=1.0,
+            effective_wallet_exposure_limit_ratio=1.0,
             log_range_ema_1m=1e308,
             log_range_ema_1h=0.0,
             params=_params(),

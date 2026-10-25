@@ -48,7 +48,7 @@ and minimum-effective-cost filtering are explicit options. These toggles exercis
 configuration paths; enabling a controller does not prove that a particular fixture
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
-Fixture-only `--hsl-red-threshold`, `--hsl-ema-span-minutes`,
+Fixture-only `--hsl-drawdown-threshold-fraction`, `--hsl-drawdown-fraction-ema-span-minutes`,
 `--hsl-cooldown-minutes` and `--lookback-ema-span-minutes` set the explicit policy
 before canonical preparation. Defaults are 0.05, 30 minutes, 30 minutes and 1440
 minutes. These settings do not enable HSL; select its mode with `--hsl`. Fractional
@@ -70,11 +70,11 @@ For a decaying-memory stress diagnostic:
 
 ```sh
 passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 3000 \
-  --seed 43 --hsl portfolio --gpu-engine native --hsl-red-threshold 0.002 \
-  --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --seed 43 --hsl portfolio --gpu-engine native --hsl-drawdown-threshold-fraction 0.002 \
+  --hsl-drawdown-fraction-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
-  --metrics adg_strategy_eq drawdown_worst_strategy_eq hard_stop_time_in_red_pct \
-  hard_stop_duration_minutes_max --report stress.json
+  --metrics adg_fraction_strategy_equity drawdown_max_fraction_strategy_equity hsl_red_time_fraction \
+  hsl_red_duration_max_minutes --report stress.json
 ```
 
 This is an adversarial diagnostic, not a blanket release gate. Missing policies remain
@@ -131,17 +131,17 @@ contain coin identities and a small sample of fills.
 
 ## Policies and reports
 
-The default requested metrics are `adg_strategy_eq`, `drawdown_worst_strategy_eq`
+The default requested metrics are `adg_fraction_strategy_equity`, `drawdown_max_fraction_strategy_equity`
 and `fills_per_day`. Configured limit metrics are also requested. Defaults include
-provisional tolerances for these metrics and `backtest_completion_ratio`. They are
+provisional tolerances for these metrics and `backtest_completion_fraction`. They are
 measurement gates, not release-wide accepted discrepancies. Supply a JSON policy to
 override or extend them:
 
 ```json
 {
-  "adg_strategy_eq": {"absolute": 0.0000001, "relative": 0.0001},
-  "fills_gap_longest_days": {"absolute": 0.0007, "relative": 0},
-  "omega_ratio_strategy_eq": {
+  "adg_fraction_strategy_equity": {"absolute": 0.0000001, "relative": 0.0001},
+  "fills_gap_max_days": {"absolute": 0.0007, "relative": 0},
+  "omega_ratio_strategy_equity": {
     "absolute": 0.00001, "relative": 0.0001, "matching_infinity": true
   }
 }

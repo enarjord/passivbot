@@ -62,7 +62,7 @@ def validate_shared_bot_policy(config):
         "bot.global.forager.score_hysteresis_margin",
         "bot.long.forager.score_hysteresis_margin",
         "bot.short.forager.score_hysteresis_margin",
-        "bot.portfolio.warmup.span_multiplier",
+        "bot.portfolio.warmup.activation_span_fraction",
     ):
         value = require_config_value(config, path)
         if (

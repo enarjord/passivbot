@@ -35,21 +35,21 @@ directory instead of the nested `pareto/` directory, it resolves that automatica
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto
 passivbot tool pareto optimize_results/.../pareto -m reference \
-  --target adg_strategy_eq=0.001 \
-  --target drawdown_worst_strategy_eq=0.25
+  --target adg_fraction_strategy_equity=0.001 \
+  --target drawdown_max_fraction_strategy_equity=0.25
 passivbot tool pareto optimize_results/.../pareto \
-  -l 'drawdown_worst_strategy_eq<=0.35' \
-  -l 'adg_strategy_eq>0.0' \
+  -l 'drawdown_max_fraction_strategy_equity<=0.35' \
+  -l 'adg_fraction_strategy_equity>0.0' \
   --save-selected configs/promoted_candidate.local.json
 passivbot tool pareto optimize_results/.../pareto \
-  -l 'drawdown_worst_strategy_eq<=0.35' \
-  -l 'adg_strategy_eq>0.0' \
+  -l 'drawdown_max_fraction_strategy_equity<=0.35' \
+  -l 'adg_fraction_strategy_equity>0.0' \
   --save-filtered optimize_results/filtered_pareto
-passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
+passivbot tool pareto -o sharpe_ratio_strategy_equity,adg_fraction_strategy_equity,recovery_max_days_strategy_equity \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
-  --weight adg_strategy_eq=4 \
-  --weight drawdown_worst_strategy_eq=2 \
+  --weight adg_fraction_strategy_equity=4 \
+  --weight drawdown_max_fraction_strategy_equity=2 \
   --show-top 5
 passivbot tool pareto optimize_results/... --scenario opt_2025_to_present
 passivbot tool pareto --json
@@ -102,7 +102,7 @@ Destinations must not overlap the source Pareto directory and must not already e
 staged before installation. Concurrent destination mutation is outside the tool's contract.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
-other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
+other stored metrics such as `sharpe_ratio_strategy_equity` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
 Normalization uses the active front's min/max values, so removing dominated candidates can
 change the selected winner. The front covers only saved candidates, not discarded optimizer results.
@@ -121,7 +121,7 @@ passivbot tool pareto-plot optimize_results/.../pareto --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
 passivbot tool pareto-plot optimize_results/... \
-  adg_strategy_eq pain_index_strategy_eq sortino_ratio_strategy_eq \
+  adg_fraction_strategy_equity pain_index_fraction_strategy_equity sortino_ratio_strategy_equity \
   --output plots/tradeoffs.html --open
 ```
 
@@ -133,7 +133,7 @@ fronts are skipped; malformed candidate data still fails visibly. Missing candid
 a clear error. Positional initial metrics follow an explicit PATH. Without positional
 metrics, the first two available metrics (scoring objectives first) are selected. Known metric aliases
 are accepted. Metric selectors group objectives, other metrics, and named statistics;
-`stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.
+`stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_fraction_strategy_equity.mean`.
 Saved objective values take precedence over aggregates, which take precedence over means.
 Canonical names take precedence over legacy aliases regardless of file ordering; conflicting
 aliases without a canonical value are rejected.
@@ -212,9 +212,9 @@ the optimizer's final effective limits, including config limits and CLI `--limit
 passivbot optimize configs/examples/suite_example.json \
   -t optimize_results/.../pareto \
   --filter-starting-configs \
-  -l 'adg_strategy_eq>0.0' \
-  -l 'strategy_eq_recovery_days_max<100' \
-  -l '{"metric":"strategy_eq_recovery_days_max","penalize_if":"greater_than","reducer":"max","value":120}'
+  -l 'adg_fraction_strategy_equity>0.0' \
+  -l 'recovery_max_days_strategy_equity<100' \
+  -l '{"metric":"recovery_max_days_strategy_equity","penalize_if":"greater_than","reducer":"max","value":120}'
 ```
 
 Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most
@@ -226,7 +226,7 @@ passivbot optimize configs/examples/suite_example.json \
   -t optimize_results/.../pareto \
   --filter-starting-configs \
   --compress-starting-configs 60 \
-  -l 'drawdown_worst_strategy_eq<0.5 scenario=base'
+  -l 'drawdown_max_fraction_strategy_equity<0.5 scenario=base'
 ```
 
 Both options trust the metrics and objectives stored in the seed artifacts. Passivbot cannot prove
@@ -294,12 +294,12 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
 passivbot tool trailing-inspect \
   --symbol COIN --side long \
   --position-size 150 --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
   --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033
 
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --side long --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
   --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033 \
   --entry-threshold-base-fraction 0.02 --json
 ```
@@ -499,8 +499,8 @@ passivbot tool crash-finder \
   --source-timeframe 1m \
   --timeframe 1h \
   --direction both \
-  --threshold -0.10 \
-  --pump-threshold 0.10 \
+  --crash-log-return-threshold -0.10 \
+  --pump-log-return-threshold 0.10 \
   --pre-days 14 \
   --post-days 60 \
   --scenario-force-normal adverse \
@@ -521,8 +521,9 @@ passivbot tool crash-finder \
 Useful suite controls:
 
 - `--direction down|up|both` chooses high-to-later-low crashes, low-to-later-high pumps, or both.
-  `--threshold` is the negative crash threshold and `--pump-threshold` is the positive pump
-  threshold, both expressed as log returns.
+  `--crash-log-return-threshold` is the negative crash threshold and
+  `--pump-log-return-threshold` is the positive pump threshold, both expressed as natural-log
+  returns (no percentage rescaling).
 - `--scenario-kind market-wide` keeps broad market crashes only.
 - `--scenario-kind coin-focused` keeps non-market-wide crashes, including isolated multi-coin
   clusters such as a DEXE/M event.

@@ -1389,9 +1389,9 @@ RESERVED_CLI_ARGS = {
             "effective coins and timestamp window for exact artifact replay."
         ),
     },
-    "backtest.maker_fee_override": {
-        "visible": ["--maker-fee-override"],
-        "hidden": ["--backtest.maker_fee_override", "--backtest_maker_fee_override"],
+    "backtest.maker_fee_override_fraction": {
+        "visible": ["--maker-fee-override-fraction"],
+        "hidden": ["--backtest.maker_fee_override_fraction", "--backtest_maker_fee_override_fraction"],
         "type": optional_float,
         "metavar": "FLOAT",
         "commands": {"backtest", "optimize"},
@@ -1399,11 +1399,11 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Override all backtest maker fees. Leave unset to use exchange-derived per-coin maker fees.",
+        "help": "Override all backtest maker fees as signed scale-one fractions (negative rebates allowed). Leave unset to use exchange-derived per-coin maker fees.",
     },
-    "backtest.taker_fee_override": {
-        "visible": ["--taker-fee-override"],
-        "hidden": ["--backtest.taker_fee_override", "--backtest_taker_fee_override"],
+    "backtest.taker_fee_override_fraction": {
+        "visible": ["--taker-fee-override-fraction"],
+        "hidden": ["--backtest.taker_fee_override_fraction", "--backtest_taker_fee_override_fraction"],
         "type": optional_float,
         "metavar": "FLOAT",
         "commands": {"backtest", "optimize"},
@@ -1411,7 +1411,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Override all backtest taker fees. Leave unset to use exchange-derived per-coin taker fees.",
+        "help": "Override all backtest taker fees as signed scale-one fractions (negative rebates allowed). Leave unset to use exchange-derived per-coin taker fees.",
     },
     "backtest.starting_balance": {
         "visible": ["--starting-balance", "-sb"],
@@ -1470,7 +1470,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "CSV",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer scoring metrics, for example adg_pnl,loss_profit_ratio.",
+        "help": "Optimizer scoring metrics, for example daily_realized_pnl_mean_fraction,loss_profit_ratio.",
     },
     "optimize.objective_scenario": {
         "visible": ["--objective-scenario"],
@@ -1521,12 +1521,10 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimize Common"},
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
-    "optimize.pymoo.shared.mutation_prob": {
-        "visible": ["--optimize.pymoo.shared.mutation_prob"],
+    "optimize.pymoo.shared.mutation_probability": {
+        "visible": ["--optimize.pymoo.shared.mutation_probability"],
         "hidden": [
-            "--optimize_pymoo_shared_mutation_prob",
-            "--optimize.pymoo.shared.mutation_prob_var",
-            "--optimize_pymoo_shared_mutation_prob_var",
+            "--optimize_pymoo_shared_mutation_probability",
             "-psmpv",
         ],
         "type": str,
@@ -1600,7 +1598,7 @@ RESERVED_CLI_ARGS["bot.global.universe.approved_coins"] = {
 # optimizer projects these settings separately from its numeric search genes.
 for _path, _group in (
     ("bot.portfolio.strategy_kind", "Behavior"),
-    ("bot.portfolio.warmup.span_multiplier", "Backtest Runtime"),
+    ("bot.portfolio.warmup.activation_span_fraction", "Backtest Runtime"),
     ("bot.portfolio.warmup.max_minutes", "Backtest Runtime"),
     ("bot.long.universe.filter_by_min_effective_cost", "Coin Selection"),
     ("bot.short.universe.filter_by_min_effective_cost", "Coin Selection"),
@@ -1739,14 +1737,16 @@ CLI_HELP_OVERRIDES = {
         "Minutes per saved balance/equity sample. 1 keeps per-minute series; "
         "higher values thin balance_and_equity.csv.gz and related plots."
     ),
-    "backtest.btc_collateral_cap": (
-        "Target and ceiling share of equity held as BTC collateral. 0 keeps "
+    "backtest.btc_collateral_target_ratio": (
+        "Target BTC collateral value divided by total wallet value (USD cash "
+        "plus current BTC market value, excluding unrealized trading PnL). 0 keeps "
         "USD-only; 1 targets fully BTC collateral; values >1 allow leveraged "
         "BTC collateral."
     ),
-    "backtest.btc_collateral_ltv_cap": (
-        "Optional USD-debt/equity cap while topping up BTC collateral. Leave "
-        "unset for no LTV cap."
+    "backtest.max_usd_debt_to_wallet_value_ratio": (
+        "Optional USD debt divided by total wallet value while topping up BTC "
+        "collateral (excluding unrealized trading PnL). Leave null or nonpositive "
+        "for no top-up debt cap."
     ),
     "backtest.compress_cache": (
         "Compress generated backtest cache artifacts to save disk. Set n/false "
@@ -1781,7 +1781,7 @@ CLI_HELP_OVERRIDES = {
         "Normalize combined-exchange volume with robust complete-day, cross-coin "
         "estimates. Disable to preserve each selected exchange's native volume."
     ),
-    "backtest.equity_floor_ratio": (
+    "backtest.equity_floor_fraction": (
         "Early-stop equity floor as a fraction of starting balance. Must "
         "satisfy 0 <= x < 1; 0.05 stops once equity is <= 5 percent of start."
     ),
@@ -1928,17 +1928,17 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
     runtime = {
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
-        "backtest.btc_collateral_cap",
-        "backtest.btc_collateral_ltv_cap",
+        "backtest.btc_collateral_target_ratio",
+        "backtest.max_usd_debt_to_wallet_value_ratio",
         "backtest.candle_interval_minutes",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
         "backtest.gap_tolerance_ohlcvs_minutes",
-        "backtest.maker_fee_override",
+        "backtest.maker_fee_override_fraction",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
-        "backtest.taker_fee_override",
+        "backtest.taker_fee_override_fraction",
     }
     output = {
         "backtest.base_dir",
@@ -1981,16 +1981,16 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
     backtest_runtime = {
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
-        "backtest.btc_collateral_cap",
-        "backtest.btc_collateral_ltv_cap",
+        "backtest.btc_collateral_target_ratio",
+        "backtest.max_usd_debt_to_wallet_value_ratio",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
         "backtest.gap_tolerance_ohlcvs_minutes",
-        "backtest.maker_fee_override",
+        "backtest.maker_fee_override_fraction",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
-        "backtest.taker_fee_override",
+        "backtest.taker_fee_override_fraction",
         "backtest.volume_normalization",
     }
     optimize_common = {
@@ -2313,7 +2313,7 @@ def add_arguments_recursively(
                 type_ = comma_separated_values_float
             if "limits" in full_name:
                 type_ = str
-                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
+                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_max_fraction 0.3333"'
             elif any(
                 [
                     x in full_name
@@ -2324,7 +2324,7 @@ def add_arguments_recursively(
                 appendix = "item1,item2,item3,..."
             elif "scoring" in full_name:
                 type_ = comma_separated_values
-                appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+                appendix = "Examples: adg_fraction,sharpe_ratio; mdg_fraction,sortino_ratio; ..."
             elif full_name in {
                 "optimize.gpu.batch_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
@@ -2352,7 +2352,7 @@ def add_arguments_recursively(
             elif nullable_float_override:
                 type_ = optional_float
             elif value is None:
-                if full_name == "backtest.btc_collateral_ltv_cap":
+                if full_name == "backtest.max_usd_debt_to_wallet_value_ratio":
                     type_ = optional_float
                 else:
                     type_ = str

@@ -199,7 +199,7 @@ class Unavailable:
 
 @dataclass(frozen=True)
 class Decision:
-    threshold: float
+    drawdown_threshold_fraction: float
     scope: Scope
     action: str | None
     execution_type: str
@@ -675,8 +675,8 @@ def capture(
             snapshot=snapshot,
             slots=slots,
             memory_ema_span_minutes=policy["memory_ema_span_minutes"],
-            drawdown_ratio_ema_span_minutes=policy["drawdown_fraction_ema_span_minutes"],
-            threshold=policy["drawdown_threshold_fraction"],
+            drawdown_fraction_ema_span_minutes=policy["drawdown_fraction_ema_span_minutes"],
+            drawdown_threshold_fraction=policy["drawdown_threshold_fraction"],
             cooldown_ms=math.floor(policy["cooldown_after_red_minutes"] * 60_000 + 0.5),
         )
         payload["scale_budget_with_excess_allowance"] = policy[
@@ -689,11 +689,11 @@ def capture(
                 .get("bot", {}).get(scope.pside, {})
             )
             payload["exposure_budget"] = dict(
-                wallet_exposure_limit=override.get(
-                    "wallet_exposure_limit_ratio", side_config.get("wallet_exposure_limit", -1.0)
+                wallet_exposure_limit_ratio=override.get(
+                    "wallet_exposure_limit_ratio", side_config.get("wallet_exposure_limit_ratio", -1.0)
                 ),
-                total_wallet_exposure_limit=side_config["risk"]["total_wallet_exposure_limit_ratio"],
-                we_excess_allowance_pct=override.get("risk", {}).get(
+                total_wallet_exposure_limit_ratio=side_config["risk"]["total_wallet_exposure_limit_ratio"],
+                we_excess_allowance_fraction=override.get("risk", {}).get(
                     "we_excess_allowance_fraction", side_config["risk"]["we_excess_allowance_fraction"]
                 ),
             )
@@ -797,17 +797,17 @@ def _evaluate(requests):
             snapshot = submitted["snapshot"]
             exposed = any(pair["position"]["size"] != 0 for pair in snapshot["pairs"])
             risk = output["risk"]
-            threshold = struct.unpack("f", struct.pack("f", submitted["threshold"]))[0]
+            threshold = struct.unpack("f", struct.pack("f", submitted["drawdown_threshold_fraction"]))[0]
             deadline = risk["cooldown_until"]
             if (
                 type(risk["timestamp_ms"]) is not int or risk["timestamp_ms"] != snapshot["now"]
                 or type(risk["exposed"]) is not bool or risk["exposed"] != exposed
                 or type(risk["red"]) is not bool
                 or type(risk["nonpositive_equity"]) is not bool
-                or any(not _finite(risk[key]) or risk[key] < 0 for key in ("raw", "ema", "drawdown"))
-                or risk["raw"] != decision["raw"] or risk["ema"] != decision["ema"]
+                or any(not _finite(risk[key]) or risk[key] < 0 for key in ("signal_raw_fraction", "signal_ema_fraction", "drawdown_memory_usd"))
+                or risk["signal_raw_fraction"] != decision["signal_raw_fraction"] or risk["signal_ema_fraction"] != decision["signal_ema_fraction"]
                 or risk["action"] != decision["action"]
-                or risk["red"] != (risk["nonpositive_equity"] or min(risk["raw"], risk["ema"]) > threshold)
+                or risk["red"] != (risk["nonpositive_equity"] or min(risk["signal_raw_fraction"], risk["signal_ema_fraction"]) > threshold)
                 or (deadline is not None and (type(deadline) is not int or deadline < 0))
                 or (exposed and decision["action"] != ("panic" if risk["red"] else "normal"))
                 or (not exposed and decision["action"] != ("halted" if deadline is not None and snapshot["now"] < deadline else "normal"))
@@ -820,7 +820,7 @@ def _evaluate(requests):
                 or decision["action"] not in {"normal", "panic", "halted"}
                 or any(
                     not _finite(decision[key]) or decision[key] < 0
-                    for key in ("raw", "ema")
+                    for key in ("signal_raw_fraction", "signal_ema_fraction")
                 )
                 or any(
                     t is not None
@@ -850,7 +850,7 @@ def _evaluate(requests):
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))
         decisions.append(
             Decision(
-                submitted["threshold"],
+                submitted["drawdown_threshold_fraction"],
                 request.scope,
                 None if decision is None else decision["action"],
                 request.execution_type,

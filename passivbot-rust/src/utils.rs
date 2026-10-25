@@ -930,16 +930,18 @@ pub fn ema_last_py(values: PyReadonlyArray1<'_, f64>, span: f64) -> PyResult<f64
     Ok(ema_last_f64(values, span))
 }
 
+/// Absolute difference divided by the absolute reference, on scale one.
+/// A zero reference retains the existing zero/positive-infinity convention.
 #[pyfunction]
-pub fn calc_diff(x: f64, y: f64) -> f64 {
-    if y == 0.0 {
-        if x == 0.0 {
+pub fn calc_abs_relative_difference_fraction(value: f64, reference: f64) -> f64 {
+    if reference == 0.0 {
+        if value == 0.0 {
             0.0
         } else {
             f64::INFINITY
         }
     } else {
-        (x - y).abs() / y.abs()
+        (value - reference).abs() / reference.abs()
     }
 }
 
@@ -1046,19 +1048,22 @@ pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64)
     qty.abs() * c_mult * (entry_price - close_price)
 }
 
+/// Signed price change adverse to the position side, relative to reference_price.
+/// Long: 1 - current/reference; short: current/reference - 1. Positive is adverse.
+/// A nonpositive or NaN reference returns zero; an unknown pside still panics.
 #[pyfunction]
-pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
+pub fn calc_pside_adverse_price_change_fraction(pside: usize, reference_price: f64, current_price: f64) -> f64 {
     match pside {
         LONG => {
-            if pprice > 0.0 {
-                1.0 - price / pprice
+            if reference_price > 0.0 {
+                1.0 - current_price / reference_price
             } else {
                 0.0
             }
         }
         SHORT => {
-            if pprice > 0.0 {
-                price / pprice - 1.0
+            if reference_price > 0.0 {
+                current_price / reference_price - 1.0
             } else {
                 0.0
             }
@@ -1067,19 +1072,8 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     }
 }
 
-/// Pside-aware signed price difference helper. Alias of calc_pprice_diff_int with clearer name.
-#[pyfunction]
-pub fn calc_pside_price_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
-    calc_pprice_diff_int(pside, pprice, price)
-}
-
-/// Backwards-compatible alias; prefer calc_pside_price_diff_int.
-#[pyfunction]
-pub fn calc_price_diff_pside_int(pside: usize, pprice: f64, price: f64) -> f64 {
-    calc_pside_price_diff_int(pside, pprice, price)
-}
-
-pub fn calc_order_price_diff_bid(order_price: f64, market_price: f64) -> f64 {
+/// Signed gap (market - order)/market: positive for a passive bid.
+pub fn calc_bid_order_price_gap_fraction(order_price: f64, market_price: f64) -> f64 {
     if market_price <= 0.0 {
         0.0
     } else {
@@ -1087,7 +1081,8 @@ pub fn calc_order_price_diff_bid(order_price: f64, market_price: f64) -> f64 {
     }
 }
 
-pub fn calc_order_price_diff_ask(order_price: f64, market_price: f64) -> f64 {
+/// Signed gap (order - market)/market: positive for a passive ask.
+pub fn calc_ask_order_price_gap_fraction(order_price: f64, market_price: f64) -> f64 {
     if market_price <= 0.0 {
         0.0
     } else {
@@ -1095,8 +1090,10 @@ pub fn calc_order_price_diff_ask(order_price: f64, market_price: f64) -> f64 {
     }
 }
 
+/// Signed passive-side gap relative to market price, using buy/sell order side.
+/// Invalid prices retain zero; an invalid order side with valid prices is an error.
 #[pyfunction]
-pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) -> PyResult<f64> {
+pub fn calc_order_price_gap_fraction(side: &str, order_price: f64, market_price: f64) -> PyResult<f64> {
     if !order_price.is_finite() || !market_price.is_finite() || market_price <= 0.0 {
         return Ok(0.0);
     }

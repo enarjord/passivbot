@@ -39,7 +39,7 @@ def request(*, mode="coin", side="long", slow=3.0, fast=3.0,
             )],
         ),
         slots=1, scale_budget_with_excess_allowance=False, exposure_budget=None,
-        memory_ema_span_minutes=slow, drawdown_ratio_ema_span_minutes=fast, threshold=0.01,
+        memory_ema_span_minutes=slow, drawdown_fraction_ema_span_minutes=fast, drawdown_threshold_fraction=0.01,
         cooldown_ms=120_000,
         budget_observations=[
             dict(timestamp=0,order=-1,balance=1000.0,slots=1,
@@ -59,6 +59,17 @@ def evaluate(native, value):
     return json.loads(native.hsl_v9_evaluate(json.dumps(value,allow_nan=False)))
 
 
+@pytest.mark.parametrize("canonical,retired", [
+    ("drawdown_threshold_fraction", "threshold"),
+    ("drawdown_fraction_ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
+])
+def test_native_hsl_request_rejects_retired_quantity_names(native, canonical, retired):
+    value = request()
+    value[retired] = value.pop(canonical)
+    with pytest.raises(ValueError, match=retired):
+        evaluate(native, value)
+
+
 @pytest.mark.parametrize("mode",["coin","pside","portfolio"])
 @pytest.mark.parametrize("side",["long","short"])
 @pytest.mark.parametrize("slow,fast",[(3.0,1.0),(43200.0,360.0),(7.5,2.5)])
@@ -75,8 +86,11 @@ def test_actual_native_risk_uses_ordered_f32_graph(
                   previous_upnl=0,upnl=-20,net=0,budget=final_budget,
                   slow_span=slow,fast_span=fast)
     actual=evaluate(native,value)["risk"]
-    for key in ["drawdown","raw","ema","nonpositive_equity"]:
-        assert actual[key] == marked[key],(key,actual,marked)
+    for key, reference in [("drawdown_memory_usd", "drawdown"),
+                           ("signal_raw_fraction", "raw"),
+                           ("signal_ema_fraction", "ema"),
+                           ("nonpositive_equity", "nonpositive_equity")]:
+        assert actual[key] == marked[reference],(key,actual,marked)
 
 
 def test_retired_risk_exports_are_absent(native):
@@ -85,8 +99,8 @@ def test_retired_risk_exports_are_absent(native):
         assert not hasattr(native,name)
 
 
-@pytest.mark.parametrize("key,value",[("drawdown_ratio_ema_span_minutes",0.5),("memory_ema_span_minutes",1e12),
-                                      ("threshold",-1),("cooldown_ms",-1)])
+@pytest.mark.parametrize("key,value",[("drawdown_fraction_ema_span_minutes",0.5),("memory_ema_span_minutes",1e12),
+                                      ("drawdown_threshold_fraction",-1),("cooldown_ms",-1)])
 def test_malformed_policy_is_a_producer_error(native,key,value):
     payload=request();payload[key]=value
     with pytest.raises(ValueError):
@@ -108,7 +122,7 @@ def test_disposable_current_preview_does_not_change_the_factual_request(native):
     assert value == saved
     repaired=deepcopy(value)
     repaired["snapshot"]["pairs"][0]["fills"][0]["fee"]=-1.0
-    assert evaluate(native,repaired)["risk"]["drawdown"] > first["risk"]["drawdown"]
+    assert evaluate(native,repaired)["risk"]["drawdown_memory_usd"] > first["risk"]["drawdown_memory_usd"]
     assert evaluate(native,value) == first
 
 
@@ -127,5 +141,5 @@ def test_scope_upnl_is_summed_before_the_binary32_risk_boundary(native,values):
     value["snapshot"].update(pairs=pairs,balance=1000.0)
     value["budget_observations"]=[]
     output=evaluate(native,value)
-    assert output["risk"]["drawdown"] == 1.0
-    assert output["risk"]["raw"] == pytest.approx(0.001)
+    assert output["risk"]["drawdown_memory_usd"] == 1.0
+    assert output["risk"]["signal_raw_fraction"] == pytest.approx(0.001)

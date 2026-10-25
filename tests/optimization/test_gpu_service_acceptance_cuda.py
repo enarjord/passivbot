@@ -48,7 +48,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
         "--unstuck",
     ]))
-    config["live"].update(max_realized_loss_pct=0.1, lookback_ema_span_minutes=8.0)
+    config["live"].update(loss_gate_max_drawdown_fraction=0.1, lookback_ema_span_minutes=8.0)
     key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(
@@ -182,7 +182,7 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "long", "--coins", "25",
         "--bars", "11520", "--seed", "7", "--hsl", "portfolio",
-        "--hsl-red-threshold", ".99", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".99", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "1440",
     ]))
     config, candles, _markets, _btc, _timestamps = inputs
@@ -204,8 +204,8 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
             bot["close"].update(qty_fraction=1., threshold_base_fraction=.5,
                                 threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
                                 threshold_log_range_1h_coefficient=0.)
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "position_held_hours_max", "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "position_held_max_hours", "hsl_red_time_fraction")
     snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]
     active = False
     completed_bars = 0

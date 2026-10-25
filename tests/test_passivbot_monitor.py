@@ -2405,7 +2405,7 @@ def test_forager_debug_profile_adds_bounded_selection_shape():
         fetch_budget=2,
         incumbent_symbols=["ETH/USDT:USDT"],
         slots_to_fill=1,
-        score_hysteresis_pct=0.03,
+        score_hysteresis_margin=0.03,
         top_scores=[
             {
                 "symbol": "BTC/USDT:USDT",
@@ -4275,9 +4275,9 @@ def test_unstuck_status_event_emits_structured_summary():
                 "status": "ok",
                 "allowance": -12.3,
                 "peak": 1000.0,
-                "pct_from_peak": -1.2,
-                "loss_allowance_pct": 0.01,
-                "override_loss_allowance_pcts": {
+                "change_from_peak_percent": -1.2,
+                "loss_allowance_fraction": 0.01,
+                "override_loss_allowance_fractions": {
                     "ETH/USDT:USDT": 0.004,
                     "BTC/USDT:USDT": 0.005,
                 },
@@ -4287,8 +4287,8 @@ def test_unstuck_status_event_emits_structured_summary():
                 },
                 "next_symbol": "BTC/USDT:USDT",
                 "next_target_price": 101_000.0,
-                "next_target_distance_ratio": 0.005,
-                "next_unstuck_trigger_distance_ratio": 0.0125,
+                "next_target_price_offset_fraction": 0.005,
+                "next_unstuck_trigger_price_offset_fraction": 0.0125,
             },
             "short": {"status": "disabled"},
         },
@@ -4310,8 +4310,8 @@ def test_unstuck_status_event_emits_structured_summary():
     long = event.data["sides"]["long"]
     assert long["allowance"] == pytest.approx(-12.3)
     assert long["over_budget"] is True
-    assert long["override_loss_allowance_pct_count"] == 2
-    assert long["override_loss_allowance_pcts"] == {
+    assert long["override_loss_allowance_fraction_count"] == 2
+    assert long["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005),
         "ETH/USDT:USDT": pytest.approx(0.004),
     }
@@ -4322,8 +4322,8 @@ def test_unstuck_status_event_emits_structured_summary():
     }
     assert long["next_symbol"] == "BTC/USDT:USDT"
     assert long["next_target_price"] == pytest.approx(101_000.0)
-    assert long["next_target_distance_ratio"] == pytest.approx(0.005)
-    assert long["next_unstuck_trigger_distance_ratio"] == pytest.approx(0.0125)
+    assert long["next_target_price_offset_fraction"] == pytest.approx(0.005)
+    assert long["next_unstuck_trigger_price_offset_fraction"] == pytest.approx(0.0125)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -4443,7 +4443,7 @@ def test_unstuck_selection_event_emits_structured_summary():
     assert event.data["changed"] is True
     assert event.data["entry_price"] == pytest.approx(1.0)
     assert event.data["current_price"] == pytest.approx(1.1)
-    assert event.data["price_diff_pct"] == pytest.approx(10.0)
+    assert event.data["price_change_percent"] == pytest.approx(10.0)
     assert event.data["allowance"] == pytest.approx(-12.3)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -5254,7 +5254,7 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
         "reduce_only": False,
         "custom_id": "raw-client-order-id-123",
         "id": "raw-exchange-order-id-456",
-        "_delta": {"price_pct_diff": 0.001, "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": 0.001, "qty_difference_percent": 0.002},
     }
     result = {
         "id": "raw-result-order-id-789",
@@ -5565,7 +5565,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
         "raw_payload": "RAW_CONNECTOR_SECRET",
         "_context": "/private/operator/path",
         "_reason": "RAW_CONNECTOR_REASON_SECRET",
-        "_delta": {"price_pct_diff": float("inf"), "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": float("inf"), "qty_difference_percent": 0.002},
     }
     bot._execution_connector_call_context = {
         "action": "create",
@@ -5594,7 +5594,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     assert event.data["connector_route"] == "base"
     assert len(event.data["order_type"]) == 64
     assert len(event.data["pb_order_type"]) == 64
-    assert event.data["delta"] == {"qty_pct_diff": 0.002}
+    assert event.data["delta"] == {"qty_difference_percent": 0.002}
     rendered = json.dumps(event.to_dict(), sort_keys=True)
     assert "RAW_CONNECTOR_SECRET" not in rendered
     assert "RAW_CONNECTOR_REASON_SECRET" not in rendered
@@ -6409,9 +6409,9 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
         side_effect=AssertionError("must not read nonauthoritative PnL")
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6437,9 +6437,9 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
         ]
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6648,14 +6648,14 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "volatility": 0.5,
                     "ema_readiness": 0.25,
                 },
-                ("long", "wallet_exposure_limit"): 0.2,
-                ("short", "wallet_exposure_limit"): 0.2,
-                ("long", "risk_we_excess_allowance_pct"): 0.5,
-                ("short", "risk_we_excess_allowance_pct"): 0.5,
+                ("long", "wallet_exposure_limit_ratio"): 0.2,
+                ("short", "wallet_exposure_limit_ratio"): 0.2,
+                ("long", "risk_we_excess_allowance_fraction"): 0.5,
+                ("short", "risk_we_excess_allowance_fraction"): 0.5,
                 ("long", "risk_we_excess_allowance_mode"): "bounded",
                 ("short", "risk_we_excess_allowance_mode"): "bounded",
-                ("long", "total_wallet_exposure_limit"): 0.24,
-                ("short", "total_wallet_exposure_limit"): 0.0,
+                ("long", "total_wallet_exposure_limit_ratio"): 0.24,
+                ("short", "total_wallet_exposure_limit_ratio"): 0.0,
                 ("long", "entry_ema_span_0_minutes"): 10.0,
                 ("long", "entry_ema_span_1_minutes"): 20.0,
                 ("short", "entry_ema_span_0_minutes"): 10.0,
@@ -6667,16 +6667,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("long", "unstuck_enabled"): True,
                 ("short", "unstuck_enabled"): False,
                 ("long", "unstuck_ema_gating_enabled"): True,
-                ("long", "unstuck_ema_span_0"): 10.0,
-                ("long", "unstuck_ema_span_1"): 20.0,
-                ("long", "unstuck_ema_dist"): 0.02,
-                ("short", "unstuck_ema_dist"): 0.02,
-                ("long", "unstuck_loss_allowance_pct"): 0.02,
-                ("short", "unstuck_loss_allowance_pct"): 0.0,
-                ("long", "unstuck_close_pct"): 0.5,
-                ("short", "unstuck_close_pct"): 0.5,
-                ("long", "unstuck_threshold"): 0.8,
-                ("short", "unstuck_threshold"): 0.8,
+                ("long", "unstuck_ema_span_0_minutes"): 10.0,
+                ("long", "unstuck_ema_span_1_minutes"): 20.0,
+                ("long", "unstuck_ema_distance_fraction"): 0.02,
+                ("short", "unstuck_ema_distance_fraction"): 0.02,
+                ("long", "unstuck_loss_allowance_fraction"): 0.02,
+                ("short", "unstuck_loss_allowance_fraction"): 0.0,
+                ("long", "unstuck_close_fraction"): 0.5,
+                ("short", "unstuck_close_fraction"): 0.5,
+                ("long", "unstuck_exposure_trigger_ratio"): 0.8,
+                ("short", "unstuck_exposure_trigger_ratio"): 0.8,
                 ("long", "entry_grid_reentry_qty_multiplier"): 1.0,
                 ("short", "entry_grid_reentry_qty_multiplier"): 1.0,
                 ("long", "entry_grid_threshold_base_fraction"): 0.01,
@@ -6709,8 +6709,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "close_log_range_1h_coefficient"): 0.0,
                 ("long", "close_log_range_1m_coefficient"): 0.0,
                 ("short", "close_log_range_1m_coefficient"): 0.0,
-                ("long", "risk_wel_enforcer_threshold"): 0.0,
-                ("short", "risk_wel_enforcer_threshold"): 0.0,
+                ("long", "risk_wel_enforcer_threshold_ratio"): 0.0,
+                ("short", "risk_wel_enforcer_threshold_ratio"): 0.0,
             }
             span2 = float((10.0 * 20.0) ** 0.5)
             self._monitor_runtime_market_hints = {}
@@ -6819,9 +6819,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "status": "ok",
                     "allowance": -20.0,
                     "peak": 1100.0,
-                    "pct_from_peak": -9.1,
-                    "loss_allowance_pct": 0.02,
-                    "override_loss_allowance_pcts": {"BTC/USDT:USDT": 0.005},
+                    "change_from_peak_percent": -9.1,
+                    "loss_allowance_fraction": 0.02,
+                    "override_loss_allowance_fractions": {"BTC/USDT:USDT": 0.005},
                     "override_allowances": {"BTC/USDT:USDT": -44.75},
                 }
             return {"status": "disabled"}
@@ -6844,8 +6844,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     payloads.append(
                         {
                             "enabled": min_cost_flags[symbol],
-                            "volume_score": 100.0,
-                            "volatility_score": 0.03,
+                            "volume_ema": 100.0,
+                            "log_range_ema": 0.03,
                             "bid": 100500.0,
                             "ask": 100500.0,
                             "ema_lower": 100200.0,
@@ -6857,8 +6857,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     payloads.append(
                         {
                             "enabled": min_cost_flags[symbol],
-                            "volume_score": 120.0,
-                            "volatility_score": 0.05,
+                            "volume_ema": 120.0,
+                            "log_range_ema": 0.05,
                             "bid": 2500.0,
                             "ask": 2500.0,
                             "ema_lower": 2550.0,
@@ -6972,7 +6972,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["forager"]["long"]["next_entry_trigger_price"] == pytest.approx(
         2550.0 * 0.99
     )
-    assert snapshot["forager"]["long"]["next_entry_distance_ratio"] == pytest.approx(
+    assert snapshot["forager"]["long"]["next_entry_price_gap_fraction"] == pytest.approx(
         2500.0 / (2550.0 * 0.99) - 1.0
     )
     assert (
@@ -6980,7 +6980,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         == "ETH/USDT:USDT"
     )
     assert (
-        snapshot["forager"]["long"]["ranking"]["top_volatility"]["symbol"]
+        snapshot["forager"]["long"]["ranking"]["top_log_range"]["symbol"]
         == "ETH/USDT:USDT"
     )
     assert (
@@ -6991,7 +6991,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
     assert snapshot["unstuck"]["sides"]["long"]["allowance_live"] == pytest.approx(0.0)
     assert snapshot["unstuck"]["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
-    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_pcts"] == {
+    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005)
     }
     assert snapshot["unstuck"]["sides"]["long"]["override_allowances"] == {
@@ -7002,10 +7002,10 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         101000.0
     )
     assert snapshot["unstuck"]["sides"]["long"][
-        "next_target_distance_ratio"
+        "next_target_price_offset_fraction"
     ] == pytest.approx(101000.0 / 100500.0 - 1.0)
     assert snapshot["unstuck"]["sides"]["long"][
-        "next_unstuck_trigger_distance_ratio"
+        "next_unstuck_trigger_price_offset_fraction"
     ] == pytest.approx((100600.0 * 1.02) / 100500.0 - 1.0)
     assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
     assert (
@@ -7529,26 +7529,26 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
                 "min_qty": 0.1,
                 "min_cost": 1.0,
                 "c_mult": 1.0,
-                "maker_fee": 0.0002,
-                "taker_fee": 0.00055,
+                "maker_fee_fraction": 0.0002,
+                "taker_fee_fraction": 0.00055,
             }
 
         def _bot_params_to_rust_dict(self, pside, requested_symbol):
             assert pside == "long"
             assert requested_symbol == symbol
             return {
-                "wallet_exposure_limit": 0.5,
-                "total_wallet_exposure_limit": 1.5,
+                "wallet_exposure_limit_ratio": 0.5,
+                "total_wallet_exposure_limit_ratio": 1.5,
                 "n_positions": 3,
-                "risk_we_excess_allowance_pct": 0.66,
+                "risk_we_excess_allowance_fraction": 0.66,
                 "risk_wel_enforcer_enabled": False,
-                "risk_wel_enforcer_threshold": 1.0,
+                "risk_wel_enforcer_threshold_ratio": 1.0,
             }
 
         def bp(self, pside, key, requested_symbol):
             assert pside == "long"
             assert requested_symbol == symbol
-            assert key == "wallet_exposure_limit"
+            assert key == "wallet_exposure_limit_ratio"
             return 0.5
 
     payload = monitor_mod._build_monitor_trailing_close_payload(
@@ -7656,12 +7656,12 @@ def test_monitor_ema_families_are_independent(missing_family):
     values = {
         "entry_ema_span_0_minutes": 10.0,
         "entry_ema_span_1_minutes": 40.0,
-        "unstuck_ema_span_0": 100.0,
-        "unstuck_ema_span_1": 400.0,
+        "unstuck_ema_span_0_minutes": 100.0,
+        "unstuck_ema_span_1_minutes": 400.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
         "entry_initial_ema_distance_fraction": 0.01,
-        "unstuck_ema_dist": 0.02,
+        "unstuck_ema_distance_fraction": 0.02,
     }
     bot = SimpleNamespace(bp=lambda side, key, symbol: values[key])
     emas = {
@@ -7725,16 +7725,16 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     names = ["AAA/USDT:USDT", "BBB/USDT:USDT", "ZZZ/USDT:USDT"]
     weights = {
         "volume": volume_weight,
-        "volatility": 0.0,
+        "log_range": 0.0,
         "ema_readiness": 0.0,
         "unilateralness": 1.0 - volume_weight,
     }
     params = {
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
         "filter_volatility_drop_pct": volatility_drop_pct,
-        "unilateralness_ema_span_1m": 60.0,
+        "unilateralness_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     for symbol, score, volume in zip(symbols, [0.9, -0.1, 0.6], [900.0, 100.0, 600.0]):
@@ -7785,7 +7785,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "unilateralness_ema_span_1m" else volatility_drop_pct)
+            else (60.0 if key == "unilateralness_ema_span_minutes" else volatility_drop_pct)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,
@@ -7811,7 +7811,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     assert calls == []  # Rendering diagnostics performs no feature fetch/recalculation.
     # A config change cannot relabel the previous selection with a new span.
     original = bot.bot_value
-    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_1m" else original(s, key)
+    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_minutes" else original(s, key)
     assert "ranking" not in (await monitor._build_monitor_forager_section(bot))[side]
     bot.bot_value = original
     # No scoring diagnostic means no fabricated or retained legacy total.

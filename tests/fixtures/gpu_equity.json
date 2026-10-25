@@ -12,63 +12,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         }
       }
     },
@@ -89,63 +89,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 0.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 0.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 0.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 0.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 0.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 0.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 0.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 0.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -167,63 +167,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0999999999999999,
-        "adg_strategy_eq": 0.02469507659595993,
-        "adg_time_integrated_strategy_eq": 0.0999999999999999,
-        "calmar_ratio_strategy_eq": 24695076595.95993,
-        "expected_shortfall_1pct_strategy_eq": 0.1,
-        "mdg_strategy_eq": 0.1,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 1.0,
-        "sharpe_ratio_strategy_eq": 0.3279344228724765,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 24695076595.95993
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0999999999999999,
+        "adg_fraction_strategy_equity": 0.02469507659595993,
+        "adg_time_integrated_fraction_strategy_equity": 0.0999999999999999,
+        "calmar_ratio_strategy_equity": 24695076595.95993,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.1,
+        "mdg_fraction_strategy_equity": 0.1,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 1.0,
+        "sharpe_ratio_strategy_equity": 0.3279344228724765,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 24695076595.95993
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.0999999999999999,
-        "adg_strategy_eq": 0.02469507659595993,
-        "adg_time_integrated_strategy_eq": 0.0999999999999999,
-        "calmar_ratio_strategy_eq": 24695076595.95993,
-        "expected_shortfall_1pct_strategy_eq": 0.1,
-        "mdg_strategy_eq": 0.1,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 1.0,
-        "sharpe_ratio_strategy_eq": 0.3279344228724765,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 24695076595.95993
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0999999999999999,
+        "adg_fraction_strategy_equity": 0.02469507659595993,
+        "adg_time_integrated_fraction_strategy_equity": 0.0999999999999999,
+        "calmar_ratio_strategy_equity": 24695076595.95993,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.1,
+        "mdg_fraction_strategy_equity": 0.1,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 1.0,
+        "sharpe_ratio_strategy_equity": 0.3279344228724765,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 24695076595.95993
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         }
       }
     },
@@ -246,63 +246,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.004987562112088923,
-        "adg_strategy_eq": 0.012075810048145286,
-        "adg_time_integrated_strategy_eq": 0.0514210946729658,
-        "calmar_ratio_strategy_eq": 0.1475932339217757,
-        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
-        "mdg_strategy_eq": 0.009090909090909094,
-        "omega_ratio_strategy_eq": 1.2222222222222223,
-        "positive_gain_participation_strategy_eq": 0.5,
-        "sharpe_ratio_strategy_eq": 0.13276236653116577,
-        "sortino_ratio_strategy_eq": 0.1475932339217757,
-        "sterling_ratio_strategy_eq": 0.1475932339217757
+        "adg_rolling_hmean_fraction_strategy_equity": 0.004987562112088923,
+        "adg_fraction_strategy_equity": 0.012075810048145286,
+        "adg_time_integrated_fraction_strategy_equity": 0.0514210946729658,
+        "calmar_ratio_strategy_equity": 0.1475932339217757,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.08181818181818182,
+        "mdg_fraction_strategy_equity": 0.009090909090909094,
+        "omega_ratio_strategy_equity": 1.2222222222222223,
+        "positive_log_return_participation_score_strategy_equity": 0.5,
+        "sharpe_ratio_strategy_equity": 0.13276236653116577,
+        "sortino_ratio_strategy_equity": 0.1475932339217757,
+        "sterling_ratio_strategy_equity": 0.1475932339217757
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.004987562112088923,
-        "adg_strategy_eq": 0.012075810048145286,
-        "adg_time_integrated_strategy_eq": 0.0514210946729658,
-        "calmar_ratio_strategy_eq": 0.1475932339217757,
-        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
-        "mdg_strategy_eq": 0.009090909090909094,
-        "omega_ratio_strategy_eq": 1.2222222222222223,
-        "positive_gain_participation_strategy_eq": 0.5,
-        "sharpe_ratio_strategy_eq": 0.13276236653116577,
-        "sortino_ratio_strategy_eq": 0.1475932339217757,
-        "sterling_ratio_strategy_eq": 0.1475932339217757
+        "adg_rolling_hmean_fraction_strategy_equity": 0.004987562112088923,
+        "adg_fraction_strategy_equity": 0.012075810048145286,
+        "adg_time_integrated_fraction_strategy_equity": 0.0514210946729658,
+        "calmar_ratio_strategy_equity": 0.1475932339217757,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.08181818181818182,
+        "mdg_fraction_strategy_equity": 0.009090909090909094,
+        "omega_ratio_strategy_equity": 1.2222222222222223,
+        "positive_log_return_participation_score_strategy_equity": 0.5,
+        "sharpe_ratio_strategy_equity": 0.13276236653116577,
+        "sortino_ratio_strategy_equity": 0.1475932339217757,
+        "sterling_ratio_strategy_equity": 0.1475932339217757
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 19.0,
-          "equity_jerkiness_usd": 0.1832797427652733,
-          "exponential_fit_error_usd": 0.001813425516139236
+          "equity_choppiness_ratio_usd": 19.0,
+          "equity_jerkiness_ratio_usd": 0.1832797427652733,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.001813425516139236
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 19.0,
-          "equity_jerkiness_usd": 0.1832797427652733,
-          "exponential_fit_error_usd": 0.001813425516139236
+          "equity_choppiness_ratio_usd": 19.0,
+          "equity_jerkiness_ratio_usd": 0.1832797427652733,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.001813425516139236
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 19.0,
-          "equity_jerkiness_usd": 0.1832797427652733,
-          "exponential_fit_error_usd": 0.001813425516139236
+          "equity_choppiness_ratio_usd": 19.0,
+          "equity_jerkiness_ratio_usd": 0.1832797427652733,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.001813425516139236
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 19.0,
-          "equity_jerkiness_usd": 0.1832797427652733,
-          "exponential_fit_error_usd": 0.001813425516139236
+          "equity_choppiness_ratio_usd": 19.0,
+          "equity_jerkiness_ratio_usd": 0.1832797427652733,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.001813425516139236
         }
       }
     },
@@ -327,63 +327,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0415804373065589,
-        "adg_strategy_eq": 0.0194265469082735,
-        "adg_time_integrated_strategy_eq": 0.03766288828904799,
-        "calmar_ratio_strategy_eq": 0.23743557332334278,
-        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
-        "mdg_strategy_eq": 0.1,
-        "omega_ratio_strategy_eq": 2.6743674367436743,
-        "positive_gain_participation_strategy_eq": 0.6622472598081476,
-        "sharpe_ratio_strategy_eq": 0.20623009446549231,
-        "sortino_ratio_strategy_eq": 0.23743557332334278,
-        "sterling_ratio_strategy_eq": 0.23743557332334278
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0415804373065589,
+        "adg_fraction_strategy_equity": 0.0194265469082735,
+        "adg_time_integrated_fraction_strategy_equity": 0.03766288828904799,
+        "calmar_ratio_strategy_equity": 0.23743557332334278,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.08181818181818182,
+        "mdg_fraction_strategy_equity": 0.1,
+        "omega_ratio_strategy_equity": 2.6743674367436743,
+        "positive_log_return_participation_score_strategy_equity": 0.6622472598081476,
+        "sharpe_ratio_strategy_equity": 0.20623009446549231,
+        "sortino_ratio_strategy_equity": 0.23743557332334278,
+        "sterling_ratio_strategy_equity": 0.23743557332334278
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.0415804373065589,
-        "adg_strategy_eq": 0.0194265469082735,
-        "adg_time_integrated_strategy_eq": 0.03766288828904799,
-        "calmar_ratio_strategy_eq": 0.23743557332334278,
-        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
-        "mdg_strategy_eq": 0.1,
-        "omega_ratio_strategy_eq": 2.6743674367436743,
-        "positive_gain_participation_strategy_eq": 0.6622472598081476,
-        "sharpe_ratio_strategy_eq": 0.20623009446549231,
-        "sortino_ratio_strategy_eq": 0.23743557332334278,
-        "sterling_ratio_strategy_eq": 0.23743557332334278
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0415804373065589,
+        "adg_fraction_strategy_equity": 0.0194265469082735,
+        "adg_time_integrated_fraction_strategy_equity": 0.03766288828904799,
+        "calmar_ratio_strategy_equity": 0.23743557332334278,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.08181818181818182,
+        "mdg_fraction_strategy_equity": 0.1,
+        "omega_ratio_strategy_equity": 2.6743674367436743,
+        "positive_log_return_participation_score_strategy_equity": 0.6622472598081476,
+        "sharpe_ratio_strategy_equity": 0.20623009446549231,
+        "sortino_ratio_strategy_equity": 0.23743557332334278,
+        "sterling_ratio_strategy_equity": 0.23743557332334278
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 2.3846153846153846,
-          "equity_jerkiness_usd": 0.1888620936048589,
-          "exponential_fit_error_usd": 0.0018068309502549153
+          "equity_choppiness_ratio_usd": 2.3846153846153846,
+          "equity_jerkiness_ratio_usd": 0.1888620936048589,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0018068309502549153
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 2.3846153846153846,
-          "equity_jerkiness_usd": 0.1888620936048589,
-          "exponential_fit_error_usd": 0.0018068309502549153
+          "equity_choppiness_ratio_usd": 2.3846153846153846,
+          "equity_jerkiness_ratio_usd": 0.1888620936048589,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0018068309502549153
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 2.3846153846153846,
-          "equity_jerkiness_usd": 0.1888620936048589,
-          "exponential_fit_error_usd": 0.0018068309502549153
+          "equity_choppiness_ratio_usd": 2.3846153846153846,
+          "equity_jerkiness_ratio_usd": 0.1888620936048589,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0018068309502549153
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 2.3846153846153846,
-          "equity_jerkiness_usd": 0.1888620936048589,
-          "exponential_fit_error_usd": 0.0018068309502549153
+          "equity_choppiness_ratio_usd": 2.3846153846153846,
+          "equity_jerkiness_ratio_usd": 0.1888620936048589,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0018068309502549153
         }
       }
     },
@@ -420,63 +420,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.06726885931119558,
-        "adg_strategy_eq": 0.03341794844502832,
-        "adg_time_integrated_strategy_eq": 0.06730636030334869,
-        "calmar_ratio_strategy_eq": 0.050126922667542484,
-        "expected_shortfall_1pct_strategy_eq": 0.03,
-        "mdg_strategy_eq": 0.0782608695652174,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.9520986004253641,
-        "sharpe_ratio_strategy_eq": 1.0490614364504967,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.050126922667542484
+        "adg_rolling_hmean_fraction_strategy_equity": 0.06726885931119558,
+        "adg_fraction_strategy_equity": 0.03341794844502832,
+        "adg_time_integrated_fraction_strategy_equity": 0.06730636030334869,
+        "calmar_ratio_strategy_equity": 0.050126922667542484,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.03,
+        "mdg_fraction_strategy_equity": 0.0782608695652174,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.9520986004253641,
+        "sharpe_ratio_strategy_equity": 1.0490614364504967,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.050126922667542484
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.06726885931119558,
-        "adg_strategy_eq": 0.03341794844502832,
-        "adg_time_integrated_strategy_eq": 0.06730636030334869,
-        "calmar_ratio_strategy_eq": 0.050126922667542484,
-        "expected_shortfall_1pct_strategy_eq": 0.03,
-        "mdg_strategy_eq": 0.0782608695652174,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.9520986004253641,
-        "sharpe_ratio_strategy_eq": 1.0490614364504967,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.050126922667542484
+        "adg_rolling_hmean_fraction_strategy_equity": 0.06726885931119558,
+        "adg_fraction_strategy_equity": 0.03341794844502832,
+        "adg_time_integrated_fraction_strategy_equity": 0.06730636030334869,
+        "calmar_ratio_strategy_equity": 0.050126922667542484,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.03,
+        "mdg_fraction_strategy_equity": 0.0782608695652174,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.9520986004253641,
+        "sharpe_ratio_strategy_equity": 1.0490614364504967,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.050126922667542484
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.030953444967272155,
-          "exponential_fit_error_usd": 4.797945973943615e-05
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.030953444967272155,
+          "exponential_fit_mse_log_ratio_squared_usd": 4.797945973943615e-05
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.030953444967272155,
-          "exponential_fit_error_usd": 4.797945973943615e-05
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.030953444967272155,
+          "exponential_fit_mse_log_ratio_squared_usd": 4.797945973943615e-05
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.030953444967272155,
-          "exponential_fit_error_usd": 4.797945973943615e-05
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.030953444967272155,
+          "exponential_fit_mse_log_ratio_squared_usd": 4.797945973943615e-05
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.030953444967272155,
-          "exponential_fit_error_usd": 4.797945973943615e-05
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.030953444967272155,
+          "exponential_fit_mse_log_ratio_squared_usd": 4.797945973943615e-05
         }
       }
     },
@@ -517,63 +517,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.03675809298100438,
-        "adg_strategy_eq": 0.02228531706191883,
-        "adg_time_integrated_strategy_eq": 0.0376024149816296,
-        "calmar_ratio_strategy_eq": 0.05199907314447727,
-        "expected_shortfall_1pct_strategy_eq": 0.4,
-        "mdg_strategy_eq": 0.036709606803064745,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.998373621829335,
-        "sharpe_ratio_strategy_eq": 0.05035143610413851,
-        "sortino_ratio_strategy_eq": 0.055713292654797075,
-        "sterling_ratio_strategy_eq": 0.05199907314447727
+        "adg_rolling_hmean_fraction_strategy_equity": 0.03675809298100438,
+        "adg_fraction_strategy_equity": 0.02228531706191883,
+        "adg_time_integrated_fraction_strategy_equity": 0.0376024149816296,
+        "calmar_ratio_strategy_equity": 0.05199907314447727,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.4,
+        "mdg_fraction_strategy_equity": 0.036709606803064745,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.998373621829335,
+        "sharpe_ratio_strategy_equity": 0.05035143610413851,
+        "sortino_ratio_strategy_equity": 0.055713292654797075,
+        "sterling_ratio_strategy_equity": 0.05199907314447727
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.03675809298100438,
-        "adg_strategy_eq": 0.02228531706191883,
-        "adg_time_integrated_strategy_eq": 0.0376024149816296,
-        "calmar_ratio_strategy_eq": 0.05199907314447727,
-        "expected_shortfall_1pct_strategy_eq": 0.4,
-        "mdg_strategy_eq": 0.036709606803064745,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.998373621829335,
-        "sharpe_ratio_strategy_eq": 0.05035143610413851,
-        "sortino_ratio_strategy_eq": 0.055713292654797075,
-        "sterling_ratio_strategy_eq": 0.05199907314447727
+        "adg_rolling_hmean_fraction_strategy_equity": 0.03675809298100438,
+        "adg_fraction_strategy_equity": 0.02228531706191883,
+        "adg_time_integrated_fraction_strategy_equity": 0.0376024149816296,
+        "calmar_ratio_strategy_equity": 0.05199907314447727,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.4,
+        "mdg_fraction_strategy_equity": 0.036709606803064745,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.998373621829335,
+        "sharpe_ratio_strategy_equity": 0.05035143610413851,
+        "sortino_ratio_strategy_equity": 0.055713292654797075,
+        "sterling_ratio_strategy_equity": 0.05199907314447727
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 1.1879751147550113e-06
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.1879751147550113e-06
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 1.1879751147550113e-06
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.1879751147550113e-06
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 1.1879751147550113e-06
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.1879751147550113e-06
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 1.1879751147550113e-06
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.1879751147550113e-06
         }
       }
     },
@@ -598,63 +598,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": -0.14409383349505134,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": -0.09906451052784779,
-        "expected_shortfall_1pct_strategy_eq": 1.495049504950495,
-        "mdg_strategy_eq": -0.08181818181818182,
-        "omega_ratio_strategy_eq": 0.06341686169301901,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": -0.18161126419201898,
-        "sortino_ratio_strategy_eq": -0.13609916110453252,
-        "sterling_ratio_strategy_eq": -0.09906451052784779
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": -0.14409383349505134,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": -0.09906451052784779,
+        "expected_shortfall_1pct_fraction_strategy_equity": 1.495049504950495,
+        "mdg_fraction_strategy_equity": -0.08181818181818182,
+        "omega_ratio_strategy_equity": 0.06341686169301901,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": -0.18161126419201898,
+        "sortino_ratio_strategy_equity": -0.13609916110453252,
+        "sterling_ratio_strategy_equity": -0.09906451052784779
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": -0.14409383349505134,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": -0.09906451052784779,
-        "expected_shortfall_1pct_strategy_eq": 1.495049504950495,
-        "mdg_strategy_eq": -0.08181818181818182,
-        "omega_ratio_strategy_eq": 0.06341686169301901,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": -0.18161126419201898,
-        "sortino_ratio_strategy_eq": -0.13609916110453252,
-        "sterling_ratio_strategy_eq": -0.09906451052784779
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": -0.14409383349505134,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": -0.09906451052784779,
+        "expected_shortfall_1pct_fraction_strategy_equity": 1.495049504950495,
+        "mdg_fraction_strategy_equity": -0.08181818181818182,
+        "omega_ratio_strategy_equity": 0.06341686169301901,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": -0.18161126419201898,
+        "sortino_ratio_strategy_equity": -0.13609916110453252,
+        "sterling_ratio_strategy_equity": -0.09906451052784779
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.1333333333333333,
-          "equity_jerkiness_usd": 1.4146212378422642,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.1333333333333333,
+          "equity_jerkiness_ratio_usd": 1.4146212378422642,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.1333333333333333,
-          "equity_jerkiness_usd": 1.4146212378422642,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.1333333333333333,
+          "equity_jerkiness_ratio_usd": 1.4146212378422642,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.1333333333333333,
-          "equity_jerkiness_usd": 1.4146212378422642,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.1333333333333333,
+          "equity_jerkiness_ratio_usd": 1.4146212378422642,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.1333333333333333,
-          "equity_jerkiness_usd": 1.4146212378422642,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.1333333333333333,
+          "equity_jerkiness_ratio_usd": 1.4146212378422642,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -681,63 +681,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.5,
-        "mdg_strategy_eq": 1.0,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": null,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.5,
+        "mdg_fraction_strategy_equity": 1.0,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": null,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.5,
-        "mdg_strategy_eq": 1.0,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": null,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.5,
+        "mdg_fraction_strategy_equity": 1.0,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": null,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.4,
-          "equity_jerkiness_usd": 0.9535714285714286,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.4,
+          "equity_jerkiness_ratio_usd": 0.9535714285714286,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.4,
-          "equity_jerkiness_usd": 0.9535714285714286,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.4,
+          "equity_jerkiness_ratio_usd": 0.9535714285714286,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.4,
-          "equity_jerkiness_usd": 0.9535714285714286,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.4,
+          "equity_jerkiness_ratio_usd": 0.9535714285714286,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.4,
-          "equity_jerkiness_usd": 0.9535714285714286,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.4,
+          "equity_jerkiness_ratio_usd": 0.9535714285714286,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -770,63 +770,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -863,63 +863,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.0,
-        "adg_strategy_eq": 0.0,
-        "adg_time_integrated_strategy_eq": 0.0,
-        "calmar_ratio_strategy_eq": 0.0,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.0,
-        "omega_ratio_strategy_eq": 0.0,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 0.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.0
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0,
+        "adg_fraction_strategy_equity": 0.0,
+        "adg_time_integrated_fraction_strategy_equity": 0.0,
+        "calmar_ratio_strategy_equity": 0.0,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.0,
+        "omega_ratio_strategy_equity": 0.0,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 0.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.0
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 0.0
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 0.0
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 0.0
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": "positive_infinity",
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 0.0
+          "equity_choppiness_ratio_usd": "positive_infinity",
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.0
         }
       }
     },
@@ -946,63 +946,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": 1.166240842748072,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": 58.312042137403594,
-        "expected_shortfall_1pct_strategy_eq": 0.02,
-        "mdg_strategy_eq": 0.1,
-        "omega_ratio_strategy_eq": 100.49999999999999,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 1.307259253714246,
-        "sortino_ratio_strategy_eq": 58.312042137403594,
-        "sterling_ratio_strategy_eq": 58.312042137403594
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": 1.166240842748072,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": 58.312042137403594,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.02,
+        "mdg_fraction_strategy_equity": 0.1,
+        "omega_ratio_strategy_equity": 100.49999999999999,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 1.307259253714246,
+        "sortino_ratio_strategy_equity": 58.312042137403594,
+        "sterling_ratio_strategy_equity": 58.312042137403594
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": 1.1662408474832393,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": 58.312043397440945,
-        "expected_shortfall_1pct_strategy_eq": 0.0199999996490334,
-        "mdg_strategy_eq": 0.099999998245167,
-        "omega_ratio_strategy_eq": 100.50000135525273,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": 1.3072592520881774,
-        "sortino_ratio_strategy_eq": 58.312043397440945,
-        "sterling_ratio_strategy_eq": 58.312043397440945
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": 1.1662408474832393,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": 58.312043397440945,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0199999996490334,
+        "mdg_fraction_strategy_equity": 0.099999998245167,
+        "omega_ratio_strategy_equity": 100.50000135525273,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": 1.3072592520881774,
+        "sortino_ratio_strategy_equity": 58.312043397440945,
+        "sterling_ratio_strategy_equity": 58.312043397440945
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.020100502512563,
-          "equity_jerkiness_usd": 2.0696480938416424,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.020100502512563,
+          "equity_jerkiness_ratio_usd": 2.0696480938416424,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.020100502512563,
-          "equity_jerkiness_usd": 2.0696480938416424,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.020100502512563,
+          "equity_jerkiness_ratio_usd": 2.0696480938416424,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0201005022387812,
-          "equity_jerkiness_usd": 2.0696480960444337,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.0201005022387812,
+          "equity_jerkiness_ratio_usd": 2.0696480960444337,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0201005022387812,
-          "equity_jerkiness_usd": 2.0696480960444337,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.0201005022387812,
+          "equity_jerkiness_ratio_usd": 2.0696480960444337,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -1029,63 +1029,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.2,
-        "mdg_strategy_eq": 0.3333333333333333,
-        "omega_ratio_strategy_eq": 6.085470085470085,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": null,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.2,
+        "mdg_fraction_strategy_equity": 0.3333333333333333,
+        "omega_ratio_strategy_equity": 6.085470085470085,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": null,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": -1.0,
-        "adg_strategy_eq": null,
-        "adg_time_integrated_strategy_eq": -1.0,
-        "calmar_ratio_strategy_eq": null,
-        "expected_shortfall_1pct_strategy_eq": 0.2,
-        "mdg_strategy_eq": 0.3333333333333333,
-        "omega_ratio_strategy_eq": 6.085470085470085,
-        "positive_gain_participation_strategy_eq": 0.0,
-        "sharpe_ratio_strategy_eq": null,
-        "sortino_ratio_strategy_eq": null,
-        "sterling_ratio_strategy_eq": null
+        "adg_rolling_hmean_fraction_strategy_equity": -1.0,
+        "adg_fraction_strategy_equity": null,
+        "adg_time_integrated_fraction_strategy_equity": -1.0,
+        "calmar_ratio_strategy_equity": null,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.2,
+        "mdg_fraction_strategy_equity": 0.3333333333333333,
+        "omega_ratio_strategy_equity": 6.085470085470085,
+        "positive_log_return_participation_score_strategy_equity": 0.0,
+        "sharpe_ratio_strategy_equity": null,
+        "sortino_ratio_strategy_equity": null,
+        "sterling_ratio_strategy_equity": null
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.5454545454545454,
-          "equity_jerkiness_usd": 0.565149505666747,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.5454545454545454,
+          "equity_jerkiness_ratio_usd": 0.565149505666747,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.5454545454545454,
-          "equity_jerkiness_usd": 0.565149505666747,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.5454545454545454,
+          "equity_jerkiness_ratio_usd": 0.565149505666747,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.5454545454545454,
-          "equity_jerkiness_usd": 0.565149505666747,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.5454545454545454,
+          "equity_jerkiness_ratio_usd": 0.565149505666747,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.5454545454545454,
-          "equity_jerkiness_usd": 0.565149505666747,
-          "exponential_fit_error_usd": "positive_infinity"
+          "equity_choppiness_ratio_usd": 1.5454545454545454,
+          "equity_jerkiness_ratio_usd": 0.565149505666747,
+          "exponential_fit_mse_log_ratio_squared_usd": "positive_infinity"
         }
       }
     },
@@ -1346,63 +1346,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.0050551469288111096,
-        "adg_strategy_eq": 0.006140401016424324,
-        "adg_time_integrated_strategy_eq": 0.0087140946529249,
-        "calmar_ratio_strategy_eq": 0.020610708590986026,
-        "expected_shortfall_1pct_strategy_eq": 0.2979008182717382,
-        "mdg_strategy_eq": 0.004608294930875576,
-        "omega_ratio_strategy_eq": 1.6002285653932729,
-        "positive_gain_participation_strategy_eq": 0.16706443126372514,
-        "sharpe_ratio_strategy_eq": 0.030669939428319835,
-        "sortino_ratio_strategy_eq": 0.020711562623453944,
-        "sterling_ratio_strategy_eq": 0.020612232796296627
+        "adg_rolling_hmean_fraction_strategy_equity": 0.0050551469288111096,
+        "adg_fraction_strategy_equity": 0.006140401016424324,
+        "adg_time_integrated_fraction_strategy_equity": 0.0087140946529249,
+        "calmar_ratio_strategy_equity": 0.020610708590986026,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.2979008182717382,
+        "mdg_fraction_strategy_equity": 0.004608294930875576,
+        "omega_ratio_strategy_equity": 1.6002285653932729,
+        "positive_log_return_participation_score_strategy_equity": 0.16706443126372514,
+        "sharpe_ratio_strategy_equity": 0.030669939428319835,
+        "sortino_ratio_strategy_equity": 0.020711562623453944,
+        "sterling_ratio_strategy_equity": 0.020612232796296627
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.00505514693580252,
-        "adg_strategy_eq": 0.006140401044462118,
-        "adg_time_integrated_strategy_eq": 0.008714094654954277,
-        "calmar_ratio_strategy_eq": 0.020610709938062983,
-        "expected_shortfall_1pct_strategy_eq": 0.2979008138399525,
-        "mdg_strategy_eq": 0.004608294930875576,
-        "omega_ratio_strategy_eq": 1.6002285636241314,
-        "positive_gain_participation_strategy_eq": 0.16706443136499513,
-        "sharpe_ratio_strategy_eq": 0.030669939722044383,
-        "sortino_ratio_strategy_eq": 0.02071156280091343,
-        "sterling_ratio_strategy_eq": 0.02061223319705684
+        "adg_rolling_hmean_fraction_strategy_equity": 0.00505514693580252,
+        "adg_fraction_strategy_equity": 0.006140401044462118,
+        "adg_time_integrated_fraction_strategy_equity": 0.008714094654954277,
+        "calmar_ratio_strategy_equity": 0.020610709938062983,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.2979008138399525,
+        "mdg_fraction_strategy_equity": 0.004608294930875576,
+        "omega_ratio_strategy_equity": 1.6002285636241314,
+        "positive_log_return_participation_score_strategy_equity": 0.16706443136499513,
+        "sharpe_ratio_strategy_equity": 0.030669939722044383,
+        "sortino_ratio_strategy_equity": 0.02071156280091343,
+        "sterling_ratio_strategy_equity": 0.02061223319705684
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 17.62081784386617,
-          "equity_jerkiness_usd": 0.19046871366235793,
-          "exponential_fit_error_usd": 0.01888184382357103
+          "equity_choppiness_ratio_usd": 17.62081784386617,
+          "equity_jerkiness_ratio_usd": 0.19046871366235793,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.01888184382357103
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 17.62081784386617,
-          "equity_jerkiness_usd": 0.19046871366235793,
-          "exponential_fit_error_usd": 0.01888184382357103
+          "equity_choppiness_ratio_usd": 17.62081784386617,
+          "equity_jerkiness_ratio_usd": 0.19046871366235793,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.01888184382357103
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 17.620817787142048,
-          "equity_jerkiness_usd": 0.1904687129211011,
-          "exponential_fit_error_usd": 0.018881843651870345
+          "equity_choppiness_ratio_usd": 17.620817787142048,
+          "equity_jerkiness_ratio_usd": 0.1904687129211011,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.018881843651870345
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 17.620817787142048,
-          "equity_jerkiness_usd": 0.1904687129211011,
-          "exponential_fit_error_usd": 0.018881843651870345
+          "equity_choppiness_ratio_usd": 17.620817787142048,
+          "equity_jerkiness_ratio_usd": 0.1904687129211011,
+          "exponential_fit_mse_log_ratio_squared_usd": 0.018881843651870345
         }
       }
     },
@@ -2923,63 +2923,63 @@
         "no_fills": []
       },
       "expected_raw_full": {
-        "adg_rolling_hmean_strategy_eq": 0.14315538323889065,
-        "adg_strategy_eq": 0.03517036840292387,
-        "adg_time_integrated_strategy_eq": 0.14315538323889065,
-        "calmar_ratio_strategy_eq": 0.16500355774923842,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.14315538323889046,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 1.0,
-        "sharpe_ratio_strategy_eq": 1.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.16500355774923842
+        "adg_rolling_hmean_fraction_strategy_equity": 0.14315538323889065,
+        "adg_fraction_strategy_equity": 0.03517036840292387,
+        "adg_time_integrated_fraction_strategy_equity": 0.14315538323889065,
+        "calmar_ratio_strategy_equity": 0.16500355774923842,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.14315538323889046,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 1.0,
+        "sharpe_ratio_strategy_equity": 1.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.16500355774923842
       },
       "expected_raw_full_f32": {
-        "adg_rolling_hmean_strategy_eq": 0.14315540361993864,
-        "adg_strategy_eq": 0.035170373325072335,
-        "adg_time_integrated_strategy_eq": 0.14315540361993864,
-        "calmar_ratio_strategy_eq": 0.1650035954683909,
-        "expected_shortfall_1pct_strategy_eq": 0.0,
-        "mdg_strategy_eq": 0.14315540361993873,
-        "omega_ratio_strategy_eq": 1000.0,
-        "positive_gain_participation_strategy_eq": 1.0,
-        "sharpe_ratio_strategy_eq": 1.0,
-        "sortino_ratio_strategy_eq": 0.0,
-        "sterling_ratio_strategy_eq": 0.1650035954683909
+        "adg_rolling_hmean_fraction_strategy_equity": 0.14315540361993864,
+        "adg_fraction_strategy_equity": 0.035170373325072335,
+        "adg_time_integrated_fraction_strategy_equity": 0.14315540361993864,
+        "calmar_ratio_strategy_equity": 0.1650035954683909,
+        "expected_shortfall_1pct_fraction_strategy_equity": 0.0,
+        "mdg_fraction_strategy_equity": 0.14315540361993873,
+        "omega_ratio_strategy_equity": 1000.0,
+        "positive_log_return_participation_score_strategy_equity": 1.0,
+        "sharpe_ratio_strategy_equity": 1.0,
+        "sortino_ratio_strategy_equity": 0.0,
+        "sterling_ratio_strategy_equity": 0.1650035954683909
       },
       "expected_account_shape": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         }
       },
       "expected_account_shape_f32": {
         "initial_fill": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         },
         "no_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 1.0,
-          "exponential_fit_error_usd": 1.0
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 1.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 1.0
         },
         "sparse_fills": {
-          "equity_choppiness_usd": 1.0,
-          "equity_jerkiness_usd": 0.0,
-          "exponential_fit_error_usd": 3.944304526105059e-31
+          "equity_choppiness_ratio_usd": 1.0,
+          "equity_jerkiness_ratio_usd": 0.0,
+          "exponential_fit_mse_log_ratio_squared_usd": 3.944304526105059e-31
         }
       }
     }

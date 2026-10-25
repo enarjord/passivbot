@@ -24,15 +24,17 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
     if hsl_mode != "coin":
         from config.hsl import generated_template
         config = generated_template(config, hsl_mode)
-        config["live"]["hsl_signal_mode"] = hsl_mode
         if hsl_mode == "portfolio":
-            config["bot"]["hsl"]["enabled"] = False
+            config["bot"]["portfolio"]["hsl"]["enabled"] = False
     count = 50
-    config["live"]["lookback_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
+    for side in ("long", "short"):
+        config["bot"][side]["enabled"] = side in sides
     for side in sides:
         bot = config["bot"][side]
         bot["risk"].update(
-            n_positions=coins,
+            max_positions=coins,
             total_wallet_exposure_limit_ratio=float(coins),
         )
         # The fixture template already carries the canonical cooldown leaf;
@@ -41,9 +43,9 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
         bot["unstuck"].update(
             enabled=True,
             ema_gating_enabled=False,
-            close_pct=0.1,
-            loss_allowance_pct=0.001,
-            threshold=0.3,
+            close_fraction=0.1,
+            loss_allowance_fraction=0.001,
+            exposure_trigger_ratio=0.3,
         )
         if strategy == "trailing_martingale":
             bot["strategy"][strategy]["entry"].update(
@@ -83,7 +85,7 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
         timestamps=timestamps,
         exchange="bybit",
         batch_size=3,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     return proxy, inputs
 
@@ -99,7 +101,11 @@ def test_native_ema_unstuck_reuses_forward_memory_without_cpu_execution(monkeypa
     from tools.gpu_parity import _native_dataset
 
     proxy, inputs = make_proxy(sides, strategy="ema_anchor", coins=coins)
-    candidates = [{}, {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002}, {}]
+    candidates = [{}, {f"{sides[0]}_unstuck_loss_allowance_fraction": 0.002}, {}]
+    allowance_column = proxy.param_keys.index("unstuck_loss_allowance_fraction")
+    np.testing.assert_array_equal(
+        proxy._parameter_matrix(candidates, sides[0])[:, allowance_column], [.001, .002, .001]
+    )
     expected = proxy.evaluate_results(candidates)
 
     def forbidden(*args, **kwargs):
@@ -110,7 +116,7 @@ def test_native_ema_unstuck_reuses_forward_memory_without_cpu_execution(monkeypa
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_strategy_eq"}) as dataset:
+                         {"adg_fraction_strategy_equity"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("finite-unstuck", dataset)
             pending = [service.submit(BacktestRequest(str(i), "finite-unstuck", values))
@@ -128,16 +134,20 @@ def test_unstuck_forward_replay_reuse_and_bounded_batches(sides, strategy):
     proxy, _ = make_proxy(sides, strategy=strategy)
     candidates = [
         {},
-        {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002},
-        {f"{sides[0]}_unstuck_loss_allowance_pct": 0.003},
+        {f"{sides[0]}_unstuck_loss_allowance_fraction": 0.002},
+        {f"{sides[0]}_unstuck_loss_allowance_fraction": 0.003},
     ]
+    matrix = proxy._parameter_matrix(candidates, sides[0])
+    allowance_column = proxy.param_keys.index("unstuck_loss_allowance_fraction")
+    np.testing.assert_array_equal(matrix[:, allowance_column], [.001, .002, .003])
     runner, expected = raw(proxy, candidates)
+    assert expected["fill_count"].unique().numel() == len(candidates)
     if len(sides) == 1 and strategy == "trailing_martingale":
         runner.max_dispatch_candidate_bars = 24
     ends = np.array([runner.n, runner.n, runner.n], dtype=np.int32)
     _, chunked = raw(proxy, candidates, end_steps=ends)
     compare(expected, chunked)
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
+    runner.hsl_scratch_budget_bytes = runner._history_batch_bytes(2)
     _, split = raw(proxy, candidates, profile=True)
     compare(expected, split)
     assert runner.last_profile["candidate_batch_count"] == 2
@@ -151,7 +161,7 @@ def test_unstuck_forward_replay_reuse_and_bounded_batches(sides, strategy):
         },
         reordered,
     )
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() - 1
+    runner.hsl_scratch_budget_bytes = runner._history_batch_bytes(1) - 1
     with pytest.raises(ValueError, match="history exceeds"):
         raw(proxy, [{}])
 

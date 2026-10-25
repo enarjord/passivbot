@@ -24,28 +24,28 @@ def _write_candidate(
     pareto_dir: Path,
     name: str,
     *,
-    adg: float,
+    adg_fraction: float,
     drawdown_mean: float,
     drawdown_max: float | None = None,
 ) -> None:
     payload = {
         "config_version": "v8.0.0",
         "backtest": {"aggregate": {"default": "max"}},
-        "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg}}},
+        "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg_fraction}}},
         "optimize": {
             "scoring": [
-                {"metric": "adg_strategy_eq", "goal": "max"},
-                {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "metrics": {
             "objectives": {
-                "adg_strategy_eq": adg,
-                "drawdown_worst_strategy_eq": drawdown_mean,
+                "adg_fraction_strategy_equity": adg_fraction,
+                "drawdown_max_fraction_strategy_equity": drawdown_mean,
             },
             "stats": {
-                "adg_strategy_eq": _metric_stats(mean=adg),
-                "drawdown_worst_strategy_eq": _metric_stats(
+                "adg_fraction_strategy_equity": _metric_stats(mean=adg_fraction),
+                "drawdown_max_fraction_strategy_equity": _metric_stats(
                     mean=drawdown_mean,
                     max_value=drawdown_max,
                 ),
@@ -62,28 +62,28 @@ def sample_pareto_dir(tmp_path: Path) -> Path:
     _write_candidate(
         pareto_dir,
         "low_drawdown_anchor",
-        adg=0.001,
+        adg_fraction=0.001,
         drawdown_mean=0.10,
         drawdown_max=0.20,
     )
     _write_candidate(
         pareto_dir,
         "adg_anchor",
-        adg=0.004,
+        adg_fraction=0.004,
         drawdown_mean=0.40,
         drawdown_max=0.80,
     )
     _write_candidate(
         pareto_dir,
         "middle",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.25,
         drawdown_max=0.60,
     )
     _write_candidate(
         pareto_dir,
         "diverse_fill",
-        adg=0.003,
+        adg_fraction=0.003,
         drawdown_mean=0.15,
         drawdown_max=0.30,
     )
@@ -97,7 +97,7 @@ def test_filters_with_effective_aggregate_then_compresses_with_anchors_farthest(
         str(sample_pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.30,
             }
@@ -162,7 +162,7 @@ def test_filtering_resolves_auto_limit_direction_like_optimizer(
         str(sample_pareto_dir),
         limits=[
             {
-                "metric": "adg_strategy_eq",
+                "metric": "adg_fraction_strategy_equity",
                 "penalize_if": "auto",
                 "value": 0.0015,
             }
@@ -207,7 +207,7 @@ def test_inside_range_filter_preserves_boundary_candidates(
         str(sample_pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "inside_range",
                 "range": [0.10, 0.25],
             }
@@ -231,7 +231,7 @@ def test_filtering_normalizes_descending_range_bounds(
         str(sample_pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "outside_range",
                 "range": [0.30, 0.10],
             }
@@ -256,7 +256,7 @@ def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
     _write_candidate(
         pareto_dir,
         "suite_candidate",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.20,
         drawdown_max=0.80,
     )
@@ -264,11 +264,11 @@ def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
         "metrics": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "aggregated": 0.002,
                 "stats": _metric_stats(mean=0.002),
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.80,
                 "stats": _metric_stats(mean=0.20, max_value=0.80),
             },
@@ -280,7 +280,7 @@ def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
         str(pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.50,
             }
@@ -299,7 +299,7 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
     _write_candidate(
         pareto_dir,
         "suite_candidate",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.50,
         drawdown_max=0.80,
     )
@@ -308,12 +308,12 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
     artifact["suite_metrics"] = {
         "scenario_labels": ["base", "stress"],
         "metrics": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "aggregated": 0.002,
                 "stats": _metric_stats(mean=0.002),
                 "scenarios": {"base": 0.002, "stress": 0.002},
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.80,
                 "stats": _metric_stats(mean=0.50, max_value=0.80),
                 "scenarios": {"base": 0.20, "stress": 0.80},
@@ -326,7 +326,7 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
         str(pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.50,
             }
@@ -348,7 +348,7 @@ def test_filtering_aggregates_metric_from_available_active_scenarios(
     _write_candidate(
         pareto_dir,
         "suite_candidate",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.20,
         drawdown_max=0.20,
     )
@@ -357,12 +357,12 @@ def test_filtering_aggregates_metric_from_available_active_scenarios(
     artifact["suite_metrics"] = {
         "scenario_labels": ["base", "stress"],
         "metrics": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "aggregated": 0.002,
                 "stats": _metric_stats(mean=0.002),
                 "scenarios": {"base": 0.002, "stress": 0.002},
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.20,
                 "stats": _metric_stats(mean=0.20),
                 "scenarios": {"base": 0.20},
@@ -375,7 +375,7 @@ def test_filtering_aggregates_metric_from_available_active_scenarios(
         str(pareto_dir),
         limits=[
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.50,
             }
@@ -395,7 +395,7 @@ def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Pat
     _write_candidate(
         pareto_dir,
         "suite_candidate",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.20,
         drawdown_max=0.20,
     )
@@ -404,12 +404,12 @@ def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Pat
     artifact["suite_metrics"] = {
         "scenario_labels": ["base"],
         "metrics": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "aggregated": 0.002,
                 "stats": _metric_stats(mean=0.002),
                 "scenarios": {"base": 0.002},
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.20,
                 "stats": _metric_stats(mean=0.20),
                 "scenarios": {"base": 0.20},
@@ -420,13 +420,13 @@ def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Pat
 
     with pytest.raises(
         ValueError,
-        match="Limit metric 'drawdown_worst_strategy_eq' could not be resolved",
+        match="Limit metric 'drawdown_max_fraction_strategy_equity' could not be resolved",
     ):
         select_starting_config_artifacts(
             str(pareto_dir),
             limits=[
                 {
-                    "metric": "drawdown_worst_strategy_eq",
+                    "metric": "drawdown_max_fraction_strategy_equity",
                     "penalize_if": "greater_than",
                     "value": 0.50,
                 }
@@ -446,7 +446,7 @@ def test_filtering_rejects_suite_artifact_missing_effective_aggregate_stat(
     _write_candidate(
         pareto_dir,
         "incomplete_suite_candidate",
-        adg=0.002,
+        adg_fraction=0.002,
         drawdown_mean=0.20,
         drawdown_max=0.20,
     )
@@ -455,8 +455,8 @@ def test_filtering_rejects_suite_artifact_missing_effective_aggregate_stat(
     artifact["suite_metrics"] = {
         "aggregate": {
             "aggregated": {
-                "adg_strategy_eq": 0.002,
-                "drawdown_worst_strategy_eq": 0.20,
+                "adg_fraction_strategy_equity": 0.002,
+                "drawdown_max_fraction_strategy_equity": 0.20,
             }
         }
     }
@@ -464,13 +464,13 @@ def test_filtering_rejects_suite_artifact_missing_effective_aggregate_stat(
 
     with pytest.raises(
         ValueError,
-        match="Limit metric 'drawdown_worst_strategy_eq' could not be resolved",
+        match="Limit metric 'drawdown_max_fraction_strategy_equity' could not be resolved",
     ):
         select_starting_config_artifacts(
             str(pareto_dir),
             limits=[
                 {
-                    "metric": "drawdown_worst_strategy_eq",
+                    "metric": "drawdown_max_fraction_strategy_equity",
                     "penalize_if": "greater_than",
                     "value": 0.50,
                 }
@@ -562,7 +562,7 @@ def test_metric_preselection_fails_when_all_candidates_are_filtered(
             str(sample_pareto_dir),
             limits=[
                 {
-                    "metric": "adg_strategy_eq",
+                    "metric": "adg_fraction_strategy_equity",
                     "penalize_if": "less_than_or_equal",
                     "value": 1.0,
                 }

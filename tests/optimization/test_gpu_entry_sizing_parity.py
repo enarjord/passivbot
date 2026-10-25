@@ -12,10 +12,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fixture(side, coin_count, entry_kind):
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
     coins = ["BTC", "ETH"][:coin_count]
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']["portfolio"]['strategy_kind'] = 'trailing_martingale'
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
@@ -25,10 +25,13 @@ def _fixture(side, coin_count, entry_kind):
     )
     for direction in ("long", "short"):
         bot = config["bot"][direction]
+        bot["enabled"] = direction == side
+        bot["universe"]["minimum_coin_age_days"] = 0.0
+        bot["universe"]["filter_by_min_effective_cost"] = False
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
-        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
             ema_span_0_minutes=2.0,
@@ -101,7 +104,7 @@ def _evaluate(side, inputs):
         timestamps=timestamps,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     outputs = []
     runner = proxy.runners[side]
@@ -178,7 +181,7 @@ def test_flat_selection_tracks_readiness_without_fills(side):
 def test_partial_initial_top_up_preserves_venue_steps(side, coin_count, retracement, case):
     config, candles, mss, btc, timestamps = _fixture(side, coin_count, "initial")
     config["backtest"].update(starting_balance=case["balance"],
-                             maker_fee_override=0.0, taker_fee_override=0.0)
+                             maker_fee_override_fraction=0.0, taker_fee_override_fraction=0.0)
     config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = case["wel"] * coin_count
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=case["initial_pct"], threshold_base_fraction=0.5,
@@ -273,8 +276,8 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = market_allowed
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = near_touch
-    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=0.1, threshold_base_fraction=0.01 if ladder == "entry" else 0.5,
                              retracement_base_fraction=0.0, reentry_qty_multiplier=1.0,
@@ -331,8 +334,8 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
-    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     bot = config["bot"][side]
     bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0,
                        total_exposure_entry_gate_enabled=entry_gate)
@@ -447,8 +450,8 @@ kernel void retracement_close_probe(constant float* values, device float* output
 def _decimal_boundary_inputs(side, coin_count, *, price, balance, initial_pct, qty_step,
                              factor, threshold, low, high):
     config, candles, markets, _, timestamps = _fixture(side, coin_count, "initial")
-    config["backtest"].update(starting_balance=balance, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=balance, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=initial_pct, threshold_base_fraction=threshold,
         retracement_base_fraction=0.0, reentry_qty_multiplier=factor, threshold_exposure_ratio_coefficient=0.0,

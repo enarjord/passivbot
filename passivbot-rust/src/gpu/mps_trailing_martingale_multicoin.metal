@@ -250,7 +250,7 @@ struct TmCloseGridContext {
     int max_rungs;
     float generation_market_price;
     bool market_orders_allowed;
-    float market_order_near_touch_threshold;
+    float market_order_near_touch_fraction;
     float market_resize_psize;
 };
 
@@ -357,7 +357,7 @@ inline void finalize_tm_close_grid_group(
     group.market = should_use_ordinary_market_execution(
         group.ticks, context.short_side, context.generation_market_price,
         context.price_step, context.market_orders_allowed,
-        context.market_order_near_touch_threshold
+        context.market_order_near_touch_fraction
     );
     if (group.market) {
         group.qty = resize_market_close_qty(
@@ -518,8 +518,8 @@ struct TrailingMartingaleMulticoinSideState {
     float volatility_1h[MAX_COINS];
     AdaptiveTiming adaptive[MAX_COINS];
     float effective_cooldown[MAX_COINS];
-    float forager_volume[MAX_COINS];
-    float forager_volatility[MAX_COINS];
+    float forager_volume_ema[MAX_COINS];
+    float forager_log_range_ema[MAX_COINS];
     float psize[MAX_COINS];
     float pprice[MAX_COINS];
     int pprice_tick[MAX_COINS];
@@ -968,28 +968,28 @@ struct TrailingMartingaleMulticoinSideConfig {
     float twel;
     bool gate_initial;
     bool gate_reentry;
-    float forager_volume_span;
-    float forager_volatility_span;
+    float forager_volume_ema_span_candles;
+    float forager_log_range_ema_span_candles;
     float w_volume;
     float w_ready;
-    float w_volatility;
+    float w_log_range;
     int n_positions;
-    float allowance_pct;
+    float allowance_fraction;
     bool scale_hsl_budget;
     bool twel_entry_gate_enabled;
     float twel_threshold;
     bool wel_enforcer_enabled;
-    float wel_enforcer_threshold;
+    float wel_enforcer_threshold_ratio;
     bool twel_enforcer_enabled;
     bool twel_enforcer_reduce_portfolio;
     bool unstuck_enabled;
     bool unstuck_ema_gating_enabled;
-    float unstuck_close_pct;
-    float unstuck_ema_dist;
-    float unstuck_loss_allowance_pct;
-    float unstuck_threshold;
+    float unstuck_close_fraction;
+    float unstuck_ema_distance_fraction;
+    float unstuck_loss_allowance_fraction;
+    float unstuck_exposure_trigger_ratio;
     float alpha_forager_volume;
-    float alpha_forager_volatility;
+    float alpha_forager_log_range;
     HslState hsl_template;
     bool coin_hsl_mode;
 };
@@ -1111,7 +1111,7 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
     float min_cost,
     float c_mult,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
+    float market_order_near_touch_fraction,
     thread const RecursiveEntryContext* cached_context = nullptr
 ) {
     RecursiveEntryCandidate out;
@@ -1222,7 +1222,7 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
     out.executable_qty = rq;
     out.market = should_use_ordinary_market_execution(
         entry_tick, !short_side, generation_market_price, price_step,
-        market_orders_allowed, market_order_near_touch_threshold
+        market_orders_allowed, market_order_near_touch_fraction
     );
     if (short_side && out.market) {
         out.executable_qty = fmax(
@@ -1280,7 +1280,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
     int C,
     bool short_side,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold
+    float market_order_near_touch_fraction
 ) {
     if (!side.entry_deferred_twel_gate) return;
 
@@ -1373,7 +1373,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             coin_settings[coin_offset + 1],
             coin_settings[coin_offset + 2],
             coin_settings[coin_offset + 3], c_mult, market_orders_allowed,
-            market_order_near_touch_threshold,
+            market_order_near_touch_fraction,
             &entry_contexts[c]
         );
         suffix_valid[c] = suffix[c].ticks > 1
@@ -1505,7 +1505,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             sim_touch_tick[best_coin],
             side.entry_gen_market_price[best_coin],
             qty_step, coin_settings[coin_offset + 1], min_qty, min_cost,
-            c_mult, market_orders_allowed, market_order_near_touch_threshold,
+            c_mult, market_orders_allowed, market_order_near_touch_fraction,
             &entry_contexts[best_coin]
         );
         suffix_valid[best_coin] = suffix[best_coin].ticks > 1
@@ -1887,7 +1887,7 @@ inline bool force_close_tm_multicoin_delisted_position(
     int coin,
     bool short_side,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close,
     thread HslState* opposite_hsl = nullptr,
     bool opposite_has_position = false
@@ -1901,7 +1901,7 @@ inline bool force_close_tm_multicoin_delisted_position(
     if (!finite_positive(close)) return false;
     const float price_step = coin_settings[coin_offset + 1];
     const float c_mult = coin_settings[coin_offset + 4];
-    const float taker_fee = coin_settings[coin_offset + 11];
+    const float taker_fee_fraction = coin_settings[coin_offset + 11];
     const float close_price = ordinary_market_fill_price(
                     market_execution_tick_at(market_execution_ticks, k, coin, coin_count, short_side), price_step
                 );
@@ -1913,13 +1913,13 @@ inline bool force_close_tm_multicoin_delisted_position(
             : close_price - position_price
     );
     const float net_pnl = pnl
-        - close_qty * close_price * c_mult * taker_fee;
+        - close_qty * close_price * c_mult * taker_fee_fraction;
     const bool coin_hsl_mode =
         side.hsl.signal_mode == HSL_SIGNAL_COIN;
     record_tm_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee_fraction,
         0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position, true
@@ -1952,7 +1952,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     int coin_count,
     bool short_side,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close
 ) {
     bool any_close = false;
@@ -1963,7 +1963,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
             market_execution_ticks,
             side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, short_side,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close
         );
         if (closed) clear_tm_multicoin_coin_orders(side, c);
@@ -1986,7 +1986,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     int timestep_count,
     int coin_count,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close
 ) {
     bool any_close = false;
@@ -2001,7 +2001,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
             market_execution_ticks,
             long_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, false,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close, &short_side.hsl, short_has_position
         );
         bool long_has_position = false;
@@ -2012,7 +2012,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
             market_execution_ticks,
             short_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, true,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close, &long_side.hsl, long_has_position
         );
         if (long_closed || short_closed) {
@@ -2053,10 +2053,10 @@ inline bool process_tm_multicoin_side_fills(
     bool alive,
     bool collect_coin_fill_counts,
     bool loss_gate_enabled,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool market_orders_allowed,
-    float market_order_slippage_pct,
-    float market_order_near_touch_threshold,
+    float market_order_slippage_fraction,
+    float market_order_near_touch_fraction,
     bool hsl_panic_market,
     thread float& hsl_equity_before_fills,
     thread HslState* opposite_hsl = nullptr,
@@ -2115,7 +2115,7 @@ inline bool process_tm_multicoin_side_fills(
     apply_tm_multicoin_recursive_entry_twel_gate(
         side, config, bars, fill_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
         k, C, short_side, market_orders_allowed,
-        market_order_near_touch_threshold
+        market_order_near_touch_fraction
     );
     for (int c = 0; c < C; ++c) {
         const int coin_offset = c * COIN_COLS;
@@ -2134,8 +2134,8 @@ inline bool process_tm_multicoin_side_fills(
         const float min_qty = coin_settings[coin_offset + 2];
         const float min_cost = coin_settings[coin_offset + 3];
         const float c_mult = coin_settings[coin_offset + 4];
-        const float maker_fee = coin_settings[coin_offset + 5];
-        const float taker_fee = coin_settings[coin_offset + 11];
+        const float maker_fee_fraction = coin_settings[coin_offset + 5];
+        const float taker_fee_fraction = coin_settings[coin_offset + 11];
 
         bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
         bool coin_hsl_panic_market = coin_hsl_mode
@@ -2279,7 +2279,7 @@ inline bool process_tm_multicoin_side_fills(
                     close_grid_max_rungs[c],
                     close_gen_market_price[c],
                     market_orders_allowed,
-                    market_order_near_touch_threshold,
+                    market_order_near_touch_fraction,
                     grid_gen_psize
                 };
                 group_count = recursive_grid_close_groups_after_reducer(grid_context, -1, group);
@@ -2427,17 +2427,17 @@ inline bool process_tm_multicoin_side_fills(
                         : close_tick[c] < group.ticks);
                 if (reducer_before_group) {
                     float qty = fmin(reducer_qty, psize[c]);
-                    float reducer_fee_rate = primary_market
-                        ? taker_fee : maker_fee;
+                    float reducer_fee_fraction = primary_market
+                        ? taker_fee_fraction : maker_fee_fraction;
                     float pnl = qty * c_mult * (short_side
                         ? pprice[c] - fill_price
                         : fill_price - pprice[c]);
                     float net_pnl = pnl
-                        - qty * fill_price * c_mult * reducer_fee_rate;
+                        - qty * fill_price * c_mult * reducer_fee_fraction;
                     record_tm_multicoin_close_fill(
                         side, account, fills, coin_fill_counts,
                         int(b), C, c, k, pnl, net_pnl, qty,
-                        fill_price, qty * fill_price * c_mult * reducer_fee_rate,
+                        fill_price, qty * fill_price * c_mult * reducer_fee_fraction,
                         fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                         pprice[c], close, c_mult, short_side,
                         false, collect_coin_fill_counts,
@@ -2464,17 +2464,17 @@ inline bool process_tm_multicoin_side_fills(
                     market_execution_tick_at(market_execution_ticks, k, c, C, short_side), price_step
                 )
                     : group.price;
-                float group_fee_rate = group.market ? taker_fee : maker_fee;
+                float group_fee_fraction = group.market ? taker_fee_fraction : maker_fee_fraction;
                 float grid_pnl = grid_qty * c_mult * (short_side
                     ? pprice[c] - group_fill_price
                     : group_fill_price - pprice[c]);
 
                 float grid_net_pnl = grid_pnl
-                    - grid_qty * group_fill_price * c_mult * group_fee_rate;
+                    - grid_qty * group_fill_price * c_mult * group_fee_fraction;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, grid_pnl, grid_net_pnl,
-                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_rate,
+                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_fraction,
                     fmax(round_step(psize[c] - grid_qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     false, collect_coin_fill_counts,
@@ -2520,13 +2520,13 @@ inline bool process_tm_multicoin_side_fills(
                     && close_is_hsl_panic[c];
                 bool market_execution = use_secondary
                     ? secondary_close_market[c] : primary_market;
-                float fee_rate = market_execution ? taker_fee : maker_fee;
+                float fee_fraction = market_execution ? taker_fee_fraction : maker_fee_fraction;
 
-                float net_pnl = pnl - qty * price * c_mult * fee_rate;
+                float net_pnl = pnl - qty * price * c_mult * fee_fraction;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, pnl, net_pnl, qty,
-                    price, qty * price * c_mult * fee_rate,
+                    price, qty * price * c_mult * fee_fraction,
                     fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     is_hsl_panic, collect_coin_fill_counts,
@@ -2600,7 +2600,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        market_orders_allowed, market_order_near_touch_threshold,
+                        market_orders_allowed, market_order_near_touch_fraction,
                         &entry_context
                     );
                     int suffix_index = rung - 1;
@@ -2625,7 +2625,7 @@ inline bool process_tm_multicoin_side_fills(
                         candidate.executable_qty, qty_step
                     );
                     float fee = adjusted * fill_price * c_mult
-                        * (candidate.market ? taker_fee : maker_fee);
+                        * (candidate.market ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
                     if (candidate.order_type == 0
                         || candidate.order_type == 11) {
@@ -2699,7 +2699,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        market_orders_allowed, market_order_near_touch_threshold,
+                        market_orders_allowed, market_order_near_touch_fraction,
                         &entry_context
                     );
                 }
@@ -2720,7 +2720,7 @@ inline bool process_tm_multicoin_side_fills(
                     candidate.executable_qty, qty_step
                 );
                 float fee = adjusted * fill_price * c_mult
-                    * (candidate.market ? taker_fee : maker_fee);
+                    * (candidate.market ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
                 if (candidate.order_type == 0
                     || candidate.order_type == 11) {
@@ -2774,7 +2774,7 @@ inline bool process_tm_multicoin_side_fills(
                 : float(entry_tick[c]) * price_step;
             float adjusted = round_step(entry_qty[c], qty_step);
             float fee = adjusted * fill_price * c_mult
-                * (entry_market[c] ? taker_fee : maker_fee);
+                * (entry_market[c] ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             if (side.entry_order_type[c] == 0
                 || side.entry_order_type[c] == 11) {
@@ -2849,42 +2849,42 @@ load_trailing_martingale_multicoin_side_config(
     config.twel = params[po + 24];
     config.gate_initial = params[po + 25] > 0.5f;
     config.gate_reentry = params[po + 26] > 0.5f;
-    config.forager_volume_span = params[po + 27];
-    config.forager_volatility_span = params[po + 28];
+    config.forager_volume_ema_span_candles = params[po + 27];
+    config.forager_log_range_ema_span_candles = params[po + 28];
     config.w_volume = params[po + 29];
     config.w_ready = params[po + 30];
-    config.w_volatility = params[po + 31];
-    float weight_sum = config.w_volume + config.w_ready + config.w_volatility + config.adaptive.score_weight;
+    config.w_log_range = params[po + 31];
+    float weight_sum = config.w_volume + config.w_ready + config.w_log_range + config.adaptive.score_weight;
     if (weight_sum > 0.0f) {
         config.w_volume /= weight_sum;
         config.w_ready /= weight_sum;
-        config.w_volatility /= weight_sum;
+        config.w_log_range /= weight_sum;
         config.adaptive.score_weight /= weight_sum;
     } else {
         config.w_volume = 0.0f;
         config.w_ready = 1.0f;
-        config.w_volatility = 0.0f;
+        config.w_log_range = 0.0f;
     }
     config.n_positions = max(0, int(rint(params[po + 32])));
-    config.allowance_pct = params[po + 33];
+    config.allowance_fraction = params[po + 33];
     config.scale_hsl_budget = params[po + 34] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 35] > 0.5f;
     config.twel_threshold = params[po + 36];
     config.wel_enforcer_enabled = params[po + 37] > 0.5f;
-    config.wel_enforcer_threshold = params[po + 38];
+    config.wel_enforcer_threshold_ratio = params[po + 38];
     config.twel_enforcer_enabled = params[po + 39] > 0.5f;
     config.twel_enforcer_reduce_portfolio = params[po + 40] > 0.5f;
     config.unstuck_enabled = params[po + 41] > 0.5f;
     config.unstuck_ema_gating_enabled = params[po + 42] > 0.5f;
-    config.unstuck_close_pct = params[po + 43];
-    config.unstuck_ema_dist = params[po + 44];
-    config.unstuck_loss_allowance_pct = params[po + 45];
-    config.unstuck_threshold = params[po + 46];
-    config.alpha_forager_volume = config.forager_volume_span > 0.0f
-        ? clamp(2.0f / (config.forager_volume_span + 1.0f), 0.0f, 1.0f)
+    config.unstuck_close_fraction = params[po + 43];
+    config.unstuck_ema_distance_fraction = params[po + 44];
+    config.unstuck_loss_allowance_fraction = params[po + 45];
+    config.unstuck_exposure_trigger_ratio = params[po + 46];
+    config.alpha_forager_volume = config.forager_volume_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.forager_volume_ema_span_candles + 1.0f), 0.0f, 1.0f)
         : 0.0f;
-    config.alpha_forager_volatility = config.forager_volatility_span > 0.0f
-        ? clamp(2.0f / (config.forager_volatility_span + 1.0f), 0.0f, 1.0f)
+    config.alpha_forager_log_range = config.forager_log_range_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.forager_log_range_ema_span_candles + 1.0f), 0.0f, 1.0f)
         : 0.0f;
     config.hsl_template = load_hsl(params, po, 47);
     config.hsl_template.slot_count = float(max(config.n_positions, 1));
@@ -2930,8 +2930,8 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.ema2[c] = seed_close;
         side.volatility_1m[c] = 0.0f;
         side.volatility_1h[c] = 0.0f;
-        side.forager_volume[c] = seed_volume;
-        side.forager_volatility[c] = 0.0f;
+        side.forager_volume_ema[c] = seed_volume;
+        side.forager_log_range_ema[c] = 0.0f;
         side.adaptive[c] = config.adaptive;
         side.effective_cooldown[c] = 0.0f;
         if (c < coin_count) {
@@ -3135,20 +3135,20 @@ inline void update_tm_multicoin_side_indicators(
                 side.volatility_1m[c]
             );
         }
-        if (config.alpha_forager_volatility > 0.0f) {
-            side.forager_volatility[c] = fma(
-                config.alpha_forager_volatility,
-                log_range - side.forager_volatility[c],
-                side.forager_volatility[c]
+        if (config.alpha_forager_log_range > 0.0f) {
+            side.forager_log_range_ema[c] = fma(
+                config.alpha_forager_log_range,
+                log_range - side.forager_log_range_ema[c],
+                side.forager_log_range_ema[c]
             );
         }
         if (config.alpha_forager_volume > 0.0f) {
             float typical = (high + low + close) / 3.0f;
             float quote_volume = fmax(volume, 0.0f) * typical;
-            side.forager_volume[c] = fma(
+            side.forager_volume_ema[c] = fma(
                 config.alpha_forager_volume,
-                quote_volume - side.forager_volume[c],
-                side.forager_volume[c]
+                quote_volume - side.forager_volume_ema[c],
+                side.forager_volume_ema[c]
             );
         }
 
@@ -3174,12 +3174,12 @@ inline void update_tm_multicoin_side_indicators(
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     coin_override_or(coin_overrides, c, 3, config.log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
-            if (config.alpha_forager_volatility > 0.0f)
-                side.forager_volatility[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    config.forager_volatility_span, bootstrap_counts[c * 10 + 9], 1, observed);
+            if (config.alpha_forager_log_range > 0.0f)
+                side.forager_log_range_ema[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
+                    config.forager_log_range_ema_span_candles, bootstrap_counts[c * 10 + 9], 1, observed);
             if (config.alpha_forager_volume > 0.0f)
-                side.forager_volume[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    config.forager_volume_span, bootstrap_counts[c * 10 + 8], 2, observed);
+                side.forager_volume_ema[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
+                    config.forager_volume_ema_span_candles, bootstrap_counts[c * 10 + 8], 2, observed);
 #if PASSIVBOT_UNSTUCK_EMA_ENABLED
             const float u0 = coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START, config.unstuck_span0);
             const float u1 = coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START + 1, config.unstuck_span1);
@@ -3409,7 +3409,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 long_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                     long_config.scale_hsl_budget, long_config.twel,
                     long_effective_n_positions, long_coin_overrides, c,
-                    24, 25, long_config.allowance_pct
+                    24, 25, long_config.allowance_fraction
                 );
                 update_coin_hsl(
                     long_side.coin_hsl[c], account.balance,
@@ -3425,7 +3425,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 short_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                     short_config.scale_hsl_budget, short_config.twel,
                     short_effective_n_positions, short_coin_overrides, c,
-                    24, 25, short_config.allowance_pct
+                    24, 25, short_config.allowance_fraction
                 );
                 update_coin_hsl(
                     short_side.coin_hsl[c], account.balance,
@@ -3473,8 +3473,8 @@ inline void update_tm_multicoin_side_selection(
     thread float* ema0 = side.ema0;
     thread float* ema1 = side.ema1;
     thread float* ema2 = side.ema2;
-    thread float* forager_volume = side.forager_volume;
-    thread float* forager_volatility = side.forager_volatility;
+    thread float* forager_volume_ema = side.forager_volume_ema;
+    thread float* forager_log_range_ema = side.forager_log_range_ema;
     thread float* psize = side.psize;
     thread float* score = side.score;
     thread bool* selected = side.selected;
@@ -3525,11 +3525,11 @@ inline void update_tm_multicoin_side_selection(
         float coin_wel = coin_override_or(coin_overrides, c, 24, -1.0f);
         float base_limit = coin_wel >= 0.0f
             ? coin_wel : config.twel / fmax(float(effective_n_positions), 1.0f);
-        float allowance_pct = coin_override_or(
-            coin_overrides, c, 25, config.allowance_pct
+        float allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, config.allowance_fraction
         );
-        float allowed_wel = allowed_wallet_exposure_limit(
-            base_limit, config.twel, allowance_pct);
+        float allowed_wel = allowed_wallet_exposure_limit_ratio(
+            base_limit, config.twel, allowance_fraction);
         float initial_qty_fraction = coin_override_or(
             coin_overrides, c, 6, config.initial_qty_fraction
         );
@@ -3593,8 +3593,8 @@ inline void update_tm_multicoin_side_selection(
     float volume_max = -INFINITY;
     float ready_min = INFINITY;
     float ready_max = -INFINITY;
-    float volatility_min = INFINITY;
-    float volatility_max = -INFINITY;
+    float log_range_min = INFINITY;
+    float log_range_max = -INFINITY;
     for (int c = 0; c < coin_count; ++c) {
         if (!survivor[c]) continue;
         int bar_offset = (k * coin_count + c) * 4;
@@ -3616,12 +3616,12 @@ inline void update_tm_multicoin_side_selection(
             unilateral_min = fmin(unilateral_min, fabs(side.adaptive[c].score));
             unilateral_max = fmax(unilateral_max, fabs(side.adaptive[c].score));
         }
-        volume_min = fmin(volume_min, forager_volume[c]);
-        volume_max = fmax(volume_max, forager_volume[c]);
+        volume_min = fmin(volume_min, forager_volume_ema[c]);
+        volume_max = fmax(volume_max, forager_volume_ema[c]);
         ready_min = fmin(ready_min, readiness);
         ready_max = fmax(ready_max, readiness);
-        volatility_min = fmin(volatility_min, forager_volatility[c]);
-        volatility_max = fmax(volatility_max, forager_volatility[c]);
+        log_range_min = fmin(log_range_min, forager_log_range_ema[c]);
+        log_range_max = fmax(log_range_max, forager_log_range_ema[c]);
     }
     for (int c = 0; c < coin_count; ++c) {
         score[c] = -INFINITY;
@@ -3642,14 +3642,14 @@ inline void update_tm_multicoin_side_selection(
                 : close / threshold - 1.0f)
             : INFINITY;
         float volume_component = volume_max > volume_min
-            ? (forager_volume[c] - volume_min) / (volume_max - volume_min)
+            ? (forager_volume_ema[c] - volume_min) / (volume_max - volume_min)
             : 1.0f;
         float ready_component = ready_max > ready_min
             ? (ready_max - readiness) / (ready_max - ready_min)
             : 1.0f;
-        float volatility_component = volatility_max > volatility_min
-            ? (forager_volatility[c] - volatility_min)
-                / (volatility_max - volatility_min)
+        float log_range_component = log_range_max > log_range_min
+            ? (forager_log_range_ema[c] - log_range_min)
+                / (log_range_max - log_range_min)
             : 1.0f;
         float unilateral_component = 0.0f;
         if (config.adaptive.score_weight > 0.0f) {
@@ -3659,7 +3659,7 @@ inline void update_tm_multicoin_side_selection(
         }
         score[c] = config.w_volume * volume_component
             + config.w_ready * ready_component
-            + config.w_volatility * volatility_component
+            + config.w_log_range * log_range_component
             + config.adaptive.score_weight * unilateral_component;
     }
     for (int pick = 0; pick < slots; ++pick) {
@@ -3756,27 +3756,27 @@ inline int select_tm_multicoin_unstuck_coin(
             config.unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         const float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, config.unstuck_close_pct
+            coin_overrides, c, 30, config.unstuck_close_fraction
         );
         const float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, config.unstuck_ema_dist
+            coin_overrides, c, 31, config.unstuck_ema_distance_fraction
         );
         const float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, config.unstuck_loss_allowance_pct
+            coin_overrides, c, 32, config.unstuck_loss_allowance_fraction
         );
         const float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, config.unstuck_threshold
+            coin_overrides, c, 33, config.unstuck_exposure_trigger_ratio
         );
         const float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 24, -1.0f
         );
         const float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        const float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, config.allowance_pct
+        const float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, config.allowance_fraction
         );
-        const float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, config.twel, coin_allowance_pct);
+        const float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, config.twel, coin_allowance_fraction);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && side.psize[c] > 0.0f && side.pprice[c] > 0.0f
@@ -3901,15 +3901,15 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
         const float short_base_limit = short_wel >= 0.0f
             ? short_wel : short_config.twel
                 / fmax(float(short_effective_n_positions), 1.0f);
-        const float long_allowed_wel = allowed_wallet_exposure_limit(
+        const float long_allowed_wel = allowed_wallet_exposure_limit_ratio(
             long_base_limit, long_config.twel,
             coin_override_or(
-                long_coin_overrides, c, 25, long_config.allowance_pct
+                long_coin_overrides, c, 25, long_config.allowance_fraction
             ));
-        const float short_allowed_wel = allowed_wallet_exposure_limit(
+        const float short_allowed_wel = allowed_wallet_exposure_limit_ratio(
             short_base_limit, short_config.twel,
             coin_override_or(
-                short_coin_overrides, c, 25, short_config.allowance_pct
+                short_coin_overrides, c, 25, short_config.allowance_fraction
             ));
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
@@ -4006,10 +4006,10 @@ inline void generate_tm_multicoin_side_orders(
     int effective_n_positions,
     int current_hsl_mode,
     bool loss_gate_enabled,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
-    float market_order_slippage_pct,
+    float market_order_near_touch_fraction,
+    float market_order_slippage_fraction,
     int forced_unstuck_coin,
     ulong one_way_initial_blocked_mask
 ) {
@@ -4038,22 +4038,22 @@ inline void generate_tm_multicoin_side_orders(
     const bool gate_initial = config.gate_initial;
     const bool gate_reentry = config.gate_reentry;
     const int n_positions = config.n_positions;
-    const float allowance_pct = config.allowance_pct;
+    const float allowance_fraction = config.allowance_fraction;
     const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
     const float twel_threshold = config.twel_threshold;
     const bool wel_enforcer_enabled = config.wel_enforcer_enabled;
-    const float wel_enforcer_threshold = config.wel_enforcer_threshold;
+    const float wel_enforcer_threshold_ratio = config.wel_enforcer_threshold_ratio;
     const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
     const bool twel_enforcer_reduce_portfolio =
         config.twel_enforcer_reduce_portfolio;
     const bool unstuck_enabled = config.unstuck_enabled;
     const bool unstuck_ema_gating_enabled =
         config.unstuck_ema_gating_enabled;
-    const float unstuck_close_pct = config.unstuck_close_pct;
-    const float unstuck_ema_dist = config.unstuck_ema_dist;
-    const float unstuck_loss_allowance_pct =
-        config.unstuck_loss_allowance_pct;
-    const float unstuck_threshold = config.unstuck_threshold;
+    const float unstuck_close_fraction = config.unstuck_close_fraction;
+    const float unstuck_ema_distance_fraction = config.unstuck_ema_distance_fraction;
+    const float unstuck_loss_allowance_fraction =
+        config.unstuck_loss_allowance_fraction;
+    const float unstuck_exposure_trigger_ratio = config.unstuck_exposure_trigger_ratio;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
     thread float* ema0 = side.ema0;
@@ -4294,27 +4294,27 @@ inline void generate_tm_multicoin_side_orders(
             unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, unstuck_close_pct
+            coin_overrides, c, 30, unstuck_close_fraction
         );
         float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, unstuck_ema_dist
+            coin_overrides, c, 31, unstuck_ema_distance_fraction
         );
         float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, unstuck_loss_allowance_pct
+            coin_overrides, c, 32, unstuck_loss_allowance_fraction
         );
         float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, unstuck_threshold
+            coin_overrides, c, 33, unstuck_exposure_trigger_ratio
         );
         float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 24, -1.0f
         );
         float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, allowance_pct
+        float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, allowance_fraction
         );
-        float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct);
+        float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, twel, coin_allowance_fraction);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && balance > 0.0f && balance_peak > 0.0f
@@ -4446,18 +4446,18 @@ inline void generate_tm_multicoin_side_orders(
         );
         float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, allowance_pct
+        float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, allowance_fraction
         );
         bool coin_wel_enforcer_enabled = coin_override_or(
             coin_overrides, c, 26,
             wel_enforcer_enabled ? 1.0f : 0.0f
         ) > 0.5f;
-        float coin_wel_enforcer_threshold = coin_override_or(
-            coin_overrides, c, 27, wel_enforcer_threshold
+        float coin_wel_enforcer_threshold_ratio = coin_override_or(
+            coin_overrides, c, 27, wel_enforcer_threshold_ratio
         );
-        float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct);
+        float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, twel, coin_allowance_fraction);
         bool tradable = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(price_now) && (psize[c] > 0.0f || allowed_coin_wel > 0.0f);
@@ -4720,7 +4720,7 @@ inline void generate_tm_multicoin_side_orders(
         bool candidate_entry_market = quantity > 0.0f
             && should_use_ordinary_market_execution(
                 candidate_entry_tick, !short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
         float executable_entry_price = candidate_entry_market
             ? price_now : entry_price;
@@ -4765,7 +4765,7 @@ inline void generate_tm_multicoin_side_orders(
         bool twel_reducer_market = raw_twel_reducer_qty > 0.0f
             && should_use_ordinary_market_execution(
                 twel_reducer_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
         if (twel_reducer_market) {
             raw_twel_reducer_qty = resize_market_close_qty(
@@ -4778,9 +4778,9 @@ inline void generate_tm_multicoin_side_orders(
         float wel_reducer_qty = 0.0f;
         int wel_reducer_tick = 0;
         float wel_target = allowed_coin_wel
-            * coin_wel_enforcer_threshold;
+            * coin_wel_enforcer_threshold_ratio;
         if (coin_wel_enforcer_enabled
-            && coin_wel_enforcer_threshold > 0.0f
+            && coin_wel_enforcer_threshold_ratio > 0.0f
             && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
             && wel_target > 0.0f && we > wel_target) {
             wel_reducer_tick = short_side ? touch_down : touch_up;
@@ -4798,7 +4798,7 @@ inline void generate_tm_multicoin_side_orders(
         bool wel_reducer_market = wel_reducer_qty > 0.0f
             && should_use_ordinary_market_execution(
                 wel_reducer_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
 #if PASSIVBOT_UNSTUCK_ENABLED
@@ -4813,7 +4813,7 @@ inline void generate_tm_multicoin_side_orders(
         bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
             && should_use_ordinary_market_execution(
                 raw_unstuck_reducer_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
         if (unstuck_reducer_market) {
             raw_unstuck_reducer_qty = resize_market_close_qty(
@@ -4919,7 +4919,7 @@ inline void generate_tm_multicoin_side_orders(
         close_market[c] = close_qty[c] > 0.0f
             && should_use_ordinary_market_execution(
                 candidate_close_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
         if (close_market[c]) {
             close_qty[c] = resize_market_close_qty(
@@ -4950,7 +4950,7 @@ inline void generate_tm_multicoin_side_orders(
                 qty_step, price_step, min_qty, min_cost, c_mult,
                 strategy_wel_reducer_qty > 0.0f ? wel_reducer_tick : 0,
                 strategy_wel_reducer_qty, strategy_wel_reducer_qty > 0.0f ? 499 : 500,
-                price_now, market_orders_allowed, market_order_near_touch_threshold, psize[c]
+                price_now, market_orders_allowed, market_order_near_touch_fraction, psize[c]
             };
             source.ordinary = {close_tick[c], float(close_tick[c]) * price_step,
                 close_qty[c], close_market[c]};
@@ -5012,7 +5012,7 @@ inline void generate_tm_multicoin_side_orders(
                     strategy_grid_rung_limit,
                     price_now,
                     market_orders_allowed,
-                    market_order_near_touch_threshold,
+                    market_order_near_touch_fraction,
                     psize[c]
                 }, 0, strategy_first_group);
             strategy_wel_merged = strategy_group_count > 0
@@ -5317,11 +5317,11 @@ inline float tm_multicoin_entry_initial_balance_pct(
     float initial_qty_fraction = coin_override_or(
         coin_overrides, 0, 6, config.initial_qty_fraction
     );
-    float allowance_pct = coin_override_or(
-        coin_overrides, 0, 25, config.allowance_pct
+    float allowance_fraction = coin_override_or(
+        coin_overrides, 0, 25, config.allowance_fraction
     );
-    return allowed_wallet_exposure_limit(
-        base_limit, config.twel, allowance_pct) * initial_qty_fraction;
+    return allowed_wallet_exposure_limit_ratio(
+        base_limit, config.twel, allowance_fraction) * initial_qty_fraction;
 }
 
 // A temporal dispatch boundary preserves the entire candidate replay. Output
@@ -5344,8 +5344,8 @@ struct TrailingMartingaleMulticoinReplayState {
     float raw_strategy_day_min;
 #endif
     float max_dd;
-    float total_wallet_exposure_max;
-    float total_wallet_exposure_mean;
+    float absolute_net_wallet_exposure_max_ratio;
+    float absolute_net_wallet_exposure_mean_ratio;
     float total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms;
@@ -5544,13 +5544,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[16] > 0.5f;
-    const float max_realized_loss_pct = run_settings[5];
-    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
+    const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
     const bool hedge_mode = run_settings[10] > 0.5f;
     const bool market_orders_allowed = run_settings[11] > 0.5f;
-    const float market_order_near_touch_threshold =
+    const float market_order_near_touch_fraction =
         fmax(run_settings[12], 0.0f);
     const bool filter_by_min_effective_cost_long = run_settings[13] > 0.5f;
     const bool filter_by_min_effective_cost_short = run_settings[17] > 0.5f;
@@ -5576,8 +5576,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float raw_strategy_day_min = INFINITY;
 #endif
     float max_dd = 0.0f;
-    float total_wallet_exposure_max = 0.0f;
-    float total_wallet_exposure_mean = 0.0f;
+    float absolute_net_wallet_exposure_max_ratio = 0.0f;
+    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
@@ -5640,8 +5640,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         raw_strategy_day_min = replay_states[b].common.raw_strategy_day_min;
 #endif
         max_dd = replay_states[b].common.max_dd;
-        total_wallet_exposure_max = replay_states[b].common.total_wallet_exposure_max;
-        total_wallet_exposure_mean = replay_states[b].common.total_wallet_exposure_mean;
+        absolute_net_wallet_exposure_max_ratio = replay_states[b].common.absolute_net_wallet_exposure_max_ratio;
+        absolute_net_wallet_exposure_mean_ratio = replay_states[b].common.absolute_net_wallet_exposure_mean_ratio;
         total_wallet_exposure_samples = replay_states[b].common.total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].common.exposure_rms;
@@ -5770,14 +5770,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             long_config.scale_hsl_budget, long_config.twel,
             wallet_exposure_denominator_n_positions(
                 long_config.n_positions, long_side.max_tradable_seen),
-            long_coin_overrides, C, 24, 25, long_config.allowance_pct
+            long_coin_overrides, C, 24, 25, long_config.allowance_fraction
         );
         prepare_coin_hsl_budgets(
             short_side.coin_hsl, short_config.coin_hsl_mode,
             short_config.scale_hsl_budget, short_config.twel,
             wallet_exposure_denominator_n_positions(
                 short_config.n_positions, short_side.max_tradable_seen),
-            short_coin_overrides, C, 24, 25, short_config.allowance_pct
+            short_coin_overrides, C, 24, 25, short_config.allowance_fraction
         );
         float long_hsl_equity_before_fills = account.balance;
         long_hsl_equity_before_fills =
@@ -5805,9 +5805,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
-            market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            market_order_slippage_fraction,
+            market_order_near_touch_fraction,
             long_hsl_panic_market, long_hsl_equity_before_fills,
             &short_side.hsl, tm_multicoin_side_has_position(short_side, C)
         );
@@ -5837,9 +5837,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
-            market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            market_order_slippage_fraction,
+            market_order_near_touch_fraction,
             short_hsl_panic_market, short_hsl_equity_before_fills,
             &long_side.hsl, tm_multicoin_side_has_position(long_side, C)
         );
@@ -6058,10 +6058,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
-                market_order_near_touch_threshold,
-                market_order_slippage_pct,
+                market_order_near_touch_fraction,
+                market_order_slippage_fraction,
                 long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
@@ -6083,10 +6083,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
-                market_order_near_touch_threshold,
-                market_order_slippage_pct,
+                market_order_near_touch_fraction,
+                market_order_slippage_fraction,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
@@ -6102,7 +6102,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_can_generate ? &long_side : nullptr,
                 short_can_generate ? &short_side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_fraction)) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
@@ -6126,7 +6126,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_side, short_side, account, fills,
                 bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
                 int(b), k, T, C, collect_coin_fill_counts,
-                market_order_slippage_pct, forced_delist_equity
+                market_order_slippage_fraction, forced_delist_equity
             );
         }
         any_fill = any_fill || forced_delist_fill;
@@ -6361,11 +6361,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     rms_position[0], rms_position[1], long_config.twel, short_config.twel);
 #endif
                 total_wallet_exposure_samples += 1.0f;
-                total_wallet_exposure_mean += (
-                    twe_abs - total_wallet_exposure_mean
+                absolute_net_wallet_exposure_mean_ratio += (
+                    twe_abs - absolute_net_wallet_exposure_mean_ratio
                 ) / total_wallet_exposure_samples;
-                total_wallet_exposure_max = fmax(
-                    total_wallet_exposure_max, twe_abs
+                absolute_net_wallet_exposure_max_ratio = fmax(
+                    absolute_net_wallet_exposure_max_ratio, twe_abs
                 );
             }
             if (liquidated) {
@@ -6406,8 +6406,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         replay_states[b].common.raw_strategy_day_min = raw_strategy_day_min;
 #endif
         replay_states[b].common.max_dd = max_dd;
-        replay_states[b].common.total_wallet_exposure_max = total_wallet_exposure_max;
-        replay_states[b].common.total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].common.absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
+        replay_states[b].common.absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
         replay_states[b].common.total_wallet_exposure_samples = total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].common.exposure_rms = exposure_rms;
@@ -6573,8 +6573,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             long_config.n_positions, long_side.max_tradable_seen
         )
     );
-    scalars[scalar_offset + 22] = total_wallet_exposure_max;
-    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
+    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
     scalars[scalar_offset + 24] = fills.fill_count;
     scalars[scalar_offset + 25] = fills.fill_count_entry;
     scalars[scalar_offset + 26] = fills.fill_count_long;
@@ -6849,7 +6849,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float initial_qty_fraction = config.initial_qty_fraction;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
-    const float allowance_pct = config.allowance_pct;
+    const float allowance_fraction = config.allowance_fraction;
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
@@ -6863,11 +6863,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[14] > 0.5f;
-    const float max_realized_loss_pct = run_settings[5];
-    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
+    const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const bool market_orders_allowed = run_settings[9] > 0.5f;
-    const float market_order_near_touch_threshold =
+    const float market_order_near_touch_fraction =
         fmax(run_settings[10], 0.0f);
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
     const bool side_activation = run_settings[15] > 0.5f;
@@ -6912,8 +6912,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float raw_strategy_day_min = INFINITY;
 #endif
     float max_dd = 0.0f;
-    float total_wallet_exposure_max = 0.0f;
-    float total_wallet_exposure_mean = 0.0f;
+    float absolute_net_wallet_exposure_max_ratio = 0.0f;
+    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
@@ -6977,8 +6977,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         raw_strategy_day_min = replay_states[b].raw_strategy_day_min;
 #endif
         max_dd = replay_states[b].max_dd;
-        total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
-        total_wallet_exposure_mean = replay_states[b].total_wallet_exposure_mean;
+        absolute_net_wallet_exposure_max_ratio = replay_states[b].absolute_net_wallet_exposure_max_ratio;
+        absolute_net_wallet_exposure_mean_ratio = replay_states[b].absolute_net_wallet_exposure_mean_ratio;
         total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].exposure_rms;
@@ -7092,7 +7092,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             side.coin_hsl, config.coin_hsl_mode, config.scale_hsl_budget,
             config.twel, wallet_exposure_denominator_n_positions(
                 config.n_positions, side.max_tradable_seen),
-            coin_overrides, C, 24, 25, config.allowance_pct
+            coin_overrides, C, 24, 25, config.allowance_fraction
         );
         bool any_fill = process_tm_multicoin_side_fills(
             market_execution_ticks,
@@ -7108,9 +7108,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
-            market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            market_order_slippage_fraction,
+            market_order_near_touch_fraction,
             hsl_panic_market, hsl_equity_before_fills
         );
         update_tm_multicoin_side_indicators(
@@ -7204,7 +7204,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     coin_hsl[c].slot_count = float(effective_n_positions);
                     coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                         config.scale_hsl_budget, config.twel, effective_n_positions,
-                        coin_overrides, c, 24, 25, config.allowance_pct
+                        coin_overrides, c, 24, 25, config.allowance_fraction
                     );
                     update_coin_hsl(
                         coin_hsl[c], balance,
@@ -7260,10 +7260,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, entries_enabled, tradable_count,
                 effective_n_positions, current_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
-                market_order_near_touch_threshold,
-                market_order_slippage_pct,
+                market_order_near_touch_fraction,
+                market_order_slippage_fraction,
                 -2, 0ul
             );
         }
@@ -7277,7 +7277,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 market_execution_ticks,
                 short_side ? nullptr : &side, short_side ? &side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_fraction)) {
             scalars[int(b) * SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
@@ -7293,7 +7293,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 market_execution_ticks,
                 side, account, fills, bars, coin_settings ORGANILLO_PASS,
                 coin_fill_counts, int(b), k, T, C, short_side,
-                collect_coin_fill_counts, market_order_slippage_pct,
+                collect_coin_fill_counts, market_order_slippage_fraction,
                 forced_delist_equity
             );
         }
@@ -7486,11 +7486,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     rms_position[0], rms_position[1], short_side ? 0.0f : twel, short_side ? twel : 0.0f);
 #endif
                 total_wallet_exposure_samples += 1.0f;
-                total_wallet_exposure_mean += (
-                    twe_abs - total_wallet_exposure_mean
+                absolute_net_wallet_exposure_mean_ratio += (
+                    twe_abs - absolute_net_wallet_exposure_mean_ratio
                 ) / total_wallet_exposure_samples;
-                total_wallet_exposure_max = fmax(
-                    total_wallet_exposure_max, twe_abs
+                absolute_net_wallet_exposure_max_ratio = fmax(
+                    absolute_net_wallet_exposure_max_ratio, twe_abs
                 );
             }
             if (liquidated) {
@@ -7528,8 +7528,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].raw_strategy_day_min = raw_strategy_day_min;
 #endif
         replay_states[b].max_dd = max_dd;
-        replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
-        replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
+        replay_states[b].absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
         replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].exposure_rms = exposure_rms;
@@ -7654,13 +7654,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float entry_initial_qty_fraction = coin_override_or(
         coin_overrides, 0, 6, initial_qty_fraction
     );
-    float entry_allowance_pct = coin_override_or(
-        coin_overrides, 0, 25, allowance_pct
+    float entry_allowance_fraction = coin_override_or(
+        coin_overrides, 0, 25, allowance_fraction
     );
-    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
-        entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_fraction;
-    scalars[scalar_offset + 22] = total_wallet_exposure_max;
-    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio(
+        entry_base_limit, twel, entry_allowance_fraction) * entry_initial_qty_fraction;
+    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
+    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
     scalars[scalar_offset + 24] = fill_count;
     scalars[scalar_offset + 25] = fill_count_entry;
     scalars[scalar_offset + 26] = fill_count_long;

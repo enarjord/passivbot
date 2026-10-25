@@ -18,6 +18,24 @@ position entry price, plus any over-budget remainder, rounded and capped by the 
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
 
+## Native Forager Quantities
+
+Raw selector inputs are `volume_ema`, `log_range_ema` (the EMA of `ln(high / low)`), and
+`ema_entry_price_gap_fraction`. The price gap is long `bid / threshold - 1` or short
+`1 - ask / threshold`; positive means the initial-entry threshold has not been reached.
+Cross-candidate normalization produces the existing score components. `weights.log_range`
+is a relative ranking weight, while `score_hysteresis_margin` is an absolute gap in normalized
+score units. Neither raw EMAs nor the margin acquire a `[0, 1]` bound through naming changes;
+the unilateralness score retains its existing unit-interval validation.
+
+Native forager volume and log-range durations use `_ema_span_minutes`. GPU parameter packing
+divides these floating durations by the replay interval exactly once. Decoded shader fields use
+`_ema_span_candles` for the resulting floating candle counts; column positions and EMA arithmetic
+remain unchanged. Native `unilateralness_ema_span_minutes` retains the floating one-minute
+exponential RMS span and its existing 20-span observation window; enabled consumers still require
+completed one-minute candles. Released-v8 conversion owns the old span and weight vocabulary
+independently of current native bindings.
+
 ## Inherited Directional Defaults
 
 The paired directional field registry defines inheritability; side activation is excluded. Resolve
@@ -301,6 +319,15 @@ Auto-unstuck has its own EMA trigger toggle:
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
 
+Native unstuck fields use `unstuck_close_fraction`, `unstuck_ema_distance_fraction`,
+`unstuck_ema_span_0_minutes`, `unstuck_ema_span_1_minutes`,
+`unstuck_loss_allowance_fraction` and `unstuck_exposure_trigger_ratio`. The native account
+loss-gate policy is `loss_gate_max_drawdown_fraction`; its public field remains
+`bot.portfolio.loss_gate.max_drawdown_fraction`. These names preserve scaling, signed
+quantities, fractional spans and off sentinels. Explicit released-v8 conversion retains the
+released spellings independently of current native identifiers.
+
+
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
 `bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
 ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
@@ -350,6 +377,12 @@ pins. This is optimizer configuration finalization, not a live/backtest coupling
 Limit buys require `low < price * (1 - buffer)` and limit sells require
 `high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
+Native exchange, backtest and coin-metadata fee rates use `maker_fee_fraction` and
+`taker_fee_fraction`: signed scale-one fractions of the existing fill-notional basis. Negative
+values remain rebates and zero remains an explicit zero fee. Exchange/cache source keys retain
+their existing spellings and precedence at the Python adapters; monetary fill fees retain their
+existing fields and sign convention. Retired native fee keys are rejected, including beside the
+current keys; required native fee inputs remain required.
 The actual fill and next-candle ladder-expansion hint share the same Rust predicate; raw candles
 used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
 forward this setting. CPU and GPU optimization treat it as fixed evaluation policy. GPU screening
@@ -371,6 +404,26 @@ must not read or forward it; live callers intentionally omit `market_order_slipp
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
 current bid/ask snapshot plus exchange-side behavior, controlled by `bot.portfolio.execution.market_orders_allowed`
 and `bot.portfolio.execution.market_order_near_touch_fraction`.
+
+Native execution inputs use `equity_floor_fraction`, `market_order_near_touch_fraction`,
+`market_order_slippage_fraction` and `limit_order_fill_buffer_fraction`. Values and buffer
+positions are unchanged. The raw backtest boundary rejects retired execution keys and
+`max_realized_loss_pct`, even when the corresponding current key is also supplied; an old
+policy must not silently disappear into an optional default. Omitted current optional fields
+retain their existing defaults. Released-v8 config conversion remains a separate explicit step.
+
+## BTC Collateral Ratios
+
+Native and configured backtest inputs share `btc_collateral_target_ratio` and
+`max_usd_debt_to_wallet_value_ratio`. Their common denominator is current total wallet value in USD:
+BTC holdings marked at the current BTC price plus USD cash, excluding unrealized trading PnL.
+The target numerator is BTC market value; the debt numerator is `max(-USD cash, 0)`.
+Targets above one remain leveraged allocations. Initial allocation uses the target directly;
+the separate debt ceiling limits subsequent top-ups. Null, zero and negative debt ceilings remain
+uncapped. Omitting the native debt ceiling retains null, while the native target remains required.
+The raw boundary rejects retired collateral keys, including the unpublished equity-denominator
+spelling, even if the current key is also supplied. These rejections do not add migration aliases.
+GPU backtests continue to require a zero collateral target; nonzero collateral uses the CPU.
 
 ## Close Recursion Contract
 

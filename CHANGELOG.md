@@ -9,6 +9,49 @@ since the latest release tag; these features may already be available when insta
 - Name the monitor snapshot's hourly entry log-range EMA `entry_log_range_ema_1h`,
   matching the trailing inspector and snapshot validator. The underlying indicator is unchanged.
 
+- Give current HSL observations explicit units: raw and smoothed signal fractions, the selected
+  trigger fraction, USD drawdown memory, and signed threshold gaps. Current report percentages
+  use `_percent` names without rescaling. Update native reports, live diagnostics, previews,
+  plots and monitors together; trading formulas are unchanged and historical event tapes remain readable.
+
+- Make analysis metric units explicit and put curve, position side and exponential weighting
+  modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
+  strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without
+  changing calculations or value scales. Explicit released-v8 migration emits the current names;
+  best-effort EW formula choices preserve supported outer aggregate statistics.
+
+- Align native BTC collateral inputs with `btc_collateral_target_ratio` and
+  `max_usd_debt_to_wallet_value_ratio`. Preserve leveraged targets, initial allocation, top-up limits,
+  uncapped debt sentinels and CPU replay values; reject retired native packet keys explicitly.
+  Both ratios use total marked wallet value (USD cash plus BTC market value), excluding unrealized
+  trading PnL. Released-v8 conversion emits the wallet-value name directly.
+
+- Name native maker and taker rates explicitly as fee fractions across CPU and GPU execution.
+  Preserve signed rebates, zero fees, exchange fallback and external market-cache formats;
+  reject retired native fee fields without changing monetary fee outputs.
+
+- Align native execution inputs with explicit equity-floor, near-touch, slippage and fill-buffer
+  fractions. Preserve execution math, native buffer layouts and omitted optional defaults;
+  reject retired raw backtest packet keys instead of silently using different defaults.
+
+- Give native price helpers explicit fraction names, distinguish absolute relative differences
+  from position-side adverse changes and order-side gaps, and use one canonical adverse-change
+  helper instead of three native aliases. Calculations and invalid-input behavior are unchanged.
+
+- Identify signed diagnostic price changes and target offsets as scale-one fractions,
+  preserving monitor/trailing values and percentage display.
+
+- Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
+  price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
+  replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing
+  ranking, normalization, limits or GPU slots.
+  Released-v8 native span and optimizer identifiers remain confined to explicit conversion.
+
+- Align native unstuck fields and optimizer IDs with explicit fractions, exposure ratios and
+  minute spans; name the native account loss gate `loss_gate_max_drawdown_fraction`.
+  Unstuck status fields use matching fraction names. Numeric behavior, signed fees and GPU
+  layouts are unchanged; explicit released-v8 migration retains its own frozen vocabulary.
+
 - Use canonical minute and one-hour-candle EMA horizons and `log_range` sensitivities throughout
   the native strategies, optimizer coordinates and CPU/GPU packets. Remove the redundant runtime
   strategy path translation; explicit released-v8 conversion retains its own frozen names.
@@ -23,6 +66,36 @@ since the latest release tag; these features may already be available when insta
   Numeric values, calculator argument positions and GPU parameter columns are unchanged.
   Released-v8 conversion retains its frozen source vocabulary; earlier dev-v9 native names
   are unsupported.
+
+- Align native exposure budgets, enforcer thresholds and optimizer IDs with explicit `_ratio`
+  names, and excess allowances with `_fraction`. Update replay packets, GPU parameter labels,
+  diagnostics and monitoring together without changing sizing, bounds or parameter slots.
+  Released-v8 conversion preserves values and reports final paths; retired native names have
+  no aliases.
+
+- Name benchmark account fractions, ratios, counts and log returns explicitly; advance the
+  account metric/discovery identities without changing economic calculations or converting old results.
+
+- Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
+  explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
+  stay unchanged; retired native names are not accepted as aliases.
+
+- Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
+  public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
+
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/wallet-value ratios,
+  signed fee override fractions, and the starting-balance equity floor fraction. Warmup
+  now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
+  backtest/activation still uses `span * r`, with fractional-minute caps preserved.
+  Released-v8 migration emits the final names without rescaling values.
+
+- Make optimizer prefilter assumptions explicit with `exposure_probe_fractions`,
+  `adverse_directionality_score` and log-range EMA inputs. Geometry checks use `_fraction`
+  metric names; measurements, rule arithmetic and the native probe protocol are unchanged.
+
+- Spell pymoo crossover and mutation controls explicitly with `_probability`,
+  `_probability_per_variable`, and `_distribution_index`. Values, automatic defaults, and
+  external pymoo arguments are unchanged; released-v8 conversion reports the final paths.
 
 - Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
   use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
@@ -41,12 +114,26 @@ since the latest release tag; these features may already be available when insta
   remain unchanged. Released-v8 migration reports the final names; unpublished v9 spellings
   are rejected instead of silently aliased.
 
+- Publish immutable analysis quantity metadata and a generated reference covering units,
+  denominators, observation populations, aggregation and weighting without changing formulas.
+
+- Rename optimizer polish to `--polish-bounds-fraction`: `0.25` still narrows bounds by a
+  relative half-width of 25%, without rescaling values. Perturbation helpers now distinguish
+  relative fractions from probabilities of retaining an unchanged parameter.
+
+- Use explicit `_fraction` names in backtest comparison JSON and plotting range arguments.
+  Comparison values and plot slicing stay unchanged; human summaries still display percentages.
+- Name crash-finder thresholds and event fields explicitly as log returns or log ratios;
+  report and CSV values retain natural-log units and existing directional ranking.
+- Spell scale-100 diagnostic and telemetry values with `_percent`; preserve values, rounding,
+  missing-value behavior and human percentage formatting across producers and report consumers.
+
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.
 
-- Replace `strategy_eq_underwater_pct_mean` with `pain_index_strategy_eq`, the mean
-  drawdown across all recorded strategy-equity samples, and add `ulcer_index_strategy_eq`,
+- Replace `strategy_eq_underwater_pct_mean` with `pain_index_fraction_strategy_equity`, the mean
+  drawdown across all recorded strategy-equity samples, and add `ulcer_index_fraction_strategy_equity`,
   their root mean square. Both use minute-level samples with standard one-minute candles,
   include zero drawdowns, and support backtest results, optimizer scoring and limits,
   suites, and GPU screening. Remove `strategy_eq_underwater_pct_median` without aliases;
