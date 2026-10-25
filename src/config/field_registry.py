@@ -176,7 +176,7 @@ _FIELDS_BY_TYPE = {
             checkpoint_interval_minutes event_rotation_mb event_rotation_minutes
             retain_days snapshot_interval_seconds
         """,
-        "optimize.prefilter": "adverse_directionality volatility_ema_1m volatility_ema_1h penalty_weight",
+        "optimize.prefilter": "adverse_directionality_score log_range_ema_1m log_range_ema_1h penalty_weight",
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
         "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
@@ -225,7 +225,7 @@ _FIELDS_BY_TYPE = {
         "backtest": "exchanges scenarios visible_metrics",
         "logging": "live_event_debug_profiles",
         "optimize": "enable_overrides fixed_params limits scoring",
-        "optimize.prefilter": "checks exposure_ratios",
+        "optimize.prefilter": "checks exposure_probe_fractions",
         "optimize.gpu.screening": "scenarios",
     },
     FieldType.OBJECT: {
@@ -412,7 +412,7 @@ def get_field_registry() -> FieldRegistry:
     add("backtest.scenarios.*.exchanges", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.scenarios.*.coin_sources", FieldType.OBJECT, nullable=True)
     add("backtest.scenarios.*.overrides", FieldType.OBJECT)
-    add("optimize.prefilter.exposure_ratios.*", FieldType.FLOAT)
+    add("optimize.prefilter.exposure_probe_fractions.*", FieldType.FLOAT)
     add("optimize.prefilter.checks.*.enabled", FieldType.BOOLEAN)
     add("optimize.prefilter.checks.*.metric", FieldType.STRING)
     add("optimize.prefilter.checks.*.sides", FieldType.ARRAY)

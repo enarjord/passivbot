@@ -6631,9 +6631,13 @@
             "prefilter": {
               "type": "object",
               "properties": {
-                "adverse_directionality": {
+                "adverse_directionality_score": {
                   "type": "number",
                   "default": 0.0,
+                  "description": "Declared adverse RMS directionality score for hypothetical cooldown measurements.",
+                  "minimum": 0.0,
+                  "maximum": 1.0,
+                  "x-passivbot-unit": "score",
                   "x-passivbot-consumers": [
                     "optimize"
                   ]
@@ -6664,6 +6668,13 @@
                       },
                       "metric": {
                         "type": "string",
+                        "enum": [
+                          "close_retracement_fraction",
+                          "entry_close_span_fraction",
+                          "entry_cooldown_minutes",
+                          "entry_retracement_fraction",
+                          "grid_span_fraction"
+                        ],
                         "x-passivbot-consumers": [
                           "optimize"
                         ]
@@ -6702,7 +6713,7 @@
                     "additionalProperties": false
                   }
                 },
-                "exposure_ratios": {
+                "exposure_probe_fractions": {
                   "type": "array",
                   "default": [
                     0.25,
@@ -6710,11 +6721,19 @@
                     0.8,
                     0.95
                   ],
+                  "description": "Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.",
+                  "x-passivbot-unit": "fraction",
+                  "x-passivbot-denominator": "effective per-position allowance including bounded excess allowance",
                   "x-passivbot-consumers": [
                     "optimize"
                   ],
                   "items": {
                     "type": "number",
+                    "description": "Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.",
+                    "minimum": 0.0,
+                    "exclusiveMaximum": 0.999,
+                    "x-passivbot-unit": "fraction",
+                    "x-passivbot-denominator": "effective per-position allowance including bounded excess allowance",
                     "x-passivbot-consumers": [
                       "optimize"
                     ]
@@ -6727,23 +6746,31 @@
                     "optimize"
                   ]
                 },
+                "log_range_ema_1h": {
+                  "type": "number",
+                  "default": 0.0,
+                  "description": "Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.",
+                  "minimum": 0.0,
+                  "x-passivbot-unit": "log range",
+                  "x-passivbot-denominator": "candle low, inside ln(high / low)",
+                  "x-passivbot-consumers": [
+                    "optimize"
+                  ]
+                },
+                "log_range_ema_1m": {
+                  "type": "number",
+                  "default": 0.0,
+                  "description": "Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.",
+                  "minimum": 0.0,
+                  "x-passivbot-unit": "log range",
+                  "x-passivbot-denominator": "candle low, inside ln(high / low)",
+                  "x-passivbot-consumers": [
+                    "optimize"
+                  ]
+                },
                 "penalty_weight": {
                   "type": "number",
                   "default": 1000000.0,
-                  "x-passivbot-consumers": [
-                    "optimize"
-                  ]
-                },
-                "volatility_ema_1h": {
-                  "type": "number",
-                  "default": 0.0,
-                  "x-passivbot-consumers": [
-                    "optimize"
-                  ]
-                },
-                "volatility_ema_1m": {
-                  "type": "number",
-                  "default": 0.0,
                   "x-passivbot-consumers": [
                     "optimize"
                   ]
@@ -19603,26 +19630,26 @@
         "optimize.prefilter": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter"
         },
-        "optimize.prefilter.adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "optimize.prefilter.adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "optimize.prefilter.checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "optimize.prefilter.exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "optimize.prefilter.exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "optimize.prefilter.grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "optimize.prefilter.log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "optimize.prefilter.log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "optimize.prefilter.penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "optimize.prefilter.volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "optimize.prefilter.volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         },
         "optimize.pymoo": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo"
@@ -25094,26 +25121,26 @@
         "prefilter": {
           "$ref": "#/$defs/scenarioPatch:optimize.prefilter"
         },
-        "prefilter.adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "prefilter.adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "prefilter.checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "prefilter.exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "prefilter.exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "prefilter.grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "prefilter.log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "prefilter.log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "prefilter.penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "prefilter.volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "prefilter.volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         },
         "pymoo": {
           "$ref": "#/$defs/scenarioPatch:optimize.pymoo"
@@ -25934,26 +25961,26 @@
     "scenarioPatch:optimize.prefilter": {
       "type": "object",
       "properties": {
-        "adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         }
       },
       "patternProperties": {},
@@ -29164,13 +29191,13 @@
                 "optimize.gpu",
                 "optimize.gpu.screening",
                 "optimize.prefilter",
-                "optimize.prefilter.adverse_directionality",
+                "optimize.prefilter.adverse_directionality_score",
                 "optimize.prefilter.checks",
-                "optimize.prefilter.exposure_ratios",
+                "optimize.prefilter.exposure_probe_fractions",
                 "optimize.prefilter.grid_max_entries",
+                "optimize.prefilter.log_range_ema_1h",
+                "optimize.prefilter.log_range_ema_1m",
                 "optimize.prefilter.penalty_weight",
-                "optimize.prefilter.volatility_ema_1h",
-                "optimize.prefilter.volatility_ema_1m",
                 "optimize.pymoo",
                 "optimize.pymoo.algorithms",
                 "optimize.pymoo.algorithms.nsga2",
@@ -30483,13 +30510,13 @@
                 "gpu",
                 "gpu.screening",
                 "prefilter",
-                "prefilter.adverse_directionality",
+                "prefilter.adverse_directionality_score",
                 "prefilter.checks",
-                "prefilter.exposure_ratios",
+                "prefilter.exposure_probe_fractions",
                 "prefilter.grid_max_entries",
+                "prefilter.log_range_ema_1h",
+                "prefilter.log_range_ema_1m",
                 "prefilter.penalty_weight",
-                "prefilter.volatility_ema_1h",
-                "prefilter.volatility_ema_1m",
                 "pymoo",
                 "pymoo.algorithms",
                 "pymoo.algorithms.nsga2",
@@ -30596,13 +30623,13 @@
           "propertyNames": {
             "not": {
               "enum": [
-                "adverse_directionality",
+                "adverse_directionality_score",
                 "checks",
-                "exposure_ratios",
+                "exposure_probe_fractions",
                 "grid_max_entries",
-                "penalty_weight",
-                "volatility_ema_1h",
-                "volatility_ema_1m"
+                "log_range_ema_1h",
+                "log_range_ema_1m",
+                "penalty_weight"
               ]
             }
           }

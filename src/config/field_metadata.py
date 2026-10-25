@@ -57,6 +57,23 @@ def enrich_fields(fields):
             data.update(_operational_fraction_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
+            if path[:2] == ("optimize", "prefilter"):
+                if path[2:3] == ("exposure_probe_fractions",):
+                    data.update(unit="fraction", denominator="effective per-position allowance including bounded excess allowance",
+                                description="Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.")
+                    if path[-1] == "*":
+                        data["domain"] = FieldDomain(minimum=0.0, maximum=0.999, exclusive_maximum=True, finite=True)
+                elif path[-1] in {"log_range_ema_1m", "log_range_ema_1h"}:
+                    data.update(unit="log range", denominator="candle low, inside ln(high / low)",
+                                domain=FieldDomain(minimum=0.0, finite=True),
+                                description="Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.")
+                elif path[-1] == "adverse_directionality_score":
+                    data.update(unit="score", domain=FieldDomain(minimum=0.0, maximum=1.0, finite=True),
+                                description="Declared adverse RMS directionality score for hypothetical cooldown measurements.")
+                elif path[-1] == "metric":
+                    from .prefilter import PREFILTER_METRICS
+
+                    data["domain"] = FieldDomain(choices=tuple(sorted(PREFILTER_METRICS)))
             if path[:3] == ("optimize", "pymoo", "shared"):
                 if path[-1].endswith("_distribution_index"):
                     data.update(unit="distribution index", domain=FieldDomain(minimum=0.0, exclusive_minimum=True),

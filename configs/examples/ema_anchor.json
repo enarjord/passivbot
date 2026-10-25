@@ -434,13 +434,13 @@
         "pareto_max_size": 1000,
         "population_size": null,
         "prefilter": {
-            "adverse_directionality": 0.0,
+            "adverse_directionality_score": 0.0,
             "checks": [],
-            "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
+            "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
             "grid_max_entries": 1024,
             "penalty_weight": 1000000.0,
-            "volatility_ema_1h": 0.0,
-            "volatility_ema_1m": 0.0
+            "log_range_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0
         },
         "pymoo": {
             "algorithm": "auto",

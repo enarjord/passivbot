@@ -4,22 +4,22 @@ from copy import deepcopy
 import math
 
 
-PREFILTER_VERSION = 1
+PREFILTER_VERSION = 2
 PREFILTER_METRICS = frozenset(
     {
-        "entry_close_span",
-        "entry_retracement",
-        "close_retracement",
+        "entry_close_span_fraction",
+        "entry_retracement_fraction",
+        "close_retracement_fraction",
         "entry_cooldown_minutes",
-        "grid_span",
+        "grid_span_fraction",
     }
 )
 PREFILTER_DEFAULTS = {
     "checks": [],
-    "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
-    "volatility_ema_1m": 0.0,
-    "volatility_ema_1h": 0.0,
-    "adverse_directionality": 0.0,
+    "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
+    "log_range_ema_1m": 0.0,
+    "log_range_ema_1h": 0.0,
+    "adverse_directionality_score": 0.0,
     "grid_max_entries": 1024,
     "penalty_weight": 1e6,
 }
@@ -47,27 +47,27 @@ def resolve_prefilter(value=None):
         if unknown:
             raise ValueError(f"unknown optimize.prefilter settings: {sorted(unknown)}")
         result.update(deepcopy(value))
-    ratios = result["exposure_ratios"]
-    if not isinstance(ratios, list) or not ratios or len(ratios) > 64:
-        raise ValueError("optimize.prefilter.exposure_ratios must contain 1..64 values")
-    result["exposure_ratios"] = [
-        _number(x, "prefilter.exposure_ratios") for x in ratios
+    fractions = result["exposure_probe_fractions"]
+    if not isinstance(fractions, list) or not fractions or len(fractions) > 64:
+        raise ValueError("optimize.prefilter.exposure_probe_fractions must contain 1..64 values")
+    result["exposure_probe_fractions"] = [
+        _number(x, "prefilter.exposure_probe_fractions") for x in fractions
     ]
-    if any(x >= 0.999 for x in result["exposure_ratios"]):
+    if any(x >= 0.999 for x in result["exposure_probe_fractions"]):
         raise ValueError(
-            "prefilter.exposure_ratios must be below the 0.999 full-capacity boundary"
+            "prefilter.exposure_probe_fractions must be below the 0.999 full-capacity boundary"
         )
     for name in (
-        "volatility_ema_1m",
-        "volatility_ema_1h",
-        "adverse_directionality",
+        "log_range_ema_1m",
+        "log_range_ema_1h",
+        "adverse_directionality_score",
         "penalty_weight",
     ):
         result[name] = _number(
             result[name], f"prefilter.{name}", positive=name == "penalty_weight"
         )
-    if result["adverse_directionality"] > 1:
-        raise ValueError("prefilter.adverse_directionality must be in [0, 1]")
+    if result["adverse_directionality_score"] > 1:
+        raise ValueError("prefilter.adverse_directionality_score must be in [0, 1]")
     count = result["grid_max_entries"]
     if isinstance(count, bool) or not isinstance(count, int) or not 2 <= count <= 4096:
         raise ValueError("prefilter.grid_max_entries must be an integer in [2, 4096]")
