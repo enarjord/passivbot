@@ -38,6 +38,7 @@ def build_command_parser(
         description=description,
         usage=usage,
         epilog=epilog,
+        allow_abbrev=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
