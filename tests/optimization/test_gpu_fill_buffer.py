@@ -158,7 +158,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
     for buffer in [0.0, 0.0015]:
         cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-                    exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_usd'})
+                    exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_fraction_usd'})
         result = proxy.evaluate([{}])[0]
         fills, _, exact = run_backtest(candles, mss, cfg, 'bybit', btc, ts)
         assert len(fills) == 2 * coin_count
@@ -166,7 +166,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         assert len(close_fills) == coin_count
         assert all(int(f[0]) == (21 if buffer else 11) for f in close_fills)
         assert result['fills_per_day'] == pytest.approx(exact['fills_per_day'], rel=1e-5)
-        assert result['adg_usd'] == pytest.approx(exact['adg_usd'], abs=1e-5, rel=1e-3)
+        assert result['adg_fraction_usd'] == pytest.approx(exact['adg_fraction_usd'], abs=1e-5, rel=1e-3)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

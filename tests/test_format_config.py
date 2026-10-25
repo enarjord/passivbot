@@ -255,11 +255,11 @@ def test_format_config_empty_optimize_freezes_configured_bounds():
 def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"] = {"scoring": [{"metric": "adg_usd", "goal": "max"}]}
+    current["optimize"] = {"scoring": [{"metric": "adg_fraction_usd", "goal": "max"}]}
 
     out = format_config(current, verbose=False, live_only=True)
 
-    assert out["optimize"]["scoring"] == [{"metric": "adg_usd", "goal": "max"}]
+    assert out["optimize"]["scoring"] == [{"metric": "adg_fraction_usd", "goal": "max"}]
     assert (
         "qty_fraction"
         in out["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"]

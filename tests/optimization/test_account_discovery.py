@@ -136,11 +136,11 @@ def protocol(**updates):
     return result
 
 
-def evidence(gene, gain, drawdown, *, at=10, export=None, scenarios=None, engine="cpu", **metrics):
+def evidence(gene, gain_multiplier, drawdown, *, at=10, export=None, scenarios=None, engine="cpu", **metrics):
     config = effective(gene)
     identity = canonical_configuration_identity(config, model="v9")
     p = protocol()
-    fields = dict(metric_definition="ordinary_account_v1", net_return=gain,
+    fields = dict(metric_definition="ordinary_account_v1", net_return=gain_multiplier,
                   account_max_drawdown=drawdown, close_fill_count=2, completed=True,
                   liquidated=False, nonpositive_equity_observed=False)
     fields.update(metrics)
@@ -158,8 +158,8 @@ def counter(**settings):
     return DiscoveryCounter(protocol(**settings), starting_pool=[evidence(0, .1, .2, at=5)])
 
 
-def compound_evidence(gene, gain, drawdown, **kwargs):
-    record = evidence(gene, gain, drawdown, **kwargs)
+def compound_evidence(gene, gain_multiplier, drawdown, **kwargs):
+    record = evidence(gene, gain_multiplier, drawdown, **kwargs)
     config = record.pop("effective_config")
     configs = {}
     for label, month in (("base", "01"), ("stress", "03"), ("heldout", "08")):
@@ -463,7 +463,7 @@ def test_missing_or_wrong_account_evidence_cannot_become_neutral_score(metric, v
 
 @pytest.mark.parametrize("updates", [
     {"constraints": []}, {"minimum_activity": {}}, {"minimum_activity": {"fill_count": 0}},
-    {"axes": [dict(metric="adg_strategy_eq", goal="max", reducer="min", novelty_tolerance=0)]},
+    {"axes": [dict(metric="adg_fraction_strategy_equity", goal="max", reducer="min", novelty_tolerance=0)]},
     {"heldout_scenarios": {}}, {"timer_origin": "after_warmup"}, {"timing_phases": ["search"]},
     {"heldout_scenarios": {"renamed_base": "a" * 64}},
     {"target_measure": "unspecified"},

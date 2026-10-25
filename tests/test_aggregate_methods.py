@@ -1,7 +1,7 @@
 """Tests for aggregate method handling across pareto_store, suite_runner, and optimize.
 
 Covers the fix ensuring that non-default aggregate methods (e.g. "max" for
-high_exposure_hours_max_long) are respected when:
+high_exposure_max_hours_long) are respected when:
   1. suite_runner.apply_scenario falls back to base_coins for scenarios without
      explicit coins
   2. pareto_store._suite_metrics_to_stats extracts aggregated values
@@ -43,24 +43,24 @@ class TestResolveAggregateMode:
         assert _resolve_reducer_mode("unknown_metric", cfg) == "median"
 
     def test_exact_match(self):
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        assert _resolve_reducer_mode("high_exposure_hours_max_long", cfg) == "max"
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "max"}
+        assert _resolve_reducer_mode("high_exposure_max_hours_long", cfg) == "max"
 
     def test_base_name_fallback(self):
         """When the full metric isn't in cfg, rsplit('_', 1) base is tried."""
-        cfg = {"default": "mean", "peak_recovery_hours_pnl": "max"}
-        # The metric "peak_recovery_hours_pnl_long" should match base "peak_recovery_hours_pnl"
+        cfg = {"default": "mean", "peak_recovery_max_hours_realized_pnl": "max"}
+        # The metric "peak_recovery_hours_pnl_long" should match base "peak_recovery_max_hours_realized_pnl"
         # ... but only if the base is in the cfg.  Actually rsplit("_", 1) on
-        # "peak_recovery_hours_pnl" gives ("peak_recovery_hours", "pnl"), so
+        # "peak_recovery_max_hours_realized_pnl" gives ("peak_recovery_hours", "pnl"), so
         # this tests a direct match on the full name.
-        assert _resolve_reducer_mode("peak_recovery_hours_pnl", cfg) == "max"
+        assert _resolve_reducer_mode("peak_recovery_max_hours_realized_pnl", cfg) == "max"
 
     def test_base_name_fallback_with_suffix(self):
         cfg = {"default": "mean", "position_held_hours": "min"}
-        assert _resolve_reducer_mode("position_held_hours_max", cfg) == "min"
+        assert _resolve_reducer_mode("position_held_max_hours", cfg) == "min"
 
     def test_default_mean_when_default_absent(self):
-        cfg = {"peak_recovery_hours_pnl": "max"}
+        cfg = {"peak_recovery_max_hours_realized_pnl": "max"}
         assert _resolve_reducer_mode("unrelated_metric", cfg) == "mean"
 
 
@@ -90,7 +90,7 @@ class TestSuiteMetricsToStatsAggregate:
         return {
             "suite_metrics": {
                 "metrics": {
-                    "high_exposure_hours_max_long": payload,
+                    "high_exposure_max_hours_long": payload,
                 }
             }
         }
@@ -98,38 +98,38 @@ class TestSuiteMetricsToStatsAggregate:
     def test_precomputed_aggregated_used_when_present(self):
         entry = self._entry_with_metrics_format(aggregated_value=200.0)
         _, agg = _suite_metrics_to_stats(entry)
-        assert agg["high_exposure_hours_max_long"] == 200.0
+        assert agg["high_exposure_max_hours_long"] == 200.0
 
     def test_fallback_uses_mean_without_cfg(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
         _, agg = _suite_metrics_to_stats(entry)
-        assert agg["high_exposure_hours_max_long"] == 100.0  # mean
+        assert agg["high_exposure_max_hours_long"] == 100.0  # mean
 
     def test_fallback_uses_aggregate_cfg_max(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "max"}
         _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
-        assert agg["high_exposure_hours_max_long"] == 200.0  # max
+        assert agg["high_exposure_max_hours_long"] == 200.0  # max
 
     def test_fallback_uses_aggregate_cfg_min(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "min"}
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "min"}
         _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
-        assert agg["high_exposure_hours_max_long"] == 50.0  # min
+        assert agg["high_exposure_max_hours_long"] == 50.0  # min
 
     def test_precomputed_takes_precedence_over_cfg(self):
         """When aggregated is present, cfg is irrelevant."""
         entry = self._entry_with_metrics_format(aggregated_value=999.0)
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "max"}
         _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
-        assert agg["high_exposure_hours_max_long"] == 999.0
+        assert agg["high_exposure_max_hours_long"] == 999.0
 
     def test_stats_flat_always_available(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "max"}
         stats_flat, _ = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
-        assert stats_flat["high_exposure_hours_max_long_mean"] == 100.0
-        assert stats_flat["high_exposure_hours_max_long_max"] == 200.0
+        assert stats_flat["high_exposure_max_hours_long_mean"] == 100.0
+        assert stats_flat["high_exposure_max_hours_long_max"] == 200.0
 
     def test_aggregate_format_fallback(self):
         """Test the elif 'aggregate' branch when aggregated_values are empty."""
@@ -137,7 +137,7 @@ class TestSuiteMetricsToStatsAggregate:
             "suite_metrics": {
                 "aggregate": {
                     "stats": {
-                        "peak_recovery_hours_pnl": {
+                        "peak_recovery_max_hours_realized_pnl": {
                             "mean": 300.0,
                             "min": 100.0,
                             "max": 500.0,
@@ -149,9 +149,9 @@ class TestSuiteMetricsToStatsAggregate:
                 },
             }
         }
-        cfg = {"default": "mean", "peak_recovery_hours_pnl": "max"}
+        cfg = {"default": "mean", "peak_recovery_max_hours_realized_pnl": "max"}
         _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
-        assert agg["peak_recovery_hours_pnl"] == 500.0
+        assert agg["peak_recovery_max_hours_realized_pnl"] == 500.0
 
 
 # ---------------------------------------------------------------------------
@@ -177,15 +177,15 @@ class TestAggregateMetricsConfig:
         ]
 
     def test_default_mean(self):
-        results = self._make_results("adg_pnl", [1.0, 3.0])
+        results = self._make_results("daily_realized_pnl_mean_fraction", [1.0, 3.0])
         summary = reduce_metrics(results, {"default": "mean"})
-        assert summary["aggregated"]["adg_pnl"] == pytest.approx(2.0)
+        assert summary["aggregated"]["daily_realized_pnl_mean_fraction"] == pytest.approx(2.0)
 
     def test_explicit_max(self):
-        results = self._make_results("high_exposure_hours_max_long", [100.0, 300.0])
-        cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
+        results = self._make_results("high_exposure_max_hours_long", [100.0, 300.0])
+        cfg = {"default": "mean", "high_exposure_max_hours_long": "max"}
         summary = reduce_metrics(results, cfg)
-        assert summary["aggregated"]["high_exposure_hours_max_long"] == pytest.approx(300.0)
+        assert summary["aggregated"]["high_exposure_max_hours_long"] == pytest.approx(300.0)
 
     def test_explicit_min(self):
         results = self._make_results("some_metric", [100.0, 300.0])
@@ -195,11 +195,11 @@ class TestAggregateMetricsConfig:
 
     def test_base_name_fallback_in_aggregate_metrics(self):
         """aggregate_metrics also uses rsplit('_', 1) base lookup."""
-        results = self._make_results("position_held_hours_max", [100.0, 400.0])
+        results = self._make_results("position_held_max_hours", [100.0, 400.0])
         cfg = {"default": "mean", "position_held_hours": "max"}
         summary = reduce_metrics(results, cfg)
-        # "position_held_hours_max" base is "position_held_hours" which maps to "max"
-        assert summary["aggregated"]["position_held_hours_max"] == pytest.approx(400.0)
+        # "position_held_max_hours" base is "position_held_hours" which maps to "max"
+        assert summary["aggregated"]["position_held_max_hours"] == pytest.approx(400.0)
 
 
 # ---------------------------------------------------------------------------
@@ -338,14 +338,14 @@ class TestCalcFitnessAggregateOverride:
 
     def test_override_changes_objective(self):
         aggregate_stats = {
-            "high_exposure_hours_max_long": {
+            "high_exposure_max_hours_long": {
                 "mean": 150.0,
                 "min": 100.0,
                 "max": 300.0,
                 "std": 50.0,
                 "median": 150.0,
             },
-            "adg_pnl": {
+            "daily_realized_pnl_mean_fraction": {
                 "mean": 0.001,
                 "min": 0.0005,
                 "max": 0.0015,
@@ -354,22 +354,22 @@ class TestCalcFitnessAggregateOverride:
             },
         }
         aggregated_values = {
-            "high_exposure_hours_max_long": 300.0,  # max, not mean
-            "adg_pnl": 0.001,  # mean (unchanged)
+            "high_exposure_max_hours_long": 300.0,  # max, not mean
+            "daily_realized_pnl_mean_fraction": 0.001,  # mean (unchanged)
         }
 
         flat_stats = flatten_metric_stats(aggregate_stats)
 
         # Before override: _mean holds the mean
-        assert flat_stats["high_exposure_hours_max_long_mean"] == 150.0
+        assert flat_stats["high_exposure_max_hours_long_mean"] == 150.0
 
         # Apply the override (same logic as optimize.py SuiteEvaluator)
         for metric, agg_value in aggregated_values.items():
             flat_stats[f"{metric}_mean"] = agg_value
 
         # After override: _mean holds the correctly aggregated value
-        assert flat_stats["high_exposure_hours_max_long_mean"] == 300.0
-        assert flat_stats["adg_pnl_mean"] == 0.001  # unchanged
+        assert flat_stats["high_exposure_max_hours_long_mean"] == 300.0
+        assert flat_stats["daily_realized_pnl_mean_fraction_mean"] == 0.001  # unchanged
 
 
 # ---------------------------------------------------------------------------
@@ -384,9 +384,9 @@ class TestObjectivesNotDoubleCorrected:
 
     AGGREGATE_CFG = {
         "default": "mean",
-        "high_exposure_hours_max_long": "max",
-        "peak_recovery_hours_pnl": "max",
-        "position_held_hours_max": "max",
+        "high_exposure_max_hours_long": "max",
+        "peak_recovery_max_hours_realized_pnl": "max",
+        "position_held_max_hours": "max",
     }
 
     def _make_pareto_entry(self, scoring_keys, objective_values, mean_values, max_values):
@@ -423,10 +423,10 @@ class TestObjectivesNotDoubleCorrected:
     def test_new_entry_objectives_unchanged(self):
         """Objectives produced by the fixed optimizer must pass through
         pareto_store untouched — no ratio correction applied."""
-        scoring = ["adg_pnl", "high_exposure_hours_max_long"]
-        means = {"adg_pnl": 0.001, "high_exposure_hours_max_long": 150.0}
-        maxes = {"adg_pnl": 0.001, "high_exposure_hours_max_long": 300.0}
-        # Fixed optimizer: adg_pnl uses mean (0.001), exposure uses max (300)
+        scoring = ["daily_realized_pnl_mean_fraction", "high_exposure_max_hours_long"]
+        means = {"daily_realized_pnl_mean_fraction": 0.001, "high_exposure_max_hours_long": 150.0}
+        maxes = {"daily_realized_pnl_mean_fraction": 0.001, "high_exposure_max_hours_long": 300.0}
+        # Fixed optimizer: daily_realized_pnl_mean_fraction uses mean (0.001), exposure uses max (300)
         entry = self._make_pareto_entry(scoring, [0.001, 300.0], means, maxes)
 
         # Reproduce pareto_store.main() logic
@@ -445,9 +445,9 @@ class TestObjectivesNotDoubleCorrected:
     def test_limit_filtering_uses_aggregated_values(self):
         """Even without objective correction, -l limit filtering still uses
         the correctly aggregated values from suite_metrics."""
-        scoring = ["high_exposure_hours_max_long"]
-        means = {"high_exposure_hours_max_long": 150.0}
-        maxes = {"high_exposure_hours_max_long": 300.0}
+        scoring = ["high_exposure_max_hours_long"]
+        means = {"high_exposure_max_hours_long": 150.0}
+        maxes = {"high_exposure_max_hours_long": 300.0}
         entry = self._make_pareto_entry(scoring, [300.0], means, maxes)
 
         reducer_cfg = entry.get("backtest", {}).get("reducer")
@@ -456,4 +456,4 @@ class TestObjectivesNotDoubleCorrected:
             reducer_cfg=reducer_cfg,
         )
         # Limit filtering sees the correct max value (300), not the mean (150)
-        assert aggregated_values["high_exposure_hours_max_long"] == 300.0
+        assert aggregated_values["high_exposure_max_hours_long"] == 300.0

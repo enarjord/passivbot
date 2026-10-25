@@ -211,7 +211,7 @@ def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
         "coin_index": {"BTC": 0},
     }
     (artifact_dir / "config.json").write_text(json.dumps(config))
-    (artifact_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.23}))
+    (artifact_dir / "analysis.json").write_text(json.dumps({"gain_multiplier_usd": 1.23}))
     (artifact_dir / "dataset.json").write_text(json.dumps(dataset))
     pd.DataFrame(
         {
@@ -251,7 +251,7 @@ def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
     neutral = calc_ema_anchor_neutral_bands_from_artifact(artifact_dir, side="long")
     inventory = calc_ema_anchor_inventory_bands_from_artifact(artifact_dir, side_mode="active")
 
-    assert loaded["analysis"]["gain_usd"] == pytest.approx(1.23)
+    assert loaded["analysis"]["gain_multiplier_usd"] == pytest.approx(1.23)
     assert list(neutral.columns) == ["timestamp", "high", "low", "close", "bid", "ask"]
     assert "fill_qty_bid" in inventory.columns
     assert inventory.loc[2, "psize"] == pytest.approx(1.0)

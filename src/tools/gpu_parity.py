@@ -25,7 +25,7 @@ from optimization.gpu.parity import MetricTolerance, compare_limits, compare_met
 from config.metrics import EXPOSURE_RMS_METRICS
 
 
-DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day")
+DEFAULT_METRICS = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day")
 FIXTURE_DEFAULTS = {
     "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
@@ -39,10 +39,10 @@ STRESS_OPTIONS = ("hsl_red_threshold", "hsl_drawdown_ratio_ema_span_minutes", "h
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
-    "adg_strategy_eq": MetricTolerance(1e-7, 1e-4),
-    "drawdown_worst_strategy_eq": MetricTolerance(1e-5, 1e-4),
+    "adg_fraction_strategy_equity": MetricTolerance(1e-7, 1e-4),
+    "drawdown_max_fraction_strategy_equity": MetricTolerance(1e-5, 1e-4),
     "fills_per_day": MetricTolerance(1e-6, 1e-5),
-    "backtest_completion_ratio": MetricTolerance(1e-6, 1e-6),
+    "backtest_completion_fraction": MetricTolerance(1e-6, 1e-6),
 }
 
 
@@ -446,7 +446,7 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     identity = _identity(config, (hlcvs, btc, timestamps), markets, exchange)
     payload = build_backtest_payload(
         hlcvs, markets, deepcopy(config), exchange, btc, timestamps,
-        metrics_only=not diagnostics, skip_btc_analysis=not any(name.endswith("_btc") for name in metrics),
+        metrics_only=not diagnostics, skip_btc_analysis=not any(name.endswith("_btc") or "_btc_" in name for name in metrics),
     )
     started = time.perf_counter()
     fills, equities, analysis = execute_backtest(payload, config)

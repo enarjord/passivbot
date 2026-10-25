@@ -58,41 +58,41 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         import session_artifacts
         config["optimize"]["seed"] = None
         monkeypatch.setattr(session_artifacts.secrets, "randbits", lambda _bits: 12)
-    config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
-                                      dict(metric="drawdown_worst_strategy_eq", goal="min")]
-    config["optimize"]["limits"] = [dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99)]
+    config["optimize"]["scoring"] = [dict(metric="adg_fraction_strategy_equity", goal="max"),
+                                      dict(metric="drawdown_max_fraction_strategy_equity", goal="min")]
+    config["optimize"]["limits"] = [dict(metric="backtest_completion_fraction", penalize_if="less_than", value=0.99)]
     if additional_equity:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_strategy_eq", goal="max"),
+            dict(metric="adg_fraction_strategy_equity", goal="max"),
             dict(metric="calmar_ratio_usd", goal="max"),
         ]
         config["optimize"]["limits"].append(dict(
-            metric="mdg_per_exposure_long_usd", penalize_if="greater_than", value=1.0,
+            metric="mdg_fraction_per_twel_ratio_usd_long", penalize_if="greater_than", value=1.0,
         ))
     if raw_equity:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_strategy_eq", goal="max"),
-            dict(metric="calmar_ratio_strategy_eq", goal="max"),
+            dict(metric="adg_fraction_strategy_equity", goal="max"),
+            dict(metric="calmar_ratio_strategy_equity", goal="max"),
         ]
         config["optimize"]["limits"].append(dict(
-            metric="expected_shortfall_1pct_strategy_eq", penalize_if="greater_than", value=1.0,
+            metric="expected_shortfall_1pct_fraction_strategy_equity", penalize_if="greater_than", value=1.0,
         ))
     if portfolio_ema:
         config["optimize"]["scoring"].append(dict(
-            metric="drawdown_worst_mean_1pct_ema_strategy_eq", goal="min",
+            metric="hsl_signal_ema_worst_1pct_mean_fraction", goal="min",
         ))
     if recovery:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_strategy_eq", goal="max"),
-            dict(metric="strategy_eq_recovery_days_p95", goal="min"),
+            dict(metric="adg_fraction_strategy_equity", goal="max"),
+            dict(metric="recovery_p95_days_strategy_equity", goal="min"),
         ]
     if hsl_tail:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_strategy_eq", goal="max"),
-            dict(metric="drawdown_worst_mean_1pct_ema_strategy_eq", goal="min"),
+            dict(metric="adg_fraction_strategy_equity", goal="max"),
+            dict(metric="hsl_signal_ema_worst_1pct_mean_fraction", goal="min"),
         ]
         config["optimize"]["limits"].extend(
-            dict(metric=f"drawdown_worst_mean_1pct_ema_strategy_eq_{side}",
+            dict(metric=f"hsl_signal_ema_worst_1pct_mean_fraction_{side}",
                  penalize_if="greater_than", value=0.05)
             for side in ("long", "short")
         )

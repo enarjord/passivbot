@@ -6,11 +6,16 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make analysis metric units explicit and put curve, position side and exponential weighting
+  modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
+  strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without
+  changing calculations or value scales. Explicit released-v8 migration emits the current names.
+
 - Publish immutable analysis quantity metadata and a generated reference covering units,
   denominators, observation populations, aggregation and weighting without changing formulas.
 
-- Replace `strategy_eq_underwater_pct_mean` with `pain_index_strategy_eq`, the mean
-  drawdown across all recorded strategy-equity samples, and add `ulcer_index_strategy_eq`,
+- Replace `strategy_eq_underwater_pct_mean` with `pain_index_fraction_strategy_equity`, the mean
+  drawdown across all recorded strategy-equity samples, and add `ulcer_index_fraction_strategy_equity`,
   their root mean square. Both use minute-level samples with standard one-minute candles,
   include zero drawdowns, and support backtest results, optimizer scoring and limits,
   suites, and GPU screening. Remove `strategy_eq_underwater_pct_median` without aliases;

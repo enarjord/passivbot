@@ -136,28 +136,49 @@ fn equity_shared_references_match_current_producers() {
                 name,
                 &[
                     (
-                        "adg_rolling_hmean_strategy_eq",
-                        raw.adg_rolling_hmean_strategy_eq,
+                        "adg_rolling_hmean_fraction_strategy_equity",
+                        raw.adg_rolling_hmean_fraction_strategy_equity,
                     ),
-                    ("adg_strategy_eq", raw.adg_strategy_eq),
                     (
-                        "adg_time_integrated_strategy_eq",
-                        raw.adg_time_integrated_strategy_eq,
+                        "adg_fraction_strategy_equity",
+                        raw.adg_fraction_strategy_equity,
                     ),
-                    ("calmar_ratio_strategy_eq", raw.calmar_ratio_strategy_eq),
                     (
-                        "expected_shortfall_1pct_strategy_eq",
-                        raw.expected_shortfall_1pct_strategy_eq,
+                        "adg_time_integrated_fraction_strategy_equity",
+                        raw.adg_time_integrated_fraction_strategy_equity,
                     ),
-                    ("mdg_strategy_eq", raw.mdg_strategy_eq),
-                    ("omega_ratio_strategy_eq", raw.omega_ratio_strategy_eq),
                     (
-                        "positive_gain_participation_strategy_eq",
-                        raw.positive_gain_participation_strategy_eq,
+                        "calmar_ratio_strategy_equity",
+                        raw.calmar_ratio_strategy_equity,
                     ),
-                    ("sharpe_ratio_strategy_eq", raw.sharpe_ratio_strategy_eq),
-                    ("sortino_ratio_strategy_eq", raw.sortino_ratio_strategy_eq),
-                    ("sterling_ratio_strategy_eq", raw.sterling_ratio_strategy_eq),
+                    (
+                        "expected_shortfall_1pct_fraction_strategy_equity",
+                        raw.expected_shortfall_1pct_fraction_strategy_equity,
+                    ),
+                    (
+                        "mdg_fraction_strategy_equity",
+                        raw.mdg_fraction_strategy_equity,
+                    ),
+                    (
+                        "omega_ratio_strategy_equity",
+                        raw.omega_ratio_strategy_equity,
+                    ),
+                    (
+                        "positive_log_return_participation_score_strategy_equity",
+                        raw.positive_log_return_participation_score_strategy_equity,
+                    ),
+                    (
+                        "sharpe_ratio_strategy_equity",
+                        raw.sharpe_ratio_strategy_equity,
+                    ),
+                    (
+                        "sortino_ratio_strategy_equity",
+                        raw.sortino_ratio_strategy_equity,
+                    ),
+                    (
+                        "sterling_ratio_strategy_equity",
+                        raw.sterling_ratio_strategy_equity,
+                    ),
                 ],
                 &case[expected_full],
             );
@@ -200,9 +221,15 @@ fn equity_shared_references_match_current_producers() {
                 assert_metrics_with_tolerance(
                     name,
                     &[
-                        ("equity_choppiness_usd", account.equity_choppiness),
-                        ("equity_jerkiness_usd", account.equity_jerkiness),
-                        ("exponential_fit_error_usd", account.exponential_fit_error),
+                        (
+                            "equity_choppiness_ratio_usd",
+                            account.equity_choppiness_ratio,
+                        ),
+                        ("equity_jerkiness_ratio_usd", account.equity_jerkiness_ratio),
+                        (
+                            "exponential_fit_mse_log_ratio_squared_usd",
+                            account.exponential_fit_mse_log_ratio_squared,
+                        ),
                     ],
                     &case[expected_shape][variant],
                     1e-10,

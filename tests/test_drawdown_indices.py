@@ -42,16 +42,16 @@ def test_real_replay_drawdown_indices_match_saved_full_resolution_curve():
     assert analysis['fills_count'] > 0
     peaks = np.maximum.accumulate(strategy_equity)
     drawdowns = (peaks - strategy_equity) / np.maximum(np.abs(peaks), 1e-12)
-    assert analysis['pain_index_strategy_eq'] == pytest.approx(np.mean(drawdowns), abs=1e-12)
-    assert analysis['ulcer_index_strategy_eq'] == pytest.approx(math.sqrt(np.mean(drawdowns**2)), abs=1e-12)
-    assert analysis['ulcer_index_strategy_eq'] >= analysis['pain_index_strategy_eq'] > 0
+    assert analysis['pain_index_fraction_strategy_equity'] == pytest.approx(np.mean(drawdowns), abs=1e-12)
+    assert analysis['ulcer_index_fraction_strategy_equity'] == pytest.approx(math.sqrt(np.mean(drawdowns**2)), abs=1e-12)
+    assert analysis['ulcer_index_fraction_strategy_equity'] >= analysis['pain_index_fraction_strategy_equity'] > 0
     assert not any(key.startswith('strategy_eq_underwater_pct_') for key in analysis)
-    specs, _ = normalize_scoring_entries(['pain_index_strategy_eq', 'ulcer_index_strategy_eq'])
+    specs, _ = normalize_scoring_entries(['pain_index_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity'])
     assert [spec.goal for spec in specs] == ['min', 'min']
 
     payload = build_backtest_payload(candles, mss, config, 'binance',
                                      np.full(n, 20000.), timestamps, metrics_only=True)
     _, omitted_equities, metrics_only = execute_backtest(payload, config)
     assert omitted_equities is None
-    for metric in ['pain_index_strategy_eq', 'ulcer_index_strategy_eq']:
+    for metric in ['pain_index_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity']:
         assert metrics_only[metric] == analysis[metric]

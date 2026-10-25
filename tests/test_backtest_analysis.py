@@ -9,7 +9,7 @@ import plotting
 from backtest import (
     BacktestPayload,
     DISABLE_PLOTTING_HELP,
-    calc_backtest_completion_ratio,
+    calc_backtest_completion_fraction,
     execute_backtest,
     expand_analysis,
     parse_disabled_plot_groups,
@@ -23,53 +23,53 @@ from plotting import (
 
 def _make_analysis_entry(value):
     base_keys = [
-        "adg",
-        "mdg",
-        "gain",
-        "positions_held_per_day",
+        "adg_fraction",
+        "mdg_fraction",
+        "gain_multiplier",
+        "position_episodes_per_day",
         "position_held_time_weighted_mean_hours",
-        "position_held_hours_mean",
-        "position_held_hours_max",
-        "position_held_hours_median",
-        "position_unchanged_hours_max",
-        "position_held_days_mean",
-        "position_held_days_max",
-        "position_held_days_median",
-        "position_unchanged_days_max",
-        "win_rate",
-        "trade_loss_max",
-        "trade_loss_mean",
-        "trade_loss_median",
-        "paper_loss_ratio",
-        "paper_loss_mean_ratio",
+        "position_held_mean_hours",
+        "position_held_max_hours",
+        "position_held_median_hours",
+        "position_unchanged_max_hours",
+        "position_held_mean_days",
+        "position_held_max_days",
+        "position_held_median_days",
+        "position_unchanged_max_days",
+        "trade_win_fraction",
+        "trade_loss_max_fraction",
+        "trade_loss_mean_fraction",
+        "trade_loss_median_fraction",
+        "adg_to_paper_loss_max_ratio",
+        "adg_to_paper_loss_mean_ratio",
         "exposure_ratio",
-        "exposure_mean_ratio",
+        "adg_to_absolute_net_exposure_mean_ratio",
         "loss_profit_ratio",
-        "volume_pct_per_day_avg",
-        "peak_recovery_hours_pnl",
-        "peak_recovery_days_pnl",
-        "total_wallet_exposure_max",
-        "total_wallet_exposure_mean",
-        "total_wallet_exposure_median",
-        "high_exposure_hours_mean_long",
-        "high_exposure_hours_max_long",
-        "high_exposure_hours_mean_short",
-        "high_exposure_hours_max_short",
-        "high_exposure_days_mean_long",
-        "high_exposure_days_max_long",
-        "high_exposure_days_mean_short",
-        "high_exposure_days_max_short",
-        "entry_initial_balance_pct_long",
-        "entry_initial_balance_pct_short",
-        "entry_interval_hours_p95",
-        "entry_interval_hours_p99",
-        "strategy_eq_recovery_days_mean",
-        "strategy_eq_recovery_days_median",
-        "strategy_eq_recovery_days_p95",
-        "strategy_eq_recovery_days_p99",
-        "strategy_eq_recovery_days_mean_worst_5pct",
-        "strategy_eq_recovery_days_mean_worst_1pct",
-        "strategy_eq_recovery_days_max",
+        "active_day_turnover_proxy_mean_ratio",
+        "peak_recovery_max_hours_realized_pnl",
+        "peak_recovery_max_days_realized_pnl",
+        "absolute_net_wallet_exposure_max_ratio",
+        "absolute_net_wallet_exposure_mean_ratio",
+        "absolute_net_wallet_exposure_median_ratio",
+        "high_exposure_mean_hours_long",
+        "high_exposure_max_hours_long",
+        "high_exposure_mean_hours_short",
+        "high_exposure_max_hours_short",
+        "high_exposure_mean_days_long",
+        "high_exposure_max_days_long",
+        "high_exposure_mean_days_short",
+        "high_exposure_max_days_short",
+        "initial_entry_balance_fraction_long",
+        "initial_entry_balance_fraction_short",
+        "entry_interval_p95_hours",
+        "entry_interval_p99_hours",
+        "recovery_mean_days_strategy_equity",
+        "recovery_median_days_strategy_equity",
+        "recovery_p95_days_strategy_equity",
+        "recovery_p99_days_strategy_equity",
+        "recovery_worst_5pct_mean_days_strategy_equity",
+        "recovery_worst_1pct_mean_days_strategy_equity",
+        "recovery_max_days_strategy_equity",
     ]
     analysis = {key: value for key in base_keys}
     analysis.update(
@@ -77,24 +77,24 @@ def _make_analysis_entry(value):
             "sharpe_ratio": 0.0,
             "sortino_ratio": 0.0,
             "omega_ratio": 0.0,
-            "expected_shortfall_1pct": 0.0,
+            "expected_shortfall_1pct_fraction": 0.0,
             "calmar_ratio": 0.0,
             "sterling_ratio": 0.0,
-            "drawdown_worst": 0.0,
-            "drawdown_worst_mean_1pct": 0.0,
-            "pain_index_strategy_eq": 0.0,
-            "ulcer_index_strategy_eq": 0.0,
-            "equity_balance_diff_neg_max": 0.0,
-            "equity_balance_diff_neg_mean": 0.0,
-            "equity_balance_diff_pos_max": 0.0,
-            "equity_balance_diff_pos_mean": 0.0,
-            "peak_recovery_hours_equity": 0.0,
-            "peak_recovery_days_equity": 0.0,
-            "equity_choppiness": 0.0,
-            "equity_jerkiness": 0.0,
-            "exponential_fit_error": 0.0,
-            "adg_per_exposure_long": 0.0,
-            "adg_per_exposure_short": 0.0,
+            "drawdown_max_fraction": 0.0,
+            "drawdown_daily_worst_1pct_mean_fraction": 0.0,
+            "pain_index_fraction_strategy_equity": 0.0,
+            "ulcer_index_fraction_strategy_equity": 0.0,
+            "equity_balance_gap_negative_max_fraction": 0.0,
+            "equity_balance_gap_negative_mean_fraction": 0.0,
+            "equity_balance_gap_positive_max_fraction": 0.0,
+            "equity_balance_gap_positive_mean_fraction": 0.0,
+            "peak_recovery_max_hours": 0.0,
+            "peak_recovery_max_days": 0.0,
+            "equity_choppiness_ratio": 0.0,
+            "equity_jerkiness_ratio": 0.0,
+            "exponential_fit_mse_log_ratio_squared": 0.0,
+            "adg_fraction_per_twel_ratio_long": 0.0,
+            "adg_fraction_per_twel_ratio_short": 0.0,
         }
     )
     return analysis
@@ -126,10 +126,10 @@ def test_expand_analysis_includes_entry_balance_pct():
         equities_array=np.empty((0, 3)),
         config=config,
     )
-    assert "entry_initial_balance_pct_long" in result
-    assert "entry_initial_balance_pct_short" in result
-    assert result["entry_initial_balance_pct_long"] == 0.123
-    assert result["entry_initial_balance_pct_short"] == 0.123
+    assert "initial_entry_balance_fraction_long" in result
+    assert "initial_entry_balance_fraction_short" in result
+    assert result["initial_entry_balance_fraction_long"] == 0.123
+    assert result["initial_entry_balance_fraction_short"] == 0.123
 
 
 def test_expand_analysis_includes_high_exposure_hours():
@@ -149,17 +149,17 @@ def test_expand_analysis_includes_high_exposure_hours():
         config=config,
     )
     for side in ("long", "short"):
-        assert f"high_exposure_hours_mean_{side}" in result
-        assert f"high_exposure_hours_max_{side}" in result
-        assert result[f"high_exposure_hours_mean_{side}"] == 0.5
-        assert result[f"high_exposure_hours_max_{side}"] == 0.5
+        assert f"high_exposure_mean_hours_{side}" in result
+        assert f"high_exposure_max_hours_{side}" in result
+        assert result[f"high_exposure_mean_hours_{side}"] == 0.5
+        assert result[f"high_exposure_max_hours_{side}"] == 0.5
 
 
 def test_expand_analysis_includes_day_duration_metrics():
     analysis_usd = _make_analysis_entry(2.0)
     analysis_btc = _make_analysis_entry(4.0)
-    analysis_usd["peak_recovery_days_equity"] = 1.25
-    analysis_btc["peak_recovery_days_equity"] = 2.5
+    analysis_usd["peak_recovery_max_days"] = 1.25
+    analysis_btc["peak_recovery_max_days"] = 2.5
     config = {
         "bot": {
             "long": {"total_wallet_exposure_limit": 1.0},
@@ -174,13 +174,13 @@ def test_expand_analysis_includes_day_duration_metrics():
         config=config,
     )
 
-    assert result["position_held_days_max"] == 2.0
-    assert result["position_unchanged_days_max"] == 2.0
-    assert result["peak_recovery_days_pnl"] == 2.0
-    assert result["high_exposure_days_max_long"] == 2.0
-    assert result["high_exposure_days_max_short"] == 2.0
-    assert result["peak_recovery_days_equity_usd"] == 1.25
-    assert result["peak_recovery_days_equity_btc"] == 2.5
+    assert result["position_held_max_days"] == 2.0
+    assert result["position_unchanged_max_days"] == 2.0
+    assert result["peak_recovery_max_days_realized_pnl"] == 2.0
+    assert result["high_exposure_max_days_long"] == 2.0
+    assert result["high_exposure_max_days_short"] == 2.0
+    assert result["peak_recovery_max_days_usd"] == 1.25
+    assert result["peak_recovery_max_days_btc"] == 2.5
 
 
 def test_expand_analysis_includes_trade_level_metrics():
@@ -201,10 +201,10 @@ def test_expand_analysis_includes_trade_level_metrics():
         config=config,
     )
 
-    assert result["win_rate"] == 0.25
-    assert result["trade_loss_max"] == 0.25
-    assert result["trade_loss_mean"] == 0.25
-    assert result["trade_loss_median"] == 0.25
+    assert result["trade_win_fraction"] == 0.25
+    assert result["trade_loss_max_fraction"] == 0.25
+    assert result["trade_loss_mean_fraction"] == 0.25
+    assert result["trade_loss_median_fraction"] == 0.25
     assert "win_rate_usd" not in result
     assert "trade_loss_max_btc" not in result
 
@@ -228,10 +228,10 @@ def test_expand_analysis_currency_suffixes_new_ratio_metrics():
     )
 
     for metric in (
-        "paper_loss_ratio",
-        "paper_loss_mean_ratio",
+        "adg_to_paper_loss_max_ratio",
+        "adg_to_paper_loss_mean_ratio",
         "exposure_ratio",
-        "exposure_mean_ratio",
+        "adg_to_absolute_net_exposure_mean_ratio",
     ):
         assert result[f"{metric}_usd"] == 0.25
         assert result[f"{metric}_btc"] == 0.75
@@ -254,7 +254,7 @@ def test_calc_backtest_completion_ratio_is_full_when_final_candle_reaches_end():
         dtype=np.float64,
     )
 
-    assert calc_backtest_completion_ratio(equities, config) == pytest.approx(1.0)
+    assert calc_backtest_completion_fraction(equities, config) == pytest.approx(1.0)
 
 
 def test_calc_backtest_completion_ratio_detects_early_stop():
@@ -273,7 +273,7 @@ def test_calc_backtest_completion_ratio_detects_early_stop():
         dtype=np.float64,
     )
 
-    assert calc_backtest_completion_ratio(equities, config) == pytest.approx(0.5)
+    assert calc_backtest_completion_fraction(equities, config) == pytest.approx(0.5)
 
 
 def test_expand_analysis_includes_backtest_completion_ratio_when_available():
@@ -306,7 +306,7 @@ def test_expand_analysis_includes_backtest_completion_ratio_when_available():
         config=config,
     )
 
-    assert result["backtest_completion_ratio"] == pytest.approx(1.0)
+    assert result["backtest_completion_fraction"] == pytest.approx(1.0)
 
 
 def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
@@ -347,7 +347,7 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
 
     assert fills is None
     assert equities_array is None
-    assert analysis["backtest_completion_ratio"] == pytest.approx(1.0)
+    assert analysis["backtest_completion_fraction"] == pytest.approx(1.0)
 
 
 def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
@@ -413,13 +413,13 @@ def test_expand_analysis_allows_skipped_btc_analysis():
         },
     )
 
-    assert result["adg_usd"] == pytest.approx(0.25)
-    assert result["adg_per_exposure_long_usd"] == pytest.approx(0.25)
-    assert "adg_btc" not in result
-    assert "adg_per_exposure_long_btc" not in result
+    assert result["adg_fraction_usd"] == pytest.approx(0.25)
+    assert result["adg_fraction_per_twel_ratio_usd_long"] == pytest.approx(0.25)
+    assert "adg_fraction_btc" not in result
+    assert "adg_fraction_per_twel_ratio_btc_long" not in result
 
 
-def test_make_table_includes_trade_metrics():
+def test_legacy_make_table_includes_trade_metrics():
     table = plotting.make_table(
         {
             "exchange": "binance",
@@ -449,20 +449,20 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     analysis_btc = _make_analysis_entry(0.5)
     analysis_usd.update(
         {
-            "hard_stop_triggers": 3,
-            "hard_stop_triggers_per_year": 36.5,
-            "hard_stop_restarts": 2,
-            "hard_stop_total_loss_pct": 0.125,
-            "hard_stop_restarts_per_year": 24.3333333333,
+            "hsl_trigger_count": 3,
+            "hsl_triggers_per_year": 36.5,
+            "hsl_restart_count": 2,
+            "hsl_panic_loss_starting_balance_fraction": 0.125,
+            "hsl_restarts_per_year": 24.3333333333,
         }
     )
     analysis_btc.update(
         {
-            "hard_stop_triggers": 3,
-            "hard_stop_triggers_per_year": 36.5,
-            "hard_stop_restarts": 2,
-            "hard_stop_total_loss_pct": 0.125,
-            "hard_stop_restarts_per_year": 24.3333333333,
+            "hsl_trigger_count": 3,
+            "hsl_triggers_per_year": 36.5,
+            "hsl_restart_count": 2,
+            "hsl_panic_loss_starting_balance_fraction": 0.125,
+            "hsl_restarts_per_year": 24.3333333333,
         }
     )
     config = {
@@ -480,19 +480,19 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
         config=config,
     )
 
-    assert result["hard_stop_triggers"] == 3
-    assert result["hard_stop_triggers_per_year"] == 36.5
-    assert result["hard_stop_restarts"] == 2
-    assert result["hard_stop_total_loss_pct"] == 0.125
-    assert result["hard_stop_restarts_per_year"] == 24.3333333333
+    assert result["hsl_trigger_count"] == 3
+    assert result["hsl_triggers_per_year"] == 36.5
+    assert result["hsl_restart_count"] == 2
+    assert result["hsl_panic_loss_starting_balance_fraction"] == 0.125
+    assert result["hsl_restarts_per_year"] == 24.3333333333
     assert "hard_stop_triggers_usd" not in result
     assert "hard_stop_triggers_btc" not in result
     assert "hard_stop_triggers_per_year_usd" not in result
     assert "hard_stop_triggers_per_year_btc" not in result
     assert "hard_stop_restarts_usd" not in result
     assert "hard_stop_restarts_btc" not in result
-    assert "hard_stop_total_loss_pct_usd" not in result
-    assert "hard_stop_total_loss_pct_btc" not in result
+    assert "hsl_panic_loss_starting_balance_fraction_usd" not in result
+    assert "hsl_panic_loss_starting_balance_fraction_btc" not in result
     assert "hard_stop_restarts_per_year_usd" not in result
     assert "hard_stop_restarts_per_year_btc" not in result
 
@@ -511,7 +511,7 @@ def test_process_forager_fills_handles_zero_pnl_division():
 
     assert analysis_appendix["loss_profit_ratio_long"] == 1.0
     assert analysis_appendix["loss_profit_ratio_short"] == 1.0
-    assert analysis_appendix["pnl_ratio_long_short"] == 0.5
+    assert analysis_appendix["long_pnl_to_total_pnl_ratio"] == 0.5
 
 
 def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
@@ -543,30 +543,30 @@ def test_expand_analysis_keeps_rust_fill_activity_metrics_shared():
     analysis_btc = _make_analysis_entry(0.75)
     fill_metrics = {
         "fills_active_days_count": 1.0,
-        "fills_active_days_ratio": 1.0,
+        "fills_active_day_fraction": 1.0,
         "fills_active_symbols_count": 2.0,
-        "fills_analysis_duration_days": 4.0 / 24.0,
+        "analysis_duration_days": 4.0 / 24.0,
         "fills_count": 2.0,
-        "fills_count_close": 1.0,
-        "fills_count_entry": 1.0,
+        "fills_close_count": 1.0,
+        "fills_entry_count": 1.0,
         "fills_count_long": 2.0,
         "fills_count_short": 0.0,
-        "fills_entry_per_close": 1.0,
-        "fills_gap_longest_days": 2.0 / 24.0,
+        "entry_to_close_fill_count_ratio": 1.0,
+        "fills_gap_max_days": 2.0 / 24.0,
         "fills_gap_mean_hours": 4.0 / 3.0,
         "fills_gap_median_hours": 1.0,
         "fills_gap_p95_hours": 1.9,
         "fills_gap_p99_hours": 1.98,
         "fills_gap_time_weighted_mean_hours": 1.5,
         "fills_per_day": 12.0,
-        "fills_per_day_close": 6.0,
-        "fills_per_day_entry": 6.0,
+        "fills_close_per_day": 6.0,
+        "fills_entry_per_day": 6.0,
         "fills_per_day_long": 12.0,
         "fills_per_day_per_position_slot": 6.0,
         "fills_per_day_per_position_slot_long": 6.0,
         "fills_per_day_per_position_slot_short": 0.0,
         "fills_per_day_short": 0.0,
-        "fills_top_symbol_share": 0.5,
+        "fills_top_symbol_fraction": 0.5,
     }
     analysis_usd.update(fill_metrics)
     analysis_btc.update(fill_metrics)
@@ -737,7 +737,7 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
         fills=[],
         equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
         btc_usd_prices=np.array([]),
-        analysis={"gain_usd": 1.0},
+        analysis={"gain_multiplier_usd": 1.0},
         results_path=str(tmp_path),
         exchange="binance",
     )
@@ -820,7 +820,7 @@ def test_post_process_writes_original_config_for_dataset_override(
         fills=[],
         equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
         btc_usd_prices=np.array([]),
-        analysis={"gain_usd": 1.0},
+        analysis={"gain_multiplier_usd": 1.0},
         results_path=str(tmp_path),
         exchange="binance",
     )
@@ -833,7 +833,7 @@ def test_post_process_writes_original_config_for_dataset_override(
         "ETH"
     ]
     assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]
-    assert dumped_by_name["config.json"]["metrics"]["stats"]["gain_usd"]["mean"] == 1.0
+    assert dumped_by_name["config.json"]["metrics"]["stats"]["gain_multiplier_usd"]["mean"] == 1.0
     assert "suite_metrics" not in dumped_by_name["config.json"]
     assert "metrics" not in dumped_by_name["config.original.json"]
 
@@ -916,7 +916,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         fills=[],
         equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
         btc_usd_prices=np.array([]),
-        analysis={"gain_usd": 1.0},
+        analysis={"gain_multiplier_usd": 1.0},
         results_path=str(tmp_path),
         exchange="binance",
     )
@@ -964,7 +964,7 @@ def test_post_process_visible_metrics_filters_logged_output_only(
         },
         "live": {},
         "optimize": {
-            "scoring": ["adg"],
+            "scoring": ["adg_fraction"],
             "limits": [{"metric": "loss_profit_ratio"}],
         },
     }
@@ -990,10 +990,10 @@ def test_post_process_visible_metrics_filters_logged_output_only(
         equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
         btc_usd_prices=np.array([]),
         analysis={
-            "adg_usd": 0.01,
-            "adg_btc": 0.02,
+            "adg_fraction_usd": 0.01,
+            "adg_fraction_btc": 0.02,
             "loss_profit_ratio": 0.5,
-            "peak_recovery_hours_hsl": 12.0,
+            "recovery_max_hours_strategy_equity": 12.0,
         },
         results_path=str(tmp_path),
         exchange="binance",
@@ -1001,12 +1001,12 @@ def test_post_process_visible_metrics_filters_logged_output_only(
 
     logged = caplog.text
     assert "Showing 3 of 4 metrics" in logged
-    assert "adg_usd" in logged
-    assert "adg_btc" in logged
+    assert "adg_fraction_usd" in logged
+    assert "adg_fraction_btc" in logged
     assert "loss_profit_ratio" in logged
-    assert "peak_recovery_hours_hsl" not in logged
+    assert "recovery_max_hours_strategy_equity" not in logged
     analysis_path = next(tmp_path.glob("*/analysis.json"))
-    assert "peak_recovery_hours_hsl" in analysis_path.read_text(encoding="utf-8")
+    assert "recovery_max_hours_strategy_equity" in analysis_path.read_text(encoding="utf-8")
 
 
 def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
@@ -1033,7 +1033,7 @@ def test_analysis_period_uses_actual_equity_timestamps(columns, count):
     equities[:, 0] = timestamps
     duration = 1.0 if count == 3 else 0.0
     result = expand_analysis(
-        {"fills_analysis_duration_days": duration},
+        {"analysis_duration_days": duration},
         {},
         None,
         equities,
@@ -1042,7 +1042,7 @@ def test_analysis_period_uses_actual_equity_timestamps(columns, count):
             "backtest": {"start_date": "2020-01-01", "end_date": "2025-01-01"},
         },
     )
-    assert result["n_days"] == result["fills_analysis_duration_days"] == duration
+    assert result["analysis_duration_days"] == result["analysis_duration_days"] == duration
     assert result["effective_start_date"] == ("2024-01-02T00:00:00Z" if count else None)
     assert result["effective_end_date"] == (
         "2024-01-03T00:00:00Z"
@@ -1106,9 +1106,9 @@ def test_post_process_persists_artifacts_with_infinite_diagnostic(
         ),
         btc_usd_prices=np.array([]),
         analysis={
-            "gain_usd": 1.0,
-            "n_days": 2.0,
-            "equity_choppiness": float("inf"),
+            "gain_multiplier_usd": 1.0,
+            "analysis_duration_days": 2.0,
+            "equity_choppiness_ratio": float("inf"),
             "effective_start_date": "2024-01-01T00:00:00Z",
             "effective_end_date": "2024-01-03T00:00:00Z",
         },
@@ -1118,9 +1118,9 @@ def test_post_process_persists_artifacts_with_infinite_diagnostic(
     result_dir = next(tmp_path.iterdir())
     raw = json.loads((result_dir / "analysis.json").read_text())
     saved = json.loads((result_dir / "config.json").read_text())
-    assert np.isinf(raw["equity_choppiness"])
-    assert saved["metrics"]["stats"]["n_days"]["mean"] == 2.0
-    assert saved["metrics"]["nonfinite_diagnostics"]["equity_choppiness"] == "inf"
+    assert np.isinf(raw["equity_choppiness_ratio"])
+    assert saved["metrics"]["stats"]["analysis_duration_days"]["mean"] == 2.0
+    assert saved["metrics"]["nonfinite_diagnostics"]["equity_choppiness_ratio"] == "inf"
     assert saved["metrics"]["effective_end_date"] == "2024-01-03T00:00:00Z"
     assert (result_dir / "fills.csv").exists()
     assert (result_dir / "balance_and_equity.csv.gz").exists()

@@ -59,12 +59,11 @@ def select_metrics(
 ) -> Dict[str, float]:
     if preferred is None:
         preferred = (
-            "adg_pnl",
-            "adg_pnl_w",
-            "mdg_pnl_w",
-            "peak_recovery_hours_pnl",
-            "position_held_hours_max",
-            "backtest_completion_ratio",
+            "daily_realized_pnl_mean_fraction",
+            "daily_realized_pnl_median_fraction",
+            "peak_recovery_max_hours_realized_pnl",
+            "position_held_max_hours",
+            "backtest_completion_fraction",
         )
     out: Dict[str, float] = {}
     for key in preferred:
@@ -383,8 +382,8 @@ def parse_args() -> argparse.Namespace:
         "--metrics",
         default="",
         help=(
-            "Comma-separated metrics to compare. Defaults to adg_pnl, adg_pnl_w, mdg_pnl_w, "
-            "peak_recovery_hours_pnl, position_held_hours_max, backtest_completion_ratio."
+            "Comma-separated metrics to compare. Defaults to daily_realized_pnl_mean_fraction, daily_realized_pnl_median_fraction, "
+            "peak_recovery_max_hours_realized_pnl, position_held_max_hours, backtest_completion_fraction."
         ),
     )
     parser.add_argument("--json", action="store_true", help="Emit the report as JSON.")

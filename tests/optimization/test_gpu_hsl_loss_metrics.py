@@ -23,7 +23,7 @@ def test_native_hsl_halt_loss_matches_cpu_report(strategy, sides):
         )
     inputs[1][1500:, 0, :3] *= 0.7
     inputs[1][1800:, 1, :3] *= 1.3
-    metric = "hard_stop_halt_to_restart_equity_loss_pct"
+    metric = "hsl_panic_loss_starting_balance_fraction"
     report = run_comparison(
         inputs, "binance", [metric],
         {metric: MetricTolerance(1e-5, 1e-3)}, gpu_engine="native",

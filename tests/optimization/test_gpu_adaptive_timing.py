@@ -322,7 +322,7 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
         timestamps=ts,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     start = (
         EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START

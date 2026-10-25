@@ -38,8 +38,8 @@ def test_default_scoring_is_ordinary_and_exponential_metrics_are_opt_in():
     config = get_template_config()
     assert config["backtest"]["ew_half_life_days"] is None
     assert not any(is_ew_metric(spec.metric) for spec in extract_objective_specs(config))
-    assert extract_objective_specs(config)[0].metric == "adg_strategy_eq"
-    assert resolve_metric_value({"adg_strategy_eq_w": 0.1}, "adg_strategy_eq_ew") is None
+    assert extract_objective_specs(config)[0].metric == "adg_fraction_strategy_equity"
+    assert resolve_metric_value({"adg_strategy_eq_w": 0.1}, "adg_fraction_strategy_equity_ew") is None
     assert len(EW_METRICS) == 12
     for metric in EW_METRICS:
         assert canonicalize_metric_name(metric) == metric
@@ -50,8 +50,8 @@ def test_default_scoring_is_ordinary_and_exponential_metrics_are_opt_in():
 def test_ew_objectives_and_limits_require_opt_in(kind):
     config = get_template_config()
     config["optimize"][kind] = (
-        [{"metric": "adg_strategy_eq_ew", "goal": "max"}] if kind == "scoring" else
-        [{"metric": "adg_ew_btc", "penalize_if": "less_than", "value": 0}]
+        [{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}] if kind == "scoring" else
+        [{"metric": "adg_fraction_btc_ew", "penalize_if": "less_than", "value": 0}]
     )
     with pytest.raises(ValueError, match="require backtest.ew_half_life_days"):
         validate_ew_config(config)
@@ -68,10 +68,10 @@ def test_ew_rejects_unsupported_intervals_during_config_preflight(kind, interval
     config = get_template_config()
     config["backtest"].update(ew_half_life_days=180, candle_interval_minutes=interval)
     if kind == "scoring":
-        config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_ew", "goal": "max"}]
+        config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}]
     elif kind == "limits":
         config["optimize"]["limits"] = [
-            {"metric": "adg_ew_btc", "penalize_if": "less_than", "value": 0}
+            {"metric": "adg_fraction_btc_ew", "penalize_if": "less_than", "value": 0}
         ]
     with pytest.raises(ValueError, match="candle_interval_minutes.*divide a UTC day"):
         prepare_config(config, verbose=False)
@@ -83,7 +83,7 @@ def test_ew_accepts_intervals_that_divide_a_utc_day(interval):
 
     config = get_template_config()
     config["backtest"].update(ew_half_life_days=180, candle_interval_minutes=interval)
-    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_ew", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}]
     assert prepare_config(config, verbose=False)["backtest"]["candle_interval_minutes"] == interval
 
 
@@ -121,26 +121,26 @@ def test_scenarios_cannot_override_half_life_even_to_global_value(overrides):
 
 @pytest.mark.parametrize("bad", [None, True, float("nan"), float("inf")])
 def test_required_ew_metric_must_be_finite_in_every_exchange(bad):
-    analyses = {"first": {"adg_ew_usd": 0.1}, "second": {"adg_ew_usd": bad}}
+    analyses = {"first": {"adg_fraction_usd_ew": 0.1}, "second": {"adg_fraction_usd_ew": bad}}
     with pytest.raises(MetricAggregationError, match="second"):
-        validate_required_ew_metrics(analyses, ["adg_ew_usd_mean"])
+        validate_required_ew_metrics(analyses, ["adg_fraction_usd_ew_mean"])
 
 
 def test_missing_currency_or_exchange_cannot_be_replaced():
-    with pytest.raises(MetricAggregationError, match="adg_ew_btc"):
-        validate_required_ew_metrics({"base": {"adg_ew_usd": .1, "adg_ew": .1}}, ["adg_ew_btc"])
-    analyses = {"first": {"adg_ew_usd": .1}, "second": {"adg_usd": .2}}
+    with pytest.raises(MetricAggregationError, match="adg_fraction_btc_ew"):
+        validate_required_ew_metrics({"base": {"adg_fraction_usd_ew": .1, "adg_fraction_ew": .1}}, ["adg_fraction_btc_ew"])
+    analyses = {"first": {"adg_fraction_usd_ew": .1}, "second": {"adg_fraction_usd": .2}}
     with pytest.raises(MetricAggregationError, match="second"):
-        validate_required_ew_metrics(analyses, ["adg_ew_usd"])
-    assert "adg_ew_usd" not in build_scenario_metrics(analyses)["stats"]
+        validate_required_ew_metrics(analyses, ["adg_fraction_usd_ew"])
+    assert "adg_fraction_usd_ew" not in build_scenario_metrics(analyses)["stats"]
 
 
 def test_metadata_is_preserved_outside_numeric_scoring():
     metadata = {"usd": {"half_life_days": 180.0, "definition_version": 1, "observation_count": 10}}
-    analysis = {"adg_ew_usd": .1, "ew_metadata": metadata}
+    analysis = {"adg_fraction_usd_ew": .1, "ew_metadata": metadata}
     scenario = build_scenario_metrics({"combined": analysis})
     assert scenario["ew_metadata"] == {"combined": metadata}
-    assert set(scenario["stats"]) == {"adg_ew_usd"}
+    assert set(scenario["stats"]) == {"adg_fraction_usd_ew"}
     standalone = build_standalone_metrics(analysis, "combined")
     assert standalone["ew_metadata"] == scenario["ew_metadata"]
     suite = merge_suite_payload({}, scenario_metrics={"base": scenario})
@@ -151,14 +151,14 @@ def test_expand_analysis_extracts_rust_metadata_and_denomination():
     from backtest import expand_analysis
     metadata = {"usd": {"definition_version": 1}, "strategy_eq": {"definition_version": 1}}
     result = expand_analysis(
-        {"adg_ew": .1, "adg_strategy_eq_ew": .2, "_ew_metadata": metadata}, {},
+        {"adg_fraction_ew": .1, "adg_fraction_strategy_equity_ew": .2, "_ew_metadata": metadata}, {},
         fills=None, equities_array=None, config={"bot": {}},
     )
-    assert result["adg_ew_usd"] == .1
-    assert result["adg_strategy_eq_ew"] == .2
+    assert result["adg_fraction_usd_ew"] == .1
+    assert result["adg_fraction_strategy_equity_ew"] == .2
     assert result["ew_metadata"] == metadata
     assert not any(key.startswith("_ew_metadata") for key in result)
-    assert "adg_ew_btc" not in result
+    assert "adg_fraction_btc_ew" not in result
 
 
 def test_resume_half_life_invalidates_saved_fitness_and_absent_matches_null(monkeypatch):
@@ -180,12 +180,12 @@ def test_cpu_suite_rejects_missing_selected_scenario_before_reduction():
     from optimize import SuiteEvaluator
     from config.scoring import ObjectiveSpec, ObjectiveBasis
     evaluator = object.__new__(SuiteEvaluator)
-    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_strategy_eq_ew", "max")], limit_checks=[])
+    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_fraction_strategy_equity_ew", "max")], limit_checks=[])
     evaluator.objective_bases = [ObjectiveBasis(scenario=None, reducer="mean")]
     evaluator.reducer_cfg = {"default": "mean"}
     results = [
-        SimpleNamespace(scenario=SimpleNamespace(label="first"), metrics={"stats": {"adg_strategy_eq_ew": {"mean": .1}}}),
-        SimpleNamespace(scenario=SimpleNamespace(label="second"), metrics={"stats": {"adg_strategy_eq": {"mean": .2}}}),
+        SimpleNamespace(scenario=SimpleNamespace(label="first"), metrics={"stats": {"adg_fraction_strategy_equity_ew": {"mean": .1}}}),
+        SimpleNamespace(scenario=SimpleNamespace(label="second"), metrics={"stats": {"adg_fraction_strategy_equity": {"mean": .2}}}),
     ]
     with pytest.raises(MetricAggregationError, match="second"):
         evaluator.score_scenario_results(results)
@@ -195,9 +195,9 @@ def test_named_scenario_requires_only_selected_ew_sources():
     from optimize import SuiteEvaluator
     from config.scoring import ObjectiveSpec, ObjectiveBasis
     evaluator = object.__new__(SuiteEvaluator)
-    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_strategy_eq_ew", "max")], limit_checks=[])
+    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_fraction_strategy_equity_ew", "max")], limit_checks=[])
     evaluator.objective_bases = [ObjectiveBasis(scenario="base", reducer=None)]
-    assert evaluator.required_metrics_for_scenario("base") == ["adg_strategy_eq_ew"]
+    assert evaluator.required_metrics_for_scenario("base") == ["adg_fraction_strategy_equity_ew"]
     assert evaluator.required_metrics_for_scenario("stress") == []
 
 
@@ -210,7 +210,7 @@ def test_canonical_config_roundtrip_retains_ew_setting(tmp_path, half_life):
     source["backtest"]["ew_half_life_days"] = half_life
     if half_life is not None:
         source["optimize"]["scoring"] = [{"metric": metric, "goal": "max"}
-                                             for metric in ("adg_strategy_eq_ew", "sharpe_ratio_ew_btc")]
+                                             for metric in ("adg_fraction_strategy_equity_ew", "sharpe_ratio_btc_ew")]
     prepared = prepare_config(source, verbose=False)
     saved = sanitize_prepared_config_for_dump(prepared)
     dump_config(saved, str(tmp_path / "config.json"))
@@ -223,11 +223,11 @@ def test_cpu_fitness_has_no_ew_currency_fallback():
     from optimize import Evaluator
     from config.scoring import ObjectiveSpec
     evaluator = object.__new__(Evaluator)
-    evaluator.scoring_specs = [ObjectiveSpec("adg_ew_btc", "max")]
+    evaluator.scoring_specs = [ObjectiveSpec("adg_fraction_btc_ew", "max")]
     evaluator.limit_checks = []
     evaluator._attachments = {}
     with pytest.raises(ValueError, match="missing optimizer scoring metric"):
-        evaluator.calc_fitness({"adg_ew_mean": .1, "adg_ew_usd_mean": .1})
+        evaluator.calc_fitness({"adg_fraction_ew_mean": .1, "adg_fraction_usd_ew_mean": .1})
 
 
 def test_scenario_apply_rejects_half_life_override():
@@ -256,10 +256,10 @@ def test_cpu_suite_rejects_absent_aggregate_source_scenario():
     from optimize import SuiteEvaluator
     from config.scoring import ObjectiveSpec, ObjectiveBasis
     evaluator = object.__new__(SuiteEvaluator)
-    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_strategy_eq_ew", "max")], limit_checks=[])
+    evaluator.base = SimpleNamespace(scoring_specs=[ObjectiveSpec("adg_fraction_strategy_equity_ew", "max")], limit_checks=[])
     evaluator.objective_bases = [ObjectiveBasis(scenario=None, reducer="mean")]
     evaluator.contexts = [SimpleNamespace(label="base"), SimpleNamespace(label="stress")]
-    results = [SimpleNamespace(scenario=SimpleNamespace(label="base"), metrics={"stats": {"adg_strategy_eq_ew": {"mean": .1}}})]
+    results = [SimpleNamespace(scenario=SimpleNamespace(label="base"), metrics={"stats": {"adg_fraction_strategy_equity_ew": {"mean": .1}}})]
     with pytest.raises(MetricAggregationError, match="stress.*absent"):
         evaluator.score_scenario_results(results)
 
@@ -284,7 +284,7 @@ def test_disabled_ew_limit_does_not_require_half_life():
     from config.ew import configured_ew_metrics
     config = get_template_config()
     config["optimize"]["limits"] = [
-        {"metric": "adg_strategy_eq_ew", "enabled": False,
+        {"metric": "adg_fraction_strategy_equity_ew", "enabled": False,
          "penalize_if": "less_than", "value": 0}
     ]
     assert configured_ew_metrics(config) == set()

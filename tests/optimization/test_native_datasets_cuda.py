@@ -27,7 +27,7 @@ async def test_canonical_lazy_suite_registry_drives_cuda_without_cpu_simulation(
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
     config["optimize"]["limits"] = []
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [

@@ -49,22 +49,22 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
         # exercise shared EMA scopes without relying on float32-scale noise.
         inputs[1][1500:, 0, :3] *= 0.7
         inputs[1][1800:, 1, :3] *= 1.3
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year", "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "hsl_triggers_per_year", "hsl_restarts_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     if (strategy == "trailing_martingale" and sides in {"short", "both"}
             and coins == 2 and shocks):
         # On these six seed-43 shock fixtures, original/corrected shaders have
         # identical non-time metrics. CPU ADG differs by <=4.51e-5 and fill rate
         # by <=0.098%; drawdown and lifecycle gates already pass. Keep these
         # bounded trajectory differences local; time-in-red stays strict.
-        policies["adg_strategy_eq"] = MetricTolerance(5e-5, 0)
+        policies["adg_fraction_strategy_equity"] = MetricTolerance(5e-5, 0)
         policies["fills_per_day"] = MetricTolerance(0, 1e-3)
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
-    assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]
 
 
@@ -148,17 +148,17 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     from tools.gpu_parity import run_comparison
     from optimization.gpu.parity import MetricTolerance
     inputs = _liquidation_inputs(strategy, sides, terminal_fill)
-    metric = "hard_stop_time_in_red_pct"
-    durations = ("hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max")
+    metric = "hsl_red_time_fraction"
+    durations = ("hsl_red_duration_mean_minutes", "hsl_red_duration_max_minutes")
     side_equity = tuple(
-        f"{name}_strategy_eq_{side}"
+        f"{name}_strategy_equity_{side}"
         for side in ("long", "short")
-        for name in ("peak_recovery_days", "drawdown_worst", "drawdown_worst_mean_1pct")
+        for name in ("recovery_max_days", "drawdown_max_fraction", "drawdown_daily_worst_1pct_mean_fraction")
     )
     ema_metrics = tuple(
-        f"{name}_strategy_eq{suffix}"
+        f"{name}{suffix}"
         for suffix in ("", "_long", "_short")
-        for name in ("drawdown_worst_ema", "drawdown_worst_mean_1pct_ema")
+        for name in ("hsl_signal_ema_max_fraction", "hsl_signal_ema_worst_1pct_mean_fraction")
     )
     metrics = (metric, *durations, *side_equity, *ema_metrics)
     policies = {name: MetricTolerance(1e-8, 1e-6) for name in metrics}
@@ -176,7 +176,7 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     # A mark crash adds the fresh terminal loss signal; a liquidating panic
     # fill retains only preceding bar signals. The terminal mark must not be
     # mistaken for another fill-boundary observation or silently omitted.
-    long_ema = report["metrics"]["drawdown_worst_ema_strategy_eq_long"]["cpu"]
+    long_ema = report["metrics"]["hsl_signal_ema_max_fraction_long"]["cpu"]
     if terminal_fill:
         assert 0 < long_ema < .1
     else:

@@ -123,8 +123,8 @@ Retired metrics require a specific replacement and a separate formula acknowledg
 ```sh
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
-  --metric-replacement adg_strategy_eq_w=adg_strategy_eq \
-  --metric-replacement strategy_eq_underwater_pct_mean=pain_index_strategy_eq \
+  --metric-replacement adg_strategy_eq_w=adg_fraction_strategy_equity \
+  --metric-replacement strategy_eq_underwater_pct_mean=pain_index_fraction_strategy_equity \
   --acknowledge-metric-formula-change --report migration-report.json
 ```
 

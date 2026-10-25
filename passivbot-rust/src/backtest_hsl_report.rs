@@ -408,23 +408,23 @@ impl Report {
             restarts_short: s.restarts_short,
             restarts_per_year_long: s.restarts_long as f64 * annual,
             restarts_per_year_short: s.restarts_short as f64 * annual,
-            time_in_red_pct: if s.observed_minutes > 0.0 {
+            red_time_fraction: if s.observed_minutes > 0.0 {
                 s.red_minutes / s.observed_minutes
             } else {
                 0.0
             },
-            duration_minutes_mean: stats.durations.mean(),
-            duration_minutes_max: stats.durations.max,
-            trigger_drawdown_mean: stats.trigger_scores.mean(),
-            panic_close_loss_sum: s.panic_close_loss,
-            panic_close_loss_max: stats.panic_loss_max,
-            panic_close_loss_drawdown_pct_min: stats.panic_loss_ratios.min,
-            panic_close_loss_drawdown_pct_mean: stats.panic_loss_ratios.mean(),
-            panic_close_loss_drawdown_pct_max: stats.panic_loss_ratios.max,
-            halt_to_restart_equity_loss_pct: s.panic_close_loss
+            red_duration_mean_minutes: stats.durations.mean(),
+            red_duration_max_minutes: stats.durations.max,
+            trigger_signal_mean_fraction: stats.trigger_scores.mean(),
+            panic_fill_loss_sum_usd: s.panic_close_loss,
+            panic_fill_loss_max_usd: stats.panic_loss_max,
+            panic_episode_loss_min_fraction: stats.panic_loss_ratios.min,
+            panic_episode_loss_mean_fraction: stats.panic_loss_ratios.mean(),
+            panic_episode_loss_max_fraction: stats.panic_loss_ratios.max,
+            panic_loss_starting_balance_fraction: s.panic_close_loss
                 / starting_balance.max(f64::EPSILON),
-            flatten_time_minutes_mean: stats.flatten_minutes.mean(),
-            post_restart_retrigger_pct: if s.restarts > 0 {
+            flatten_time_mean_minutes: stats.flatten_minutes.mean(),
+            restart_retrigger_fraction: if s.restarts > 0 {
                 stats.retriggers as f64 / s.restarts as f64
             } else {
                 0.0
@@ -806,10 +806,10 @@ mod tests {
                 (
                     m.triggers,
                     m.restarts,
-                    m.post_restart_retrigger_pct,
-                    m.duration_minutes_mean,
-                    m.duration_minutes_max,
-                    m.flatten_time_minutes_mean
+                    m.restart_retrigger_fraction,
+                    m.red_duration_mean_minutes,
+                    m.red_duration_max_minutes,
+                    m.flatten_time_mean_minutes
                 ),
                 expected,
                 "mode {mode}"
@@ -841,7 +841,7 @@ mod tests {
         report.panic_fill(key, 10.0, 900.0);
         report.record_bar_signals(120_000, [0.1, 0.1, 0.0]);
         for _ in 0..2 {
-            assert_eq!(report.metrics(1000.0, 2.0).flatten_time_minutes_mean, 1.0);
+            assert_eq!(report.metrics(1000.0, 2.0).flatten_time_mean_minutes, 1.0);
         }
         report.observe(
             key,
@@ -875,18 +875,18 @@ mod tests {
             // Snapshot metrics must not consume unfinished episodes.
             let m = report.metrics(1000.0, 7.0);
             assert_eq!((m.triggers, m.restarts), (2, 1));
-            assert!((m.time_in_red_pct - 5.0 / 7.0).abs() < 1e-12);
-            assert_eq!(m.duration_minutes_mean, 2.5);
-            assert_eq!(m.duration_minutes_max, 4.0);
-            assert_eq!(m.flatten_time_minutes_mean, 1.5); // Completed two minutes + open one minute.
-            assert_eq!(m.trigger_drawdown_mean, 0.1);
-            assert_eq!(m.panic_close_loss_sum, 65.0);
-            assert_eq!(m.panic_close_loss_max, 40.0);
-            assert_eq!(m.panic_close_loss_drawdown_pct_min, 0.025);
-            assert!((m.panic_close_loss_drawdown_pct_mean - 0.0375).abs() < 1e-12);
-            assert_eq!(m.panic_close_loss_drawdown_pct_max, 0.05);
-            assert_eq!(m.halt_to_restart_equity_loss_pct, 0.065);
-            assert_eq!(m.post_restart_retrigger_pct, 1.0);
+            assert!((m.red_time_fraction - 5.0 / 7.0).abs() < 1e-12);
+            assert_eq!(m.red_duration_mean_minutes, 2.5);
+            assert_eq!(m.red_duration_max_minutes, 4.0);
+            assert_eq!(m.flatten_time_mean_minutes, 1.5); // Completed two minutes + open one minute.
+            assert_eq!(m.trigger_signal_mean_fraction, 0.1);
+            assert_eq!(m.panic_fill_loss_sum_usd, 65.0);
+            assert_eq!(m.panic_fill_loss_max_usd, 40.0);
+            assert_eq!(m.panic_episode_loss_min_fraction, 0.025);
+            assert!((m.panic_episode_loss_mean_fraction - 0.0375).abs() < 1e-12);
+            assert_eq!(m.panic_episode_loss_max_fraction, 0.05);
+            assert_eq!(m.panic_loss_starting_balance_fraction, 0.065);
+            assert_eq!(m.restart_retrigger_fraction, 1.0);
             assert_eq!(m.triggers_per_year, 2.0 * 365.25 * 1440.0 / 7.0);
         }
         assert!(report.samples.is_empty() && report.events.is_empty());
@@ -922,8 +922,8 @@ mod tests {
         );
         let m = report.metrics(1000.0, 3.0);
         assert_eq!((m.triggers, m.restarts), (2, 1));
-        assert_eq!(m.duration_minutes_mean, 3.0);
-        assert_eq!(m.flatten_time_minutes_mean, 0.5); // Two exits: zero and one minute.
+        assert_eq!(m.red_duration_mean_minutes, 3.0);
+        assert_eq!(m.flatten_time_mean_minutes, 0.5); // Two exits: zero and one minute.
         assert_eq!(m.triggers_long + m.triggers_short, 0);
     }
     #[test]
@@ -996,8 +996,8 @@ mod tests {
         }
         assert_eq!(report.events.iter().filter(|e| e.kind == "flat").count(), 1);
         let m = report.metrics(1000.0, 2.0);
-        assert_eq!(m.flatten_time_minutes_mean, 1.0);
+        assert_eq!(m.flatten_time_mean_minutes, 1.0);
         assert_eq!(m.restarts, 1);
-        assert_eq!(m.panic_close_loss_drawdown_pct_mean, 0.02);
+        assert_eq!(m.panic_episode_loss_mean_fraction, 0.02);
     }
 }

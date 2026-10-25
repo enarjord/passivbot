@@ -35,7 +35,7 @@ def test_ew_metrics_match_daily_hand_calculation(require_real_passivbot_rust_mod
     variance = sum(w * (r - mu)**2 for w, r in zip(weights, returns)) / sum(weights)
     downside = sum(w * min(r, 0)**2 for w, r in zip(weights, returns)) / sum(weights)
     assert result["metrics"] == pytest.approx({
-        "adg": math.expm1(sum(w * math.log1p(r) for w, r in zip(weights, returns)) / sum(weights)),
+        "adg_fraction": math.expm1(sum(w * math.log1p(r) for w, r in zip(weights, returns)) / sum(weights)),
         "sharpe_ratio": mu / math.sqrt(variance),
         "sortino_ratio": mu / math.sqrt(downside),
         "omega_ratio": 0.5,
@@ -113,8 +113,8 @@ def test_native_backtest_ew_wiring_and_metrics_only_agree(require_real_passivbot
             assert analysis[f"{name}_ew"] == pytest.approx(value)
         strategy = pbr.calculate_ew_metrics(eq[:, 3].tolist(), clocks, 180.5)
         for name, value in strategy["metrics"].items():
-            assert analysis[f"{name}_strategy_eq_ew"] == pytest.approx(value)
-    assert full[2]["_ew_metadata"]["strategy_eq"] == strategy["metadata"]
+            assert analysis[f"{name}_strategy_equity_ew"] == pytest.approx(value)
+    assert full[2]["_ew_metadata"]["strategy_equity"] == strategy["metadata"]
     for analysis in full[2:4]:
         assert not any(key.endswith("_w") for key in analysis)
     payload.backtest_params["metrics_only"] = True

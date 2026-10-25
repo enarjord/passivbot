@@ -94,7 +94,7 @@ from config.shared_bot import (
     get_grouped_bot_value,
 )
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-from config.metrics import resolve_metric_value
+from config.metrics import KNOWN_METRICS, resolve_metric_value, split_metric_curve
 from config.ew import is_ew_metric
 from config.scoring import (
     ObjectiveSpec,
@@ -670,6 +670,16 @@ def _format_objectives(
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
+
+
+def _currency_fallback_metric(metric: str) -> str | None:
+    """Keep curve-free scoring fallback without treating shared cash as a curve."""
+    base, curve = split_metric_curve(metric)
+    if curve is not None:
+        return base
+    if metric not in KNOWN_METRICS and metric.endswith(("_usd", "_btc")):
+        return metric.rsplit("_", 1)[0]
+    return None
 
 
 def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -> str:
@@ -1917,14 +1927,11 @@ class Evaluator:
         for idx, spec in enumerate(self.scoring_specs):
             if objective_values is None:
                 val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-                if (
-                    val is None
-                    and spec.metric.endswith(("_usd", "_btc"))
-                    and not is_ew_metric(spec.metric)
-                ):
+                fallback_metric = _currency_fallback_metric(spec.metric)
+                if val is None and fallback_metric is not None and not is_ew_metric(spec.metric):
                     val = resolve_metric_value(
                         analyses_combined,
-                        f"{spec.metric.rsplit('_', 1)[0]}_mean",
+                        f"{fallback_metric}_mean",
                     )
             else:
                 val = objective_values[idx]
@@ -2270,14 +2277,11 @@ class SuiteEvaluator:
                 source_stats = reduced_stats_flat
                 reducer = basis.reducer or "mean"
             value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            if (
-                value is None
-                and spec.metric.endswith(("_usd", "_btc"))
-                and not is_ew_metric(spec.metric)
-            ):
+            fallback_metric = _currency_fallback_metric(spec.metric)
+            if value is None and fallback_metric is not None and not is_ew_metric(spec.metric):
                 value = resolve_metric_value(
                     source_stats,
-                    f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
+                    f"{fallback_metric}_{reducer}",
                 )
             if value is None:
                 basis_label = (
@@ -2540,17 +2544,17 @@ class SuiteEvaluator:
             _profile_add(timings, "combine_metrics_ms", phase_start)
             stats = combined_metrics.get("stats", {})
             logging.debug(
-                "Scenario metrics | label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
+                "Scenario metrics | label=%s daily_realized_pnl_mean_fraction=%s peak_recovery_max_hours_realized_pnl=%s",
                 ctx.label,
                 (
-                    stats.get("adg_pnl", {}).get("mean")
-                    if isinstance(stats.get("adg_pnl"), dict)
-                    else stats.get("adg_pnl")
+                    stats.get("daily_realized_pnl_mean_fraction", {}).get("mean")
+                    if isinstance(stats.get("daily_realized_pnl_mean_fraction"), dict)
+                    else stats.get("daily_realized_pnl_mean_fraction")
                 ),
                 (
-                    stats.get("peak_recovery_hours_pnl", {}).get("mean")
-                    if isinstance(stats.get("peak_recovery_hours_pnl"), dict)
-                    else stats.get("peak_recovery_hours_pnl")
+                    stats.get("peak_recovery_max_hours_realized_pnl", {}).get("mean")
+                    if isinstance(stats.get("peak_recovery_max_hours_realized_pnl"), dict)
+                    else stats.get("peak_recovery_max_hours_realized_pnl")
                 ),
             )
             scenario_results.append(
@@ -3855,8 +3859,8 @@ async def main():
         metavar="SPEC",
         help=(
             "Repeatable optimize limit override. Example: "
-            '"drawdown_worst > 0.35" or '
-            '"drawdown_worst_strategy_eq <= 0.5 scenario=base". '
+            '"drawdown_max_fraction > 0.35" or '
+            '"drawdown_max_fraction_strategy_equity <= 0.5 scenario=base". '
             "Suite limits may use reducer=min|max|mean|std|median."
         ),
     )

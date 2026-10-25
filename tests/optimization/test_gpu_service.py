@@ -365,16 +365,16 @@ def test_compact_recovery_output_remains_on_device_and_rejects_bad_transport(mon
     elif malformed == "non_tensor": output["strategy_eq_recovery_distribution"] = object()
     if malformed:
         with pytest.raises(RuntimeError, match="(Invalid compact GPU|Ambiguous GPU) recovery output"):
-            _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"})
+            _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"})
     else:
-        assert _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"}) is stats
-        assert _mps_strategy_eq_recovery_distribution(output, {"adg_strategy_eq"}) is None
+        assert _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"}) is stats
+        assert _mps_strategy_eq_recovery_distribution(output, {"adg_fraction_strategy_equity"}) is None
 
 
 def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
-    needed = {"strategy_eq_recovery_days_p99"}
+    needed = {"recovery_p99_days_strategy_equity"}
 
-    assert _mps_strategy_eq_recovery_distribution({}, {"adg_strategy_eq"}) is None
+    assert _mps_strategy_eq_recovery_distribution({}, {"adg_fraction_strategy_equity"}) is None
     with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
         _mps_strategy_eq_recovery_distribution({}, needed)
 
@@ -669,10 +669,10 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "loss_sum",
         "position_unchanged_max_ms",
         "entry_initial_balance_pct",
-        "entry_initial_balance_pct_long",
-        "entry_initial_balance_pct_short",
-        "total_wallet_exposure_max",
-        "total_wallet_exposure_mean",
+        "initial_entry_balance_fraction_long",
+        "initial_entry_balance_fraction_short",
+        "absolute_net_wallet_exposure_max_ratio",
+        "absolute_net_wallet_exposure_mean_ratio",
         "day_fill_count",
         "fill_count",
         "fill_count_entry",
@@ -708,10 +708,10 @@ def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
 
     metrics = _directional_entry_initial_metrics(side, values)
 
-    assert metrics[f"entry_initial_balance_pct_{side}"].tolist() == values.tolist()
+    assert metrics[f"initial_entry_balance_fraction_{side}"].tolist() == values.tolist()
     other = "short" if side == "long" else "long"
-    assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
-    assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
+    assert metrics[f"initial_entry_balance_fraction_{other}"].shape == values.shape
+    assert metrics[f"initial_entry_balance_fraction_{other}"].tolist() == [0.0, 0.0, 0.0]
 
 
 def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
@@ -795,14 +795,14 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
 def test_hsl_diagnostics_are_requested_only_for_hsl_metric_families():
     assert not _hsl_diagnostics_needed(
         {
-            "adg_strategy_eq",
-            "drawdown_worst_strategy_eq",
+            "adg_fraction_strategy_equity",
+            "drawdown_max_fraction_strategy_equity",
             "fills_per_day",
         }
     )
-    assert _hsl_diagnostics_needed({"hard_stop_triggers_per_year"})
-    assert _hsl_diagnostics_needed({"drawdown_worst_ema_strategy_eq_long"})
-    assert _hsl_diagnostics_needed({"peak_recovery_days_strategy_eq_long"})
+    assert _hsl_diagnostics_needed({"hsl_triggers_per_year"})
+    assert _hsl_diagnostics_needed({"hsl_signal_ema_max_fraction_long"})
+    assert _hsl_diagnostics_needed({"recovery_max_days_strategy_equity_long"})
 
 
 
@@ -826,7 +826,7 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     proxy.metrics_data = {"ts0": 0.0}
     proxy.run = SimpleNamespace()
     proxy.sides = ["long"]
-    proxy.needed_metrics = {"hard_stop_panic_close_loss_sum"}
+    proxy.needed_metrics = {"hsl_panic_fill_loss_sum_usd"}
     proxy.weighted_equity_metrics = ()
     proxy._parameter_matrix = lambda candidates, side=None: np.zeros(
         (len(candidates), 0)
@@ -851,11 +851,11 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     def reduce(output, *args, **kwargs):
         assert output["hsl_triggers_long"].item() == 2.0
         assert output["hsl_panic_close_loss_sum"].item() == 37.5
-        return {"hard_stop_panic_close_loss_sum": output["hsl_panic_close_loss_sum"]}
+        return {"hsl_panic_fill_loss_sum_usd": output["hsl_panic_close_loss_sum"]}
 
     proxy._compute_objectives = reduce
 
-    assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
+    assert proxy.evaluate([{}]) == [{"hsl_panic_fill_loss_sum_usd": 37.5}]
 
 
 @pytest.mark.parametrize(
@@ -883,11 +883,11 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     proxy.run = SimpleNamespace()
     proxy.sides = ["long", "short"]
     proxy.needed_metrics = {
-        "none": {"hard_stop_triggers"},
-        "raw": {"drawdown_worst_strategy_eq"},
-        "growth": {"adg_strategy_eq"},
-        "calmar": {"calmar_ratio_strategy_eq"},
-        "portfolio_ema": {"drawdown_worst_mean_1pct_ema_strategy_eq"},
+        "none": {"hsl_trigger_count"},
+        "raw": {"drawdown_max_fraction_strategy_equity"},
+        "growth": {"adg_fraction_strategy_equity"},
+        "calmar": {"calmar_ratio_strategy_equity"},
+        "portfolio_ema": {"hsl_signal_ema_worst_1pct_mean_fraction"},
     }[missing_summary]
     proxy.param_keys = param_keys
     proxy.base_params = {
@@ -923,7 +923,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     def reduce(output, *args, **kwargs):
         assert output["hsl_unified_scope"].tolist() == [True, False]
         return {
-            "hard_stop_triggers": output["hsl_triggers_long"]
+            "hsl_trigger_count": output["hsl_triggers_long"]
             + output["hsl_triggers_short"]
         }
 
@@ -956,8 +956,8 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         return
 
     assert proxy.evaluate(candidates) == [
-        {"hard_stop_triggers": 4.0},
-        {"hard_stop_triggers": 6.0},
+        {"hsl_trigger_count": 4.0},
+        {"hsl_trigger_count": 6.0},
     ]
     assert seen["params"].shape == (
         2,
@@ -1004,13 +1004,13 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "recovery_distribution_enabled",
     ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
-        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
-        ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
-        ({"entry_interval_hours_p95"}, False, False, False, False),
-        ({"fills_top_symbol_share"}, False, False, False, False),
+        ({"hsl_red_time_fraction"}, False, False, False, False),
+        ({"hsl_signal_ema_worst_1pct_mean_fraction"}, True, False, False, False),
+        ({"drawdown_max_fraction_strategy_equity_long"}, False, True, False, False),
+        ({"drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long"}, False, True, True, False),
+        ({"recovery_p99_days_strategy_equity"}, False, False, False, True),
+        ({"entry_interval_p95_hours"}, False, False, False, False),
+        ({"fills_top_symbol_fraction"}, False, False, False, False),
         ({"fills_active_symbols_count"}, False, False, False, False),
     ],
 )
@@ -1211,7 +1211,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert np.isnan(short_overrides[1, wallet_exposure_column])
     assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
     assert constructed["kwargs"]["collect_coin_fill_counts"] is bool(
-        needed_metrics & {"fills_top_symbol_share", "fills_active_symbols_count"}
+        needed_metrics & {"fills_top_symbol_fraction", "fills_active_symbols_count"}
     )
     assert constructed["kwargs"]["hsl_raw_drawdown_enabled"] is raw_drawdown_enabled
     assert constructed["kwargs"]["hsl_raw_tail_enabled"] is raw_tail_enabled
@@ -1228,7 +1228,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
     assert constructed["kwargs"]["entry_interval_enabled"] is (
         strategy_kind == "trailing_martingale"
-        and "entry_interval_hours_p95" in needed_metrics
+        and "entry_interval_p95_hours" in needed_metrics
     )
 
 
@@ -2518,7 +2518,7 @@ def _suite_batch_proxy():
         base_params={"long": {"n_positions": 4}}, backtest={"max_realized_loss_pct": 1}
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
-    proxy.needed_metrics = {"adg_strategy_eq"}
+    proxy.needed_metrics = {"adg_fraction_strategy_equity"}
     proxy.weighted_equity_metrics = ()
     proxy.couple_unstuck_emas = False
     proxy.batch_size = 1024
@@ -2567,7 +2567,7 @@ def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, 
             "coin_overrides" if changed == "overrides" else "btc_prices"
         ].flat[-1] = 9
     elif changed == "metrics":
-        second.needed_metrics = {"sortino_ratio_strategy_eq"}
+        second.needed_metrics = {"sortino_ratio_strategy_equity"}
     elif changed == "coupling":
         second.couple_unstuck_emas = True
     elif changed == "batch":

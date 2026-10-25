@@ -34,7 +34,7 @@ def test_unsupported_collateral_rejected_before_optional_device_imports(
         else:
             SharedAccountReplay(config=config, hlcvs=None, mss={}, btc=None,
                               timestamps=None, exchange="binance", batch_size=1,
-                              needed_metrics=["adg_strategy_eq"])
+                              needed_metrics=["adg_fraction_strategy_equity"])
 
 
 def test_suite_overrides_cannot_hide_unsupported_collateral():
@@ -94,6 +94,6 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
             prepare_candidate_parameters(config, markets, "binance")
         else:
             SharedAccountReplay(config=config, hlcvs=None, mss=markets, btc=None,
-                              timestamps=None, exchange="binance", batch_size=1, needed_metrics=["adg_strategy_eq"])
+                              timestamps=None, exchange="binance", batch_size=1, needed_metrics=["adg_fraction_strategy_equity"])
     config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0
     validate_gpu_backtest_config(config)  # Dormant risk settings on disabled sides are unused.

@@ -28,19 +28,19 @@ mod tests {
         state.record([&[], &[]], [2.0, 1.0]);
         let mut a = Analysis::default();
         state.apply(&mut a);
-        close(a.total_wallet_exposure_rms_long, (0.25_f64 / 2.0).sqrt());
-        close(a.total_wallet_exposure_rms_short, (0.16_f64 / 2.0).sqrt());
-        close(a.total_wallet_exposure_rms_gross, (0.81_f64 / 2.0).sqrt());
+        close(a.wallet_exposure_rms_ratio_long, (0.25_f64 / 2.0).sqrt());
+        close(a.wallet_exposure_rms_ratio_short, (0.16_f64 / 2.0).sqrt());
+        close(a.gross_wallet_exposure_rms_ratio, (0.81_f64 / 2.0).sqrt());
         close(
-            a.total_wallet_exposure_utilization_rms_long,
+            a.wallet_exposure_utilization_rms_ratio_long,
             (0.0625_f64 / 2.0).sqrt(),
         );
         close(
-            a.position_exposure_utilization_rms_long,
+            a.position_exposure_utilization_rms_ratio_long,
             ((0.09 / 0.8 + 0.04 / 1.6) / 2.0_f64).sqrt(),
         );
         close(
-            a.position_exposure_utilization_rms_short,
+            a.position_exposure_utilization_rms_ratio_short,
             (0.32_f64 / 2.0).sqrt(),
         );
     }
@@ -58,17 +58,20 @@ mod tests {
         a.apply(&mut x);
         b.apply(&mut y);
         close(
-            x.total_wallet_exposure_utilization_rms_long,
-            y.total_wallet_exposure_utilization_rms_long,
+            x.wallet_exposure_utilization_rms_ratio_long,
+            y.wallet_exposure_utilization_rms_ratio_long,
         );
         close(
-            x.position_exposure_utilization_rms_long,
-            y.position_exposure_utilization_rms_long,
+            x.position_exposure_utilization_rms_ratio_long,
+            y.position_exposure_utilization_rms_ratio_long,
         );
-        close(x.position_exposure_utilization_rms_long, 0.75_f64.sqrt());
         close(
-            y.total_wallet_exposure_rms_long,
-            x.total_wallet_exposure_rms_long * 1.5,
+            x.position_exposure_utilization_rms_ratio_long,
+            0.75_f64.sqrt(),
+        );
+        close(
+            y.wallet_exposure_rms_ratio_long,
+            x.wallet_exposure_rms_ratio_long * 1.5,
         );
     }
 
@@ -77,21 +80,21 @@ mod tests {
         let mut a = Analysis::default();
         let mut state = ExposureRms::default();
         state.apply(&mut a);
-        assert!(a.total_wallet_exposure_rms_gross.is_nan());
+        assert!(a.gross_wallet_exposure_rms_ratio.is_nan());
         state.record([&[], &[(0.0, f64::NAN)]], [0.0, f64::NAN]);
         state.apply(&mut a);
-        close(a.position_exposure_utilization_rms_short, 0.0);
-        close(a.total_wallet_exposure_utilization_rms_long, 0.0);
+        close(a.position_exposure_utilization_rms_ratio_short, 0.0);
+        close(a.wallet_exposure_utilization_rms_ratio_long, 0.0);
         for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let mut state = ExposureRms::default();
             state.record([&[(0.5, invalid)], &[]], [1.0, 0.0]);
             state.apply(&mut a);
-            assert!(a.position_exposure_utilization_rms_long.is_nan());
-            close(a.total_wallet_exposure_rms_long, 0.5);
+            assert!(a.position_exposure_utilization_rms_ratio_long.is_nan());
+            close(a.wallet_exposure_rms_ratio_long, 0.5);
             let mut state = ExposureRms::default();
             state.record([&[(0.5, 0.5)], &[]], [invalid, 0.0]);
             state.apply(&mut a);
-            assert!(a.total_wallet_exposure_utilization_rms_long.is_nan());
+            assert!(a.wallet_exposure_utilization_rms_ratio_long.is_nan());
         }
     }
 }
@@ -155,12 +158,12 @@ impl ExposureRms {
                 (self.sums[i] / self.samples as f64).sqrt()
             }
         };
-        analysis.total_wallet_exposure_rms_long = rms(0);
-        analysis.total_wallet_exposure_rms_short = rms(1);
-        analysis.total_wallet_exposure_rms_gross = rms(2);
-        analysis.total_wallet_exposure_utilization_rms_long = rms(3);
-        analysis.total_wallet_exposure_utilization_rms_short = rms(4);
-        analysis.position_exposure_utilization_rms_long = rms(5);
-        analysis.position_exposure_utilization_rms_short = rms(6);
+        analysis.wallet_exposure_rms_ratio_long = rms(0);
+        analysis.wallet_exposure_rms_ratio_short = rms(1);
+        analysis.gross_wallet_exposure_rms_ratio = rms(2);
+        analysis.wallet_exposure_utilization_rms_ratio_long = rms(3);
+        analysis.wallet_exposure_utilization_rms_ratio_short = rms(4);
+        analysis.position_exposure_utilization_rms_ratio_long = rms(5);
+        analysis.position_exposure_utilization_rms_ratio_short = rms(6);
     }
 }

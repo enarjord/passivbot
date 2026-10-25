@@ -10,7 +10,7 @@ import random
 from .catalogue import declared_gpu_support, select_cases
 
 VERSION = 2
-CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "backtest_completion_ratio"]
+CORE_METRICS = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction"]
 
 
 def harness_digest():
@@ -254,9 +254,9 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             population, vectors, bounds = sampled_population(config, case, candidates, seed, bounds_config, boundary_candidates)
             metrics = list(CORE_METRICS)
             if any(f.startswith("hsl") for f in case.features):
-                metrics += ["hard_stop_triggers_per_year", "hard_stop_time_in_red_pct"]
+                metrics += ["hsl_triggers_per_year", "hsl_red_time_fraction"]
             if "equity_metrics" in case.features:
-                metrics += ["adg_strategy_eq", "fills_gap_p95_hours", "strategy_eq_recovery_days_p95"]
+                metrics += ["adg_fraction_strategy_equity", "fills_gap_p95_hours", "recovery_p95_days_strategy_equity"]
             entry = dict(case=case.record(), seed=seed, metrics=metrics, configs=population,
                          vectors=vectors, bounds=bounds, markets=markets, exchange="binance",
                          data_sha256=array_digest(candles, btc, timestamps),

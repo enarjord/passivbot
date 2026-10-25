@@ -56,7 +56,7 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     fills, equities, analysis = execute_backtest(prepared, cfg)
     report = prepared.hard_stop_plot_data["hsl"]
     assert report["mode"] == ("pside" if mode == "position_side" else mode)
-    assert analysis["hard_stop_triggers"] > 0
+    assert analysis["hsl_trigger_count"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is False
     assert report["samples"] == []
@@ -77,7 +77,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
-    cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
+    cfg["optimize"]["scoring"] = ["hsl_trigger_count"]
     cfg["optimize"]["limits"] = []
     manager = SharedArrayManager()
     try:
@@ -223,7 +223,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
         iters=2,
         n_cpus=1,
         population_size=2,
-        scoring=[{"metric": "hard_stop_triggers", "goal": "min"}],
+        scoring=[{"metric": "hsl_trigger_count", "goal": "min"}],
         limits=[],
         seed=42,
         compress_results_file=False,

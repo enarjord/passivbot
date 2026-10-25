@@ -101,7 +101,7 @@ def _evaluate(side, inputs):
         timestamps=timestamps,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     outputs = []
     runner = proxy.runners[side]

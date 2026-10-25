@@ -35,9 +35,9 @@ def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
     from tools.gpu_parity import run_comparison
     inputs = _side_equity_inputs(strategy, sides, hsl)
     metrics = [
-        f'{name}_strategy_eq_{side}'
+        f'{name}_strategy_equity_{side}'
         for side in ('long', 'short')
-        for name in ('peak_recovery_days', 'drawdown_worst', 'drawdown_worst_mean_1pct')
+        for name in ('recovery_max_days', 'drawdown_max_fraction', 'drawdown_daily_worst_1pct_mean_fraction')
     ]
     policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
     if strategy == 'trailing_martingale' and sides == 'both' and hsl in ('disabled', 'portfolio'):
@@ -46,14 +46,14 @@ def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
         # in Rust and .018 under GPU float32 rounding. The long drawdown gaps
         # are 5.35e-5 and 5.94e-6; bound this fixture's risk error to one basis
         # point. Recovery, short drawdown and all other cases stay strict.
-        for name in ('drawdown_worst_strategy_eq_long',
-                     'drawdown_worst_mean_1pct_strategy_eq_long'):
+        for name in ('drawdown_max_fraction_strategy_equity_long',
+                     'drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long'):
             policies[name] = MetricTolerance(1e-4, 0)
     report = run_comparison(inputs, 'binance', metrics, policies, gpu_engine='native')
     for side in ('long', 'short'):
-        assert report['metrics'][f'peak_recovery_days_strategy_eq_{side}']['cpu'] > 0
+        assert report['metrics'][f'recovery_max_days_strategy_equity_{side}']['cpu'] > 0
         if sides in (side, 'both'):
-            assert report['metrics'][f'drawdown_worst_strategy_eq_{side}']['cpu'] > 0
+            assert report['metrics'][f'drawdown_max_fraction_strategy_equity_{side}']['cpu'] > 0
     assert report['passed'], report['metrics']
 
 

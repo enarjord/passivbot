@@ -99,7 +99,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     source['bot']["portfolio"]['strategy_kind'] = strategy
     set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     source["live"]["startup"]["startup_phase_budgets"] = {"candles": 15.0}
-    source["backtest"]["reducer"] = {"adg_strategy_eq": "max"}
+    source["backtest"]["reducer"] = {"adg_fraction_strategy_equity": "max"}
     source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
     source["backtest"]["scenarios"] = [
         {"label": "stress", "overrides": {"bot.long.risk.max_positions": 2.0}}
@@ -125,7 +125,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned == repeated
     assert not (_mutable_container_ids(source) & _mutable_container_ids(cleaned))
     assert not (_mutable_container_ids(cleaned) & _mutable_container_ids(repeated))
-    assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
+    assert cleaned["backtest"]["reducer"] == {"adg_fraction_strategy_equity": "max", "default": "mean"}
     assert cleaned["live"]["startup"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
@@ -242,7 +242,7 @@ def test_strip_config_metadata_removes_known_keys_recursively():
 
 def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
     config = {
-        "analysis": {"adg": 0.1},
+        "analysis": {"adg_fraction": 0.1},
         "_raw": {"bot": {}},
         "_raw_effective": {"bot": {}},
         "_transform_log": ["normalize"],
@@ -274,7 +274,7 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     from released_v8_fixtures import released_v8_policy
     source = released_v8_policy()
     source["backtest"].pop("reducer", None)
-    source["backtest"]["aggregate"] = {"adg_pnl": "max"}
+    source["backtest"]["aggregate"] = {"daily_realized_pnl_mean_fraction": "max"}
     before = deepcopy(source)
     cfg_path, out_path = tmp_path / "in.json", tmp_path / "out.json"
     cfg_path.write_text(json.dumps(source))
@@ -285,24 +285,24 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     dumped = json.loads(out_path.read_text())
     assert source == before
     assert json.loads(cfg_path.read_text()) == before
-    assert dumped["backtest"]["reducer"]["adg_pnl"] == "max"
+    assert dumped["backtest"]["reducer"]["daily_realized_pnl_mean_fraction"] == "max"
     assert dumped["backtest"]["reducer"]["default"] == "mean"
     assert "aggregate" not in dumped["backtest"]
-    assert "drawdown_worst_strategy_eq" not in dumped["backtest"]["reducer"]
-    assert "position_held_days_max" not in dumped["backtest"]["reducer"]
+    assert "drawdown_max_fraction_strategy_equity" not in dumped["backtest"]["reducer"]
+    assert "position_held_max_days" not in dumped["backtest"]["reducer"]
 
 
 def test_clean_config_preserves_backtest_reducer_overrides():
     config = {
-        "backtest": {"reducer": {"adg_pnl": "max", "default": "mean"}},
+        "backtest": {"reducer": {"daily_realized_pnl_mean_fraction": "max", "default": "mean"}},
     }
 
     cleaned = clean_config(config)
 
-    assert cleaned["backtest"]["reducer"]["adg_pnl"] == "max"
+    assert cleaned["backtest"]["reducer"]["daily_realized_pnl_mean_fraction"] == "max"
     assert cleaned["backtest"]["reducer"]["default"] == "mean"
-    assert "drawdown_worst_strategy_eq" not in cleaned["backtest"]["reducer"]
-    assert "position_held_days_max" not in cleaned["backtest"]["reducer"]
+    assert "drawdown_max_fraction_strategy_equity" not in cleaned["backtest"]["reducer"]
+    assert "position_held_max_days" not in cleaned["backtest"]["reducer"]
 
 
 def test_clean_config_preserves_sparse_backtest_reducer():

@@ -88,7 +88,7 @@ def make_proxy(
         timestamps=timestamps,
         exchange="binance",
         batch_size=3,
-        needed_metrics={"adg_usd"},
+        needed_metrics={"adg_fraction_usd"},
         prepared_data_cache=prepared_data_cache,
         interrupt_check=interrupt_check,
         factual_hsl=factual_hsl,
@@ -110,7 +110,7 @@ def test_multicoin_hsl_service_dispatch(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides)
     rows = proxy.evaluate([{}])
     assert len(rows) == 1
-    assert np.isfinite(rows[0]["adg_usd"])
+    assert np.isfinite(rows[0]["adg_fraction_usd"])
     runners = (
         [proxy.fused_runner] if proxy.fused_runner else list(proxy.runners.values())
     )

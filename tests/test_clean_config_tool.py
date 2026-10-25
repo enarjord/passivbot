@@ -71,8 +71,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     cfg["backtest"]["end_date"] = "now"
     cfg["backtest"]["filter_by_min_effective_cost"] = None
     cfg["bot"]["long"]["risk"] = {"max_positions": 4.0}
-    cfg["metrics"] = {"adg_strategy_eq": 1.0}
-    cfg["suite_metrics"] = {"base": {"adg_strategy_eq": 1.0}}
+    cfg["metrics"] = {"adg_fraction_strategy_equity": 1.0}
+    cfg["suite_metrics"] = {"base": {"adg_fraction_strategy_equity": 1.0}}
     cfg["optimizer_anchor"] = {"seed": 7}
     cfg["optimizer_evaluation_contract"] = {"version": 5}
     cfg["backtest"]["coins"] = {"binance": ["BTCUSDT"]}
@@ -82,7 +82,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     }
     cfg["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 3.0}}}}
     cfg["_raw"] = {"bad": "metadata"}
-    wrapper = {"config": cfg, "analysis": {"adg": 123}, "timestamp": 456}
+    wrapper = {"config": cfg, "analysis": {"adg_fraction": 123}, "timestamp": 456}
     original = deepcopy(wrapper)
     result = cleanup_config(wrapper, base_config_path=str(tmp_path / "input.json"))
     assert wrapper == original
@@ -125,7 +125,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     (("bot", "long", "risk", "dead"), 777),
     (("bot", "long", "risk", "_raw"), {"ignored": 1}),
     (("bot", "long", "risk", "excess_allowance_mode"), "bounded"),
-    (("backtest", "metrics"), {"adg_strategy_eq": 1.0}),
+    (("backtest", "metrics"), {"adg_fraction_strategy_equity": 1.0}),
     (("coin_overrides", "BTC", "_note"), "unknown"),
     (("optimize", "backend"), "deap"),
     (("live", "strategy_kind"), "trailing_grid_v7"),
@@ -176,7 +176,7 @@ def test_cleanup_rejects_retired_override_selectors(selector, container):
 def test_cleanup_rejects_unknown_limit_fields(field, value):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [{
-        "metric": "adg_strategy_eq", "penalize_if": "less_than", "value": 0,
+        "metric": "adg_fraction_strategy_equity", "penalize_if": "less_than", "value": 0,
         field: value,
     }]
     with pytest.raises(ValueError, match="unknown configuration field"):
@@ -396,24 +396,24 @@ def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
         cfg = get_template_config()
         limits = [
             {
-                "metric": "backtest_completion_ratio",
+                "metric": "backtest_completion_fraction",
                 "penalize_if": "less_than",
                 "value": number(1),
                 "enabled": True,
             },
             {
-                "metric": "adg_strategy_eq",
+                "metric": "adg_fraction_strategy_equity",
                 "penalize_if": "outside_range",
                 "range": [number(0), number(1)],
             },
             {"metric": "fills_count", "penalize_if": "greater_than", "value": number(10)},
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.125,
             },
             {
-                "metric": "adg_strategy_eq",
+                "metric": "adg_fraction_strategy_equity",
                 "penalize_if": "inside_range",
                 "range": [0.125, number(1)],
             },
@@ -510,7 +510,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC", "ETH"], "short": []})
     cfg["backtest"]["scenarios"] = [{"label": "base"}]
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
-    cfg["backtest"]["reducer"] = {"default": "mean", "adg_strategy_eq": "min"}
+    cfg["backtest"]["reducer"] = {"default": "mean", "adg_fraction_strategy_equity": "min"}
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)

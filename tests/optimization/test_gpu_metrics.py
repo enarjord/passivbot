@@ -28,7 +28,7 @@ from optimization.gpu.metrics import (
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
-    _pct_change,
+    _simple_returns,
     _sharpe_sortino,
     _smoothed_adg,
     _smoothed_gain_adg,
@@ -39,8 +39,8 @@ from optimization.gpu.metrics import (
 
 def test_exact_only_metrics_are_disjoint_and_fail_closed_for_proxy_scoring():
     assert not GPU_EXACT_ONLY_METRICS & set(SUPPORTED_METRICS)
-    assert "strategy_eq_recovery_days_max" in SUPPORTED_METRICS
-    assert "peak_recovery_days_strategy_eq" in GPU_EXACT_ONLY_METRICS
+    assert "recovery_max_days_strategy_equity" in SUPPORTED_METRICS
+    assert "recovery_max_days_strategy_equity" in SUPPORTED_METRICS
 
     for name in GPU_EXACT_ONLY_METRICS:
         with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
@@ -48,16 +48,16 @@ def test_exact_only_metrics_are_disjoint_and_fail_closed_for_proxy_scoring():
 
 
 def test_proxy_metric_validation_canonicalizes_retained_cpu_shorthand():
-    assert validate_gpu_metric_names(["adg", "drawdown_worst"]) == {
-        "adg_usd",
-        "drawdown_worst_usd",
+    assert validate_gpu_metric_names(["adg_fraction", "drawdown_max_fraction"]) == {
+        "adg_fraction_usd",
+        "drawdown_max_fraction_usd",
     }
 
 
 def test_proxy_metric_validation_accepts_profit_ratio_alias():
     assert validate_gpu_metric_names(
-        ["long_short_profit_ratio", "pnl_ratio_long_short"]
-    ) == {"pnl_ratio_long_short"}
+        ["long_pnl_to_total_pnl_ratio", "long_pnl_to_total_pnl_ratio"]
+    ) == {"long_pnl_to_total_pnl_ratio"}
 
 
 def _assert_proxy_surface_partition(metric_names):
@@ -99,22 +99,17 @@ def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
         },
         SimpleNamespace(interval_ms=60_000),
         {
-            "fills_active_days_ratio",
+            "fills_active_day_fraction",
             "fills_active_symbols_count",
-            "fills_analysis_duration_days",
-            "n_days",
-            "fills_top_symbol_share",
+            "analysis_duration_days",
+            "fills_top_symbol_fraction",
         },
     )
 
-    assert (
-        metrics["n_days"].item()
-        == metrics["fills_analysis_duration_days"].item()
-        == 1.0
-    )
-    assert metrics["fills_active_days_ratio"].item() == 1.0
+    assert metrics["analysis_duration_days"].item() == 1.0
+    assert metrics["fills_active_day_fraction"].item() == 1.0
     assert metrics["fills_active_symbols_count"].item() == 1.0
-    assert metrics["fills_top_symbol_share"].item() == 1.0
+    assert metrics["fills_top_symbol_fraction"].item() == 1.0
 
 
 def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
@@ -139,7 +134,7 @@ def test_directional_pnl_metrics_match_rust_neutral_and_alias_contracts():
 
     assert metrics["loss_profit_ratio_long"].tolist() == [0.25, 1_000.0, 1.0]
     assert metrics["loss_profit_ratio_short"].tolist() == [1.5, 1.0, 1.0]
-    assert metrics["pnl_ratio_long_short"].tolist() == [1.5, 1.0, 0.5]
+    assert metrics["long_pnl_to_total_pnl_ratio"].tolist() == [1.5, 1.0, 0.5]
     assert set(metrics) <= set(SUPPORTED_METRICS)
 
 
@@ -164,23 +159,23 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         "first_eq_ts": torch.tensor([0.0]),
         "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
         "liq_step": torch.tensor([-1]),
-        "equity_balance_diff_pos_max": torch.tensor([0.20]),
-        "equity_balance_diff_pos_mean": torch.tensor([0.10]),
-        "equity_balance_diff_neg_max": torch.tensor([0.30]),
-        "equity_balance_diff_neg_mean": torch.tensor([0.15]),
-        "equity_balance_diff_pos_max_btc": torch.tensor([0.25]),
-        "equity_balance_diff_pos_mean_btc": torch.tensor([0.125]),
-        "equity_balance_diff_neg_max_btc": torch.tensor([0.35]),
-        "equity_balance_diff_neg_mean_btc": torch.tensor([0.175]),
+        "equity_balance_gap_positive_max_fraction": torch.tensor([0.20]),
+        "equity_balance_gap_positive_mean_fraction": torch.tensor([0.10]),
+        "equity_balance_gap_negative_max_fraction": torch.tensor([0.30]),
+        "equity_balance_gap_negative_mean_fraction": torch.tensor([0.15]),
+        "equity_balance_gap_positive_max_fraction_btc": torch.tensor([0.25]),
+        "equity_balance_gap_positive_mean_fraction_btc": torch.tensor([0.125]),
+        "equity_balance_gap_negative_max_fraction_btc": torch.tensor([0.35]),
+        "equity_balance_gap_negative_mean_fraction_btc": torch.tensor([0.175]),
     }
     requested = {
-        f"equity_balance_diff_{sign}_{stat}_{currency}"
-        for sign in ("neg", "pos")
+        f"equity_balance_gap_{sign}_{stat}_fraction_{currency}"
+        for sign in ("negative", "positive")
         for stat in ("max", "mean")
         for currency in ("btc", "usd")
     } | {
-        f"paper_loss{middle}_ratio_{currency}"
-        for middle in ("", "_mean")
+        f"adg_to_paper_loss_{stat}_ratio_{currency}"
+        for stat in ("max", "mean")
         for currency in ("btc", "usd")
     }
 
@@ -200,7 +195,7 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         needed=requested,
     )
 
-    _gain, adg = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
+    _gain, adg_fraction = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
     expected_differences = {
@@ -214,22 +209,22 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         neg_mean,
     ) in expected_differences.items():
         assert metrics[
-            f"equity_balance_diff_pos_max_{currency}"
+            f"equity_balance_gap_positive_max_fraction_{currency}"
         ].item() == pytest.approx(pos_max)
         assert metrics[
-            f"equity_balance_diff_pos_mean_{currency}"
+            f"equity_balance_gap_positive_mean_fraction_{currency}"
         ].item() == pytest.approx(pos_mean)
         assert metrics[
-            f"equity_balance_diff_neg_max_{currency}"
+            f"equity_balance_gap_negative_max_fraction_{currency}"
         ].item() == pytest.approx(neg_max)
         assert metrics[
-            f"equity_balance_diff_neg_mean_{currency}"
+            f"equity_balance_gap_negative_mean_fraction_{currency}"
         ].item() == pytest.approx(neg_mean)
-        assert metrics[f"paper_loss_ratio_{currency}"].item() == pytest.approx(
-            adg.item() / neg_max
+        assert metrics[f"adg_to_paper_loss_max_ratio_{currency}"].item() == pytest.approx(
+            adg_fraction.item() / neg_max
         )
-        assert metrics[f"paper_loss_mean_ratio_{currency}"].item() == pytest.approx(
-            adg.item() / neg_mean
+        assert metrics[f"adg_to_paper_loss_mean_ratio_{currency}"].item() == pytest.approx(
+            adg_fraction.item() / neg_mean
         )
 
 
@@ -265,7 +260,7 @@ def test_equity_balance_diff_metrics_fail_closed_without_metal_output():
                 interval_ms=60_000,
             ),
             {"ts0": 0.0, "n": 1},
-            needed={"paper_loss_ratio_usd"},
+            needed={"adg_to_paper_loss_max_ratio_usd"},
         )
 
 
@@ -290,23 +285,23 @@ def test_equity_balance_diff_metrics_use_rust_defaults_without_fills():
         "first_eq_ts": torch.tensor([0.0]),
         "last_eq_ts": torch.tensor([0.0]),
         "liq_step": torch.tensor([-1]),
-        "equity_balance_diff_pos_max": torch.zeros(1),
-        "equity_balance_diff_pos_mean": torch.zeros(1),
-        "equity_balance_diff_neg_max": torch.zeros(1),
-        "equity_balance_diff_neg_mean": torch.zeros(1),
-        "equity_balance_diff_pos_max_btc": torch.zeros(1),
-        "equity_balance_diff_pos_mean_btc": torch.zeros(1),
-        "equity_balance_diff_neg_max_btc": torch.zeros(1),
-        "equity_balance_diff_neg_mean_btc": torch.zeros(1),
+        "equity_balance_gap_positive_max_fraction": torch.zeros(1),
+        "equity_balance_gap_positive_mean_fraction": torch.zeros(1),
+        "equity_balance_gap_negative_max_fraction": torch.zeros(1),
+        "equity_balance_gap_negative_mean_fraction": torch.zeros(1),
+        "equity_balance_gap_positive_max_fraction_btc": torch.zeros(1),
+        "equity_balance_gap_positive_mean_fraction_btc": torch.zeros(1),
+        "equity_balance_gap_negative_max_fraction_btc": torch.zeros(1),
+        "equity_balance_gap_negative_mean_fraction_btc": torch.zeros(1),
     }
     requested = {
-        f"equity_balance_diff_{sign}_{stat}_{currency}"
-        for sign in ("neg", "pos")
+        f"equity_balance_gap_{sign}_{stat}_fraction_{currency}"
+        for sign in ("negative", "positive")
         for stat in ("max", "mean")
         for currency in ("btc", "usd")
     } | {
-        f"paper_loss{middle}_ratio_{currency}"
-        for middle in ("", "_mean")
+        f"adg_to_paper_loss_{stat}_ratio_{currency}"
+        for stat in ("max", "mean")
         for currency in ("btc", "usd")
     }
 
@@ -327,7 +322,7 @@ def test_equity_balance_diff_metrics_use_rust_defaults_without_fills():
     )
 
     for name in requested:
-        expected = 0.0 if name.startswith("paper_loss") else 1.0
+        expected = 0.0 if name.startswith("adg_to_paper_loss") else 1.0
         assert metrics[name].item() == expected
 
 
@@ -347,26 +342,26 @@ def test_equity_shape_metrics_match_rust_daily_series_contract():
 
     metrics = _equity_shape_metrics(day_eq, active)
 
-    assert metrics["equity_choppiness_usd"][0].item() == pytest.approx(3.0)
-    assert metrics["equity_jerkiness_usd"][0].item() == pytest.approx(
+    assert metrics["equity_choppiness_ratio_usd"][0].item() == pytest.approx(3.0)
+    assert metrics["equity_jerkiness_ratio_usd"][0].item() == pytest.approx(
         (0.3 + 0.46875) / 2.0
     )
     log_equity = np.log(np.array([100.0, 110.0, 90.0, 120.0]))
     x = np.arange(4, dtype=float)
     slope, intercept = np.polyfit(x, log_equity, 1)
     expected_fit_error = np.mean((slope * x + intercept - log_equity) ** 2)
-    assert metrics["exponential_fit_error_usd"][0].item() == pytest.approx(
+    assert metrics["exponential_fit_mse_log_ratio_squared_usd"][0].item() == pytest.approx(
         expected_fit_error
     )
-    assert math.isinf(metrics["equity_choppiness_usd"][1].item())
-    assert metrics["equity_jerkiness_usd"][2].item() == 0.0
-    assert metrics["exponential_fit_error_usd"][2].item() == pytest.approx(0.0)
-    assert math.isinf(metrics["exponential_fit_error_usd"][3].item())
-    assert metrics["equity_choppiness_usd"][4].item() == 0.0
-    assert metrics["equity_jerkiness_usd"][4].item() == 0.0
-    assert math.isinf(metrics["exponential_fit_error_usd"][4].item())
-    assert metrics["equity_choppiness_usd"][5].item() == pytest.approx(3.0)
-    assert metrics["equity_jerkiness_usd"][5].item() == pytest.approx(0.3)
+    assert math.isinf(metrics["equity_choppiness_ratio_usd"][1].item())
+    assert metrics["equity_jerkiness_ratio_usd"][2].item() == 0.0
+    assert metrics["exponential_fit_mse_log_ratio_squared_usd"][2].item() == pytest.approx(0.0)
+    assert math.isinf(metrics["exponential_fit_mse_log_ratio_squared_usd"][3].item())
+    assert metrics["equity_choppiness_ratio_usd"][4].item() == 0.0
+    assert metrics["equity_jerkiness_ratio_usd"][4].item() == 0.0
+    assert math.isinf(metrics["exponential_fit_mse_log_ratio_squared_usd"][4].item())
+    assert metrics["equity_choppiness_ratio_usd"][5].item() == pytest.approx(3.0)
+    assert metrics["equity_jerkiness_ratio_usd"][5].item() == pytest.approx(0.3)
 
 
 def test_equity_curve_metrics_use_rust_defaults_without_fills():
@@ -393,11 +388,11 @@ def test_equity_curve_metrics_use_rust_defaults_without_fills():
         "liq_step": torch.tensor([-1]),
     }
     requested = {
-        "equity_choppiness_usd",
-        "equity_jerkiness_usd",
-        "exponential_fit_error_usd",
-        "peak_recovery_days_equity_usd",
-        "peak_recovery_hours_equity_usd",
+        "equity_choppiness_ratio_usd",
+        "equity_jerkiness_ratio_usd",
+        "exponential_fit_mse_log_ratio_squared_usd",
+        "peak_recovery_max_days_usd",
+        "peak_recovery_max_hours_usd",
     }
 
     metrics = compute_objectives(
@@ -414,11 +409,11 @@ def test_equity_curve_metrics_use_rust_defaults_without_fills():
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
     assert {name: value.item() for name, value in metrics.items()} == {
-        "equity_choppiness_usd": 1.0,
-        "equity_jerkiness_usd": 1.0,
-        "exponential_fit_error_usd": 1.0,
-        "peak_recovery_days_equity_usd": 0.0,
-        "peak_recovery_hours_equity_usd": 0.0,
+        "equity_choppiness_ratio_usd": 1.0,
+        "equity_jerkiness_ratio_usd": 1.0,
+        "exponential_fit_mse_log_ratio_squared_usd": 1.0,
+        "peak_recovery_max_days_usd": 0.0,
+        "peak_recovery_max_hours_usd": 0.0,
     }
 
 
@@ -456,25 +451,24 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     }
     requested = {
         "fills_active_days_count",
-        "fills_active_days_ratio",
+        "fills_active_day_fraction",
         "fills_active_symbols_count",
-        "fills_analysis_duration_days",
-        "n_days",
+        "analysis_duration_days",
         "fills_count",
-        "fills_count_close",
-        "fills_count_entry",
+        "fills_close_count",
+        "fills_entry_count",
         "fills_count_long",
         "fills_count_short",
-        "fills_entry_per_close",
+        "entry_to_close_fill_count_ratio",
         "fills_per_day",
-        "fills_per_day_close",
-        "fills_per_day_entry",
+        "fills_close_per_day",
+        "fills_entry_per_day",
         "fills_per_day_long",
         "fills_per_day_per_position_slot",
         "fills_per_day_per_position_slot_long",
         "fills_per_day_per_position_slot_short",
         "fills_per_day_short",
-        "fills_top_symbol_share",
+        "fills_top_symbol_fraction",
     }
 
     metrics = compute_objectives(
@@ -484,29 +478,26 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         needed=requested,
     )
 
-    assert (
-        metrics["n_days"].tolist() == metrics["fills_analysis_duration_days"].tolist()
-    )
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
-    assert metrics["fills_analysis_duration_days"].tolist() == pytest.approx(
+    assert metrics["analysis_duration_days"].tolist() == pytest.approx(
         [2.5, 4.0 / 24.0]
     )
     assert metrics["fills_active_days_count"].tolist() == [2.0, 0.0]
-    assert metrics["fills_active_days_ratio"].tolist() == pytest.approx(
+    assert metrics["fills_active_day_fraction"].tolist() == pytest.approx(
         [2.0 / 3.0, 0.0]
     )
     assert metrics["fills_active_symbols_count"].tolist() == [2.0, 0.0]
-    assert metrics["fills_top_symbol_share"].tolist() == pytest.approx([0.8, 0.0])
+    assert metrics["fills_top_symbol_fraction"].tolist() == pytest.approx([0.8, 0.0])
     assert metrics["fills_count"].tolist() == [5.0, 0.0]
-    assert metrics["fills_count_entry"].tolist() == [3.0, 0.0]
-    assert metrics["fills_count_close"].tolist() == [2.0, 0.0]
+    assert metrics["fills_entry_count"].tolist() == [3.0, 0.0]
+    assert metrics["fills_close_count"].tolist() == [2.0, 0.0]
     assert metrics["fills_count_long"].tolist() == [4.0, 0.0]
     assert metrics["fills_count_short"].tolist() == [1.0, 0.0]
-    assert metrics["fills_entry_per_close"].tolist() == [1.5, 0.0]
+    assert metrics["entry_to_close_fill_count_ratio"].tolist() == [1.5, 0.0]
     assert metrics["fills_per_day"].tolist() == pytest.approx([2.0, 0.0])
-    assert metrics["fills_per_day_entry"].tolist() == pytest.approx([1.2, 0.0])
-    assert metrics["fills_per_day_close"].tolist() == pytest.approx([0.8, 0.0])
+    assert metrics["fills_entry_per_day"].tolist() == pytest.approx([1.2, 0.0])
+    assert metrics["fills_close_per_day"].tolist() == pytest.approx([0.8, 0.0])
     assert metrics["fills_per_day_long"].tolist() == pytest.approx([1.6, 0.0])
     assert metrics["fills_per_day_short"].tolist() == pytest.approx([0.4, 0.0])
     assert metrics["fills_per_day_per_position_slot_long"].tolist() == pytest.approx(
@@ -553,14 +544,14 @@ def test_fill_activity_metrics_ignore_inactive_daily_slots_and_zero_single_sampl
         SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000),
         {"ts0": 0.0, "n": 1},
         needed={
-            "fills_analysis_duration_days",
+            "analysis_duration_days",
             "fills_count",
             "fills_per_day",
         },
     )
 
     assert metrics["fills_count"].item() == 2.0
-    assert metrics["fills_analysis_duration_days"].item() == 0.0
+    assert metrics["analysis_duration_days"].item() == 0.0
     assert metrics["fills_per_day"].item() == 0.0
 
 
@@ -595,35 +586,35 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
         "last_eq_ts": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
-        "entry_initial_balance_pct_long": torch.tensor([0.125]),
-        "entry_initial_balance_pct_short": torch.tensor([0.075]),
-        "total_wallet_exposure_max": torch.tensor([1.25]),
-        "total_wallet_exposure_mean": torch.tensor([0.625]),
+        "initial_entry_balance_fraction_long": torch.tensor([0.125]),
+        "initial_entry_balance_fraction_short": torch.tensor([0.075]),
+        "absolute_net_wallet_exposure_max_ratio": torch.tensor([1.25]),
+        "absolute_net_wallet_exposure_mean_ratio": torch.tensor([0.625]),
     }
     run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000)
     requested = {
-        "position_held_days_mean",
-        "position_held_days_max",
+        "position_held_mean_days",
+        "position_held_max_days",
         "position_held_time_weighted_mean_hours",
-        "position_held_hours_mean",
-        "position_held_hours_max",
-        "positions_held_per_day",
-        "position_unchanged_days_max",
-        "position_unchanged_hours_max",
-        "strategy_eq_recovery_days_max",
-        "peak_recovery_days_strategy_eq",
-        "peak_recovery_hours_strategy_eq",
-        "peak_recovery_days_equity_usd",
-        "peak_recovery_hours_equity_usd",
-        "peak_recovery_days_pnl",
-        "peak_recovery_hours_pnl",
-        "entry_initial_balance_pct_long",
-        "entry_initial_balance_pct_short",
-        "total_wallet_exposure_max",
-        "total_wallet_exposure_mean",
-        "adg_strategy_eq",
-        "exposure_ratio_usd",
-        "exposure_mean_ratio_usd",
+        "position_held_mean_hours",
+        "position_held_max_hours",
+        "position_episodes_per_day",
+        "position_unchanged_max_days",
+        "position_unchanged_max_hours",
+        "recovery_max_days_strategy_equity",
+        "recovery_max_days_strategy_equity",
+        "recovery_max_hours_strategy_equity",
+        "peak_recovery_max_days_usd",
+        "peak_recovery_max_hours_usd",
+        "peak_recovery_max_days_realized_pnl",
+        "peak_recovery_max_hours_realized_pnl",
+        "initial_entry_balance_fraction_long",
+        "initial_entry_balance_fraction_short",
+        "absolute_net_wallet_exposure_max_ratio",
+        "absolute_net_wallet_exposure_mean_ratio",
+        "adg_fraction_strategy_equity",
+        "adg_to_absolute_net_exposure_max_ratio_usd",
+        "adg_to_absolute_net_exposure_mean_ratio_usd",
     }
 
     metrics = compute_objectives(
@@ -634,8 +625,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     )
 
     assert set(metrics) == requested
-    assert metrics["position_held_days_mean"].item() == pytest.approx(1.0)
-    assert metrics["position_held_days_max"].item() == pytest.approx(1.5)
+    assert metrics["position_held_mean_days"].item() == pytest.approx(1.0)
+    assert metrics["position_held_max_days"].item() == pytest.approx(1.5)
     assert metrics["position_held_time_weighted_mean_hours"].item() == pytest.approx(
         30.0
     )
@@ -655,34 +646,34 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         )
         assert empty_metrics["position_held_time_weighted_mean_hours"].item() == 0.0
 
-    assert metrics["position_held_hours_mean"].item() == pytest.approx(24.0)
-    assert metrics["position_held_hours_max"].item() == pytest.approx(36.0)
-    assert metrics["positions_held_per_day"].item() == pytest.approx(4.0 / 3.0)
-    assert metrics["position_unchanged_hours_max"].item() == pytest.approx(18.0)
-    assert metrics["position_unchanged_days_max"].item() == pytest.approx(0.75)
-    assert metrics["strategy_eq_recovery_days_max"].item() == pytest.approx(1.25)
-    assert metrics["peak_recovery_days_strategy_eq"].item() == pytest.approx(1.25)
-    assert metrics["peak_recovery_hours_strategy_eq"].item() == pytest.approx(30.0)
-    assert metrics["peak_recovery_days_equity_usd"].item() == pytest.approx(0.5)
-    assert metrics["peak_recovery_hours_equity_usd"].item() == pytest.approx(12.0)
-    assert metrics["peak_recovery_days_pnl"].item() == pytest.approx(0.75)
-    assert metrics["peak_recovery_hours_pnl"].item() == pytest.approx(18.0)
-    assert metrics["entry_initial_balance_pct_long"].item() == pytest.approx(0.125)
-    assert metrics["entry_initial_balance_pct_short"].item() == pytest.approx(0.075)
-    assert metrics["total_wallet_exposure_max"].item() == pytest.approx(1.25)
-    assert metrics["total_wallet_exposure_mean"].item() == pytest.approx(0.625)
-    adg = metrics["adg_strategy_eq"].item()
-    assert metrics["exposure_ratio_usd"].item() == pytest.approx(adg / 1.25)
-    assert metrics["exposure_mean_ratio_usd"].item() == pytest.approx(adg / 0.625)
+    assert metrics["position_held_mean_hours"].item() == pytest.approx(24.0)
+    assert metrics["position_held_max_hours"].item() == pytest.approx(36.0)
+    assert metrics["position_episodes_per_day"].item() == pytest.approx(4.0 / 3.0)
+    assert metrics["position_unchanged_max_hours"].item() == pytest.approx(18.0)
+    assert metrics["position_unchanged_max_days"].item() == pytest.approx(0.75)
+    assert metrics["recovery_max_days_strategy_equity"].item() == pytest.approx(1.25)
+    assert metrics["recovery_max_days_strategy_equity"].item() == pytest.approx(1.25)
+    assert metrics["recovery_max_hours_strategy_equity"].item() == pytest.approx(30.0)
+    assert metrics["peak_recovery_max_days_usd"].item() == pytest.approx(0.5)
+    assert metrics["peak_recovery_max_hours_usd"].item() == pytest.approx(12.0)
+    assert metrics["peak_recovery_max_days_realized_pnl"].item() == pytest.approx(0.75)
+    assert metrics["peak_recovery_max_hours_realized_pnl"].item() == pytest.approx(18.0)
+    assert metrics["initial_entry_balance_fraction_long"].item() == pytest.approx(0.125)
+    assert metrics["initial_entry_balance_fraction_short"].item() == pytest.approx(0.075)
+    assert metrics["absolute_net_wallet_exposure_max_ratio"].item() == pytest.approx(1.25)
+    assert metrics["absolute_net_wallet_exposure_mean_ratio"].item() == pytest.approx(0.625)
+    adg_fraction = metrics["adg_fraction_strategy_equity"].item()
+    assert metrics["adg_to_absolute_net_exposure_max_ratio_usd"].item() == pytest.approx(adg_fraction / 1.25)
+    assert metrics["adg_to_absolute_net_exposure_mean_ratio_usd"].item() == pytest.approx(adg_fraction / 0.625)
     _assert_proxy_surface_partition(requested)
 
 
 def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
     changes = torch.tensor([[0.1, 0.1]], dtype=torch.float64)
     mask = torch.tensor([[True, True]])
-    adg = torch.tensor([0.1], dtype=torch.float64)
+    adg_fraction = torch.tensor([0.1], dtype=torch.float64)
 
-    sharpe, sortino = _sharpe_sortino(changes, mask, adg)
+    sharpe, sortino = _sharpe_sortino(changes, mask, adg_fraction)
 
     assert sharpe.item() == 0.0
     assert sortino.item() == 0.0
@@ -703,15 +694,15 @@ def test_gain_quality_metrics_distinguish_steady_early_and_late_gain():
         day_eq,
         active,
         {
-            "adg_rolling_hmean_strategy_eq",
-            "adg_time_integrated_strategy_eq",
-            "positive_gain_participation_strategy_eq",
+            "adg_rolling_hmean_fraction_strategy_equity",
+            "adg_time_integrated_fraction_strategy_equity",
+            "positive_log_return_participation_score_strategy_equity",
         },
     )
 
-    rolling = metrics["adg_rolling_hmean_strategy_eq"]
-    integrated = metrics["adg_time_integrated_strategy_eq"]
-    participation = metrics["positive_gain_participation_strategy_eq"]
+    rolling = metrics["adg_rolling_hmean_fraction_strategy_equity"]
+    integrated = metrics["adg_time_integrated_fraction_strategy_equity"]
+    participation = metrics["positive_log_return_participation_score_strategy_equity"]
     expected_daily_rate = math.expm1(math.log(2.0) / (day_count - 1))
     assert rolling[0].item() == pytest.approx(expected_daily_rate)
     assert integrated[0].item() == pytest.approx(expected_daily_rate)
@@ -741,10 +732,10 @@ def test_rolling_hmean_adg_matches_manual_automatic_horizons(n_intervals, horizo
     metrics = _gain_quality_metrics(
         torch.tensor(equity, dtype=torch.float64).unsqueeze(0),
         torch.ones((1, n_intervals + 1), dtype=torch.bool),
-        {"adg_rolling_hmean_strategy_eq"},
+        {"adg_rolling_hmean_fraction_strategy_equity"},
     )
 
-    assert metrics["adg_rolling_hmean_strategy_eq"].item() == pytest.approx(expected)
+    assert metrics["adg_rolling_hmean_fraction_strategy_equity"].item() == pytest.approx(expected)
 
 
 def test_gain_quality_metrics_compact_missing_days_and_fail_closed():
@@ -766,18 +757,18 @@ def test_gain_quality_metrics_compact_missing_days_and_fail_closed():
         day_eq,
         active,
         {
-            "adg_rolling_hmean_strategy_eq",
-            "adg_time_integrated_strategy_eq",
-            "positive_gain_participation_strategy_eq",
+            "adg_rolling_hmean_fraction_strategy_equity",
+            "adg_time_integrated_fraction_strategy_equity",
+            "positive_log_return_participation_score_strategy_equity",
         },
     )
 
-    assert metrics["positive_gain_participation_strategy_eq"][
+    assert metrics["positive_log_return_participation_score_strategy_equity"][
         0
     ].item() == pytest.approx(2.0 / 3.0)
-    assert metrics["adg_rolling_hmean_strategy_eq"][1].item() == -1.0
-    assert metrics["adg_time_integrated_strategy_eq"][1].item() == -1.0
-    assert metrics["positive_gain_participation_strategy_eq"][1].item() == 0.0
+    assert metrics["adg_rolling_hmean_fraction_strategy_equity"][1].item() == -1.0
+    assert metrics["adg_time_integrated_fraction_strategy_equity"][1].item() == -1.0
+    assert metrics["positive_log_return_participation_score_strategy_equity"][1].item() == 0.0
 
 
 def test_daily_pnl_metrics_match_rust_fill_day_contract():
@@ -806,10 +797,10 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
         "liq_step": torch.tensor([-1]),
     }
     requested = {
-        "adg_pnl",
-        "mdg_pnl",
-        "sharpe_ratio_pnl",
-        "sortino_ratio_pnl",
+        "daily_realized_pnl_mean_fraction",
+        "daily_realized_pnl_median_fraction",
+        "sharpe_ratio_realized_pnl",
+        "sortino_ratio_realized_pnl",
     }
 
     metrics = compute_objectives(
@@ -825,10 +816,10 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
     downside = torch.sqrt((ratios[ratios < 0.0] ** 2).mean())
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
-    assert metrics["adg_pnl"].item() == pytest.approx(mean.item())
-    assert metrics["mdg_pnl"].item() == 0.0
-    assert metrics["sharpe_ratio_pnl"].item() == pytest.approx((mean / std).item())
-    assert metrics["sortino_ratio_pnl"].item() == pytest.approx(
+    assert metrics["daily_realized_pnl_mean_fraction"].item() == pytest.approx(mean.item())
+    assert metrics["daily_realized_pnl_median_fraction"].item() == 0.0
+    assert metrics["sharpe_ratio_realized_pnl"].item() == pytest.approx((mean / std).item())
+    assert metrics["sortino_ratio_realized_pnl"].item() == pytest.approx(
         (mean / downside).item()
     )
 
@@ -1098,11 +1089,11 @@ def test_entry_interval_metrics_keep_exact_mean_and_max_with_conservative_percen
     )
 
     assert ENTRY_INTERVAL_METRICS <= set(SUPPORTED_METRICS)
-    assert metrics["entry_interval_hours_mean"].item() == pytest.approx(2.0)
-    assert metrics["entry_interval_hours_max"].item() == pytest.approx(3.0)
-    assert metrics["entry_interval_hours_median"].item() >= 2.0
-    assert metrics["entry_interval_hours_p95"].item() >= 2.9
-    assert metrics["entry_interval_hours_p99"].item() >= 2.98
+    assert metrics["entry_interval_mean_hours"].item() == pytest.approx(2.0)
+    assert metrics["entry_interval_max_hours"].item() == pytest.approx(3.0)
+    assert metrics["entry_interval_median_hours"].item() >= 2.0
+    assert metrics["entry_interval_p95_hours"].item() >= 2.9
+    assert metrics["entry_interval_p99_hours"].item() >= 2.98
 
 
 def test_entry_interval_metrics_keep_ema_anchor_canonical_zero_without_kernel_output():
@@ -1152,63 +1143,63 @@ def test_entry_interval_metrics_fail_closed_for_missing_or_inconsistent_output()
 
 def test_strategy_equity_summary_metric_surface_is_supported():
     strategy_metrics = {
-        "gain_strategy_eq",
-        "omega_ratio_strategy_eq",
-        "expected_shortfall_1pct_strategy_eq",
-        "calmar_ratio_strategy_eq",
-        "sterling_ratio_strategy_eq",
-        "ulcer_index_strategy_eq",
+        "gain_multiplier_strategy_equity",
+        "omega_ratio_strategy_equity",
+        "expected_shortfall_1pct_fraction_strategy_equity",
+        "calmar_ratio_strategy_equity",
+        "sterling_ratio_strategy_equity",
+        "ulcer_index_fraction_strategy_equity",
     }
     _assert_proxy_surface_partition(strategy_metrics)
     usd_metrics = {
-        "adg_usd",
+        "adg_fraction_usd",
         "calmar_ratio_usd",
-        "drawdown_worst_mean_1pct_usd",
-        "drawdown_worst_usd",
-        "expected_shortfall_1pct_usd",
-        "gain_usd",
-        "mdg_usd",
+        "drawdown_daily_worst_1pct_mean_fraction_usd",
+        "drawdown_max_fraction_usd",
+        "expected_shortfall_1pct_fraction_usd",
+        "gain_multiplier_usd",
+        "mdg_fraction_usd",
         "omega_ratio_usd",
         "sharpe_ratio_usd",
         "sortino_ratio_usd",
         "sterling_ratio_usd",
-        "exposure_ratio_usd",
-        "exposure_mean_ratio_usd",
+        "adg_to_absolute_net_exposure_max_ratio_usd",
+        "adg_to_absolute_net_exposure_mean_ratio_usd",
     }
     _assert_proxy_surface_partition(usd_metrics)
 
 
 def test_hard_stop_lifecycle_metric_surface_is_supported():
     lifecycle_metrics = {
-        "hard_stop_triggers",
-        "hard_stop_triggers_per_year",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_short",
-        "hard_stop_restarts",
-        "hard_stop_restarts_per_year",
-        "hard_stop_restarts_per_year_long",
-        "hard_stop_restarts_per_year_short",
-        "hard_stop_restarts_long",
-        "hard_stop_restarts_short",
-        "hard_stop_time_in_red_pct",
-        "hard_stop_duration_minutes_mean",
-        "hard_stop_duration_minutes_max",
-        "hard_stop_trigger_drawdown_mean",
-        "hard_stop_flatten_time_minutes_mean",
-        "hard_stop_post_restart_retrigger_pct",
+        "hsl_trigger_count",
+        "hsl_triggers_per_year",
+        "hsl_trigger_count_long",
+        "hsl_trigger_count_short",
+        "hsl_restart_count",
+        "hsl_restarts_per_year",
+        "hsl_restarts_per_year_long",
+        "hsl_restarts_per_year_short",
+        "hsl_restart_count_long",
+        "hsl_restart_count_short",
+        "hsl_red_time_fraction",
+        "hsl_red_duration_mean_minutes",
+        "hsl_red_duration_max_minutes",
+        "hsl_trigger_signal_mean_fraction",
+        "hsl_flatten_time_mean_minutes",
+        "hsl_restart_retrigger_fraction",
     }
     _assert_proxy_surface_partition(lifecycle_metrics)
     assert {
-        "drawdown_worst_ema_strategy_eq",
-        "drawdown_worst_ema_strategy_eq_long",
-        "drawdown_worst_ema_strategy_eq_short",
-        "drawdown_worst_mean_1pct_ema_strategy_eq",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_short",
-        "peak_recovery_hours_strategy_eq_long",
-        "peak_recovery_hours_strategy_eq_short",
-        "peak_recovery_days_strategy_eq_long",
-        "peak_recovery_days_strategy_eq_short",
+        "hsl_signal_ema_max_fraction",
+        "hsl_signal_ema_max_fraction_long",
+        "hsl_signal_ema_max_fraction_short",
+        "hsl_signal_ema_worst_1pct_mean_fraction",
+        "hsl_signal_ema_worst_1pct_mean_fraction_long",
+        "hsl_signal_ema_worst_1pct_mean_fraction_short",
+        "recovery_max_hours_strategy_equity_long",
+        "recovery_max_hours_strategy_equity_short",
+        "recovery_max_days_strategy_equity_long",
+        "recovery_max_days_strategy_equity_short",
     } <= set(SUPPORTED_METRICS)
 
 
@@ -1222,13 +1213,13 @@ def test_hard_stop_ema_drawdown_reduction_matches_rust_side_max_contract():
         }
     )
 
-    assert metrics["drawdown_worst_ema_strategy_eq"].tolist() == pytest.approx(
+    assert metrics["hsl_signal_ema_max_fraction"].tolist() == pytest.approx(
         [0.12, 0.2]
     )
-    assert metrics["drawdown_worst_ema_strategy_eq_long"].tolist() == pytest.approx(
+    assert metrics["hsl_signal_ema_max_fraction_long"].tolist() == pytest.approx(
         [0.12, 0.0]
     )
-    assert metrics["drawdown_worst_ema_strategy_eq_short"].tolist() == pytest.approx(
+    assert metrics["hsl_signal_ema_max_fraction_short"].tolist() == pytest.approx(
         [0.08, 0.2]
     )
 
@@ -1257,17 +1248,17 @@ def test_hard_stop_raw_drawdown_metrics_map_each_side():
         }
     )
 
-    assert metrics["drawdown_worst_strategy_eq_long"].tolist() == pytest.approx(
+    assert metrics["drawdown_max_fraction_strategy_equity_long"].tolist() == pytest.approx(
         [0.17, 0.0]
     )
-    assert metrics["drawdown_worst_strategy_eq_short"].tolist() == pytest.approx(
+    assert metrics["drawdown_max_fraction_strategy_equity_short"].tolist() == pytest.approx(
         [0.08, 0.23]
     )
     assert metrics[
-        "drawdown_worst_mean_1pct_strategy_eq_long"
+        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long"
     ].tolist() == pytest.approx([0.12, 0.0])
     assert metrics[
-        "drawdown_worst_mean_1pct_strategy_eq_short"
+        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short"
     ].tolist() == pytest.approx([0.06, 0.19])
 
 
@@ -1297,14 +1288,14 @@ def test_retained_directional_proxy_ema_tail_uses_legacy_side_max():
         }
     )
 
-    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq"].tolist() == (
+    assert metrics["hsl_signal_ema_worst_1pct_mean_fraction"].tolist() == (
         pytest.approx([0.14, 0.21])
     )
     assert metrics[
-        "drawdown_worst_mean_1pct_ema_strategy_eq_long"
+        "hsl_signal_ema_worst_1pct_mean_fraction_long"
     ].tolist() == pytest.approx([0.14, 0.0])
     assert metrics[
-        "drawdown_worst_mean_1pct_ema_strategy_eq_short"
+        "hsl_signal_ema_worst_1pct_mean_fraction_short"
     ].tolist() == pytest.approx([0.09, 0.21])
 
 
@@ -1316,9 +1307,9 @@ def test_hard_stop_ema_tail_uses_observed_portfolio_summary():
         "hsl_drawdown_ema_mean_worst_1pct_long": torch.tensor([0.6]),
         "hsl_drawdown_ema_mean_worst_1pct_short": torch.tensor([0.45]),
     })
-    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq"].item() == pytest.approx(0.9)
-    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_long"].item() == pytest.approx(0.6)
-    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_short"].item() == pytest.approx(0.45)
+    assert metrics["hsl_signal_ema_worst_1pct_mean_fraction"].item() == pytest.approx(0.9)
+    assert metrics["hsl_signal_ema_worst_1pct_mean_fraction_long"].item() == pytest.approx(0.6)
+    assert metrics["hsl_signal_ema_worst_1pct_mean_fraction_short"].item() == pytest.approx(0.45)
 
 
 def test_hard_stop_ema_tail_metrics_fail_closed_without_directional_outputs():
@@ -1347,16 +1338,16 @@ def test_hard_stop_strategy_equity_recovery_matches_rust_units():
         }
     )
 
-    assert metrics["peak_recovery_hours_strategy_eq_long"].tolist() == pytest.approx(
+    assert metrics["recovery_max_hours_strategy_equity_long"].tolist() == pytest.approx(
         [1.0, 24.0]
     )
-    assert metrics["peak_recovery_hours_strategy_eq_short"].tolist() == pytest.approx(
+    assert metrics["recovery_max_hours_strategy_equity_short"].tolist() == pytest.approx(
         [2.0, 48.0]
     )
-    assert metrics["peak_recovery_days_strategy_eq_long"].tolist() == pytest.approx(
+    assert metrics["recovery_max_days_strategy_equity_long"].tolist() == pytest.approx(
         [1.0 / 24.0, 1.0]
     )
-    assert metrics["peak_recovery_days_strategy_eq_short"].tolist() == pytest.approx(
+    assert metrics["recovery_max_days_strategy_equity_short"].tolist() == pytest.approx(
         [2.0 / 24.0, 2.0]
     )
 
@@ -1385,12 +1376,12 @@ def test_strategy_eq_recovery_distribution_maps_mps_columns():
     )
 
     assert {name: value.item() for name, value in metrics.items()} == {
-        "strategy_eq_recovery_days_mean": 1.25,
-        "strategy_eq_recovery_days_median": 1.0,
-        "strategy_eq_recovery_days_p95": 3.5,
-        "strategy_eq_recovery_days_p99": 4.0,
-        "strategy_eq_recovery_days_mean_worst_5pct": 4.5,
-        "strategy_eq_recovery_days_mean_worst_1pct": 5.0,
+        "recovery_mean_days_strategy_equity": 1.25,
+        "recovery_median_days_strategy_equity": 1.0,
+        "recovery_p95_days_strategy_equity": 3.5,
+        "recovery_p99_days_strategy_equity": 4.0,
+        "recovery_worst_5pct_mean_days_strategy_equity": 4.5,
+        "recovery_worst_1pct_mean_days_strategy_equity": 5.0,
     }
     assert set(metrics) <= set(SUPPORTED_METRICS)
 
@@ -1426,29 +1417,29 @@ def test_hard_stop_lifecycle_reduction_matches_rust_formulas(portfolio):
     out["hsl_unified_scope"] = torch.tensor([portfolio, False])
     metrics = _hard_stop_lifecycle_metrics(out, SimpleNamespace(interval_ms=60_000))
 
-    assert metrics["hard_stop_triggers_long"].tolist() == [0.0 if portfolio else 2.0, 0.0]
-    assert metrics["hard_stop_triggers_short"].tolist() == [0.0 if portfolio else 1.0, 0.0]
-    assert metrics["hard_stop_triggers"].tolist() == [3.0, 0.0]
-    assert metrics["hard_stop_triggers_per_year"].tolist() == pytest.approx(
+    assert metrics["hsl_trigger_count_long"].tolist() == [0.0 if portfolio else 2.0, 0.0]
+    assert metrics["hsl_trigger_count_short"].tolist() == [0.0 if portfolio else 1.0, 0.0]
+    assert metrics["hsl_trigger_count"].tolist() == [3.0, 0.0]
+    assert metrics["hsl_triggers_per_year"].tolist() == pytest.approx(
         [3.0 * 365.25, 0.0]
     )
-    assert metrics["hard_stop_restarts"].tolist() == [2.0, 0.0]
-    assert metrics["hard_stop_restarts_per_year_long"].tolist() == pytest.approx(
+    assert metrics["hsl_restart_count"].tolist() == [2.0, 0.0]
+    assert metrics["hsl_restarts_per_year_long"].tolist() == pytest.approx(
         [0.0 if portfolio else 365.25, 0.0]
     )
-    assert metrics["hard_stop_restarts_per_year_short"].tolist() == pytest.approx(
+    assert metrics["hsl_restarts_per_year_short"].tolist() == pytest.approx(
         [0.0 if portfolio else 365.25, 0.0]
     )
-    assert metrics["hard_stop_time_in_red_pct"][0].item() == pytest.approx(
+    assert metrics["hsl_red_time_fraction"][0].item() == pytest.approx(
         720.0 / 1441.0
     )
-    assert metrics["hard_stop_duration_minutes_mean"].tolist() == [15.0, 0.0]
-    assert metrics["hard_stop_duration_minutes_max"].tolist() == [30.0, 0.0]
-    assert metrics["hard_stop_trigger_drawdown_mean"].tolist() == pytest.approx(
+    assert metrics["hsl_red_duration_mean_minutes"].tolist() == [15.0, 0.0]
+    assert metrics["hsl_red_duration_max_minutes"].tolist() == [30.0, 0.0]
+    assert metrics["hsl_trigger_signal_mean_fraction"].tolist() == pytest.approx(
         [0.3, 0.0]
     )
-    assert metrics["hard_stop_flatten_time_minutes_mean"].tolist() == [3.0, 0.0]
-    assert metrics["hard_stop_post_restart_retrigger_pct"].tolist() == [0.5, 0.0]
+    assert metrics["hsl_flatten_time_mean_minutes"].tolist() == [3.0, 0.0]
+    assert metrics["hsl_restart_retrigger_fraction"].tolist() == [0.5, 0.0]
 
 
 def test_hard_stop_lifecycle_metrics_fail_closed_without_directional_outputs():
@@ -1476,20 +1467,20 @@ def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
     )
 
     # Rust normalizes panic-close loss, not the legacy independent halt scalar.
-    assert metrics["hard_stop_halt_to_restart_equity_loss_pct"].tolist() == [
+    assert metrics["hsl_panic_loss_starting_balance_fraction"].tolist() == [
         0.045,
         0.0,
     ]
-    assert metrics["hard_stop_panic_close_loss_sum"].tolist() == [45.0, 0.0]
-    assert metrics["hard_stop_panic_close_loss_max"].tolist() == [30.0, 0.0]
+    assert metrics["hsl_panic_fill_loss_sum_usd"].tolist() == [45.0, 0.0]
+    assert metrics["hsl_panic_fill_loss_max_usd"].tolist() == [30.0, 0.0]
     assert metrics[
-        "hard_stop_panic_close_loss_drawdown_pct_min"
+        "hsl_panic_episode_loss_min_fraction"
     ].tolist() == pytest.approx([0.01, 0.0])
     assert metrics[
-        "hard_stop_panic_close_loss_drawdown_pct_mean"
+        "hsl_panic_episode_loss_mean_fraction"
     ].tolist() == pytest.approx([0.03, 0.0])
     assert metrics[
-        "hard_stop_panic_close_loss_drawdown_pct_max"
+        "hsl_panic_episode_loss_max_fraction"
     ].tolist() == pytest.approx([0.05, 0.0])
 
 
@@ -1530,19 +1521,19 @@ def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
             out,
             SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000),
             {"ts0": 0.0, "n": 2},
-            needed={"peak_recovery_hours_pnl"},
+            needed={"peak_recovery_max_hours_realized_pnl"},
         )
 
 
 def test_smoothed_gain_and_adg_match_rust_terminal_contract():
-    gain, adg = _smoothed_gain_adg(
+    gain_multiplier, adg_fraction = _smoothed_gain_adg(
         torch.tensor([[100.0, 110.0, 120.0, 130.0]], dtype=torch.float64),
         torch.tensor([[True, True, True, True]]),
     )
 
     expected_gain = (110.0 + 120.0 + 130.0) / 3.0 / 100.0
-    assert gain.item() == pytest.approx(expected_gain)
-    assert adg.item() == pytest.approx(expected_gain ** (1.0 / 4.0) - 1.0)
+    assert gain_multiplier.item() == pytest.approx(expected_gain)
+    assert adg_fraction.item() == pytest.approx(expected_gain ** (1.0 / 4.0) - 1.0)
 
 
 def test_omega_ratio_matches_rust_zero_and_cap_contracts():
@@ -1577,49 +1568,49 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     out.update(raw_strategy_day_dd_sum=day_dd,
                raw_strategy_day_dd_squared_sum=day_dd.square(),
                raw_strategy_day_sample_count=torch.ones_like(day_dd))
-    requested = {'adg_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_strategy_eq', 'gain_strategy_eq', 'mdg_strategy_eq', 'omega_ratio_strategy_eq', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq', 'expected_shortfall_1pct_strategy_eq', 'calmar_ratio_strategy_eq', 'sterling_ratio_strategy_eq', 'ulcer_index_strategy_eq'}
-    requested.add('pain_index_strategy_eq')
-    alias_sources = {'adg_usd': 'adg_strategy_eq', 'calmar_ratio_usd': 'calmar_ratio_strategy_eq', 'drawdown_worst_mean_1pct_usd': 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_usd': 'drawdown_worst_strategy_eq', 'expected_shortfall_1pct_usd': 'expected_shortfall_1pct_strategy_eq', 'gain_usd': 'gain_strategy_eq', 'mdg_usd': 'mdg_strategy_eq', 'omega_ratio_usd': 'omega_ratio_strategy_eq', 'sharpe_ratio_usd': 'sharpe_ratio_strategy_eq', 'sortino_ratio_usd': 'sortino_ratio_strategy_eq', 'sterling_ratio_usd': 'sterling_ratio_strategy_eq'}
+    requested = {'adg_fraction_strategy_equity', 'drawdown_daily_worst_1pct_mean_fraction_strategy_equity', 'drawdown_max_fraction_strategy_equity', 'gain_multiplier_strategy_equity', 'mdg_fraction_strategy_equity', 'omega_ratio_strategy_equity', 'sharpe_ratio_strategy_equity', 'sortino_ratio_strategy_equity', 'expected_shortfall_1pct_fraction_strategy_equity', 'calmar_ratio_strategy_equity', 'sterling_ratio_strategy_equity', 'ulcer_index_fraction_strategy_equity'}
+    requested.add('pain_index_fraction_strategy_equity')
+    alias_sources = {'adg_fraction_usd': 'adg_fraction_strategy_equity', 'calmar_ratio_usd': 'calmar_ratio_strategy_equity', 'drawdown_daily_worst_1pct_mean_fraction_usd': 'drawdown_daily_worst_1pct_mean_fraction_strategy_equity', 'drawdown_max_fraction_usd': 'drawdown_max_fraction_strategy_equity', 'expected_shortfall_1pct_fraction_usd': 'expected_shortfall_1pct_fraction_strategy_equity', 'gain_multiplier_usd': 'gain_multiplier_strategy_equity', 'mdg_fraction_usd': 'mdg_fraction_strategy_equity', 'omega_ratio_usd': 'omega_ratio_strategy_equity', 'sharpe_ratio_usd': 'sharpe_ratio_strategy_equity', 'sortino_ratio_usd': 'sortino_ratio_strategy_equity', 'sterling_ratio_usd': 'sterling_ratio_strategy_equity'}
     requested.update(alias_sources)
     requested.update(alias_sources.values())
-    per_exposure_sources = {'adg_per_exposure_long_usd': ('adg_strategy_eq', 1.25), 'adg_per_exposure_short_usd': ('adg_strategy_eq', 0.5), 'gain_per_exposure_long_usd': ('gain_strategy_eq', 1.25), 'gain_per_exposure_short_usd': ('gain_strategy_eq', 0.5), 'mdg_per_exposure_long_usd': ('mdg_strategy_eq', 1.25), 'mdg_per_exposure_short_usd': ('mdg_strategy_eq', 0.5)}
+    per_exposure_sources = {'adg_fraction_per_twel_ratio_usd_long': ('adg_fraction_strategy_equity', 1.25), 'adg_fraction_per_twel_ratio_usd_short': ('adg_fraction_strategy_equity', 0.5), 'gain_multiplier_per_twel_ratio_usd_long': ('gain_multiplier_strategy_equity', 1.25), 'gain_multiplier_per_twel_ratio_usd_short': ('gain_multiplier_strategy_equity', 0.5), 'mdg_fraction_per_twel_ratio_usd_long': ('mdg_fraction_strategy_equity', 1.25), 'mdg_fraction_per_twel_ratio_usd_short': ('mdg_fraction_strategy_equity', 0.5)}
     requested.update(per_exposure_sources)
     _assert_proxy_surface_partition(per_exposure_sources)
     metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed=requested)
-    gain, adg = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
-    assert metrics['pain_index_strategy_eq'].item() == pytest.approx(0.55 / 4)
+    gain_multiplier, adg_fraction = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
+    assert metrics['pain_index_fraction_strategy_equity'].item() == pytest.approx(0.55 / 4)
     assert set(metrics) == requested
-    assert metrics['gain_strategy_eq'].item() == pytest.approx(gain.item())
-    assert metrics['calmar_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
-    assert metrics['sterling_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
-    assert metrics['ulcer_index_strategy_eq'].item() == pytest.approx(math.sqrt(0.1325 / 4))
-    assert metrics['expected_shortfall_1pct_strategy_eq'].item() == pytest.approx(abs((80.0 - 105.0) / 105.0))
+    assert metrics['gain_multiplier_strategy_equity'].item() == pytest.approx(gain_multiplier.item())
+    assert metrics['calmar_ratio_strategy_equity'].item() == pytest.approx(adg_fraction.item() / 0.3)
+    assert metrics['sterling_ratio_strategy_equity'].item() == pytest.approx(adg_fraction.item() / 0.3)
+    assert metrics['ulcer_index_fraction_strategy_equity'].item() == pytest.approx(math.sqrt(0.1325 / 4))
+    assert metrics['expected_shortfall_1pct_fraction_strategy_equity'].item() == pytest.approx(abs((80.0 - 105.0) / 105.0))
     expected_omega = ((110.0 - 100.0) / 100.0 + (120.0 - 90.0) / 90.0) / abs((90.0 - 110.0) / 110.0)
-    assert metrics['omega_ratio_strategy_eq'].item() == pytest.approx(expected_omega)
+    assert metrics['omega_ratio_strategy_equity'].item() == pytest.approx(expected_omega)
     for alias, source in alias_sources.items():
         assert metrics[alias].item() == pytest.approx(metrics[source].item())
     for name, (source, denominator) in per_exposure_sources.items():
         assert metrics[name].item() == pytest.approx(metrics[source].item() / denominator)
     out['candidate_total_wallet_exposure_limit_short'] = torch.zeros(1, dtype=torch.float64)
-    zero_exposure = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed={'gain_per_exposure_short_usd'})
-    assert zero_exposure['gain_per_exposure_short_usd'].item() == 0.0
+    zero_exposure = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed={'gain_multiplier_per_twel_ratio_usd_short'})
+    assert zero_exposure['gain_multiplier_per_twel_ratio_usd_short'].item() == 0.0
 
 
 @pytest.mark.parametrize('fill_count', [1.0, 3.0])
 def test_btc_account_metrics_use_prepared_daily_price_context(fill_count):
     day_end = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
-    out = {'day_end_eq': day_end, 'day_min_eq': day_end.clone(), 'day_max_dd': torch.zeros_like(day_end), 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.ones_like(day_end, dtype=torch.bool), 'fill_count': torch.tensor([fill_count]), 'max_dd': torch.zeros(1), 'held_max_ms': torch.zeros(1), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1), 'first_fill_ts': torch.tensor([0.0]), 'last_fill_ts': torch.tensor([2 * 86400000.0]), 'recovery_max_ms': torch.zeros(1), 'last_high_ts': torch.tensor([86400000.0]), 'first_eq_ts': torch.tensor([0.0]), 'last_eq_ts': torch.tensor([2 * 86400000.0]), 'liq_step': torch.tensor([-1]), 'total_wallet_exposure_max': torch.tensor([2.0]), 'total_wallet_exposure_mean': torch.tensor([1.0]), 'candidate_total_wallet_exposure_limit_long': torch.tensor([1.25]), 'candidate_total_wallet_exposure_limit_short': torch.tensor([0.5])}
-    requested = {'adg_btc', 'gain_btc', 'gain_per_exposure_long_btc', 'peak_recovery_days_equity_btc'}
+    out = {'day_end_eq': day_end, 'day_min_eq': day_end.clone(), 'day_max_dd': torch.zeros_like(day_end), 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.ones_like(day_end, dtype=torch.bool), 'fill_count': torch.tensor([fill_count]), 'max_dd': torch.zeros(1), 'held_max_ms': torch.zeros(1), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1), 'first_fill_ts': torch.tensor([0.0]), 'last_fill_ts': torch.tensor([2 * 86400000.0]), 'recovery_max_ms': torch.zeros(1), 'last_high_ts': torch.tensor([86400000.0]), 'first_eq_ts': torch.tensor([0.0]), 'last_eq_ts': torch.tensor([2 * 86400000.0]), 'liq_step': torch.tensor([-1]), 'absolute_net_wallet_exposure_max_ratio': torch.tensor([2.0]), 'absolute_net_wallet_exposure_mean_ratio': torch.tensor([1.0]), 'candidate_total_wallet_exposure_limit_long': torch.tensor([1.25]), 'candidate_total_wallet_exposure_limit_short': torch.tensor([0.5])}
+    requested = {'adg_fraction_btc', 'gain_multiplier_btc', 'gain_multiplier_per_twel_ratio_btc_long', 'peak_recovery_max_days_btc'}
     btc_day_end = np.array([10.0, 10.0, 20.0])
     metrics = compute_objectives(out, SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=86400000), {'ts0': 0.0, 'n': 3, 'btc_day_end_price': btc_day_end, 'btc_prices': btc_day_end}, needed=requested)
     btc_equity = torch.tensor([[10.0, 11.0, 4.5]], dtype=torch.float64)
     expected_gain, expected_adg = _smoothed_gain_adg(btc_equity, torch.ones_like(btc_equity, dtype=torch.bool))
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
-    assert metrics['gain_btc'].item() == pytest.approx(expected_gain.item())
-    assert metrics['adg_btc'].item() == pytest.approx(expected_adg.item())
-    assert metrics['gain_per_exposure_long_btc'].item() == pytest.approx(expected_gain.item() / 1.25)
-    assert metrics['peak_recovery_days_equity_btc'].item() == 1.0
+    assert metrics['gain_multiplier_btc'].item() == pytest.approx(expected_gain.item())
+    assert metrics['adg_fraction_btc'].item() == pytest.approx(expected_adg.item())
+    assert metrics['gain_multiplier_per_twel_ratio_btc_long'].item() == pytest.approx(expected_gain.item() / 1.25)
+    assert metrics['peak_recovery_max_days_btc'].item() == 1.0
 
 
 def test_btc_account_metrics_fail_closed_without_price_context():
@@ -1654,7 +1645,7 @@ def test_btc_account_metrics_fail_closed_without_price_context():
                 interval_ms=86_400_000,
             ),
             {"ts0": 0.0, "n": 2},
-            needed={"adg_btc"},
+            needed={"adg_fraction_btc"},
         )
 
 
@@ -1692,10 +1683,10 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
     }
     requested = {
         "calmar_ratio_btc",
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
-        "expected_shortfall_1pct_btc",
-        "gain_btc",
+        "drawdown_max_fraction_btc",
+        "drawdown_daily_worst_1pct_mean_fraction_btc",
+        "expected_shortfall_1pct_fraction_btc",
+        "gain_multiplier_btc",
         "sharpe_ratio_btc",
         "sortino_ratio_btc",
         "sterling_ratio_btc",
@@ -1718,23 +1709,23 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
     )
 
     active = torch.ones_like(day_end_btc, dtype=torch.bool)
-    _gain, adg = _smoothed_gain_adg(day_end_btc, active)
-    min_changes, min_change_mask = _pct_change(day_min_btc, active)
-    sharpe, sortino = _sharpe_sortino(min_changes, min_change_mask, adg)
+    _gain, adg_fraction = _smoothed_gain_adg(day_end_btc, active)
+    min_changes, min_change_mask = _simple_returns(day_min_btc, active)
+    sharpe, sortino = _sharpe_sortino(min_changes, min_change_mask, adg_fraction)
     expected_shortfall = _mean_worst_one_pct_abs(min_changes, min_change_mask)
     assert set(metrics) == requested
     safe_day_end_btc = day_end_usd / 100.0
     safe_gain, _safe_adg = _smoothed_gain_adg(safe_day_end_btc, active)
-    assert metrics["gain_btc"].item() == pytest.approx(safe_gain.item())
-    assert metrics["drawdown_worst_btc"].item() == pytest.approx(0.50)
-    assert metrics["drawdown_worst_mean_1pct_btc"].item() == pytest.approx(0.50)
-    assert metrics["expected_shortfall_1pct_btc"].item() == pytest.approx(
+    assert metrics["gain_multiplier_btc"].item() == pytest.approx(safe_gain.item())
+    assert metrics["drawdown_max_fraction_btc"].item() == pytest.approx(0.50)
+    assert metrics["drawdown_daily_worst_1pct_mean_fraction_btc"].item() == pytest.approx(0.50)
+    assert metrics["expected_shortfall_1pct_fraction_btc"].item() == pytest.approx(
         expected_shortfall.item()
     )
     assert metrics["sharpe_ratio_btc"].item() == pytest.approx(sharpe.item())
     assert metrics["sortino_ratio_btc"].item() == pytest.approx(sortino.item())
-    assert metrics["calmar_ratio_btc"].item() == pytest.approx(adg.item() / 0.50)
-    assert metrics["sterling_ratio_btc"].item() == pytest.approx(adg.item() / 0.50)
+    assert metrics["calmar_ratio_btc"].item() == pytest.approx(adg_fraction.item() / 0.50)
+    assert metrics["sterling_ratio_btc"].item() == pytest.approx(adg_fraction.item() / 0.50)
 
 
 def test_btc_risk_metrics_fail_closed_without_synchronized_surface():
@@ -1778,9 +1769,9 @@ def test_btc_risk_metrics_match_no_fill_defaults():
     }
     requested = {
         "calmar_ratio_btc",
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
-        "expected_shortfall_1pct_btc",
+        "drawdown_max_fraction_btc",
+        "drawdown_daily_worst_1pct_mean_fraction_btc",
+        "expected_shortfall_1pct_fraction_btc",
         "sharpe_ratio_btc",
         "sortino_ratio_btc",
         "sterling_ratio_btc",
@@ -1798,11 +1789,11 @@ def test_btc_risk_metrics_match_no_fill_defaults():
         requested,
     )
 
-    assert metrics["drawdown_worst_btc"].item() == 1.0
-    assert metrics["drawdown_worst_mean_1pct_btc"].item() == 1.0
+    assert metrics["drawdown_max_fraction_btc"].item() == 1.0
+    assert metrics["drawdown_daily_worst_1pct_mean_fraction_btc"].item() == 1.0
     for metric in requested - {
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
+        "drawdown_max_fraction_btc",
+        "drawdown_daily_worst_1pct_mean_fraction_btc",
     }:
         assert metrics[metric].item() == 0.0
 
@@ -1848,10 +1839,10 @@ def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():
             "btc_day_end_price": np.array([10.0, 40.0]),
             "btc_prices": btc_prices,
         },
-        needed={"gain_btc"},
+        needed={"gain_multiplier_btc"},
     )
 
-    assert metrics["gain_btc"].item() == pytest.approx(0.75)
+    assert metrics["gain_multiplier_btc"].item() == pytest.approx(0.75)
 
 
 def test_objectives_include_final_active_calendar_day():
@@ -1882,12 +1873,12 @@ def test_objectives_include_final_active_calendar_day():
         out,
         run,
         {"ts0": 0.0, "n": 3},
-        needed={"adg_strategy_eq"},
+        needed={"adg_fraction_strategy_equity"},
     )
 
     expected = _smoothed_adg(day_end, active).item()
-    assert metrics["adg_strategy_eq"].item() == pytest.approx(expected)
-    assert metrics["adg_strategy_eq"].item() > 0.0
+    assert metrics["adg_fraction_strategy_equity"].item() == pytest.approx(expected)
+    assert metrics["adg_fraction_strategy_equity"].item() > 0.0
 
 
 def test_completion_uses_rust_exclusive_requested_end():
@@ -1917,23 +1908,23 @@ def test_completion_uses_rust_exclusive_requested_end():
         out,
         run,
         {"ts0": 0.0, "n": 3},
-        needed={"backtest_completion_ratio"},
+        needed={"backtest_completion_fraction"},
     )
 
-    assert metrics["backtest_completion_ratio"].item() == pytest.approx(2.0 / 3.0)
+    assert metrics["backtest_completion_fraction"].item() == pytest.approx(2.0 / 3.0)
 
 
 def test_completion_is_zero_when_no_equity_sample_exists():
     day_end = torch.tensor([[0.0]], dtype=torch.float64)
     out = {'fill_count': torch.zeros(1), 'day_end_eq': day_end, 'day_min_eq': torch.full_like(day_end, float('inf')), 'day_max_dd': torch.zeros_like(day_end), 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.zeros_like(day_end, dtype=torch.bool), 'max_dd': torch.zeros(1, dtype=torch.float64), 'held_max_ms': torch.zeros(1, dtype=torch.float64), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1, dtype=torch.float64), 'first_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'recovery_max_ms': torch.zeros(1, dtype=torch.float64), 'last_high_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'first_eq_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_eq_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'liq_step': torch.tensor([-1.0], dtype=torch.float64)}
     run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60000)
-    metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 3}, needed={'adg_rolling_hmean_strategy_eq', 'adg_strategy_eq', 'adg_time_integrated_strategy_eq', 'backtest_completion_ratio', 'fills_gap_longest_days', 'fills_gap_mean_hours', 'fills_gap_median_hours', 'fills_gap_p95_hours', 'fills_gap_p99_hours', 'fills_gap_time_weighted_mean_hours', 'positive_gain_participation_strategy_eq'})
-    assert metrics['backtest_completion_ratio'].item() == 0.0
-    assert metrics['adg_strategy_eq'].item() == 0.0
-    assert metrics['adg_rolling_hmean_strategy_eq'].item() == 0.0
-    assert metrics['adg_time_integrated_strategy_eq'].item() == 0.0
-    assert metrics['positive_gain_participation_strategy_eq'].item() == 0.0
-    assert metrics['fills_gap_longest_days'].item() == 0.0
+    metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 3}, needed={'adg_rolling_hmean_fraction_strategy_equity', 'adg_fraction_strategy_equity', 'adg_time_integrated_fraction_strategy_equity', 'backtest_completion_fraction', 'fills_gap_max_days', 'fills_gap_mean_hours', 'fills_gap_median_hours', 'fills_gap_p95_hours', 'fills_gap_p99_hours', 'fills_gap_time_weighted_mean_hours', 'positive_log_return_participation_score_strategy_equity'})
+    assert metrics['backtest_completion_fraction'].item() == 0.0
+    assert metrics['adg_fraction_strategy_equity'].item() == 0.0
+    assert metrics['adg_rolling_hmean_fraction_strategy_equity'].item() == 0.0
+    assert metrics['adg_time_integrated_fraction_strategy_equity'].item() == 0.0
+    assert metrics['positive_log_return_participation_score_strategy_equity'].item() == 0.0
+    assert metrics['fills_gap_max_days'].item() == 0.0
     for name in ('fills_gap_mean_hours', 'fills_gap_median_hours', 'fills_gap_p95_hours', 'fills_gap_p99_hours', 'fills_gap_time_weighted_mean_hours'):
         assert metrics[name].item() == 0.0
 
@@ -1969,18 +1960,18 @@ def test_completion_uses_raw_requested_start_before_available_history():
         out,
         run,
         {"ts0": 0.0, "n": 3},
-        needed={"backtest_completion_ratio"},
+        needed={"backtest_completion_fraction"},
     )
 
-    assert metrics["backtest_completion_ratio"].item() == pytest.approx(1442.0 / 1443.0)
+    assert metrics["backtest_completion_fraction"].item() == pytest.approx(1442.0 / 1443.0)
 
 
-@pytest.mark.parametrize("name", ["n_days", "fills_analysis_duration_days"])
-def test_duration_aliases_preserve_exact_only_gpu_metric_policy(name):
+def test_canonical_duration_preserves_exact_only_gpu_metric_policy():
+    name = "analysis_duration_days"
     with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
         validate_gpu_metric_names([name])
-    assert {"n_days", "fills_analysis_duration_days"} <= GPU_EXACT_ONLY_METRICS
-    assert "n_days" not in SUPPORTED_METRICS
+    assert "analysis_duration_days" in GPU_EXACT_ONLY_METRICS
+    assert "analysis_duration_days" not in SUPPORTED_METRICS
 
 
 @pytest.mark.parametrize("gap_hours", [1.0 / 60.0, 6.0, 120.0])
@@ -2016,11 +2007,11 @@ def test_strategy_drawdown_moments_weight_minutes_and_exclude_padding():
         'raw_strategy_day_sample_count': torch.tensor([[3., 1., 10000.]]),
     }
     result = _strategy_drawdown_indices(out, active,
-                                       {'pain_index_strategy_eq', 'ulcer_index_strategy_eq'})
-    assert result['pain_index_strategy_eq'].item() == pytest.approx(.3125)
-    assert result['ulcer_index_strategy_eq'].item() == pytest.approx(.375)
+                                       {'pain_index_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity'})
+    assert result['pain_index_fraction_strategy_equity'].item() == pytest.approx(.3125)
+    assert result['ulcer_index_fraction_strategy_equity'].item() == pytest.approx(.375)
     with pytest.raises(RuntimeError, match='moments are missing'):
-        _strategy_drawdown_indices({}, active, {'pain_index_strategy_eq'})
+        _strategy_drawdown_indices({}, active, {'pain_index_fraction_strategy_equity'})
 
 
 @pytest.mark.parametrize('count', [0., .5, float('nan')])
@@ -2032,4 +2023,4 @@ def test_strategy_drawdown_moments_reject_invalid_observation_counts(count):
         'raw_strategy_day_sample_count': torch.tensor([[count]]),
     }
     with pytest.raises(RuntimeError, match='sample counts|finite and nonnegative'):
-        _strategy_drawdown_indices(out, torch.tensor([[True]]), {'ulcer_index_strategy_eq'})
+        _strategy_drawdown_indices(out, torch.tensor([[True]]), {'ulcer_index_fraction_strategy_equity'})

@@ -1470,7 +1470,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "CSV",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer scoring metrics, for example adg_pnl,loss_profit_ratio.",
+        "help": "Optimizer scoring metrics, for example daily_realized_pnl_mean_fraction,loss_profit_ratio.",
     },
     "optimize.objective_scenario": {
         "visible": ["--objective-scenario"],
@@ -2313,7 +2313,7 @@ def add_arguments_recursively(
                 type_ = comma_separated_values_float
             if "limits" in full_name:
                 type_ = str
-                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
+                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_max_fraction 0.3333"'
             elif any(
                 [
                     x in full_name
@@ -2324,7 +2324,7 @@ def add_arguments_recursively(
                 appendix = "item1,item2,item3,..."
             elif "scoring" in full_name:
                 type_ = comma_separated_values
-                appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+                appendix = "Examples: adg_fraction,sharpe_ratio; mdg_fraction,sortino_ratio; ..."
             elif full_name in {
                 "optimize.gpu.batch_size",
                 "optimize.gpu.max_dispatch_candidate_bars",

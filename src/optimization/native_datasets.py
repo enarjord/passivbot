@@ -168,7 +168,7 @@ class NativeDatasetRegistry:
         if key not in self._timestamps:
             self._timestamps[key] = self._arrays.create_from(timestamps)[0]
         selected_metrics = requested if requested is not None else tuple(sorted(
-            self.scorer.required_metrics(label) or {"backtest_completion_ratio"},
+            self.scorer.required_metrics(label) or {"backtest_completion_fraction"},
         ))
         selection_specs = {}
         if shared_selection is not None:

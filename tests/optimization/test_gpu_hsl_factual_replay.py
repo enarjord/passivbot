@@ -122,10 +122,10 @@ def test_authoritative_service_never_calls_cpu_simulation(reference, forbid_cpu,
         "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "128",
         "--hsl", "portfolio", "--hsl-red-threshold", "1e-8", "--hsl-drawdown-ratio-ema-span-minutes", "1",
     ]))
-    metrics = ("fills_per_day", "hard_stop_triggers_per_year")
+    metrics = ("fills_per_day", "hsl_triggers_per_year")
     with _native_dataset(inputs, "binance", metrics) as dataset:
         with NativeBacktestService(batch_size=1, tuning_mode="off") as service:
             service.register_dataset("forward", dataset)
             actual = service.submit(BacktestRequest("one", "forward", {})).result(timeout=120)
     assert actual.metrics["fills_per_day"] > 0
-    assert actual.metrics["hard_stop_triggers_per_year"] > 0
+    assert actual.metrics["hsl_triggers_per_year"] > 0

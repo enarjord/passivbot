@@ -42,7 +42,7 @@ def loss_gate_proxy(
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=3,
-        needed_metrics={"adg_strategy_eq", "fills_per_day"},
+        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
     )
     return proxy, inputs
 
@@ -83,7 +83,7 @@ def test_shared_gate_production_consumers_and_transport(
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,
-            needed_metrics={"adg_strategy_eq", "fills_per_day"},
+            needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
         )
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
@@ -204,7 +204,7 @@ def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_strategy_eq", "fills_per_day"}) as dataset:
+                         {"adg_fraction_strategy_equity", "fills_per_day"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("finite-loss", dataset)
             pending = [service.submit(BacktestRequest(str(i), "finite-loss", values))

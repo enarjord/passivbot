@@ -13,16 +13,16 @@ def test_native_portfolio_raw_risk_retains_liquidation_mark(strategy, sides, ter
     from tools.gpu_parity import run_comparison
     from optimization.gpu.parity import MetricTolerance
 
-    metrics = ("drawdown_worst_strategy_eq", "drawdown_worst_mean_1pct_strategy_eq",
-               "pain_index_strategy_eq", "ulcer_index_strategy_eq", "drawdown_worst_usd")
+    metrics = ("drawdown_max_fraction_strategy_equity", "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
+               "pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity", "drawdown_max_fraction_usd")
     report = run_comparison(
         _liquidation_inputs(strategy, sides, terminal_fill), "bybit", metrics,
         {name: MetricTolerance(1e-8, 1e-6) for name in metrics},
         diagnostics=True, gpu_engine="native",
     )
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
-    assert report["metrics"]["drawdown_worst_strategy_eq"]["cpu"] > 3
-    assert report["metrics"]["drawdown_worst_usd"]["cpu"] < 1
+    assert report["metrics"]["drawdown_max_fraction_strategy_equity"]["cpu"] > 3
+    assert report["metrics"]["drawdown_max_fraction_usd"]["cpu"] < 1
     assert report["passed"], report["metrics"]
 
 
@@ -59,20 +59,20 @@ def test_raw_daily_risk_keeps_account_aliases_and_excludes_padding(days):
         'last_high_ts': zero, 'recovery_max_ms': zero,
         'liq_step': torch.tensor([-1]),
     }
-    names = {'drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
-             'pain_index_strategy_eq', 'drawdown_worst_usd',
-             'drawdown_worst_mean_1pct_usd'}
+    names = {'drawdown_max_fraction_strategy_equity', 'drawdown_daily_worst_1pct_mean_fraction_strategy_equity',
+             'pain_index_fraction_strategy_equity', 'drawdown_max_fraction_usd',
+             'drawdown_daily_worst_1pct_mean_fraction_usd'}
     values = compute_objectives(
         out, SimpleNamespace(interval_ms=86400000, requested_start_ts_ms=0),
         {'ts0': 0, 'n': days}, needed=names,
     )
     assert set(values) == names
-    assert values['drawdown_worst_strategy_eq'].item() == pytest.approx(3.0)
-    assert values['drawdown_worst_mean_1pct_strategy_eq'].item() == pytest.approx(
+    assert values['drawdown_max_fraction_strategy_equity'].item() == pytest.approx(3.0)
+    assert values['drawdown_daily_worst_1pct_mean_fraction_strategy_equity'].item() == pytest.approx(
         3.0 if days == 2 else 2.5)
-    assert values['pain_index_strategy_eq'].item() == pytest.approx(
+    assert values['pain_index_fraction_strategy_equity'].item() == pytest.approx(
         (5.0 + (days-2)*.2) / days)
-    for name in ('drawdown_worst_usd', 'drawdown_worst_mean_1pct_usd'):
+    for name in ('drawdown_max_fraction_usd', 'drawdown_daily_worst_1pct_mean_fraction_usd'):
         assert values[name].item() == pytest.approx(.1)
 
 
@@ -127,8 +127,8 @@ def test_native_portfolio_raw_risk_on_active_shock_replay(strategy, sides, hsl):
     from tools.gpu_parity import run_comparison
     from optimization.gpu.parity import MetricTolerance
 
-    metrics = ('drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
-               'pain_index_strategy_eq', 'ulcer_index_strategy_eq', 'drawdown_worst_usd')
+    metrics = ('drawdown_max_fraction_strategy_equity', 'drawdown_daily_worst_1pct_mean_fraction_strategy_equity',
+               'pain_index_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity', 'drawdown_max_fraction_usd')
     policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
     if strategy == 'trailing_martingale' and sides == 'both' and hsl == 'disabled':
         # This public seed-43 fixture retains the independently traced .017/.018
@@ -142,7 +142,7 @@ def test_native_portfolio_raw_risk_on_active_shock_replay(strategy, sides, hsl):
         # public fixture. Raw capture on/off and the accepted shader produce
         # exactly the same account value. Bound only this account comparison;
         # all three new raw-risk values retain the strict policy above.
-        policies['drawdown_worst_usd'] = MetricTolerance(3.1e-6, 0)
+        policies['drawdown_max_fraction_usd'] = MetricTolerance(3.1e-6, 0)
     report = run_comparison(
         _side_equity_inputs(strategy, sides, hsl), 'binance', metrics, policies,
         diagnostics=True, gpu_engine='native',
@@ -152,9 +152,9 @@ def test_native_portfolio_raw_risk_on_active_shock_replay(strategy, sides, hsl):
     if account_ablation:
         account_only = run_comparison(
             _side_equity_inputs(strategy, sides, hsl), 'binance',
-            ('drawdown_worst_usd',), {'drawdown_worst_usd': policies['drawdown_worst_usd']},
+            ('drawdown_max_fraction_usd',), {'drawdown_max_fraction_usd': policies['drawdown_max_fraction_usd']},
             gpu_engine='native',
         )
         assert account_only['passed'], account_only['metrics']
-        assert (account_only['metrics']['drawdown_worst_usd']['gpu']
-                == report['metrics']['drawdown_worst_usd']['gpu'])
+        assert (account_only['metrics']['drawdown_max_fraction_usd']['gpu']
+                == report['metrics']['drawdown_max_fraction_usd']['gpu'])

@@ -24,7 +24,7 @@ def test_file_backed_native_metrics_equal_shared_memory(tmp_path, strategy, hsl)
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--coins", "3", "--sides", "both", "--bars", "512", "--hsl", hsl,
     ]))
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "backtest_completion_ratio",
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "backtest_completion_fraction",
                "fills_per_day", "position_held_time_weighted_mean_hours")
     results = []
     for file_backed in (False, True):

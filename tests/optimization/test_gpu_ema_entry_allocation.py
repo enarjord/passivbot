@@ -97,11 +97,11 @@ def test_native_ema_shock_replay_matches_cpu_after_crossing_coin_allocation(side
     ]))
     inputs[1][1500:, 0, :3] *= .7
     inputs[1][1800:, 1, :3] *= 1.3
-    metrics = ["drawdown_worst_strategy_eq", "fills_per_day", "adg_usd"]
+    metrics = ["drawdown_max_fraction_strategy_equity", "fills_per_day", "adg_fraction_usd"]
     policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
     # The measured shared-case float32 growth gap is 7.52e-6. Keep this
     # fixture-local growth bound and all drawdown checks strict.
-    policies["adg_usd"] = MetricTolerance(1e-5, 0)
+    policies["adg_fraction_usd"] = MetricTolerance(1e-5, 0)
     if sides == "both":
         # At step 1453, balances 1010.691403/1010.686707 straddle the
         # nearest-step clip boundary: .050 CPU versus .049 GPU. This changes

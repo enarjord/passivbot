@@ -203,7 +203,7 @@ def test_cpu_confirmation_binds_own_runtime_config_and_samples_clock_after_extra
     inputs = prepared()
     fills, equities = artifacts()
     config = dict(bot={"long": {"gene": 1}}, live={}, coin_overrides={})
-    result = (fills, equities, {"liquidated": False, "adg_strategy_eq": -999}, {}, {})
+    result = (fills, equities, {"liquidated": False, "adg_fraction_strategy_equity": -999}, {}, {})
     calls = []
     def clock():
         calls.append("after account extraction")
@@ -216,7 +216,7 @@ def test_cpu_confirmation_binds_own_runtime_config_and_samples_clock_after_extra
     assert row["engine"] == "cpu" and row["completed_elapsed_seconds"] == 42.5
     assert row["input_sha256"] == "a" * 64 and row["runtime_sha256"] == "b" * 64
     assert row["metrics"]["net_return"] == pytest.approx(.029)
-    assert "adg_strategy_eq" not in row["metrics"]
+    assert "adg_fraction_strategy_equity" not in row["metrics"]
     unknown = deepcopy(result)
     del unknown[2]["liquidated"]
     with pytest.raises(ValueError, match="liquidation status"):

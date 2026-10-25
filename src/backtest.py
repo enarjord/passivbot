@@ -240,7 +240,7 @@ def parse_disabled_plot_groups(value) -> set[str]:
     return disabled
 
 
-ANALYSIS_SHARED_PREFIXES = ("hard_stop_",)
+ANALYSIS_SHARED_PREFIXES = ("hsl_",)
 
 # Fallback stubs for test environments without full extension symbols
 if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
@@ -1357,7 +1357,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     return fills, equities_array, analysis
 
 
-def calc_backtest_completion_ratio(equities_array, config: dict) -> float | None:
+def calc_backtest_completion_fraction(equities_array, config: dict) -> float | None:
     backtest_cfg = config.get("backtest", {}) if isinstance(config, dict) else {}
     if not isinstance(backtest_cfg, dict):
         return None
@@ -1560,7 +1560,7 @@ def process_forager_fills(
             abs(loss / profit) if profit != 0.0 else 1.0
         )
     pnl_sum = pnls["long"] + pnls["short"]
-    analysis_appendix["pnl_ratio_long_short"] = (
+    analysis_appendix["long_pnl_to_total_pnl_ratio"] = (
         pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
     )
     sample_divider = max(1, int(balance_sample_divider))
@@ -2987,7 +2987,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
             if not isinstance(metadata, dict):
                 raise ValueError("Rust EW metadata must be a mapping")
             ew_metadata.update(metadata)
-    keys = ["adg", "mdg", "gain"]
+    keys = ["adg_fraction", "mdg_fraction", "gain_multiplier"]
     for pside in ["long", "short"]:
         twel = float(
             flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
@@ -2997,13 +2997,13 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         )
         for key in keys:
             if key in analysis_usd:
-                analysis_usd[f"{key}_per_exposure_{pside}"] = (
+                analysis_usd[f"{key}_per_twel_ratio_{pside}"] = (
                     (analysis_usd[key] / twel if twel > 0.0 else 0.0)
                     if analysis_usd[key] is not None
                     else None
                 )
             if key in analysis_btc:
-                analysis_btc[f"{key}_per_exposure_{pside}"] = (
+                analysis_btc[f"{key}_per_twel_ratio_{pside}"] = (
                     (analysis_btc[key] / twel if twel > 0.0 else 0.0)
                     if analysis_btc[key] is not None
                     else None
@@ -3057,26 +3057,20 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         analysis_usd.pop(key, None)
         analysis_btc.pop(key, None)
 
+    from config.metrics import metric_with_curve
+
     def _add_metrics(metrics: dict, suffix: str):
         for key, value in metrics.items():
-            suffix_lower = suffix.lower()
-            key_lower = key.lower()
-            if f"_{suffix_lower}" in key_lower:
-                normalized_key = key
-            else:
-                normalized_key = f"{key}_{suffix}"
+            normalized_key = metric_with_curve(key, suffix)
             result[normalized_key] = value
 
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")
-    completion_ratio = calc_backtest_completion_ratio(equities_array, config)
+    completion_ratio = calc_backtest_completion_fraction(equities_array, config)
     if completion_ratio is not None:
-        result["backtest_completion_ratio"] = completion_ratio
+        result["backtest_completion_fraction"] = completion_ratio
 
-    # Rust returns the actual equity timestamps even in metrics-only mode.
-    # Keep dates out of numeric aggregation and preserve the released duration key.
-    if "fills_analysis_duration_days" in result:
-        result["n_days"] = result["fills_analysis_duration_days"]
+    # Dates use the authoritative equity clocks and stay outside numeric aggregation.
     timestamps = (
         np.asarray(equities_array) if equities_array is not None else np.empty((0, 1))
     )

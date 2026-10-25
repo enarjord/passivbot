@@ -58,8 +58,8 @@ def _write_suite_candidate(
     path: Path,
     name: str,
     *,
-    adg_mean: float,
-    adg_min: float,
+    adg_fraction_mean: float,
+    adg_fraction_min: float,
     recovery_mean: float,
     recovery_max: float,
     drawdown_mean: float,
@@ -68,36 +68,36 @@ def _write_suite_candidate(
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
-                {"metric": "peak_recovery_hours_hsl", "goal": "min"},
-                {"metric": "drawdown_worst_hsl", "goal": "min"},
+                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "recovery_max_hours_strategy_equity", "goal": "min"},
+                {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "backtest": {
             "aggregate": {
                 "default": "mean",
-                "peak_recovery_hours_hsl": "mean",
-                "drawdown_worst_hsl": "max",
+                "recovery_max_hours_strategy_equity": "mean",
+                "drawdown_max_fraction_strategy_equity": "max",
             }
         },
         "suite_metrics": {
             "aggregate": {
                 "stats": {
-                    "adg_strategy_pnl_rebased": {
-                        "mean": adg_mean,
-                        "min": adg_min,
-                        "max": max(adg_mean, adg_min),
+                    "adg_fraction_strategy_equity": {
+                        "mean": adg_fraction_mean,
+                        "min": adg_fraction_min,
+                        "max": max(adg_fraction_mean, adg_fraction_min),
                         "std": 0.0,
-                        "median": adg_mean,
+                        "median": adg_fraction_mean,
                     },
-                    "peak_recovery_hours_hsl": {
+                    "recovery_max_hours_strategy_equity": {
                         "mean": recovery_mean,
                         "min": recovery_mean,
                         "max": recovery_max,
                         "std": 0.0,
                         "median": recovery_mean,
                     },
-                    "drawdown_worst_hsl": {
+                    "drawdown_max_fraction_strategy_equity": {
                         "mean": drawdown_mean,
                         "min": drawdown_mean,
                         "max": drawdown_max,
@@ -106,9 +106,9 @@ def _write_suite_candidate(
                     },
                 },
                 "aggregated": {
-                    "adg_strategy_pnl_rebased": adg_mean,
-                    "peak_recovery_hours_hsl": recovery_mean,
-                    "drawdown_worst_hsl": drawdown_max,
+                    "adg_fraction_strategy_equity": adg_fraction_mean,
+                    "recovery_max_hours_strategy_equity": recovery_mean,
+                    "drawdown_max_fraction_strategy_equity": drawdown_max,
                 },
             }
         },
@@ -121,22 +121,22 @@ def _write_fill_suite_candidate(
     path: Path,
     name: str,
     *,
-    adg: float,
+    adg_fraction: float,
     p95_gap: float,
     p99_gap: float,
 ) -> None:
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "adg_strategy_eq", "goal": "max"},
+                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
                 {"metric": "fills_gap_p99_hours", "goal": "min"},
             ]
         },
         "suite_metrics": {
             "metrics": {
-                "adg_strategy_eq": {
-                    "stats": _metric_stats(adg),
-                    "aggregated": adg,
+                "adg_fraction_strategy_equity": {
+                    "stats": _metric_stats(adg_fraction),
+                    "aggregated": adg_fraction,
                     "scenarios": {},
                 },
                 "fills_gap_p95_hours": {
@@ -200,20 +200,20 @@ def scenario_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir.mkdir(parents=True)
     values = {
         "a": {
-            "bull": {"metric_a": 0.9, "metric_b": 0.4, "sharpe_ratio_strategy_eq": 1.2},
-            "bear": {"metric_a": 0.2, "metric_b": 0.8, "sharpe_ratio_strategy_eq": 0.2},
+            "bull": {"metric_a": 0.9, "metric_b": 0.4, "sharpe_ratio_strategy_equity": 1.2},
+            "bear": {"metric_a": 0.2, "metric_b": 0.8, "sharpe_ratio_strategy_equity": 0.2},
         },
         "b": {
-            "bull": {"metric_a": 0.8, "metric_b": 0.3, "sharpe_ratio_strategy_eq": 1.0},
-            "bear": {"metric_a": 0.8, "metric_b": 0.5, "sharpe_ratio_strategy_eq": 1.5},
+            "bull": {"metric_a": 0.8, "metric_b": 0.3, "sharpe_ratio_strategy_equity": 1.0},
+            "bear": {"metric_a": 0.8, "metric_b": 0.5, "sharpe_ratio_strategy_equity": 1.5},
         },
         "c_dominated": {
-            "bull": {"metric_a": 0.7, "metric_b": 0.5, "sharpe_ratio_strategy_eq": 0.8},
-            "bear": {"metric_a": 0.6, "metric_b": 0.7, "sharpe_ratio_strategy_eq": 0.7},
+            "bull": {"metric_a": 0.7, "metric_b": 0.5, "sharpe_ratio_strategy_equity": 0.8},
+            "bear": {"metric_a": 0.6, "metric_b": 0.7, "sharpe_ratio_strategy_equity": 0.7},
         },
         "d": {
-            "bull": {"metric_a": 0.5, "metric_b": 0.1, "sharpe_ratio_strategy_eq": 0.5},
-            "bear": {"metric_a": 0.9, "metric_b": 0.9, "sharpe_ratio_strategy_eq": 1.1},
+            "bull": {"metric_a": 0.5, "metric_b": 0.1, "sharpe_ratio_strategy_equity": 0.5},
+            "bear": {"metric_a": 0.9, "metric_b": 0.9, "sharpe_ratio_strategy_equity": 1.1},
         },
     }
     for name, scenario_values in values.items():
@@ -223,7 +223,7 @@ def scenario_pareto_dir(tmp_path: Path) -> Path:
             aggregate={
                 "metric_a": 0.5,
                 "metric_b": 0.5,
-                "sharpe_ratio_strategy_eq": 0.5,
+                "sharpe_ratio_strategy_equity": 0.5,
             },
             scenarios={
                 "bull": scenario_values["bull"],
@@ -318,8 +318,8 @@ def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_pa
     _write_suite_candidate(
         pareto_dir,
         "passes_by_aggregate_defaults",
-        adg_mean=0.02,
-        adg_min=-0.05,
+        adg_fraction_mean=0.02,
+        adg_fraction_min=-0.05,
         recovery_mean=4000.0,
         recovery_max=9000.0,
         drawdown_mean=0.4,
@@ -328,8 +328,8 @@ def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_pa
     _write_suite_candidate(
         pareto_dir,
         "fails_drawdown_max",
-        adg_mean=0.03,
-        adg_min=0.01,
+        adg_fraction_mean=0.03,
+        adg_fraction_min=0.01,
         recovery_mean=3000.0,
         recovery_max=3500.0,
         drawdown_mean=0.5,
@@ -341,9 +341,9 @@ def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_pa
         candidates,
         limits_payload=None,
         limit_entries=[
-            "adg_strategy_pnl_rebased>0.0",
-            "peak_recovery_hours_hsl<5000",
-            "drawdown_worst_hsl<0.8",
+            "adg_fraction_strategy_equity>0.0",
+            "recovery_max_hours_strategy_equity<5000",
+            "drawdown_max_fraction_strategy_equity<0.8",
         ],
     )
 
@@ -357,8 +357,8 @@ def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_
     _write_suite_candidate(
         pareto_dir,
         "strict_failure",
-        adg_mean=0.02,
-        adg_min=-0.05,
+        adg_fraction_mean=0.02,
+        adg_fraction_min=-0.05,
         recovery_mean=4000.0,
         recovery_max=9000.0,
         drawdown_mean=0.4,
@@ -370,9 +370,9 @@ def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_
         candidates,
         limits_payload=None,
         limit_entries=[
-            "adg_strategy_pnl_rebased>0.0 stat=min",
-            "peak_recovery_hours_hsl<5000 stat=max",
-            "drawdown_worst_hsl<0.8 stat=max",
+            "adg_fraction_strategy_equity>0.0 stat=min",
+            "recovery_max_hours_strategy_equity<5000 stat=max",
+            "drawdown_max_fraction_strategy_equity<0.8 stat=max",
         ],
     )
 
@@ -553,7 +553,7 @@ def test_filter_candidates_resolves_auto_limit_with_optimizer_direction(
         limits_payload=json.dumps(
             [
                 {
-                    "metric": "sharpe_ratio_strategy_eq",
+                    "metric": "sharpe_ratio_strategy_equity",
                     "penalize_if": "auto",
                     "scenario": "bull",
                     "value": 1.1,
@@ -645,7 +645,7 @@ def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
             "--scenario",
             "bear",
             "--objectives",
-            "sharpe_ratio_strategy_eq",
+            "sharpe_ratio_strategy_equity",
             "--json",
         ]
     )
@@ -660,7 +660,7 @@ def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
     assert payload["retained_count"] == 4
     assert payload["scenario_front_count"] == 1
     assert payload["active_front_count"] == 1
-    assert payload["selected"]["objectives"]["sharpe_ratio_strategy_eq"] == pytest.approx(1.5)
+    assert payload["selected"]["objectives"]["sharpe_ratio_strategy_equity"] == pytest.approx(1.5)
 
 
 def test_run_from_args_scenario_text_documents_incomplete_front(
@@ -1012,7 +1012,7 @@ def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_di
     }.items():
         path = sample_pareto_dir / entry_path
         payload = json.loads(path.read_text())
-        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = _metric_stats(sharpe)
+        payload["metrics"]["stats"]["sharpe_ratio_strategy_equity"] = _metric_stats(sharpe)
         path.write_text(json.dumps(payload, indent=2))
 
     _pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
@@ -1020,12 +1020,12 @@ def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_di
         candidates,
         specs,
         method="utility",
-        objectives_arg="sharpe_ratio_strategy_pnl_rebased,metric_a,metric_b",
-        weight_pairs=["sharpe_ratio_strategy_pnl_rebased=5", "metric_a=1", "metric_b=1"],
+        objectives_arg="sharpe_ratio_strategy_equity,metric_a,metric_b",
+        weight_pairs=["sharpe_ratio_strategy_equity=5", "metric_a=1", "metric_b=1"],
     )
     assert result.candidate.path.stem == "balanced"
-    assert "sharpe_ratio_strategy_pnl_rebased" in result.objective_values
-    assert result.objective_values["sharpe_ratio_strategy_pnl_rebased"] == pytest.approx(1.4)
+    assert "sharpe_ratio_strategy_equity" in result.objective_values
+    assert result.objective_values["sharpe_ratio_strategy_equity"] == pytest.approx(1.4)
 
 
 def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp_path: Path):
@@ -1034,14 +1034,14 @@ def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp
     _write_fill_suite_candidate(
         pareto_dir,
         "low_p95_gap",
-        adg=0.01,
+        adg_fraction=0.01,
         p95_gap=12.0,
         p99_gap=80.0,
     )
     _write_fill_suite_candidate(
         pareto_dir,
         "high_p95_gap",
-        adg=0.01,
+        adg_fraction=0.01,
         p95_gap=48.0,
         p99_gap=80.0,
     )
@@ -1051,7 +1051,7 @@ def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp
         candidates,
         specs,
         method="ideal",
-        objectives_arg="adg_strategy_eq,fills_gap_p95_hours",
+        objectives_arg="adg_fraction_strategy_equity,fills_gap_p95_hours",
     )
 
     assert result.candidate.path.stem == "low_p95_gap"
@@ -1067,7 +1067,7 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
     }.items():
         path = sample_pareto_dir / entry_path
         payload = json.loads(path.read_text())
-        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = _metric_stats(sharpe)
+        payload["metrics"]["stats"]["sharpe_ratio_strategy_equity"] = _metric_stats(sharpe)
         path.write_text(json.dumps(payload, indent=2))
 
     args = argparse.Namespace(
@@ -1075,8 +1075,8 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
         method="utility",
         limit_entries=[],
         limits_payload=None,
-        objectives="sharpe_ratio_strategy_pnl_rebased,metric_a,metric_b",
-        weight=["sharpe_ratio_strategy_pnl_rebased=5", "metric_a=1", "metric_b=1"],
+        objectives="sharpe_ratio_strategy_equity,metric_a,metric_b",
+        weight=["sharpe_ratio_strategy_equity=5", "metric_a=1", "metric_b=1"],
         target=None,
         priority=None,
         show_top=1,
@@ -1084,7 +1084,7 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
     )
     run_from_args(args)
     captured = capsys.readouterr().out
-    assert "sharpe_ratio_strategy_pnl_rebased" in captured
+    assert "sharpe_ratio_strategy_equity" in captured
     assert "| max  | 1.400" in captured
 
 

@@ -29,18 +29,18 @@ def test_native_ema_current_ranking_matches_cpu(mode, sides):
         inputs[0]["bot"]["hsl"].update(
             drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year", "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "hsl_triggers_per_year", "hsl_restarts_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     if mode == "disabled" and sides == "long":
         # Original and corrected kernels give identical assessed metrics here:
         # 8.88e-7 ADG error, identical fills and no HSL events. Accept this bounded
         # fixture discrepancy without widening the parity tool's default gates.
-        policies["adg_strategy_eq"] = MetricTolerance(1e-6, 1e-4)
+        policies["adg_fraction_strategy_equity"] = MetricTolerance(1e-6, 1e-4)
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     if mode != "disabled":
-        assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
+        assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]

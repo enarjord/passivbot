@@ -61,18 +61,18 @@ def test_native_raw_growth_retains_liquidation_mark(strategy, sides, terminal_fi
     origin = int(inputs[4][0]) // 86_400_000 * 86_400_000 + 23 * 3_600_000 + 56 * 60_000
     inputs[4] = origin + np.arange(len(inputs[4]), dtype=np.int64) * 60_000
     account = {name.replace("_strategy_eq", "_usd") for name in RAW_STRATEGY_EQUITY_METRICS
-               if name not in {"adg_rolling_hmean_strategy_eq", "adg_time_integrated_strategy_eq",
-                               "positive_gain_participation_strategy_eq"}}
+               if name not in {"adg_rolling_hmean_fraction_strategy_equity", "adg_time_integrated_fraction_strategy_equity",
+                               "positive_log_return_participation_score_strategy_equity"}}
     names = RAW_STRATEGY_EQUITY_METRICS | account | {
-        "adg_per_exposure_long_usd",
-        "drawdown_worst_strategy_eq", "drawdown_worst_usd",
+        "adg_fraction_per_twel_ratio_usd_long",
+        "drawdown_max_fraction_strategy_equity", "drawdown_max_fraction_usd",
     }
     report = run_comparison(tuple(inputs), "bybit", tuple(sorted(names)),
         {name: MetricTolerance(1e-8, 1e-5) for name in names},
         diagnostics=True, gpu_engine="native")
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
-    assert report["metrics"]["adg_strategy_eq"]["cpu"] == -1.
-    assert report["metrics"]["adg_usd"]["cpu"] > -1.
+    assert report["metrics"]["adg_fraction_strategy_equity"]["cpu"] == -1.
+    assert report["metrics"]["adg_fraction_usd"]["cpu"] > -1.
     assert report["passed"], report["metrics"]
 
 
@@ -155,16 +155,16 @@ def test_native_raw_growth_on_active_shock_replay(strategy, sides, hsl):
     # match reductions of CPU, quantized CPU and GPU curves independently.
     # Existing replay differences change near-zero ADG and derived ratios;
     # their relative errors alone are not useful acceptance criteria.
-    growth = {"adg_strategy_eq", "mdg_strategy_eq", "adg_rolling_hmean_strategy_eq",
-              "adg_time_integrated_strategy_eq", "expected_shortfall_1pct_strategy_eq"}
+    growth = {"adg_fraction_strategy_equity", "mdg_fraction_strategy_equity", "adg_rolling_hmean_fraction_strategy_equity",
+              "adg_time_integrated_fraction_strategy_equity", "expected_shortfall_1pct_fraction_strategy_equity"}
     policies = {name: MetricTolerance(1e-4, 0) if name in growth
                 else MetricTolerance(1e-4, .01) for name in RAW_STRATEGY_EQUITY_METRICS}
-    policies["positive_gain_participation_strategy_eq"] = MetricTolerance(1e-6, .001)
+    policies["positive_log_return_participation_score_strategy_equity"] = MetricTolerance(1e-6, .001)
     if strategy == "trailing_martingale" and sides != "long":
         # A near-zero two-day ADG affects short-side ratios most; all observed
         # absolute ratio gaps remain below .0005 in those ill-conditioned cases.
-        for name in ("calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
-                     "sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq"):
+        for name in ("calmar_ratio_strategy_equity", "sterling_ratio_strategy_equity",
+                     "sharpe_ratio_strategy_equity", "sortino_ratio_strategy_equity"):
             policies[name] = MetricTolerance(5e-4, .01)
     report = run_comparison(_side_equity_inputs(strategy, sides, hsl), "binance",
         tuple(sorted(RAW_STRATEGY_EQUITY_METRICS)), policies, diagnostics=True, gpu_engine="native")

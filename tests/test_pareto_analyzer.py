@@ -24,7 +24,7 @@ def _write_candidate(
     *,
     qty_pct: float,
     twe: float,
-    adg: float,
+    adg_fraction: float,
     drawdown: float,
 ) -> None:
     payload = {
@@ -46,22 +46,22 @@ def _write_candidate(
         "live": {"leverage": 10},
         "optimize": {
             "scoring": [
-                {"metric": "adg_strategy_eq", "goal": "max"},
-                {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "metrics": {
             "objectives": {
-                "adg_strategy_eq": adg,
-                "drawdown_worst_strategy_eq": drawdown,
+                "adg_fraction_strategy_equity": adg_fraction,
+                "drawdown_max_fraction_strategy_equity": drawdown,
             },
             "stats": {
-                "adg_strategy_eq": _metric_stats(
-                    adg,
-                    min_value=adg * 0.5,
-                    max_value=adg * 1.5,
+                "adg_fraction_strategy_equity": _metric_stats(
+                    adg_fraction,
+                    min_value=adg_fraction * 0.5,
+                    max_value=adg_fraction * 1.5,
                 ),
-                "drawdown_worst_strategy_eq": _metric_stats(
+                "drawdown_max_fraction_strategy_equity": _metric_stats(
                     drawdown,
                     min_value=drawdown * 0.8,
                     max_value=drawdown * 1.2,
@@ -77,9 +77,9 @@ def _write_candidate(
 def sample_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir = tmp_path / "run" / "pareto"
     pareto_dir.mkdir(parents=True)
-    _write_candidate(pareto_dir, "a", qty_pct=0.01, twe=1.0, adg=0.001, drawdown=0.30)
-    _write_candidate(pareto_dir, "b", qty_pct=0.02, twe=1.5, adg=0.002, drawdown=0.35)
-    _write_candidate(pareto_dir, "c", qty_pct=0.03, twe=2.0, adg=0.003, drawdown=0.45)
+    _write_candidate(pareto_dir, "a", qty_pct=0.01, twe=1.0, adg_fraction=0.001, drawdown=0.30)
+    _write_candidate(pareto_dir, "b", qty_pct=0.02, twe=1.5, adg_fraction=0.002, drawdown=0.35)
+    _write_candidate(pareto_dir, "c", qty_pct=0.03, twe=2.0, adg_fraction=0.003, drawdown=0.45)
     return pareto_dir
 
 
@@ -95,9 +95,9 @@ def test_analyze_summarizes_config_params_and_scoring_metrics(sample_pareto_dir:
     assert param_by_name["bot.long.strategy.trailing_martingale.entry.initial_qty_pct"]["median"] == 0.02
 
     metric_by_name = {item["name"]: item for item in payload["metrics"]}
-    assert set(metric_by_name) == {"adg_strategy_eq", "drawdown_worst_strategy_eq"}
-    assert metric_by_name["adg_strategy_eq"]["mean"] == pytest.approx(0.002)
-    assert metric_by_name["drawdown_worst_strategy_eq"]["median"] == pytest.approx(0.35)
+    assert set(metric_by_name) == {"adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"}
+    assert metric_by_name["adg_fraction_strategy_equity"]["mean"] == pytest.approx(0.002)
+    assert metric_by_name["drawdown_max_fraction_strategy_equity"]["median"] == pytest.approx(0.35)
 
 
 def test_analyze_applies_limits_and_writes_outputs(sample_pareto_dir: Path, tmp_path: Path):
@@ -107,7 +107,7 @@ def test_analyze_applies_limits_and_writes_outputs(sample_pareto_dir: Path, tmp_
         [
             str(sample_pareto_dir.parent),
             "--limit",
-            "adg_strategy_eq>0.0005",
+            "adg_fraction_strategy_equity>0.0005",
             "--params",
             "bot.long.risk.total_wallet_exposure_limit",
             "--metrics",

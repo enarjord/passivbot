@@ -336,7 +336,7 @@ def test_exports_keep_strict_authored_and_result_boundaries(exporter):
     with pytest.raises(ValueError, match="unknown configuration field"):
         exporter(source)
     source = policy()
-    wrapper = {"config": source, "analysis": {"adg": 1.0}}
+    wrapper = {"config": source, "analysis": {"adg_fraction": 1.0}}
     assert "analysis" not in exporter(wrapper)
     assert "sources" not in exporter(wrapper)
 

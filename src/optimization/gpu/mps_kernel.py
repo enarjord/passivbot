@@ -585,14 +585,14 @@ def _decode_equity_balance_diff_outputs(values) -> dict:
         positive_count = values[:, offset + 2]
         negative_count = values[:, offset + 5]
         zeros = torch.zeros_like(positive_count)
-        output[f"equity_balance_diff_pos_max{suffix}"] = values[:, offset]
-        output[f"equity_balance_diff_pos_mean{suffix}"] = torch.where(
+        output[f"equity_balance_gap_positive_max_fraction{suffix}"] = values[:, offset]
+        output[f"equity_balance_gap_positive_mean_fraction{suffix}"] = torch.where(
             positive_count > 0.0,
             values[:, offset + 1] / positive_count.clamp(min=1.0),
             zeros,
         )
-        output[f"equity_balance_diff_neg_max{suffix}"] = values[:, offset + 3]
-        output[f"equity_balance_diff_neg_mean{suffix}"] = torch.where(
+        output[f"equity_balance_gap_negative_max_fraction{suffix}"] = values[:, offset + 3]
+        output[f"equity_balance_gap_negative_mean_fraction{suffix}"] = torch.where(
             negative_count > 0.0,
             values[:, offset + 4] / negative_count.clamp(min=1.0),
             zeros,
@@ -1262,8 +1262,8 @@ def _decode_outputs(
         "loss_sum": scalars[:, 19],
         "position_unchanged_max_ms": scalars[:, 20],
         "entry_initial_balance_pct": scalars[:, 21],
-        "total_wallet_exposure_max": scalars[:, 22],
-        "total_wallet_exposure_mean": scalars[:, 23],
+        "absolute_net_wallet_exposure_max_ratio": scalars[:, 22],
+        "absolute_net_wallet_exposure_mean_ratio": scalars[:, 23],
         "fill_count": scalars[:, 24],
         "fill_count_entry": scalars[:, 25],
         "fill_count_long": scalars[:, 26],
@@ -1324,10 +1324,10 @@ def _decode_outputs(
     }
     if exposure_rms_enabled:
         for i, name in enumerate((
-            "total_wallet_exposure_rms_long", "total_wallet_exposure_rms_short",
-            "total_wallet_exposure_rms_gross", "total_wallet_exposure_utilization_rms_long",
-            "total_wallet_exposure_utilization_rms_short", "position_exposure_utilization_rms_long",
-            "position_exposure_utilization_rms_short",
+            "wallet_exposure_rms_ratio_long", "wallet_exposure_rms_ratio_short",
+            "gross_wallet_exposure_rms_ratio", "wallet_exposure_utilization_rms_ratio_long",
+            "wallet_exposure_utilization_rms_ratio_short", "position_exposure_utilization_rms_ratio_long",
+            "position_exposure_utilization_rms_ratio_short",
         )):
             output[name] = rms_scalars[:, i]
     # Preserve exact indices on-device; host reduction restores float64 clocks.
@@ -1357,8 +1357,8 @@ def _decode_multicoin_fused_outputs(
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
-            "entry_initial_balance_pct_long": long_entry_initial_balance_pct,
-            "entry_initial_balance_pct_short": scalars[:, 57],
+            "initial_entry_balance_fraction_long": long_entry_initial_balance_pct,
+            "initial_entry_balance_fraction_short": scalars[:, 57],
             "profit_sum_long": scalars[:, 58],
             "loss_sum_long": scalars[:, 59],
             "profit_sum_short": scalars[:, 60],

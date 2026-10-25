@@ -21,7 +21,7 @@ def proxy():
             "backtest": {"first_timestamp_ms": 123, "global_warmup_bars": 100},
             "base_params": {"hsl_enabled": 0},
         },
-        needed_metrics={"adg"},
+        needed_metrics={"adg_fraction"},
         max_dispatch_candidate_bars=1000000,
     )
 

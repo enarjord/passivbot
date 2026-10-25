@@ -79,7 +79,7 @@ def test_native_long_history_equity_clock_transport(strategy, sides, coin_count)
         config=config, hlcvs=candles, mss=markets,
         btc=np.full(count, 50_000.0), timestamps=timestamps,
         exchange="binance", batch_size=1,
-        needed_metrics={"adg_strategy_eq"}, factual_hsl=True,
+        needed_metrics={"adg_fraction_strategy_equity"}, factual_hsl=True,
     )
     _, device_out = raw(proxy, [{}])
     from optimization.gpu.metrics import _with_native_equity_timestamps
@@ -132,8 +132,8 @@ def test_native_objectives_preserve_common_fill_and_equity_clock_origin(origin):
     run = SimpleNamespace(interval_ms=interval, requested_start_ts_ms=origin, guard_ts_ms=origin)
     data = {"ts0": origin, "n": 11}
     metrics = compute_objectives(out, run, data,
-                                needed={"fills_gap_longest_days", "fills_gap_p95_hours"})
-    assert metrics["fills_gap_longest_days"].item() == pytest.approx(5 / 1440)
+                                needed={"fills_gap_max_days", "fills_gap_p95_hours"})
+    assert metrics["fills_gap_max_days"].item() == pytest.approx(5 / 1440)
     assert metrics["fills_gap_p95_hours"].item() == pytest.approx(5 / 60)
 
 
@@ -152,7 +152,7 @@ def test_native_service_fill_gap_clocks_match_exact_rust(side, coin_count):
 
     assert not verify_loaded_runtime_extension().get("skipped")
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
-    requested = {"fills_gap_longest_days", "fills_gap_p95_hours"}
+    requested = {"fills_gap_max_days", "fills_gap_p95_hours"}
     _, _, analysis = run_backtest(candles, markets, config, "bybit", btc, timestamps)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,

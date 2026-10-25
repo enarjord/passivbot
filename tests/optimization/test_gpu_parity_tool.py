@@ -640,8 +640,8 @@ def test_real_cuda_passive_recursive_ladders_recover_cpu_metrics(
     # fills and ~95% of ADG. Keep the stricter diagnostic policy unchanged and
     # separately guard the recovered trajectory to 0.1%; minor tick/float32
     # differences still appear in the report and need case-specific assessment.
-    for name in ("adg_strategy_eq", "fills_per_day"):
+    for name in ("adg_fraction_strategy_equity", "fills_per_day"):
         metric = report["metrics"][name]
         assert metric["cpu"] > 0
         assert metric["gpu"] == pytest.approx(metric["cpu"], rel=1e-3)
-    assert report["metrics"]["drawdown_worst_strategy_eq"]["status"] == "match"
+    assert report["metrics"]["drawdown_max_fraction_strategy_equity"]["status"] == "match"

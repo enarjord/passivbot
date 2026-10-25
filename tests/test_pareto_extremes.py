@@ -23,13 +23,13 @@ def _make_candidate(w_values, violation=0.0):
 def _make_adg_candidate(value, *, include_scoring=True):
     candidate = {
         "metrics": {
-            "objectives": {"adg_strategy_eq": value},
+            "objectives": {"adg_fraction_strategy_equity": value},
             "constraint_violation": 0.0,
         },
     }
     if include_scoring:
         candidate["optimize"] = {
-            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+            "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
         }
     return candidate
 
@@ -171,9 +171,9 @@ def test_pareto_store_bootstrap_uses_nonempty_scoring_from_later_file(tmp_path):
     store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
 
     front = store.get_front()
-    assert store.scoring_keys == ["adg_strategy_eq"]
+    assert store.scoring_keys == ["adg_fraction_strategy_equity"]
     assert len(front) == 1
-    assert front[0]["metrics"]["objectives"]["adg_strategy_eq"] == 2.0
+    assert front[0]["metrics"]["objectives"]["adg_fraction_strategy_equity"] == 2.0
 
 
 def test_pareto_store_rejects_scored_entry_after_unscored_front(tmp_path):

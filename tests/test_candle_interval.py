@@ -143,29 +143,29 @@ def test_backtest_with_candle_interval():
     fills, equities_array, analysis = execute_backtest(payload, config)
     assert equities_array.shape[1] == 4
     assert equities_array.shape[0] <= n_minutes // 5
-    assert np.isfinite(analysis["positions_held_per_day"])
+    assert np.isfinite(analysis["position_episodes_per_day"])
     assert analysis["liquidated"] is False
     assert "win_rate_w" not in analysis
     for key in [
-        "win_rate",
-        "trade_loss_max",
-        "trade_loss_mean",
-        "trade_loss_median",
-        "paper_loss_ratio_usd",
-        "paper_loss_mean_ratio_usd",
-        "exposure_ratio_usd",
-        "exposure_mean_ratio_usd",
-        "peak_recovery_days_pnl",
-        "peak_recovery_days_equity_usd",
-        "position_held_days_max",
-        "position_unchanged_days_max",
-        "high_exposure_days_max_long",
-        "peak_recovery_days_strategy_eq",
-        "pain_index_strategy_eq",
-        "ulcer_index_strategy_eq",
+        "trade_win_fraction",
+        "trade_loss_max_fraction",
+        "trade_loss_mean_fraction",
+        "trade_loss_median_fraction",
+        "adg_to_paper_loss_max_ratio_usd",
+        "adg_to_paper_loss_mean_ratio_usd",
+        "adg_to_absolute_net_exposure_max_ratio_usd",
+        "adg_to_absolute_net_exposure_mean_ratio_usd",
+        "peak_recovery_max_days_realized_pnl",
+        "peak_recovery_max_days_usd",
+        "position_held_max_days",
+        "position_unchanged_max_days",
+        "high_exposure_max_days_long",
+        "recovery_max_days_strategy_equity",
+        "pain_index_fraction_strategy_equity",
+        "ulcer_index_fraction_strategy_equity",
         "fills_count",
         "fills_per_day",
-        "fills_gap_longest_days",
+        "fills_gap_max_days",
         "fills_gap_time_weighted_mean_hours",
         "position_held_time_weighted_mean_hours",
         "fills_per_day_per_position_slot",

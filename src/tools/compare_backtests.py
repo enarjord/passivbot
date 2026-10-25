@@ -19,13 +19,13 @@ DATASET_IDENTITY_KEYS = (
     "requested_end_date",
 )
 ANALYSIS_METRICS = (
-    "adg_strategy_eq",
-    "drawdown_worst_strategy_eq",
+    "adg_fraction_strategy_equity",
+    "drawdown_max_fraction_strategy_equity",
     "loss_profit_ratio",
-    "position_held_days_max",
-    "high_exposure_days_max_long",
-    "high_exposure_days_max_short",
-    "strategy_eq_recovery_days_max",
+    "position_held_max_days",
+    "high_exposure_max_days_long",
+    "high_exposure_max_days_short",
+    "recovery_max_days_strategy_equity",
 )
 FULL_FILL_KEY_COLUMNS = (
     "timestamp",
@@ -307,11 +307,11 @@ def format_human_summary(report: dict) -> str:
         f"Equity RMSE vs initial balance: {equity['rmse_pct_of_initial'] * 100:.3f}%",
     ]
     for key in (
-        "adg_strategy_eq",
-        "drawdown_worst_strategy_eq",
-        "position_held_days_max",
-        "high_exposure_days_max_long",
-        "high_exposure_days_max_short",
+        "adg_fraction_strategy_equity",
+        "drawdown_max_fraction_strategy_equity",
+        "position_held_max_days",
+        "high_exposure_max_days_long",
+        "high_exposure_max_days_short",
     ):
         metric = report["metrics"].get(key)
         if metric is None:

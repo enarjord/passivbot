@@ -612,9 +612,9 @@ def main():
             "Examples:\n"
             "  python3 src/pareto_store.py\n"
             "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
-            '  python3 src/pareto_store.py -l "peak_recovery_hours_pnl<800"\n'
-            '  python3 src/pareto_store.py -l "peak_recovery_hours_pnl.max<600"\n'
-            "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 0.1,0.1\n"
+            '  python3 src/pareto_store.py -l "peak_recovery_max_hours_realized_pnl<800"\n'
+            '  python3 src/pareto_store.py -l "peak_recovery_max_hours_realized_pnl.max<600"\n'
+            "  python3 src/pareto_store.py -o adg_fraction_btc,mdg_fraction_btc -w 0.1,0.1\n"
         ),
     )
     parser.add_argument(
@@ -668,7 +668,7 @@ def main():
         action="append",
         help=(
             "Limit filters applied before ranking. Repeat for multiple expressions:\n"
-            '  -l "peak_recovery_hours_pnl<800" -l "position_held_hours_max<400"\n'
+            '  -l "peak_recovery_max_hours_realized_pnl<800" -l "position_held_max_hours<400"\n'
             "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
             "suite-level aggregates (if available) are used; otherwise the mean.\n"
             "Legacy w_i identifiers are still accepted for old result files."

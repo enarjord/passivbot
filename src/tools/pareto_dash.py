@@ -1963,8 +1963,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         if trigger_id == "preset-conservative":
             # Low risk: prioritize low drawdown, longer holding allowed
             expressions = []
-            if "adg_pnl" in run_data.aggregated_metrics:
-                expressions.append("adg_pnl >= 0")
+            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
+                expressions.append("daily_realized_pnl_mean_fraction >= 0")
             if "drawdown_max" in run_data.aggregated_metrics:
                 expressions.append("drawdown_max <= 0.3")
             if "loss_profit_ratio" in run_data.aggregated_metrics:
@@ -1974,8 +1974,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         elif trigger_id == "preset-balanced":
             # Balanced: moderate constraints
             expressions = []
-            if "adg_pnl" in run_data.aggregated_metrics:
-                expressions.append("adg_pnl >= 0")
+            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
+                expressions.append("daily_realized_pnl_mean_fraction >= 0")
             if "drawdown_max" in run_data.aggregated_metrics:
                 expressions.append("drawdown_max <= 0.5")
             return "\n".join(expressions)
@@ -1983,8 +1983,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         elif trigger_id == "preset-aggressive":
             # Aggressive: prioritize profit, allow higher risk
             expressions = []
-            if "adg_pnl" in run_data.aggregated_metrics:
-                expressions.append("adg_pnl >= 0.001")
+            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
+                expressions.append("daily_realized_pnl_mean_fraction >= 0.001")
             return "\n".join(expressions)
 
         return no_update

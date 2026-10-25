@@ -5344,8 +5344,8 @@ struct TrailingMartingaleMulticoinReplayState {
     float raw_strategy_day_min;
 #endif
     float max_dd;
-    float total_wallet_exposure_max;
-    float total_wallet_exposure_mean;
+    float absolute_net_wallet_exposure_max_ratio;
+    float absolute_net_wallet_exposure_mean_ratio;
     float total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms;
@@ -5576,8 +5576,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float raw_strategy_day_min = INFINITY;
 #endif
     float max_dd = 0.0f;
-    float total_wallet_exposure_max = 0.0f;
-    float total_wallet_exposure_mean = 0.0f;
+    float absolute_net_wallet_exposure_max_ratio = 0.0f;
+    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
@@ -5640,8 +5640,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         raw_strategy_day_min = replay_states[b].common.raw_strategy_day_min;
 #endif
         max_dd = replay_states[b].common.max_dd;
-        total_wallet_exposure_max = replay_states[b].common.total_wallet_exposure_max;
-        total_wallet_exposure_mean = replay_states[b].common.total_wallet_exposure_mean;
+        absolute_net_wallet_exposure_max_ratio = replay_states[b].common.absolute_net_wallet_exposure_max_ratio;
+        absolute_net_wallet_exposure_mean_ratio = replay_states[b].common.absolute_net_wallet_exposure_mean_ratio;
         total_wallet_exposure_samples = replay_states[b].common.total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].common.exposure_rms;
@@ -6361,11 +6361,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     rms_position[0], rms_position[1], long_config.twel, short_config.twel);
 #endif
                 total_wallet_exposure_samples += 1.0f;
-                total_wallet_exposure_mean += (
-                    twe_abs - total_wallet_exposure_mean
+                absolute_net_wallet_exposure_mean_ratio += (
+                    twe_abs - absolute_net_wallet_exposure_mean_ratio
                 ) / total_wallet_exposure_samples;
-                total_wallet_exposure_max = fmax(
-                    total_wallet_exposure_max, twe_abs
+                absolute_net_wallet_exposure_max_ratio = fmax(
+                    absolute_net_wallet_exposure_max_ratio, twe_abs
                 );
             }
             if (liquidated) {
@@ -6406,8 +6406,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         replay_states[b].common.raw_strategy_day_min = raw_strategy_day_min;
 #endif
         replay_states[b].common.max_dd = max_dd;
-        replay_states[b].common.total_wallet_exposure_max = total_wallet_exposure_max;
-        replay_states[b].common.total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].common.absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
+        replay_states[b].common.absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
         replay_states[b].common.total_wallet_exposure_samples = total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].common.exposure_rms = exposure_rms;
@@ -6573,8 +6573,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             long_config.n_positions, long_side.max_tradable_seen
         )
     );
-    scalars[scalar_offset + 22] = total_wallet_exposure_max;
-    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
+    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
     scalars[scalar_offset + 24] = fills.fill_count;
     scalars[scalar_offset + 25] = fills.fill_count_entry;
     scalars[scalar_offset + 26] = fills.fill_count_long;
@@ -6912,8 +6912,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float raw_strategy_day_min = INFINITY;
 #endif
     float max_dd = 0.0f;
-    float total_wallet_exposure_max = 0.0f;
-    float total_wallet_exposure_mean = 0.0f;
+    float absolute_net_wallet_exposure_max_ratio = 0.0f;
+    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
@@ -6977,8 +6977,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         raw_strategy_day_min = replay_states[b].raw_strategy_day_min;
 #endif
         max_dd = replay_states[b].max_dd;
-        total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
-        total_wallet_exposure_mean = replay_states[b].total_wallet_exposure_mean;
+        absolute_net_wallet_exposure_max_ratio = replay_states[b].absolute_net_wallet_exposure_max_ratio;
+        absolute_net_wallet_exposure_mean_ratio = replay_states[b].absolute_net_wallet_exposure_mean_ratio;
         total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].exposure_rms;
@@ -7486,11 +7486,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     rms_position[0], rms_position[1], short_side ? 0.0f : twel, short_side ? twel : 0.0f);
 #endif
                 total_wallet_exposure_samples += 1.0f;
-                total_wallet_exposure_mean += (
-                    twe_abs - total_wallet_exposure_mean
+                absolute_net_wallet_exposure_mean_ratio += (
+                    twe_abs - absolute_net_wallet_exposure_mean_ratio
                 ) / total_wallet_exposure_samples;
-                total_wallet_exposure_max = fmax(
-                    total_wallet_exposure_max, twe_abs
+                absolute_net_wallet_exposure_max_ratio = fmax(
+                    absolute_net_wallet_exposure_max_ratio, twe_abs
                 );
             }
             if (liquidated) {
@@ -7528,8 +7528,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].raw_strategy_day_min = raw_strategy_day_min;
 #endif
         replay_states[b].max_dd = max_dd;
-        replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
-        replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
+        replay_states[b].absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
         replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].exposure_rms = exposure_rms;
@@ -7659,8 +7659,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     );
     scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
         entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_pct;
-    scalars[scalar_offset + 22] = total_wallet_exposure_max;
-    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
+    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
     scalars[scalar_offset + 24] = fill_count;
     scalars[scalar_offset + 25] = fill_count_entry;
     scalars[scalar_offset + 26] = fill_count_long;

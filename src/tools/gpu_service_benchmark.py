@@ -213,10 +213,10 @@ def main(argv=None):
         "--bars", str(args.bars), "--seed", "7", "--hsl", args.hsl,
         "--hsl-red-threshold", ".99", "--hsl-memory-ema-span-minutes", "1440",
     ]))
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "backtest_completion_ratio", "hard_stop_time_in_red_pct",
-               "strategy_eq_recovery_days_mean", "strategy_eq_recovery_days_p95",
-               "strategy_eq_recovery_days_mean_worst_1pct", "volume_pct_per_day_avg")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "backtest_completion_fraction", "hsl_red_time_fraction",
+               "recovery_mean_days_strategy_equity", "recovery_p95_days_strategy_equity",
+               "recovery_worst_1pct_mean_days_strategy_equity", "active_day_turnover_proxy_mean_ratio")
     recipe = dict(strategy=args.strategy, coins=args.coins, bars=args.bars,
                   candidates=args.candidates, rounds=args.rounds, hsl=args.hsl,
                   tuning_windows=args.tuning_windows, max_rounds=args.max_rounds, reference_rounds=2,

@@ -122,9 +122,9 @@ def exponential_equity_metrics(out, run, data, requested, *, relative_timestamps
     }
     metrics = {}
     curves = {
-        "strategy_eq": ("raw_strategy_day_end_eq", "raw_strategy_day_min_eq", "_strategy_eq_ew"),
-        "usd": ("day_end_eq", "day_min_eq", "_ew_usd"),
-        "btc": ("btc_day_end_eq", "btc_day_min_eq", "_ew_btc"),
+        "strategy_equity": ("raw_strategy_day_end_eq", "raw_strategy_day_min_eq", "_strategy_equity_ew"),
+        "usd": ("day_end_eq", "day_min_eq", "_usd_ew"),
+        "btc": ("btc_day_end_eq", "btc_day_min_eq", "_btc_ew"),
     }
     for curve, (end_name, min_name, suffix) in curves.items():
         names = {name for name in requested if name.endswith(suffix)}
@@ -157,7 +157,7 @@ def exponential_equity_metrics(out, run, data, requested, *, relative_timestamps
         negative = (probabilities * (-returns).clamp(min=0)).sum(dim=1)
         log_return = torch.log1p(returns)
         values = {
-            "adg": torch.expm1((probabilities * log_return).sum(dim=1)),
+            "adg_fraction": torch.expm1((probabilities * log_return).sum(dim=1)),
             "sharpe_ratio": (mean / variance.sqrt().clamp(min=1e-12)).clamp(-1000, 1000),
             "sortino_ratio": (mean / downside.sqrt().clamp(min=1e-12)).clamp(-1000, 1000),
             "omega_ratio": (positive / negative.clamp(min=1e-12)).clamp(0, 1000),

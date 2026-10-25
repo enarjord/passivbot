@@ -243,10 +243,10 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
-        validate_optimizer_metrics(config, ["hard_stop_restarts"])
+        validate_optimizer_metrics(config, ["hsl_restart_count"])
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
-            validate_optimizer_metrics(config, ["hard_stop_restarts"])
+            validate_optimizer_metrics(config, ["hsl_restart_count"])
 
 
 @pytest.mark.parametrize(
@@ -841,9 +841,9 @@ def test_prepare_config_preserves_backtest_visible_metrics():
         "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "visible_metrics": [
-                "gain",
-                "drawdown_worst_hsl",
-                "hard_stop_restarts_short",
+                "gain_multiplier",
+                "drawdown_max_fraction_strategy_equity",
+                "hsl_restart_count_short",
             ]
         },
         "bot": {"long": {}, "short": {}},
@@ -855,9 +855,9 @@ def test_prepare_config_preserves_backtest_visible_metrics():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["backtest"]["visible_metrics"] == [
-        "gain",
-        "drawdown_worst_hsl",
-        "hard_stop_restarts_short",
+        "gain_multiplier",
+        "drawdown_max_fraction_strategy_equity",
+        "hsl_restart_count_short",
     ]
 
 
@@ -878,7 +878,7 @@ def test_prepare_config_rejects_unknown_backtest_visible_metrics():
 def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
     source = {
         "config_version": CONFIG_SCHEMA_VERSION,
-        "backtest": {"visible_metrics": "adg"},
+        "backtest": {"visible_metrics": "adg_fraction"},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
         "live": {},
