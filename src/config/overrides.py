@@ -489,6 +489,8 @@ def _validate_effective_coin_config(
         "_fine_tune_anchor_plan",
         "_optimizer_anchor",
         "_hlcvs_dataset_override_meta",
+        "results_dir",
+        "results_filename",
     ):
         effective.pop(metadata_key, None)
     # Runtime dataset metadata has no role in validating a coin's policy.

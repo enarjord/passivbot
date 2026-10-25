@@ -16,7 +16,17 @@ RUNTIME_KEYS = (
     "_fine_tune_anchor_plan",
     "_optimizer_anchor",
     "_hlcvs_dataset_override_meta",
+    "results_dir",
+    "results_filename",
 )
+
+
+def runtime_metadata(key):
+    if key == "results_dir":
+        return "optimizer-output"
+    if key == "results_filename":
+        return "optimizer-output/all_results.bin"
+    return {"sentinel": [1, 2, 3]}
 
 
 def source_config():
@@ -34,14 +44,15 @@ def prepared_config():
 @pytest.mark.parametrize("key", RUNTIME_KEYS)
 def test_runtime_metadata_survives_coin_policy_validation_without_mutation(key):
     config = prepared_config()
-    config[key] = {"sentinel": [1, 2, 3]}
+    config[key] = runtime_metadata(key)
     before = deepcopy(config)
 
     parsed = parse_overrides(config, verbose=False, symbol_normalizer=lambda coin: coin)
 
     assert config == before
     assert parsed[key] == before[key]
-    assert parsed[key] is not config[key]
+    if isinstance(config[key], dict):
+        assert parsed[key] is not config[key]
     assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"][
         "exposure_trigger_ratio"
     ] == 0.7
@@ -50,7 +61,7 @@ def test_runtime_metadata_survives_coin_policy_validation_without_mutation(key):
 @pytest.mark.parametrize("key", (*RUNTIME_KEYS, "_optimizer_typo"))
 def test_authored_runtime_metadata_remains_rejected(key):
     source = source_config()
-    source[key] = {"sentinel": True}
+    source[key] = runtime_metadata(key)
     before = deepcopy(source)
 
     with pytest.raises(ValueError, match=re.escape(key) + " is an unknown configuration field"):
@@ -59,11 +70,13 @@ def test_authored_runtime_metadata_remains_rejected(key):
     assert source == before
 
 
-@pytest.mark.parametrize("key", ["_optimizer_typo", "_optimizer_prepared_dataset_identitiy"])
+@pytest.mark.parametrize("key", [
+    "_optimizer_typo", "_optimizer_prepared_dataset_identitiy", "results_dri",
+])
 def test_internal_unknown_fields_are_not_hidden_by_runtime_projection(key):
     config = prepared_config()
     for runtime_key in RUNTIME_KEYS:
-        config[runtime_key] = {"sentinel": True}
+        config[runtime_key] = runtime_metadata(runtime_key)
     config[key] = True
     before = deepcopy(config)
 
@@ -94,7 +107,7 @@ def test_evaluation_contract_retains_prepared_identity_and_normalized_coin_polic
                         lambda: {"version": 1, "sentinel": "implementation"})
     config = prepared_config()
     for key in RUNTIME_KEYS:
-        config[key] = {"sentinel": True}
+        config[key] = runtime_metadata(key)
     config["_optimizer_evaluation_contract"] = {"prepared_data": {"digest": "stale"}}
     fixed_path = ["bot", "long", "entry_cooldown", "base_duration_minutes"]
     fixed_value = config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"]
@@ -120,6 +133,8 @@ def test_evaluation_contract_retains_prepared_identity_and_normalized_coin_polic
     ] == 0.7
     changed = deepcopy(config)
     changed["_optimizer_prepared_dataset_identity"]["digest"] = "b" * 64
+    changed["results_dir"] = "other-optimizer-output"
+    changed["results_filename"] = "other-optimizer-output/all_results.bin"
     second = evaluation_contract.build_evaluation_contract(changed)
     expected = deepcopy(first)
     expected["prepared_data"] = changed["_optimizer_prepared_dataset_identity"]
