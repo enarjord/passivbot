@@ -10,6 +10,16 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+## Numeric Presentation Units
+
+Owned diagnostic fields ending in `_percent` use scale 100: `2.5` means 2.5%, without a numeric
+rescaling from their previous abbreviated spelling. This includes replacement price/quantity
+differences (absolute relative differences), unstuck price changes and changes from a balance peak
+(signed), memory changes, execution-distance samples, progress, budget usage and failure shares.
+CPU, memory and budget usage may exceed 100 where the producer's existing contract permits it.
+Percentile qualifiers such as `p95` describe selection, not a percent-valued output. External
+library field names remain unchanged; report producers and consumers use the owned names together.
+
 ## Canonical Payload Budget
 
 Each `LiveEvent` constructor makes a non-mutating, JSON-compatible bounded copy of its canonical
