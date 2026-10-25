@@ -9,7 +9,7 @@ from tools import pareto_plot
 from passivbot_cli.main import main as cli_main
 
 
-METRICS = ["adg_strategy_eq", "strategy_eq_underwater_pct_mean", "sortino_ratio_strategy_eq"]
+METRICS = ["adg_strategy_eq", "pain_index_strategy_eq", "sortino_ratio_strategy_eq"]
 SPECS = [ObjectiveSpec(metric=name, goal=goal) for name, goal in zip(METRICS, ["max", "min", "max"])]
 
 
