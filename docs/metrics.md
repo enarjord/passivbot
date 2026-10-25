@@ -1,5 +1,10 @@
 # Metrics reference
 
+The generated [quantity reference](ai/generated/metric_fields.md) lists each owned field's unit,
+denominator, observation population, intrinsic aggregation, weighting and sign convention.
+Its source is `config.metric_definitions`; scoring direction and backend support retain their
+existing owners. Describing a quantity does not authorize a selector alias or change its formula.
+
 This page documents the main backtest metrics exposed by `passivbot-rust`. Values may appear with
 `_usd`/`_btc` suffixes. `_usd` metrics are computed from USD-denominated balance/equity, while
 `_btc` metrics are computed from BTC-denominated balance/equity even when the backtest never holds
@@ -239,7 +244,10 @@ RMS metrics are rejected before replay on legacy GPU paths and Apple Metal; the
 RMS implementation currently supports native NVIDIA/CUDA only.
 
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.
-- `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.
+- `volume_pct_per_day_avg`: Scale-one mean of active-fill-day sums of
+  `abs(fill_qty) * fill_price / fill.usd_total_balance`. Days without fills are absent.
+  This quantity-price turnover proxy does not apply `c_mult`; its signed balance denominator
+  has no floor, so negative balances can produce negative values and zero balances can be nonfinite.
 - `positions_held_per_day`: Average number of positions opened per day.
 - `position_held_hours_mean/median/max`: Holding-time stats for closed (or still-open) positions.
 - `position_held_time_weighted_mean_hours`: Duration-weighted mean holding time, computed as
