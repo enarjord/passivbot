@@ -22,10 +22,10 @@ SPANS = ("ema_span_0", "ema_span_1")
 def legacy_config():
     config = get_released_v8_defaults(strategy_kind=KIND)
     config["backtest"]["visible_metrics"] = [
-        name for name in config["backtest"]["visible_metrics"] if not name.endswith("_w")
+        name for name in config["backtest"]["visible_metrics"] if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
     ]
     config["optimize"]["scoring"] = [
-        item for item in config["optimize"]["scoring"] if not item["metric"].endswith("_w")
+        item for item in config["optimize"]["scoring"] if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")
     ]
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.

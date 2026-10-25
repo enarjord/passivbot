@@ -770,7 +770,8 @@
                 "sortino_ratio_strategy_eq",
                 "sharpe_ratio_strategy_eq",
                 "loss_profit_ratio",
-                "strategy_eq_underwater_pct_mean",
+                "pain_index_strategy_eq",
+                "ulcer_index_strategy_eq",
                 "hard_stop_restarts_per_year",
                 "hard_stop_panic_close_loss_drawdown_pct_mean"
               ],
@@ -6807,7 +6808,7 @@
                 },
                 {
                   "goal": "min",
-                  "metric": "strategy_eq_underwater_pct_mean"
+                  "metric": "pain_index_strategy_eq"
                 }
               ],
               "x-passivbot-consumers": [
