@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix optimizer coin-override validation when prepared dataset and other runtime
+  metadata are present, while retaining strict rejection of unknown authored fields.
+
 - Reduce GPU optimizer host-memory peaks with read-only file-backed candle inputs and
   bounded validation buffers. Check exact cached input sizes before decoding or packing,
   and stop memory admission failures without retrying historical downloads.
