@@ -12,6 +12,22 @@ position entry price, plus any over-budget remainder, rounded and capped by the 
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
 
+## Native Forager Quantities
+
+Raw selector inputs are `volume_ema`, `log_range_ema` (the EMA of `ln(high / low)`), and
+`ema_entry_price_gap_fraction`. The price gap is long `bid / threshold - 1` or short
+`1 - ask / threshold`; positive means the initial-entry threshold has not been reached.
+Cross-candidate normalization produces the existing score components. `weights.log_range`
+is a relative ranking weight, while `score_hysteresis_margin` is an absolute gap in normalized
+score units. Neither raw EMAs nor the margin acquire a `[0, 1]` bound through naming changes;
+the unilateralness score retains its existing unit-interval validation.
+
+Native forager volume and log-range durations use `_ema_span_minutes`. GPU parameter packing
+divides these floating durations by the replay interval exactly once. Decoded shader fields use
+`_ema_span_candles` for the resulting floating candle counts; column positions and EMA arithmetic
+remain unchanged. Released-v8 conversion owns the old span and weight vocabulary independently
+of current native bindings.
+
 ## Inherited Directional Defaults
 
 The paired directional field registry defines inheritability; side activation is excluded. Resolve

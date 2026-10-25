@@ -37,19 +37,6 @@ CLIFF_EDGE_THRESHOLD_KEYS = (
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
-FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
-    "forager_volatility_ema_span_1m": "filter_volatility_ema_span_1m",
-    "forager_volume_ema_span_1m": "filter_volume_ema_span_1m",
-}
-
-FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
-    "long_forager_volatility_ema_span_1m": "long_filter_volatility_ema_span_1m",
-    "long_forager_volume_ema_span_1m": "long_filter_volume_ema_span_1m",
-    "short_forager_volatility_ema_span_1m": "short_filter_volatility_ema_span_1m",
-    "short_forager_volume_ema_span_1m": "short_filter_volume_ema_span_1m",
-}
-
-
 def validate_unstuck_ema_dist_value(value, *, path: str, pside: str) -> None:
     try:
         numeric = float(value)
@@ -916,12 +903,6 @@ def format_bot_config(
 def apply_forager_internal_aliases(result: dict) -> None:
     def _alias_bot_cfg(bot_cfg: dict) -> None:
         inject_flattened_shared_bot_side(bot_cfg)
-        for (
-            canonical_key,
-            internal_key,
-        ) in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
-            if canonical_key in bot_cfg and internal_key not in bot_cfg:
-                bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
         bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
 
     for pside in BOT_POSITION_SIDES:
@@ -939,10 +920,3 @@ def apply_forager_internal_aliases(result: dict) -> None:
             bot_cfg = override_bot.get(pside, {})
             if isinstance(bot_cfg, dict):
                 _alias_bot_cfg(bot_cfg)
-
-    bounds = result.get("optimize", {}).get("bounds", {})
-    if not isinstance(bounds, dict):
-        return
-    for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS.items():
-        if canonical_key in bounds and internal_key not in bounds:
-            bounds[internal_key] = deepcopy(bounds[canonical_key])

@@ -18,7 +18,7 @@ from config.param_paths import (
 )
 from config.optimize_bounds import flatten_optimize_bounds
 from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
-from config.shared_bot import flatten_shared_bot_side
+from config.shared_bot import flatten_shared_bot_side, native_forager_weight_name
 from config.schema import get_template_config
 from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
 from config.strategy_spec import (
@@ -476,7 +476,7 @@ def _validate_forager_weight_context(
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
         for name in names:
-            key = f"{weight_source}_forager_score_weights_{name}"
+            key = f"{weight_source}_forager_score_weights_{native_forager_weight_name(name)}"
             configured, runtime_pinned = pinned_value(
                 ("bot", weight_source, "forager", "score_weights", name),
                 weights[name], runtime_pins,

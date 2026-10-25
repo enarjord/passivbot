@@ -9,8 +9,8 @@ from .strategy_spec import BOT_POSITION_SIDES
 SPECIAL_OPTIMIZER_KEY_PATHS = {
     "unstuck_memory_ema_span_minutes": ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
     "loss_gate_memory_ema_span_minutes": ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
-    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_minutes"),
-    "long_forager_volatility_ema_span_1m": (
+    "long_forager_volume_ema_span_minutes": ("bot", "long", "forager", "volume_ema_span_minutes"),
+    "long_forager_log_range_ema_span_minutes": (
         "bot",
         "long",
         "forager",
@@ -30,7 +30,7 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "score_weights",
         "ema_readiness",
     ),
-    "long_forager_score_weights_volatility": (
+    "long_forager_score_weights_log_range": (
         "bot",
         "long",
         "forager",
@@ -51,20 +51,20 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "score_weights",
         "ema_readiness",
     ),
-    "short_forager_score_weights_volatility": (
+    "short_forager_score_weights_log_range": (
         "bot",
         "short",
         "forager",
         "score_weights",
         "volatility",
     ),
-    "short_forager_volume_ema_span_1m": (
+    "short_forager_volume_ema_span_minutes": (
         "bot",
         "short",
         "forager",
         "volume_ema_span_minutes",
     ),
-    "short_forager_volatility_ema_span_1m": (
+    "short_forager_log_range_ema_span_minutes": (
         "bot",
         "short",
         "forager",

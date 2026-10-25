@@ -433,7 +433,7 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
     assert "backtest" not in prepared
     assert prepared["live"]["account"]["user"] == "test_user"
-    assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == pytest.approx(
+    assert prepared["bot"]["long"]["forager_volume_ema_span_minutes"] == pytest.approx(
         prepared["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert prepared["_raw"] == raw_snapshot
@@ -1198,9 +1198,9 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert "risk_wel_enforcer_threshold_ratio" not in config["bot"]["long"]
     assert "unstuck_threshold" not in config["bot"]["long"]
     assert "hsl_drawdown_threshold_fraction" not in config["bot"]["long"]
-    assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
-    assert "filter_volume_ema_span_1m" not in config["bot"]["long"]
-    assert "long_filter_volume_ema_span_1m" not in config["optimize"]["bounds"]
+    assert "forager_volume_ema_span_minutes" not in config["bot"]["long"]
+    assert "forager_volume_ema_span_minutes" not in config["bot"]["long"]
+    assert "long_forager_volume_ema_span_minutes" not in config["optimize"]["bounds"]
 
     compiled = compile_runtime_config(config, runtime="live")
 
@@ -1221,15 +1221,15 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["forager_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
+        compiled["bot"]["long"]["forager_log_range_ema_span_minutes"]
         == config["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
     )
     assert (

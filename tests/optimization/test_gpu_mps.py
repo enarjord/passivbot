@@ -1523,8 +1523,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     short_config.w_volume = 1.0f;
     long_config.w_ready = 0.0f;
     short_config.w_ready = 0.0f;
-    long_config.w_volatility = 0.0f;
-    short_config.w_volatility = 0.0f;
+    long_config.w_log_range = 0.0f;
+    short_config.w_log_range = 0.0f;
     long_config.initial_ema_dist = 0.0f;
     short_config.initial_ema_dist = 0.0f;
     long_config.n_positions = 1;
@@ -1548,8 +1548,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         short_side.ema2[c] = 100.0f;
         long_side.forager_volume[c] = float(3 - c) * 100.0f;
         short_side.forager_volume[c] = float(c + 1) * 100.0f;
-        long_side.forager_volatility[c] = 0.0f;
-        short_side.forager_volatility[c] = 0.0f;
+        long_side.forager_log_range_ema[c] = 0.0f;
+        short_side.forager_log_range_ema[c] = 0.0f;
         long_side.coin_hsl[c].enabled = false;
         long_side.coin_hsl[c].halted = false;
         long_side.coin_hsl[c].tier = 0;
@@ -1820,9 +1820,9 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
     EmaMulticoinSideConfig long_config = {};
     EmaMulticoinSideConfig short_config = {};
     long_config.alpha_forager_volume = 1.0f;
-    long_config.alpha_forager_volatility = 1.0f;
+    long_config.alpha_forager_log_range = 1.0f;
     short_config.alpha_forager_volume = 0.5f;
-    short_config.alpha_forager_volatility = 0.5f;
+    short_config.alpha_forager_log_range = 0.5f;
     for (int c = 0; c < 2; ++c) {
         float seed = c == 0 ? 90.0f : 190.0f;
         long_side.ema0[c] = seed;
@@ -1847,8 +1847,8 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         short_side.volatility_1h[c] = 0.0f;
         long_side.forager_volume[c] = 0.0f;
         short_side.forager_volume[c] = 0.0f;
-        long_side.forager_volatility[c] = 0.0f;
-        short_side.forager_volatility[c] = 0.0f;
+        long_side.forager_log_range_ema[c] = 0.0f;
+        short_side.forager_log_range_ema[c] = 0.0f;
         long_side.psize[c] = c == 0 ? 2.0f : 0.2f;
         long_side.pprice[c] = c == 0 ? 90.0f : 100.0f;
         short_side.psize[c] = c == 0 ? 3.0f : 0.2f;
@@ -1875,8 +1875,8 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
     output[4] = ema_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
     output[5] = long_side.ema0[0];
     output[6] = short_side.ema0[0];
-    output[7] = long_side.forager_volatility[0];
-    output[8] = short_side.forager_volatility[0];
+    output[7] = long_side.forager_log_range_ema[0];
+    output[8] = short_side.forager_log_range_ema[0];
     output[9] = long_side.forager_volume[0];
     output[10] = short_side.forager_volume[0];
     output[11] = long_side.volatility_1h[0];
@@ -1963,9 +1963,9 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
     TrailingMartingaleMulticoinSideConfig long_config = {};
     TrailingMartingaleMulticoinSideConfig short_config = {};
     long_config.alpha_forager_volume = 1.0f;
-    long_config.alpha_forager_volatility = 1.0f;
+    long_config.alpha_forager_log_range = 1.0f;
     short_config.alpha_forager_volume = 0.5f;
-    short_config.alpha_forager_volatility = 0.5f;
+    short_config.alpha_forager_log_range = 0.5f;
     for (int c = 0; c < 2; ++c) {
         float seed = c == 0 ? 90.0f : 190.0f;
         long_side.ema0[c] = seed;
@@ -1990,8 +1990,8 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
         short_side.volatility_1h[c] = 0.0f;
         long_side.forager_volume[c] = 0.0f;
         short_side.forager_volume[c] = 0.0f;
-        long_side.forager_volatility[c] = 0.0f;
-        short_side.forager_volatility[c] = 0.0f;
+        long_side.forager_log_range_ema[c] = 0.0f;
+        short_side.forager_log_range_ema[c] = 0.0f;
         long_side.psize[c] = c == 0 ? 2.0f : 0.0f;
         long_side.pprice[c] = 90.0f;
         short_side.psize[c] = c == 0 ? 3.0f : 0.0f;
@@ -2026,8 +2026,8 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
     output[4] = tm_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
     output[5] = long_side.ema0[0];
     output[6] = short_side.ema0[0];
-    output[7] = long_side.forager_volatility[0];
-    output[8] = short_side.forager_volatility[0];
+    output[7] = long_side.forager_log_range_ema[0];
+    output[8] = short_side.forager_log_range_ema[0];
     output[9] = long_side.forager_volume[0];
     output[10] = short_side.forager_volume[0];
     output[11] = long_side.volatility_1h[0];
@@ -2273,8 +2273,8 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     short_config.w_volume = 1.0f;
     long_config.w_ready = 0.0f;
     short_config.w_ready = 0.0f;
-    long_config.w_volatility = 0.0f;
-    short_config.w_volatility = 0.0f;
+    long_config.w_log_range = 0.0f;
+    short_config.w_log_range = 0.0f;
     long_config.offset = 0.0f;
     short_config.offset = 0.0f;
     long_config.n_positions = 1;
@@ -2298,8 +2298,8 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         short_side.ema2[c] = 100.0f;
         long_side.forager_volume[c] = float(3 - c) * 100.0f;
         short_side.forager_volume[c] = float(c + 1) * 100.0f;
-        long_side.forager_volatility[c] = 0.0f;
-        short_side.forager_volatility[c] = 0.0f;
+        long_side.forager_log_range_ema[c] = 0.0f;
+        short_side.forager_log_range_ema[c] = 0.0f;
     }
     ulong long_selection_blocked_mask = 0ul;
     ulong short_selection_blocked_mask = 0ul;
@@ -2745,8 +2745,8 @@ def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
             "ema_span_1": 90.0,
             "offset_volatility_ema_span_1h": 24.0,
             "offset_volatility_ema_span_1m": 120.0,
-            "forager_volume_ema_span_1m": 180.0,
-            "forager_volatility_ema_span_1m": 240.0,
+            "forager_volume_ema_span_minutes": 180.0,
+            "forager_log_range_ema_span_minutes": 240.0,
             "entry_cooldown_minutes": 15.0,
             "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
@@ -2771,8 +2771,8 @@ def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
             ("ema_span_0", 6.0),
             ("ema_span_1", 18.0),
             ("offset_volatility_ema_span_1m", 24.0),
-            ("forager_volume_ema_span_1m", 36.0),
-            ("forager_volatility_ema_span_1m", 48.0),
+            ("forager_volume_ema_span_minutes", 36.0),
+            ("forager_log_range_ema_span_minutes", 48.0),
             ("entry_cooldown_minutes", 3.0),
             ("hsl_cooldown_ms_lo", 2100000.0),
         ):
@@ -2831,8 +2831,8 @@ def test_multicoin_tm_interval_packing_scales_forager_and_directional_spans():
             "ema_span_1": 90.0,
             "volatility_ema_span_1h": 24.0,
             "volatility_ema_span_1m": 120.0,
-            "forager_volume_ema_span_1m": 180.0,
-            "forager_volatility_ema_span_1m": 240.0,
+            "forager_volume_ema_span_minutes": 180.0,
+            "forager_log_range_ema_span_minutes": 240.0,
             "entry_cooldown_minutes": 15.0,
             "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
@@ -2857,8 +2857,8 @@ def test_multicoin_tm_interval_packing_scales_forager_and_directional_spans():
             ("ema_span_0", 6.0),
             ("ema_span_1", 18.0),
             ("volatility_ema_span_1m", 24.0),
-            ("forager_volume_ema_span_1m", 36.0),
-            ("forager_volatility_ema_span_1m", 48.0),
+            ("forager_volume_ema_span_minutes", 36.0),
+            ("forager_log_range_ema_span_minutes", 48.0),
             ("entry_cooldown_minutes", 3.0),
             ("hsl_cooldown_ms_lo", 2100000.0),
         ):
@@ -3354,11 +3354,11 @@ def _multicoin_exposure_fixture(
             "offset_volatility_ema_span_1m": 2.0,
             "entry_cooldown_minutes": 0.0,
             "total_wallet_exposure_limit_ratio": 1.0,
-            "forager_volume_ema_span_1m": 2.0,
-            "forager_volatility_ema_span_1m": 2.0,
+            "forager_volume_ema_span_minutes": 2.0,
+            "forager_log_range_ema_span_minutes": 2.0,
             "forager_score_weights_volume": 1.0,
             "forager_score_weights_ema_readiness": 0.0,
-            "forager_score_weights_volatility": 0.0,
+            "forager_score_weights_log_range": 0.0,
             "n_positions": 2.0,
             "we_excess_allowance_fraction": 0.0,
             "hsl_scale_budget_with_excess_allowance": 0.0,
@@ -3422,11 +3422,11 @@ def _multicoin_exposure_fixture(
             "total_wallet_exposure_limit_ratio": 1.0,
             "gate_initial": 0.0,
             "gate_reentry": 0.0,
-            "forager_volume_ema_span_1m": 2.0,
-            "forager_volatility_ema_span_1m": 2.0,
+            "forager_volume_ema_span_minutes": 2.0,
+            "forager_log_range_ema_span_minutes": 2.0,
             "forager_score_weights_volume": 1.0,
             "forager_score_weights_ema_readiness": 0.0,
-            "forager_score_weights_volatility": 0.0,
+            "forager_score_weights_log_range": 0.0,
             "n_positions": 2.0,
             "we_excess_allowance_fraction": 0.0,
             "hsl_scale_budget_with_excess_allowance": 0.0,
@@ -4618,7 +4618,7 @@ kernel void passivbot_tm_incumbent_probe(
         load_trailing_martingale_multicoin_side_config(params, 0);
     config.w_volume = 0.01f;
     config.w_ready = 0.0f;
-    config.w_volatility = 0.99f;
+    config.w_log_range = 0.99f;
     TrailingMartingaleMulticoinSideState state;
     init_trailing_martingale_multicoin_side_state(
         state, config, coin_settings, coin_overrides, 2
@@ -8596,11 +8596,11 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "total_wallet_exposure_limit_ratio": 1.0,
         "gate_initial": 1.0,
         "gate_reentry": 1.0,
-        "forager_volume_ema_span_1m": 60.0,
-        "forager_volatility_ema_span_1m": 60.0,
+        "forager_volume_ema_span_minutes": 60.0,
+        "forager_log_range_ema_span_minutes": 60.0,
         "forager_score_weights_volume": 1.0,
         "forager_score_weights_ema_readiness": 0.0,
-        "forager_score_weights_volatility": 0.0,
+        "forager_score_weights_log_range": 0.0,
         "n_positions": 2.0,
         "we_excess_allowance_fraction": 0.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
@@ -9164,11 +9164,11 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "total_wallet_exposure_limit_ratio": 1.0,
         "gate_initial": 1.0,
         "gate_reentry": 1.0,
-        "forager_volume_ema_span_1m": 60.0,
-        "forager_volatility_ema_span_1m": 60.0,
+        "forager_volume_ema_span_minutes": 60.0,
+        "forager_log_range_ema_span_minutes": 60.0,
         "forager_score_weights_volume": 1.0,
         "forager_score_weights_ema_readiness": 0.0,
-        "forager_score_weights_volatility": 0.0,
+        "forager_score_weights_log_range": 0.0,
         "n_positions": 2.0,
         "we_excess_allowance_fraction": 0.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,

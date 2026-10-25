@@ -5,6 +5,7 @@ from the template bot's decorative values (e.g. volatility_ema_span_1h)
 instead of the worst case the optimizer's search space can actually produce.
 """
 from config.universe import set_side_universe_sources
+from config.shared_bot import native_forager_weight_name
 
 from pathlib import Path
 
@@ -76,14 +77,14 @@ def _make_optimizer_config() -> dict:
     bounds = config["optimize"]["bounds"]
     _set_bounds(config, {"long_ema_span_0": [1, 100, 1]})
     _set_bounds(config, {"long_ema_span_1": [1, 100, 1]})
-    _set_bounds(config, {"long_forager_volatility_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"long_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"long_forager_log_range_ema_span_minutes": [0, 0]})
+    _set_bounds(config, {"long_forager_volume_ema_span_minutes": [0, 0]})
     _set_bounds(config, {"long_volatility_ema_span_1h": [0, 0]})
     _set_bounds(config, {"long_volatility_ema_span_1m": [0, 0]})
     _set_bounds(config, {"short_ema_span_0": [1, 100, 1]})
     _set_bounds(config, {"short_ema_span_1": [1, 100, 1]})
-    _set_bounds(config, {"short_forager_volatility_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"short_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_forager_log_range_ema_span_minutes": [0, 0]})
+    _set_bounds(config, {"short_forager_volume_ema_span_minutes": [0, 0]})
     _set_bounds(config, {"short_volatility_ema_span_1h": [0, 0]})
     _set_bounds(config, {"short_volatility_ema_span_1m": [0, 0]})
     for side in ("long", "short"):
@@ -574,9 +575,9 @@ def _mirrored_weight_config(strategy, short_bounds):
             volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0,
         )
     for index, name in enumerate(("volume", "volatility", "ema_readiness", "unilateralness")):
-        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, float(index + 1)]})
+        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, float(index + 1)]})
         if short_bounds == "explicit_zero":
-            _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
+            _set_bounds(config, {f"short_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
     return prepare_config(config, verbose=False)
 
 
@@ -627,7 +628,7 @@ def test_mirrored_fixed_zero_source_group_does_not_enable_fallback():
 
     config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
     for name in ("volume", "volatility", "ema_readiness", "unilateralness"):
-        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0]})
+        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config(
         [bound.low for bound in shape.bounds], config, key_paths=shape.key_paths,
@@ -714,8 +715,8 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
         config["bot"][side]["forager"]["score_weights"] = deepcopy(zero)
     _set_bounds(config, {"long_total_wallet_exposure_limit_ratio": [0.0, 1.0]})
     for name in names:
-        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
-        _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
+        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, 1.0]})
+        _set_bounds(config, {f"short_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
     config = prepare_config(config, verbose=False)
     anchors = [deepcopy(config), deepcopy(config)]
     anchors[1]["bot"]["long"]["forager"]["score_weights"] = deepcopy(positive)
@@ -765,7 +766,7 @@ def test_preflight_validates_effective_zero_weight_activation_without_mutating_g
     _set_bounds(config, {"long_total_wallet_exposure_limit_ratio": [0.0, 1.0]})
     if authority != "dormant":
         for name in names:
-            _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
+            _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, 1.0]})
     if authority == "runtime":
         config["optimize"]["fixed_runtime_overrides"] = {
             f"bot.long.forager.score_weights.{name}": 0.0 for name in names

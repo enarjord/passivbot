@@ -34,10 +34,10 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "score_weights_unilateralness": "forager_score_weights_unilateralness",
         "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
-        "score_weights_volatility": "forager_score_weights_volatility",
+        "score_weights_volatility": "forager_score_weights_log_range",
         "score_weights_volume": "forager_score_weights_volume",
-        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
-        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
+        "volatility_ema_span_minutes": "forager_log_range_ema_span_minutes",
+        "volume_ema_span_minutes": "forager_volume_ema_span_minutes",
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",

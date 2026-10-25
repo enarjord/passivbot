@@ -202,11 +202,11 @@ MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
@@ -250,11 +250,11 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *TRAILING_MARTINGALE_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,

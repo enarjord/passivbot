@@ -85,9 +85,9 @@ def _rust_bot_params(**overrides):
         "entry_trailing_double_down_factor": 0.0,
         "entry_trailing_retracement_pct": 0.0,
         "entry_trailing_threshold_pct": 0.0,
-        "filter_volatility_ema_span_1m": 10.0,
+        "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span_1m": 10.0,
+        "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -529,16 +529,16 @@ class _BundleReproBot:
             return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
         if key in (
             "filter_volume_ema_span",
-            "filter_volume_ema_span_1m",
+            "forager_volume_ema_span_minutes",
             "forager_volume_ema_span",
-            "forager_volume_ema_span_1m",
+            "forager_volume_ema_span_minutes",
         ):
             return 10.0
         if key in (
             "filter_volatility_ema_span",
-            "filter_volatility_ema_span_1m",
-            "forager_volatility_ema_span",
-            "forager_volatility_ema_span_1m",
+            "forager_log_range_ema_span_minutes",
+            "forager_log_range_ema_ema_span",
+            "forager_log_range_ema_span_minutes",
         ):
             return 10.0
         return 0.0

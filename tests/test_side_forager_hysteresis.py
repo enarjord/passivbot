@@ -50,7 +50,7 @@ def selection_snapshot(kind, *, high_side="short", hedge_mode=True):
             for target in (symbol[side]["bot_params"], value["global"]["global_bot_params"][side]):
                 target["forager_score_weights"] = {
                     "volume": 1.0, "ema_readiness": 0.0,
-                    "volatility": 0.0, "unilateralness": 0.0}
+                    "log_range": 0.0, "unilateralness": 0.0}
         value["symbols"].append(symbol)
     value["forager_hysteresis"] = {"incumbent_long": [1], "incumbent_short": [1]}
     return value
@@ -72,7 +72,7 @@ def test_native_unequal_margin_keeps_one_incumbent_and_rotates_other(kind, high_
     for side in ("long", "short"):
         row = diagnostics[side]
         assert row["selected_symbol_indices"] == ([1] if side == high_side else [0])
-        assert row["score_hysteresis_pct"] == value["global"]["forager_score_hysteresis"][side]
+        assert row["score_hysteresis_margin"] == value["global"]["forager_score_hysteresis"][side]
         event, = row["hysteresis_events"]
         assert 0.001 < event["score_gap"] < 1.0
         assert event["kept_incumbent"] is (side == high_side)

@@ -9,7 +9,7 @@ from backtest_universe import backtest_side_enabled
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path, resolve_optimizer_key_path
-from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side, get_grouped_path
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side, get_grouped_path, native_forager_weight_name
 from optimizer_overrides import (
     optimizer_overrides,
     materialize_coupled_scenario_spans,
@@ -438,7 +438,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
                 and origin.source in fixed_value_paths)
             or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
             for name in weights
-            if (key := f"{source_side}_forager_score_weights_{name}") in flat_bounds
+            if (key := f"{source_side}_forager_score_weights_{native_forager_weight_name(name)}") in flat_bounds
         ):
             continue
         forager_cfg["score_weights"] = normalize_forager_score_weights(

@@ -144,11 +144,11 @@ The optimizer retains these internal sub-weight identifiers; authored bounds use
 
 - `long_forager_score_weights_volume`
 - `long_forager_score_weights_ema_readiness`
-- `long_forager_score_weights_volatility`
+- `long_forager_score_weights_log_range`
 - `long_forager_score_weights_unilateralness`
 - `short_forager_score_weights_volume`
 - `short_forager_score_weights_ema_readiness`
-- `short_forager_score_weights_volatility`
+- `short_forager_score_weights_log_range`
 - `short_forager_score_weights_unilateralness`
 
 The optional span dimensions retain the internal identifiers `long_unilateralness_ema_span_1m` and

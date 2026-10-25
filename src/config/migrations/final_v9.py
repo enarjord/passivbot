@@ -18,6 +18,12 @@ _RELEASED_SHARED_FLAT_PATHS = {
     "risk_we_excess_allowance_pct": ("risk", "we_excess_allowance_fraction"),
     "risk_wel_enforcer_threshold": ("risk", "position_exposure_enforcer", "threshold_ratio"),
     "risk_twel_enforcer_threshold": ("risk", "total_exposure_enforcer", "threshold_ratio"),
+    "forager_volume_ema_span_1m": ("forager", "volume_ema_span_minutes"),
+    "forager_volatility_ema_span_1m": ("forager", "volatility_ema_span_minutes"),
+}
+_RELEASED_SHARED_BOUND_PATHS = {
+    **_RELEASED_SHARED_FLAT_PATHS,
+    "forager_score_weights_volatility": ("forager", "score_weights", "volatility"),
 }
 
 
@@ -331,8 +337,8 @@ def canonical_released_v8_path(parts):
     if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
         side, separator, flat = parts[-1].partition("_")
         if separator and side in {"long", "short"}:
-            if flat in _RELEASED_SHARED_FLAT_PATHS:
-                return (*parts[:-1], side, *_RELEASED_SHARED_FLAT_PATHS[flat])
+            if flat in _RELEASED_SHARED_BOUND_PATHS:
+                return (*parts[:-1], side, *_RELEASED_SHARED_BOUND_PATHS[flat])
             for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
                 if flat in mapping:
                     local = mapping[flat]
@@ -562,7 +568,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     bound_values = result.get("optimize", {}).get("bounds", {})
     if isinstance(bound_values, dict):
         for side in ("long", "short"):
-            for old, target in _RELEASED_SHARED_FLAT_PATHS.items():
+            for old, target in _RELEASED_SHARED_BOUND_PATHS.items():
                 source_key = f"{side}_{old}"
                 if source_key not in bound_values:
                     continue

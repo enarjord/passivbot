@@ -1103,7 +1103,7 @@ def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, 
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
-          "filter_volume_ema_span_1m": 10.0,
+          "forager_volume_ema_span_minutes": 10.0,
           "unilateralness_ema_span_1m": 60.0,
           "forager_score_weights": {
               "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}}

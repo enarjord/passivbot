@@ -99,7 +99,7 @@ def pack_bootstrap_counts(params, keys, coin_overrides, *, interval_minutes, ava
     else:
         raise ValueError("Unsupported GPU EMA bootstrap parameter layout")
     leaves = ("ema_span_0", "ema_span_1", "unstuck_ema_span_0", "unstuck_ema_span_1",
-              minute, hour, "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m")
+              minute, hour, "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes")
     pins = (strategy_keys.index("ema_span_0"), strategy_keys.index("ema_span_1"),
             unstuck_start, unstuck_start + 1, strategy_keys.index(minute),
             strategy_keys.index(hour), None, None)

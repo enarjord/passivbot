@@ -410,8 +410,8 @@ def compute_backtest_warmup_minutes(
         "ema_span_1",
         "unstuck_ema_span_0",
         "unstuck_ema_span_1",
-        "forager_volume_ema_span_1m",
-        "forager_volatility_ema_span_1m",
+        "forager_volume_ema_span_minutes",
+        "forager_log_range_ema_span_minutes",
     ]
 
     for (
@@ -455,10 +455,10 @@ def compute_backtest_warmup_minutes(
         strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     bound_keys_minutes = [
-        "long_forager_volume_ema_span_1m",
-        "long_forager_volatility_ema_span_1m",
-        "short_forager_volume_ema_span_1m",
-        "short_forager_volatility_ema_span_1m",
+        "long_forager_volume_ema_span_minutes",
+        "long_forager_log_range_ema_span_minutes",
+        "short_forager_volume_ema_span_minutes",
+        "short_forager_log_range_ema_span_minutes",
     ]
     bound_keys_minutes.extend(
         f"{side}_unstuck_ema_span_{i}"
@@ -529,8 +529,8 @@ def compute_per_coin_warmup_minutes(
         "ema_span_1",
         "unstuck_ema_span_0",
         "unstuck_ema_span_1",
-        "forager_volume_ema_span_1m",
-        "forager_volatility_ema_span_1m",
+        "forager_volume_ema_span_minutes",
+        "forager_log_range_ema_span_minutes",
     ]
     for coin, long_params, short_params, long_strategy, short_strategy in param_sets:
         max_minutes = 0.0

@@ -2809,23 +2809,8 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "entry_trailing_retracement_pct",
         )?,
         entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
-        filter_volatility_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volatility_ema_span_1m",
-            "filter_volatility_ema_span_1m",
-        )
-        .or_else(|_| {
-            extract_value_with_fallback(
-                dict,
-                "filter_volatility_ema_span_1m",
-                "filter_log_range_ema_span",
-            )
-        })?,
-        filter_volume_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volume_ema_span_1m",
-            "filter_volume_ema_span_1m",
-        )?,
+        forager_log_range_ema_span_minutes: extract_value(dict, "forager_log_range_ema_span_minutes")?,
+        forager_volume_ema_span_minutes: extract_value(dict, "forager_volume_ema_span_minutes")?,
         _legacy_filter_volatility_drop_pct: 0.0,
         forager_score_weights: dict
             .get_item("forager_score_weights")
@@ -2912,7 +2897,7 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
     let weights = ForagerScoreWeights {
         volume: extract_value(weights_dict, "volume")?,
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
-        volatility: extract_value(weights_dict, "volatility")?,
+        log_range: extract_value(weights_dict, "log_range")?,
         unilateralness: extract_optional_f64(weights_dict, "unilateralness")?,
     };
     weights.canonicalize().map_err(PyValueError::new_err)
@@ -3148,23 +3133,6 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
             ))
         })
         .and_then(pyo3::FromPyObject::extract)
-}
-
-fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
-    dict: &'a PyDict,
-    primary: &str,
-    fallback: &str,
-) -> PyResult<T> {
-    if let Some(item) = dict.get_item(primary)? {
-        return item.extract::<T>();
-    }
-    if let Some(item) = dict.get_item(fallback)? {
-        return item.extract::<T>();
-    }
-    Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
-        "Keys '{}' or '{}' not found",
-        primary, fallback
-    )))
 }
 
 fn make_trailing_martingale_entry_params(

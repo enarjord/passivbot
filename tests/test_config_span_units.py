@@ -54,8 +54,8 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("native,group,public", [
-    ("forager_volume_ema_span_1m", "forager", "volume_ema_span_minutes"),
-    ("forager_volatility_ema_span_1m", "forager", "volatility_ema_span_minutes"),
+    ("forager_volume_ema_span_minutes", "forager", "volume_ema_span_minutes"),
+    ("forager_log_range_ema_span_minutes", "forager", "volatility_ema_span_minutes"),
     ("unilateralness_ema_span_1m", "forager", "unilateralness_ema_span_minutes"),
     ("unstuck_ema_span_0", "unstuck", "ema_span_0_minutes"),
     ("unstuck_ema_span_1", "unstuck", "ema_span_1_minutes"),

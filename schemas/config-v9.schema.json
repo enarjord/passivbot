@@ -2491,7 +2491,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_forager_score_weights_volatility",
+                          "x-passivbot-optimizer-key": "long_forager_score_weights_log_range",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
@@ -2552,7 +2552,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_forager_volatility_ema_span_1m",
+                      "x-passivbot-optimizer-key": "long_forager_log_range_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
@@ -2572,7 +2572,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_forager_volume_ema_span_1m",
+                      "x-passivbot-optimizer-key": "long_forager_volume_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         180,
@@ -4354,7 +4354,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_forager_score_weights_volatility",
+                          "x-passivbot-optimizer-key": "short_forager_score_weights_log_range",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
@@ -4415,7 +4415,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_forager_volatility_ema_span_1m",
+                      "x-passivbot-optimizer-key": "short_forager_log_range_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
@@ -4435,7 +4435,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_forager_volume_ema_span_1m",
+                      "x-passivbot-optimizer-key": "short_forager_volume_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         180,
