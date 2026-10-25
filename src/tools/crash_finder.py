@@ -76,6 +76,8 @@ class ScanError:
 
 @dataclass(frozen=True)
 class CrashEvent:
+    """Log moves retain natural-log units; the unordered range is a level quotient."""
+
     exchange: str
     symbol: str
     coin: str
@@ -83,19 +85,21 @@ class CrashEvent:
     timestamp: int
     timestamp_iso: str
     valid_minutes: int
-    range_log: float
-    ordered_high_to_later_low_log: float
-    prev_close_low_log: float | None
+    low_over_high_log_ratio: float
+    ordered_high_to_later_low_log_return: float
+    previous_close_to_low_log_return: float | None
     bucket_high: float
     bucket_low: float
     previous_close: float | None
     direction: str = "down"
-    ordered_low_to_later_high_log: float | None = None
-    prev_close_high_log: float | None = None
+    ordered_low_to_later_high_log_return: float | None = None
+    previous_close_to_high_log_return: float | None = None
 
 
 @dataclass(frozen=True)
 class CrashCluster:
+    """Ranking severity retains log units; pump values are negated so worse sorts first."""
+
     label: str
     timestamp: int
     timestamp_iso: str
@@ -103,7 +107,7 @@ class CrashCluster:
     end_ts: int
     start_iso: str
     end_iso: str
-    severity: float
+    severity_log_return: float
     event_count: int
     affected_coin_count: int
     affected_coins: list[str]
@@ -197,13 +201,13 @@ def _finite_positive_mask(values: np.ndarray, valid: np.ndarray) -> np.ndarray:
     )
 
 
-def _worst_ordered_high_to_later_low_log(high: np.ndarray, low: np.ndarray) -> float:
+def _worst_ordered_high_to_later_low_log_return(high: np.ndarray, low: np.ndarray) -> float:
     prefix_high = np.maximum.accumulate(high)
     ratios = low / prefix_high
     return float(np.log(np.min(ratios)))
 
 
-def _worst_ordered_low_to_later_high_log(high: np.ndarray, low: np.ndarray) -> float:
+def _worst_ordered_low_to_later_high_log_return(high: np.ndarray, low: np.ndarray) -> float:
     prefix_low = np.minimum.accumulate(low)
     ratios = high / prefix_low
     return float(np.log(np.max(ratios)))
@@ -334,9 +338,9 @@ def scan_symbol(
     scan_timeframe: str,
     bucket_ms: int,
     min_valid_minutes: int,
-    threshold: float,
+    crash_log_return_threshold: float,
     direction: str,
-    pump_threshold: float,
+    pump_log_return_threshold: float,
     rank_metric: str,
 ) -> tuple[list[CrashEvent], ScannedRange]:
     start_ts = _floor_ts(symbol_range.first_ts, interval_ms)
@@ -388,29 +392,33 @@ def scan_symbol(
         close = np.asarray(bucket_values[:, 2], dtype=np.float64)
         bucket_high = float(np.max(high))
         bucket_low = float(np.min(low))
-        range_log = float(np.log(bucket_low / bucket_high))
-        ordered_down_log = _worst_ordered_high_to_later_low_log(high, low)
-        ordered_up_log = _worst_ordered_low_to_later_high_log(high, low)
-        prev_close_low_log = None
-        prev_close_high_log = None
+        low_over_high_log_ratio = float(np.log(bucket_low / bucket_high))
+        ordered_down_log_return = _worst_ordered_high_to_later_low_log_return(high, low)
+        ordered_up_log_return = _worst_ordered_low_to_later_high_log_return(high, low)
+        previous_close_to_low_log_return = None
+        previous_close_to_high_log_return = None
         if prev_close is not None and np.isfinite(prev_close) and prev_close > 0.0:
-            prev_close_low_log = float(np.log(bucket_low / prev_close))
-            prev_close_high_log = float(np.log(bucket_high / prev_close))
+            previous_close_to_low_log_return = float(np.log(bucket_low / prev_close))
+            previous_close_to_high_log_return = float(np.log(bucket_high / prev_close))
         if rank_metric == "range":
-            down_threshold_value = range_log
-            up_threshold_value = -range_log
+            down_threshold_value = low_over_high_log_ratio
+            up_threshold_value = -low_over_high_log_ratio
         elif rank_metric == "prev-close":
             down_threshold_value = (
-                prev_close_low_log if prev_close_low_log is not None else ordered_down_log
+                previous_close_to_low_log_return
+                if previous_close_to_low_log_return is not None
+                else ordered_down_log_return
             )
             up_threshold_value = (
-                prev_close_high_log if prev_close_high_log is not None else ordered_up_log
+                previous_close_to_high_log_return
+                if previous_close_to_high_log_return is not None
+                else ordered_up_log_return
             )
         else:
-            down_threshold_value = ordered_down_log
-            up_threshold_value = ordered_up_log
+            down_threshold_value = ordered_down_log_return
+            up_threshold_value = ordered_up_log_return
         event_ts = int(bucket_id * bucket_ms)
-        if direction in {"down", "both"} and down_threshold_value <= threshold:
+        if direction in {"down", "both"} and down_threshold_value <= crash_log_return_threshold:
             events.append(
                 CrashEvent(
                     exchange=symbol_range.exchange,
@@ -420,18 +428,18 @@ def scan_symbol(
                     timestamp=event_ts,
                     timestamp_iso=_ts_to_iso(event_ts),
                     valid_minutes=int(len(indices)),
-                    range_log=range_log,
-                    ordered_high_to_later_low_log=ordered_down_log,
-                    prev_close_low_log=prev_close_low_log,
+                    low_over_high_log_ratio=low_over_high_log_ratio,
+                    ordered_high_to_later_low_log_return=ordered_down_log_return,
+                    previous_close_to_low_log_return=previous_close_to_low_log_return,
                     bucket_high=bucket_high,
                     bucket_low=bucket_low,
                     previous_close=prev_close,
                     direction="down",
-                    ordered_low_to_later_high_log=ordered_up_log,
-                    prev_close_high_log=prev_close_high_log,
+                    ordered_low_to_later_high_log_return=ordered_up_log_return,
+                    previous_close_to_high_log_return=previous_close_to_high_log_return,
                 )
             )
-        if direction in {"up", "both"} and up_threshold_value >= pump_threshold:
+        if direction in {"up", "both"} and up_threshold_value >= pump_log_return_threshold:
             event_ts = int(bucket_id * bucket_ms)
             events.append(
                 CrashEvent(
@@ -442,15 +450,15 @@ def scan_symbol(
                     timestamp=event_ts,
                     timestamp_iso=_ts_to_iso(event_ts),
                     valid_minutes=int(len(indices)),
-                    range_log=range_log,
-                    ordered_high_to_later_low_log=ordered_down_log,
-                    prev_close_low_log=prev_close_low_log,
+                    low_over_high_log_ratio=low_over_high_log_ratio,
+                    ordered_high_to_later_low_log_return=ordered_down_log_return,
+                    previous_close_to_low_log_return=previous_close_to_low_log_return,
                     bucket_high=bucket_high,
                     bucket_low=bucket_low,
                     previous_close=prev_close,
                     direction="up",
-                    ordered_low_to_later_high_log=ordered_up_log,
-                    prev_close_high_log=prev_close_high_log,
+                    ordered_low_to_later_high_log_return=ordered_up_log_return,
+                    previous_close_to_high_log_return=previous_close_to_high_log_return,
                 )
             )
         prev_close = float(close[-1])
@@ -474,25 +482,25 @@ def scan_symbol(
 def _event_severity(event: CrashEvent, rank_metric: str) -> float:
     if event.direction == "up":
         if rank_metric == "range":
-            value = -event.range_log
+            value = -event.low_over_high_log_ratio
         elif rank_metric == "prev-close":
             value = (
-                event.prev_close_high_log
-                if event.prev_close_high_log is not None
-                else event.ordered_low_to_later_high_log
+                event.previous_close_to_high_log_return
+                if event.previous_close_to_high_log_return is not None
+                else event.ordered_low_to_later_high_log_return
             )
         else:
-            value = event.ordered_low_to_later_high_log
+            value = event.ordered_low_to_later_high_log_return
         if value is None:
             raise ValueError(f"pump event missing {rank_metric} severity metric")
         return -float(value)
     if rank_metric == "range":
-        return event.range_log
+        return event.low_over_high_log_ratio
     if rank_metric == "prev-close":
-        if event.prev_close_low_log is None:
-            return event.ordered_high_to_later_low_log
-        return event.prev_close_low_log
-    return event.ordered_high_to_later_low_log
+        if event.previous_close_to_low_log_return is None:
+            return event.ordered_high_to_later_low_log_return
+        return event.previous_close_to_low_log_return
+    return event.ordered_high_to_later_low_log_return
 
 
 def select_top_events(
@@ -588,7 +596,7 @@ def cluster_events(
                 end_ts=end_ts,
                 start_iso=_ts_to_iso(start_ts),
                 end_iso=_ts_to_iso(end_ts),
-                severity=float(_event_severity(worst, rank_metric)),
+                severity_log_return=float(_event_severity(worst, rank_metric)),
                 event_count=len(raw),
                 affected_coin_count=len(coins),
                 affected_coins=coins,
@@ -597,7 +605,7 @@ def cluster_events(
                 direction=direction,
             )
         )
-    return sorted(clusters, key=lambda item: (item.severity, item.timestamp))
+    return sorted(clusters, key=lambda item: (item.severity_log_return, item.timestamp))
 
 
 def build_suite_payload(
@@ -638,7 +646,7 @@ def build_suite_payload(
                 "coins": coins,
                 "force_coins": force_coins,
                 "exchanges": list(cluster.exchanges),
-                "severity": cluster.severity,
+                "severity_log_return": cluster.severity_log_return,
                 "market_wide": cluster.market_wide,
                 "direction": cluster.direction,
             }
@@ -691,7 +699,7 @@ def _merge_overlapping_scenario_specs(scenario_specs: Sequence[dict[str, Any]]) 
         by_direction.setdefault(str(spec.get("direction") or "down"), []).append(spec)
     for direction_specs in by_direction.values():
         direction_merged: list[dict[str, Any]] = []
-        for spec in sorted(direction_specs, key=lambda item: (item["start_dt"], item["severity"])):
+        for spec in sorted(direction_specs, key=lambda item: (item["start_dt"], item["severity_log_return"])):
             if not direction_merged or spec["start_dt"] > direction_merged[-1]["end_dt"]:
                 direction_merged.append({**spec, "labels": [spec["label"]]})
                 continue
@@ -708,8 +716,8 @@ def _merge_overlapping_scenario_specs(scenario_specs: Sequence[dict[str, Any]]) 
                 else sorted(dict.fromkeys([*current["force_coins"], *spec["force_coins"]]))
             )
             current["labels"].append(spec["label"])
-            if spec["severity"] < current["severity"]:
-                current["severity"] = spec["severity"]
+            if spec["severity_log_return"] < current["severity_log_return"]:
+                current["severity_log_return"] = spec["severity_log_return"]
                 current["label"] = spec["label"]
         merged.extend(direction_merged)
     return sorted(merged, key=lambda item: (item["start_dt"], item["direction"], item["label"]))
@@ -900,7 +908,7 @@ def load_clusters_csv(path: Path) -> list[CrashCluster]:
                 end_ts=int(row["end_ts"]),
                 start_iso=str(row["start_iso"]),
                 end_iso=str(row["end_iso"]),
-                severity=float(row["severity"]),
+                severity_log_return=float(row["severity_log_return"]),
                 event_count=int(row["event_count"]),
                 affected_coin_count=int(row.get("affected_coin_count") or len(coins)),
                 affected_coins=coins,
@@ -909,7 +917,7 @@ def load_clusters_csv(path: Path) -> list[CrashCluster]:
                 direction=str(row.get("direction") or "down"),
             )
         )
-    return sorted(clusters, key=lambda item: (item.severity, item.timestamp))
+    return sorted(clusters, key=lambda item: (item.severity_log_return, item.timestamp))
 
 
 def load_scanned_ranges_csv(path: Path) -> list[ScannedRange]:
@@ -986,7 +994,7 @@ def write_outputs(
             "end_ts",
             "start_iso",
             "end_iso",
-            "severity",
+            "severity_log_return",
             "event_count",
             "affected_coin_count",
             "affected_coins",
@@ -1042,7 +1050,7 @@ def write_cluster_suite_outputs(
             "end_ts",
             "start_iso",
             "end_iso",
-            "severity",
+            "severity_log_return",
             "event_count",
             "affected_coin_count",
             "affected_coins",
@@ -1180,10 +1188,10 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.min_valid_minutes <= 0:
         raise ValueError("min-valid-minutes must be positive")
-    if args.threshold >= 0.0:
-        raise ValueError("threshold must be negative")
-    if args.pump_threshold <= 0.0:
-        raise ValueError("pump-threshold must be positive")
+    if args.crash_log_return_threshold >= 0.0:
+        raise ValueError("crash-log-return-threshold must be negative")
+    if args.pump_log_return_threshold <= 0.0:
+        raise ValueError("pump-log-return-threshold must be positive")
     exchanges = sorted(
         dict.fromkeys(str(exchange).strip().lower() for exchange in (args.exchange or []))
     )
@@ -1227,9 +1235,9 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
                 scan_timeframe=scan_timeframe,
                 bucket_ms=bucket_ms,
                 min_valid_minutes=args.min_valid_minutes,
-                threshold=args.threshold,
+                crash_log_return_threshold=args.crash_log_return_threshold,
                 direction=args.direction,
-                pump_threshold=args.pump_threshold,
+                pump_log_return_threshold=args.pump_log_return_threshold,
                 rank_metric=args.rank_metric,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
@@ -1312,8 +1320,8 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
         "exchanges": exchanges,
         "rank_metric": args.rank_metric,
         "direction": args.direction,
-        "threshold": args.threshold,
-        "pump_threshold": args.pump_threshold,
+        "crash_log_return_threshold": args.crash_log_return_threshold,
+        "pump_log_return_threshold": args.pump_log_return_threshold,
         "symbols_attempted": len(symbol_ranges),
         "symbols_scanned": len(scanned_ranges),
         "symbols_failed": len(scan_errors),
@@ -1344,6 +1352,7 @@ class _StoreDirection(argparse.Action):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool crash-finder",
+        allow_abbrev=False,
         description=(
             "Scan local v2 OHLCV cache data for the worst historical crash and pump windows."
         ),
@@ -1370,7 +1379,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Crash discovery candle timeframe built from source candles (default: 1h).",
     )
     parser.add_argument(
-        "--threshold",
+        "--crash-log-return-threshold",
         type=float,
         default=-0.10,
         help="Only keep crash candidates at or below this log-return severity.",
@@ -1387,7 +1396,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.set_defaults(_direction_explicit=False)
     parser.add_argument(
-        "--pump-threshold",
+        "--pump-log-return-threshold",
         type=float,
         default=0.10,
         help="Only keep pump candidates at or above this positive log-return severity.",
@@ -1495,7 +1504,7 @@ def _print_text_summary(payload: dict[str, Any]) -> None:
             if len(cluster["affected_coins"]) > 8:
                 coins += ",..."
             print(
-                f"  {cluster['label']} severity={cluster['severity']:.6f} "
+                f"  {cluster['label']} severity_log_return={cluster['severity_log_return']:.6f} "
                 f"time={cluster['timestamp_iso']} coins={coins}"
             )
 
