@@ -248,13 +248,13 @@ def test_native_backend_validates_effective_fixed_runtime_config(monkeypatch, tm
     register = FakeService.register_dataset
     def observe_registration(self, dataset_id, dataset):
         import json
-        registered_collateral.append(json.loads(dataset.config_json)["backtest"]["btc_collateral_cap"])
+        registered_collateral.append(json.loads(dataset.config_json)["backtest"]["btc_collateral_target_ratio"])
         return register(self, dataset_id, dataset)
     monkeypatch.setattr(FakeService, "register_dataset", observe_registration)
     with managed_arrays() as manager:
         base = inputs(manager)
-        base.config["backtest"]["btc_collateral_cap"] = 0.5
-        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_cap": 0.0}
+        base.config["backtest"]["btc_collateral_target_ratio"] = 0.5
+        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_target_ratio": 0.0}
         # CLI preflight and native dataset preparation both validate the effective
         # runtime contract; the raw template must not introduce a second gate.
         optimize._run_gpu_preparation_preflight(base.config, {})
@@ -262,7 +262,7 @@ def test_native_backend_validates_effective_fixed_runtime_config(monkeypatch, tm
         execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
         assert registered_collateral and all(value == 0.0 for value in registered_collateral)
         assert len(records) == len(FakeService.rows) == 8
-        assert all(row["backtest"]["btc_collateral_cap"] == 0.0 for row in records)
+        assert all(row["backtest"]["btc_collateral_target_ratio"] == 0.0 for row in records)
 
 
 def test_native_effective_unsupported_config_is_rejected_before_service(monkeypatch, tmp_path):
@@ -273,11 +273,11 @@ def test_native_effective_unsupported_config_is_rejected_before_service(monkeypa
     monkeypatch.setattr(native, "NativeBacktestService", forbidden_service)
     with managed_arrays() as manager:
         base = inputs(manager)
-        base.config["backtest"]["btc_collateral_cap"] = 0.0
-        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_cap": 0.5}
-        with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+        base.config["backtest"]["btc_collateral_target_ratio"] = 0.0
+        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_target_ratio": 0.5}
+        with pytest.raises(ValueError, match="btc_collateral_target_ratio=0"):
             optimize._run_gpu_preparation_preflight(base.config, {})
-        with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+        with pytest.raises(ValueError, match="btc_collateral_target_ratio=0"):
             execute(base, SimpleNamespace(record=lambda _row: None), tmp_path / "checkpoint.pkl")
         assert FakeService.rows == []
 

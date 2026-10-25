@@ -444,7 +444,7 @@ def released_runtime_selector(path):
     for old, new in (
         ("live.hsl_signal_mode", "bot.portfolio.hsl.scope"),
         ("live.max_realized_loss_pct", "bot.portfolio.loss_gate.max_drawdown_ratio"),
-        ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
+        ("backtest.liquidation_threshold", "backtest.equity_floor_fraction"),
         ("live.auto_gs", "live.disapproved_position_mode"),
         ("bot.hsl.", "bot.portfolio.hsl."),
         (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
@@ -649,7 +649,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         for key, value in old.items():
             put(result, ("bot", "portfolio", "hsl", key), value, f"bot.hsl.{key}")
         record("bot.hsl", old, {"bot.portfolio.hsl": old}, "portfolio HSL authority")
-    rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_ratio", "backtest")
+    rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_fraction", "backtest")
 
     def visit(node, path=""):
         if isinstance(node, list):

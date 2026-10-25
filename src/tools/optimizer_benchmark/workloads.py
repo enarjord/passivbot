@@ -66,7 +66,7 @@ def apply_features(config, case, coins, markets, bars):
     if "slippage" in flags:
         config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
-        config["backtest"]["btc_collateral_cap"] = 0.25
+        config["backtest"]["btc_collateral_target_ratio"] = 0.25
     if "eligibility" in flags and len(coins) > 1:
         markets[coins[-1]]["first_valid_index"] = bars // 2
         markets[coins[0]]["last_valid_index"] = bars - bars // 4 - 1

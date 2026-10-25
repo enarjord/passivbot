@@ -2,14 +2,14 @@
     "backtest": {
         "balance_sample_divider": 60,
         "base_dir": "backtests",
-        "btc_collateral_cap": 0.0,
-        "btc_collateral_ltv_cap": null,
+        "btc_collateral_target_ratio": 0.0,
+        "max_usd_debt_to_equity_ratio": null,
         "candle_interval_minutes": 1,
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
         "end_date": "2026-09-28",
-        "equity_floor_ratio": 0.05,
+        "equity_floor_fraction": 0.05,
         "ew_half_life_days": null,
         "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
@@ -18,7 +18,7 @@
         "hlcvs_data_override_mode": "intersection",
         "hsl_detailed_report": false,
         "limit_order_fill_buffer_fraction": 0.0,
-        "maker_fee_override": 0.0004,
+        "maker_fee_override_fraction": 0.0004,
         "market_order_slippage_fraction": 0.0005,
         "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
         "market_settings_sources": {},
@@ -145,7 +145,7 @@
         "start_date": "2021-04-20",
         "starting_balance": 100000,
         "suite_enabled": false,
-        "taker_fee_override": 0.00055,
+        "taker_fee_override_fraction": 0.00055,
         "visible_metrics": [
             "adg_strategy_eq",
             "adg_strategy_eq",
@@ -251,7 +251,7 @@
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
             "strategy_kind": "trailing_martingale",
             "unstuck": {"memory_ema_span_minutes": 1440.0},
-            "warmup": {"max_minutes": null, "span_multiplier": 0.0}
+            "warmup": {"max_minutes": null, "activation_span_fraction": 0.0}
         },
         "long": {"enabled": true},
         "short": {"enabled": false}

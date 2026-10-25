@@ -540,7 +540,7 @@ def test_authoring_tools_never_connect_to_network(monkeypatch):
 def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
     path = write_json(tmp_path / "input.json", policy())
     before = path.read_bytes()
-    assert cli_main(["tool", "config-explain", str(path), "bot.portfolio.warmup.span_multiplier", "--json"]) == 0
+    assert cli_main(["tool", "config-explain", str(path), "bot.portfolio.warmup.activation_span_fraction", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["value"] == 0.3
     assert report["context"]["scope"] == "offline_policy"

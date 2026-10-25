@@ -37,7 +37,7 @@ def deny_network(monkeypatch):
 
 def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     for side in ("long", "short"):
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0

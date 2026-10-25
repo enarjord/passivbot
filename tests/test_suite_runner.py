@@ -1014,7 +1014,7 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
             "end_date": "1970-01-01T00:03:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr(
@@ -1060,7 +1060,7 @@ def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
             "end_date": "1970-01-01T00:05:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
@@ -1111,7 +1111,7 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
         "bot": {
             "long": {"enabled": False},
             "short": {"enabled": False},
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}},
         },
         "optimize": {"bounds": {}},
     }

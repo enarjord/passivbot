@@ -258,8 +258,10 @@ def test_migration_cli_writes_private_report_without_modifying_source(tmp_path):
                  "--report", str(report)]) == 0
     assert source.read_bytes() == original
     converted = json.loads(output.read_text())
-    for key in ("start_date", "end_date", "maker_fee_override", "taker_fee_override", "scenarios"):
+    for key in ("start_date", "end_date", "scenarios"):
         assert converted["backtest"][key] == config["backtest"][key]
+    for kind in ("maker", "taker"):
+        assert converted["backtest"][f"{kind}_fee_override_fraction"] == config["backtest"][f"{kind}_fee_override"]
     assert report.stat().st_mode & 0o777 == 0o600
     assert json.loads(report.read_text())["target_version"] == "v9.0.0"
 

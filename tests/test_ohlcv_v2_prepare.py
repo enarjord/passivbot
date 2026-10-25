@@ -43,7 +43,7 @@ def _write_day(root, exchange, symbol, day, rows):
 
 def _minimal_bot_config(approved_coins):
     return {
-        "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+        "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         "long": {
             "enabled": True,
             "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},

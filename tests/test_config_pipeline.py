@@ -67,8 +67,8 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     for key, expected in {
         "start_date": "2023-01-01", "end_date": "2023-01-15",
         "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
-        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
-        "btc_collateral_cap": 0.0, "suite_enabled": False,
+        "starting_balance": 100000.0, "maker_fee_override_fraction": 0.0004,
+        "btc_collateral_target_ratio": 0.0, "suite_enabled": False,
     }.items():
         assert config["backtest"][key] == expected
     expected_native_strategy = {

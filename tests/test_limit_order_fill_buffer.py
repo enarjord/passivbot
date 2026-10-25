@@ -75,7 +75,7 @@ def _native_args():
 
     cfg = get_expanded_config_prototype()
     cfg['backtest']['coins'] = {'binance': ['BTC']}
-    cfg['backtest']['btc_collateral_cap'] = 0.0
+    cfg['backtest']['btc_collateral_target_ratio'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
     cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = False

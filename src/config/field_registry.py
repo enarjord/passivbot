@@ -154,9 +154,9 @@ _FIELDS_BY_TYPE = {
     },
     FieldType.FLOAT: {
         "backtest": """
-            btc_collateral_cap equity_floor_ratio gap_tolerance_ohlcvs_minutes
-            maker_fee_override market_order_slippage_fraction limit_order_fill_buffer_fraction
-            starting_balance taker_fee_override
+            btc_collateral_target_ratio equity_floor_fraction gap_tolerance_ohlcvs_minutes
+            maker_fee_override_fraction market_order_slippage_fraction limit_order_fill_buffer_fraction
+            starting_balance taker_fee_override_fraction
         """,
         "live": """
             balance_hysteresis_snap_pct candle_lock_timeout_seconds execution_delay_seconds
@@ -184,7 +184,7 @@ _FIELDS_BY_TYPE = {
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
-        "bot.portfolio.warmup": "span_multiplier",
+        "bot.portfolio.warmup": "activation_span_fraction",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -241,7 +241,7 @@ _FIELDS_BY_TYPE = {
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
         "bot.portfolio.warmup.max_minutes",
-        "backtest.btc_collateral_ltv_cap", "backtest.ew_half_life_days",
+        "backtest.max_usd_debt_to_equity_ratio", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
     FieldType.INTEGER: (
@@ -330,7 +330,7 @@ def get_field_registry() -> FieldRegistry:
                 path = f"{prefix}.{name}" if prefix else name
                 add(path, kind, nullable=path in {
                     "backtest.filter_by_min_effective_cost",
-                    "backtest.maker_fee_override", "backtest.taker_fee_override",
+                    "backtest.maker_fee_override_fraction", "backtest.taker_fee_override_fraction",
                     "backtest.visible_metrics",
                 })
     for kind, paths in _NULLABLE_FIELDS.items():
