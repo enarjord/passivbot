@@ -2,17 +2,110 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
 import logging
+import mmap
+from threading import Lock
 import weakref
 
 import numpy as np
 
 
 PREPARATION_CHUNK_BYTES = 8 * 2**20
+
+
+@dataclass
+class _MpsUploadSource:
+    """Own aliases until the device has finished reading a mapped upload source."""
+
+    mapped: object
+    cpu: object = None
+    destination: object = None
+
+    def close(self):
+        self.cpu = None
+        self.destination = None
+        self.mapped._mmap.close()
+
+
+# A failed synchronization cannot establish that queued copies released their
+# source pointers. Retain ownership until a later confirmed device quiescence;
+# never drop an older unsafe mapping merely to bound this exceptional list.
+_mps_upload_quarantine = []
+_mps_upload_quarantine_lock = Lock()
+
+
+def _quarantine_mps_upload_sources(sources):
+    with _mps_upload_quarantine_lock:
+        _mps_upload_quarantine.extend(sources)
+
+
+def _close_mps_upload_sources(sources, *, preserve_error=False):
+    first_error = None
+    for source in sources:
+        try:
+            source.close()
+        except BaseException as exc:
+            if preserve_error or first_error is not None:
+                logging.exception("Could not close a completed Metal upload source")
+            else:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
+
+
+def _mps_upload_quarantine_snapshot():
+    with _mps_upload_quarantine_lock:
+        return tuple(_mps_upload_quarantine)
+
+
+def _release_mps_upload_sources_after_sync(pending):
+    """Release only sources snapshotted before a confirmed successful wait."""
+    with _mps_upload_quarantine_lock:
+        claimed = [source for source in pending
+                   if any(source is other for other in _mps_upload_quarantine)]
+        _mps_upload_quarantine[:] = [source for source in _mps_upload_quarantine
+                                    if not any(source is other for other in claimed)]
+    for source in claimed:
+        try:
+            source.close()
+        except BaseException as exc:
+            # Preserve ownership even if a mapping-close failure prevents this
+            # confirmed-quiescent source from being released immediately.
+            _quarantine_mps_upload_sources((source,))
+            if not isinstance(exc, Exception):
+                raise
+            logging.exception("Could not close a completed Metal upload source")
+
+
+def _synchronize_mps_uploads(torch):
+    # A different worker may quarantine newer queued work after this wait
+    # completes. The pre-wait snapshot excludes those still-unsafe sources.
+    pending = _mps_upload_quarantine_snapshot()
+    torch.mps.synchronize()
+    _release_mps_upload_sources_after_sync(pending)
+
+
+def _discard_completed_upload_pages(array, completed_bytes, discarded_bytes=0):
+    """Advise only complete consumed pages of an internal, unmodified mapping."""
+    advise = getattr(array._mmap, "madvise", None)
+    advice = getattr(mmap, "MADV_DONTNEED", None)
+    page = mmap.PAGESIZE
+    data_offset = int(array.offset) % mmap.ALLOCATIONGRANULARITY
+    end = min(len(array._mmap), data_offset + int(completed_bytes))
+    end -= end % page
+    if end <= discarded_bytes:
+        return discarded_bytes
+    if callable(advise) and advice is not None:
+        try:
+            advise(advice, discarded_bytes, end - discarded_bytes)
+        except OSError:
+            logging.debug("Could not discard completed Metal upload pages", exc_info=True)
+    return end
 
 
 @contextmanager
@@ -65,12 +158,124 @@ def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
         )
 
 
-def multicoin_invariant_bytes(candles, coins, *, device, include_hourly_ranges=True):
-    """Exact dense packed payload size, excluding candidate state and driver scratch."""
+def compact_hourly_rows(candles, *, start_minute_of_hour=None):
+    """Boundary rows for 1m hourly inputs; unknown phase uses a safe header bound."""
+    candles = int(candles)
+    if candles < 1:
+        raise ValueError("Hourly GPU inputs require at least one candle")
+    if start_minute_of_hour is None:
+        return (candles + 59) // 60 + 1
+    minute = int(start_minute_of_hour)
+    if not 0 <= minute < 60:
+        raise ValueError("Hourly GPU start minute must be in 0..59")
+    # The canonical hourly builder never marks row zero as an observation.
+    # Keep one sentinel row for a bindable device buffer when no boundary occurs.
+    return max(1, (minute + candles - 1) // 60)
+
+
+def multicoin_invariant_bytes(candles, coins, *, device, include_hourly_ranges=True,
+                             compact_hourly_ranges=False, start_minute_of_hour=None):
+    """Packed payload size, excluding candidate state and driver scratch."""
     # bars, execution ticks, fill ticks, touch ticks, nearest ticks, min-qty
     # bits/relation and (when requested) hourly ranges. CUDA packs relation as i8.
     per_coin = 16 + 8 + 8 + 8 + 4 + 4 + (1 if device == "cuda" else 4)
-    return int(candles) * int(coins) * (per_coin + (4 if include_hourly_ranges else 0))
+    total = int(candles) * int(coins) * per_coin
+    if include_hourly_ranges:
+        if compact_hourly_ranges:
+            if device != "mps":
+                raise ValueError("Compact hourly GPU inputs require Metal")
+            return total + compact_hourly_rows(
+                candles, start_minute_of_hour=start_minute_of_hour,
+            ) * int(coins) * 4
+        total += int(candles) * int(coins) * 4
+    return total
+
+
+METAL_STREAMED_TICK_FIELDS = frozenset((
+    "fill_ticks", "touch_ticks", "touch_nearest_ticks", "touch_min_qty_bits", "touch_min_qty_relation",
+))
+
+
+def multicoin_resident_bytes(candles, coins, *, device, include_hourly_ranges=True,
+                            stream_tick_inputs=False, compact_hourly_ranges=False,
+                            start_minute_of_hour=None):
+    if compact_hourly_ranges and not stream_tick_inputs:
+        raise ValueError("Compact hourly GPU inputs require streamed ticks")
+    full = multicoin_invariant_bytes(candles, coins, device=device,
+                                    include_hourly_ranges=include_hourly_ranges,
+                                    compact_hourly_ranges=compact_hourly_ranges,
+                                    start_minute_of_hour=start_minute_of_hour)
+    if not stream_tick_inputs:
+        return full
+    if device != "mps":
+        raise ValueError("Streamed tick inputs require Metal")
+    # Previous-touch and next-fill context add one row each to a replay window.
+    from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_BARS
+    streamed_per_row = int(coins) * 28
+    window_rows = min(int(candles), MPS_TM_MULTICOIN_CHUNK_BARS + 2)
+    return full - int(candles) * streamed_per_row + window_rows * streamed_per_row
+
+
+@dataclass(frozen=True)
+class MpsInputMemoryBudget:
+    """Run-start transport preferences, fixed before file-cache pages are touched."""
+
+    device_bytes: int
+    host_bytes: int
+
+
+def capture_mps_input_memory_budget(torch):
+    """Sample device and system headroom once, before preparing input histories."""
+    import psutil
+
+    recommended = int(torch.mps.recommended_max_memory())
+    driver = int(torch.mps.driver_allocated_memory())
+    available = int(psutil.virtual_memory().available)
+    return MpsInputMemoryBudget(
+        device_bytes=int(max(0, recommended - driver) * 0.45),
+        host_bytes=max(0, min(int(available * 0.7), available - 2**30)),
+    )
+
+
+def prefer_streamed_ticks(candles, coins, budget, *, interval_ms=None):
+    """Prefer resident Metal inputs when comfortable, streaming only if it saves RAM.
+
+    This choice is pure and separate from live allocation admission. Reuse the
+    same budget for header preflight and the effective prepared dataset.
+    """
+    full = multicoin_invariant_bytes(candles, coins, device="mps")
+    streamed = multicoin_resident_bytes(
+        candles, coins, device="mps", stream_tick_inputs=True,
+        compact_hourly_ranges=interval_ms == 60_000,
+    )
+    return streamed < full and full > min(budget.device_bytes, budget.host_bytes)
+
+
+def discard_readonly_file_pages(values):
+    """Optionally evict clean raw input pages after independent packed outputs exist.
+
+    The mapping remains open and valid for future reads. Writable, copy-on-write
+    and shared-memory arrays do not qualify for this advisory optimization.
+    """
+    if not isinstance(values, np.ndarray) or values.flags.writeable:
+        return False
+    owner = values
+    while owner is not None:
+        if isinstance(owner, np.memmap):
+            if owner.mode != "r":
+                return False
+            advice = getattr(mmap, "MADV_DONTNEED", None)
+            advise = getattr(owner._mmap, "madvise", None)
+            if advice is None or not callable(advise):
+                return False
+            try:
+                advise(advice)
+            except OSError:
+                logging.debug("Could not discard read-only raw input pages", exc_info=True)
+                return False
+            return True
+        owner = getattr(owner, "base", None)
+    return False
 
 
 def check_mps_invariant_memory(torch, invariant_bytes, *, working_set=None, require_free=True):
@@ -114,6 +319,14 @@ class CudaSuiteResidency:
         if self._working_set is None:
             self._working_set = int(torch.cuda.mem_get_info()[0])
         check_cuda_invariant_memory(torch, invariant_bytes, working_set=self._working_set)
+
+    def _synchronize(self, torch):
+        self._device_api(torch).synchronize()
+
+    def _upload_file(self, torch, path):
+        # Preserve CUDA's existing whole-file device-copy behavior.
+        array = np.load(path, mmap_mode="c", allow_pickle=False)
+        return torch.as_tensor(array, device=self.device).contiguous()
 
     def __init__(self):
         self._directory = None
@@ -180,7 +393,7 @@ class CudaSuiteResidency:
             return
         entry = self._active
         try:
-            self._device_api(torch).synchronize()
+            self._synchronize(torch)
         finally:
             self._clear_runners(entry)
             # Keep dictionary identity for compatible suite grouping.
@@ -198,13 +411,14 @@ class CudaSuiteResidency:
             self._release(torch)
             # CUDA driver/kernel workspace can remain resident after tensors are
             # released. It belongs to the reserved 55%, not a shrinking budget.
-            self._check_memory(torch, entry["data"]["invariant_bytes"])
+            self._check_memory(torch, entry["data"].get("resident_bytes", entry["data"]["invariant_bytes"]))
             self._active = entry
             try:
                 for name, path in entry["files"].items():
-                    array = np.load(path, mmap_mode="c", allow_pickle=False)
-                    entry["data"][name] = torch.as_tensor(array, device=self.device).contiguous()
-                    del array
+                    if (entry["data"].get("stream_tick_inputs", False)
+                            and name in METAL_STREAMED_TICK_FIELDS):
+                        continue
+                    entry["data"][name] = self._upload_file(torch, path)
             except BaseException:
                 _cleanup_after_failure(self._release, torch)
                 raise
@@ -212,7 +426,7 @@ class CudaSuiteResidency:
             # Incompatible proxies and screening representatives can share the
             # market entry. Keep its tensors, but retain only one owner's scratch.
             try:
-                self._device_api(torch).synchronize()
+                self._synchronize(torch)
             finally:
                 self._clear_runners(entry)
                 self._active_owner = None
@@ -292,6 +506,87 @@ class MetalSuiteResidency(CudaSuiteResidency):
         check_mps_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
         )
+
+    def _synchronize(self, torch):
+        _synchronize_mps_uploads(torch)
+
+    def _upload_file(self, torch, path):
+        """Upload one packed file without keeping all touched CPU pages active.
+
+        A single destination owns the complete immutable device array. Large
+        inputs copy bounded contiguous slices from a CPU alias, then discard
+        consumed clean source pages after each completed copy. These startup
+        waits do not change replay dispatch synchronization.
+        """
+        source = _MpsUploadSource(np.load(path, mmap_mode="c", allow_pickle=False))
+        queued = failed = quarantined = False
+        try:
+            array = source.mapped
+            if not array.flags.c_contiguous:
+                raise ValueError("Packed Metal input must be C-contiguous")
+            if PREPARATION_CHUNK_BYTES < array.dtype.itemsize:
+                raise ValueError("Metal upload chunk budget is smaller than one input value")
+            if array.nbytes <= PREPARATION_CHUNK_BYTES:
+                queued = True
+                source.destination = torch.as_tensor(array, device=self.device).contiguous()
+                self._synchronize(torch)
+                queued = False
+                _discard_completed_upload_pages(array, array.nbytes)
+            else:
+                # Slice NumPy before exposing it to Torch. Slicing a full CPU
+                # tensor would retain its history-sized storage even when its
+                # numel is small, allowing MPS to stage the complete source.
+                flat = array.reshape(-1)  # A NumPy view, never a full CPU copy.
+                dtype = torch.from_numpy(flat[:0]).dtype
+                source.destination = torch.empty(
+                    array.shape, dtype=dtype, device=self.device,
+                )
+                destination = source.destination.reshape(-1)
+                row_values = int(np.prod(array.shape[1:])) if array.ndim else 1
+                chunk_values = PREPARATION_CHUNK_BYTES // array.dtype.itemsize
+                if row_values <= chunk_values:
+                    chunk_values = (chunk_values // row_values) * row_values
+                discarded = 0
+                for start in range(0, array.size, chunk_values):
+                    end = min(start + chunk_values, array.size)
+                    source.cpu = torch.from_numpy(flat[start:end])
+                    queued = True
+                    destination[start:end].copy_(source.cpu)
+                    self._synchronize(torch)
+                    queued = False
+                    source.cpu = None
+                    discarded = _discard_completed_upload_pages(
+                        array, end * array.dtype.itemsize, discarded,
+                    )
+            return source.destination
+        except BaseException:
+            failed = True
+            if queued:
+                try:
+                    self._synchronize(torch)
+                except BaseException:
+                    # Unknown queue ownership must outlive this failed helper
+                    # and its service. Recover only after a later successful wait.
+                    _quarantine_mps_upload_sources((source,))
+                    quarantined = True
+                    logging.exception("Metal upload cleanup synchronization failed")
+            raise
+        finally:
+            if not quarantined:
+                if failed:
+                    _cleanup_after_failure(source.close)
+                else:
+                    source.close()
+
+    def close(self):
+        try:
+            # Failed activation may already have cleared _active while an
+            # unreadable device queue still owns its quarantined source.
+            if self._active is None and _mps_upload_quarantine:
+                import torch
+                self._synchronize(torch)
+        finally:
+            super().close()
 
 
 @contextmanager

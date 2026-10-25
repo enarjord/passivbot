@@ -872,10 +872,12 @@ def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer,
 
 def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
                           fill_buffer, market_order_slippage_pct,
-                          include_hourly_ranges, directory):
+                          include_hourly_ranges, directory, *, compact_hourly_ranges=False):
     from contextlib import ExitStack
     from tempfile import TemporaryDirectory
-    from optimization.gpu.residency import PREPARATION_CHUNK_BYTES, spill_array_file
+    from optimization.gpu.residency import (
+        PREPARATION_CHUNK_BYTES, compact_hourly_rows, spill_array_file,
+    )
 
     n, coins = values.shape[:2]
     # Packed output plus per-coin float64 scratch stays independent of history length.
@@ -889,6 +891,10 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
     paths = {}
     first_hour_observed = np.full(coins, n, dtype=np.int64)
     max_costs = np.zeros(coins, dtype=np.float64)
+    if compact_hourly_ranges:
+        start_minute = int((timestamps[0] // 60_000) % 60)
+        boundary_rows = np.arange(60 - start_minute, n, 60, dtype=np.int64)
+        hourly_rows = compact_hourly_rows(n, start_minute_of_hour=start_minute)
     with TemporaryDirectory(prefix="hourly-", dir=directory) as hourly_directory, ExitStack() as stack:
         hourly_paths = []
         if include_hourly_ranges:
@@ -903,9 +909,18 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
                 if valid.any():
                     first_hour_observed[coin] = int(np.flatnonzero(valid)[0])
                 path = Path(hourly_directory) / f"{coin}.npy"
-                np.save(path, np.where(valid, ranges, np.float32(-1.0)), allow_pickle=False)
+                if compact_hourly_ranges:
+                    if np.count_nonzero(valid) != np.count_nonzero(valid[boundary_rows]):
+                        raise ValueError("Compact GPU hourly ranges require boundary-only observations")
+                    packed_hourly = np.full(hourly_rows, -1.0, dtype=np.float32)
+                    packed_hourly[:len(boundary_rows)] = np.where(
+                        valid[boundary_rows], ranges[boundary_rows], np.float32(-1.0),
+                    )
+                else:
+                    packed_hourly = np.where(valid, ranges, np.float32(-1.0))
+                np.save(path, packed_hourly, allow_pickle=False)
                 hourly_paths.append(path)
-                del ranges, valid
+                del ranges, valid, packed_hourly
         handles = {}
         for start in range(0, n, chunk_rows):
             end = min(start + chunk_rows, n)
@@ -914,7 +929,7 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
                 runs, market_order_slippage_pct, row_offset=start,
             )
             max_costs = np.maximum(max_costs, costs)
-            if include_hourly_ranges:
+            if include_hourly_ranges and not compact_hourly_ranges:
                 hourly = np.empty((end - start, coins), dtype=np.float32)
                 for coin, path in enumerate(hourly_paths):
                     mapped = np.load(path, mmap_mode="r", allow_pickle=False)
@@ -931,6 +946,21 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
                     ))
                 handles[name].write(memoryview(array).cast("B"))
             del arrays
+        if compact_hourly_ranges:
+            paths["hour_log_ranges"] = directory / "hour_log_ranges.npy"
+            hour_chunk_rows = max(1, PREPARATION_CHUNK_BYTES // (coins * 4))
+            with spill_array_file(paths["hour_log_ranges"], (hourly_rows, coins), np.float32) as output:
+                for start in range(0, hourly_rows, hour_chunk_rows):
+                    end = min(start + hour_chunk_rows, hourly_rows)
+                    hourly = np.empty((end - start, coins), dtype=np.float32)
+                    for coin, path in enumerate(hourly_paths):
+                        mapped = np.load(path, mmap_mode="r", allow_pickle=False)
+                        try:
+                            hourly[:, coin] = mapped[start:end]
+                        finally:
+                            mapped._mmap.close()
+                    output.write(memoryview(hourly).cast("B"))
+                    del hourly
     return paths, max_costs, first_hour_observed
 
 
@@ -944,6 +974,8 @@ def build_mps_multicoin_data(
     limit_order_fill_buffer_pct: float = 0.0,
     market_order_slippage_pct: float = 0.0,
     spill_dir=None,
+    stream_tick_inputs=False,
+    compact_hourly_ranges=False,
 ):
     """Pack compact multicoin inputs for the shared MPS/CUDA kernel.
 
@@ -1003,21 +1035,37 @@ def build_mps_multicoin_data(
     relation_dtype = np.int8 if gpu_device(torch) == "cuda" else np.int32
     from optimization.gpu.residency import (
         check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
+        multicoin_resident_bytes, compact_hourly_rows,
         current_gpu_residency, MetalSuiteResidency,
     )
+    compact_hourly_ranges = bool(
+        compact_hourly_ranges and stream_tick_inputs and include_hourly_ranges
+        and interval_ms == 60_000
+    )
+    start_minute_of_hour = int((timestamps[0] // 60_000) % 60)
     invariant_bytes = multicoin_invariant_bytes(
         candle_count, coin_count, device=gpu_device(torch),
         include_hourly_ranges=include_hourly_ranges,
+        compact_hourly_ranges=compact_hourly_ranges,
+        start_minute_of_hour=start_minute_of_hour,
+    )
+    if stream_tick_inputs and (spill_dir is None or gpu_device(torch) != "mps"):
+        raise ValueError("Streamed tick inputs require disk-backed Metal preparation")
+    resident_bytes = multicoin_resident_bytes(
+        candle_count, coin_count, device=gpu_device(torch),
+        include_hourly_ranges=include_hourly_ranges, stream_tick_inputs=stream_tick_inputs,
+        compact_hourly_ranges=compact_hourly_ranges,
+        start_minute_of_hour=start_minute_of_hour,
     )
     # Admission must precede the history-sized packing work, including spill mode.
     if gpu_device(torch) == "mps":
         residency = current_gpu_residency()
         if spill_dir is not None and isinstance(residency, MetalSuiteResidency):
-            residency.check_preparation_memory(torch, invariant_bytes)
+            residency.check_preparation_memory(torch, resident_bytes)
         else:
             # A direct spill has no residency owner yet. Check the nominal
             # budget now; activation owns release and live availability checks.
-            check_mps_invariant_memory(torch, invariant_bytes, require_free=spill_dir is None)
+            check_mps_invariant_memory(torch, resident_bytes, require_free=spill_dir is None)
     elif spill_dir is None:
         check_cuda_invariant_memory(torch, invariant_bytes)
     first_hour_observed = np.full(coin_count, candle_count, dtype=np.int64)
@@ -1025,7 +1073,7 @@ def build_mps_multicoin_data(
         arrays, max_costs, first_hour_observed = _spill_multicoin_arrays(
             values, timestamps, runs, markets, relation_dtype,
             limit_order_fill_buffer_pct, market_order_slippage_pct,
-            include_hourly_ranges, spill_dir,
+            include_hourly_ranges, spill_dir, compact_hourly_ranges=compact_hourly_ranges,
         )
     else:
         arrays, max_costs = _pack_multicoin_price_arrays(
@@ -1097,8 +1145,13 @@ def build_mps_multicoin_data(
         "n_days": last_day - first_day + 1,
         "ts0": int(timestamps[0]),
         "start_minute_of_day": int((timestamps[0] // 60_000) % 1440),
-        "start_minute_of_hour": int((timestamps[0] // 60_000) % 60),
+        "start_minute_of_hour": start_minute_of_hour,
         "invariant_bytes": invariant_bytes,
+        "resident_bytes": resident_bytes,
+        "stream_tick_inputs": bool(stream_tick_inputs),
+        "compact_hourly_ranges": compact_hourly_ranges,
+        "hourly_range_rows": (compact_hourly_rows(candle_count, start_minute_of_hour=start_minute_of_hour)
+                              if compact_hourly_ranges else candle_count),
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
         "market_order_slippage_pct": market_order_slippage_pct,
         # Compact factual admission metadata, retained on the host even when

@@ -3563,17 +3563,23 @@ def _run_gpu_preparation_preflight(
         raise ValueError("GPU screening.scenarios requires a scenario suite")
 
 
-def _gpu_cached_input_preflight(path, shape, dtype):
+def _gpu_cached_input_preflight(path, shape, dtype, *, stream_tick_inputs=False, input_memory_budget=None):
     """Reject an exact cached candle payload before decoding its history."""
     if len(shape) != 3 or shape[2] != 4:
         return
     import torch
     from optimization.gpu.runtime import gpu_device
     from optimization.gpu.residency import (
-        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
+        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
+        prefer_streamed_ticks,
     )
     device = gpu_device(torch)
-    required = multicoin_invariant_bytes(shape[0], shape[1], device=device)
+    if stream_tick_inputs and input_memory_budget is not None:
+        stream_tick_inputs = prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
+                                                  interval_ms=60_000)
+    required = multicoin_resident_bytes(shape[0], shape[1], device=device,
+        stream_tick_inputs=stream_tick_inputs and device == "mps",
+        compact_hourly_ranges=stream_tick_inputs and device == "mps")
     if device == "mps":
         check_mps_invariant_memory(torch, required)
     else:
@@ -4079,6 +4085,15 @@ async def main():
     try:
         _run_gpu_preparation_preflight(config, suite_cfg)
         is_gpu = str(config["optimize"].get("backend", "")).strip().lower() == "gpu"
+        gpu_input_memory_budget = None
+        if is_gpu:
+            import torch
+            from optimization.gpu.runtime import gpu_device
+            from optimization.gpu.residency import capture_mps_input_memory_budget
+            if gpu_device(torch) == "mps":
+                # Freeze a run-level preference before file-cache pages are read.
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
+
         # A header describes the actual replay only for unsliced, unaggregated
         # ordinary caches. Suites and explicit dataset overrides admit after
         # their effective subset/time range has been selected instead.
@@ -4087,9 +4102,13 @@ async def main():
             and not data_config["backtest"].get("hlcvs_data_dir")
             and int(data_config["backtest"].get("candle_interval_minutes", 1) or 1) == 1
         )
+        def cached_input_preflight(path, shape, dtype):
+            _gpu_cached_input_preflight(path, shape, dtype,
+                stream_tick_inputs=config["bot"]["portfolio"]["strategy_kind"] == "trailing_martingale",
+                input_memory_budget=gpu_input_memory_budget)
         array_manager = (SharedArrayManager(
             file_backed=True,
-            file_preflight=_gpu_cached_input_preflight if exact_cache_shape else None,
+            file_preflight=cached_input_preflight if exact_cache_shape else None,
         ) if is_gpu else SharedArrayManager())
         if is_gpu:
             from hlcvs_manifest import numpy_artifact_loader
@@ -4350,6 +4369,9 @@ async def main():
             )
         else:
             evaluator_for_pool = evaluator
+
+        if is_gpu:
+            evaluator_for_pool._gpu_input_memory_budget = gpu_input_memory_budget
 
         logging.info(f"Finished initializing evaluator...")
         flush_interval = 60  # or read from your config

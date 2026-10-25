@@ -331,7 +331,13 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 [(binding.scenario, binding.dataset.exchange) for binding in registry.bindings
                  if binding.scenario in labels], "screening",
             )
-        service = NativeBacktestService(batch_size=batch_size,
+        input_memory_budget = getattr(evaluator_for_pool, "_gpu_input_memory_budget", None)
+        memory_options = ({"input_memory_budget": input_memory_budget}
+                          if input_memory_budget is not None else {})
+        input_owner = getattr(base, "shared_array_manager", None)
+        if getattr(input_owner, "file_backed", False):
+            memory_options["on_inputs_prepared"] = input_owner.discard_file_pages
+        service = NativeBacktestService(batch_size=batch_size, **memory_options,
                                      max_dispatch_candidate_bars=dispatch_budget,
                                      interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
         session = NativeEvaluationSession(service, registry.scorer,

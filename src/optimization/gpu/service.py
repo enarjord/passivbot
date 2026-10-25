@@ -1158,46 +1158,58 @@ def _require_supported_multicoin_valid_tails(
     # bars to float32 and replaces non-finite packed values with zero, so a
     # finite-positive float64 value is insufficient if it overflows or
     # underflows during that conversion.
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        packed_hlc = np.asarray(values[:, :, :3], dtype=np.float32)
-    actual_valid = np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2)
     for coin, last_valid_idx in enumerate(tails):
-        if (
-            last_valid_idx + 1400 < candle_count
-            and not actual_valid[last_valid_idx, coin]
-        ):
-            raise ValueError(
-                "GPU multicoin proxy requires each forced-delist final "
-                "candle's packed float32 H/L/C values to remain finite and "
-                "positive; "
-                f"coin={coin}, last_valid_idx={last_valid_idx}, "
-                f"packed_hlc={packed_hlc[last_valid_idx, coin].tolist()}"
-            )
+        if last_valid_idx + 1400 < candle_count:
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                packed_hlc = np.asarray(values[last_valid_idx, coin, :3], dtype=np.float32)
+            if not np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0)):
+                raise ValueError(
+                    "GPU multicoin proxy requires each forced-delist final "
+                    "candle's packed float32 H/L/C values to remain finite and "
+                    "positive; "
+                    f"coin={coin}, last_valid_idx={last_valid_idx}, "
+                    f"packed_hlc={packed_hlc.tolist()}"
+                )
+            del packed_hlc
     for coin, first_valid_idx in enumerate(starts):
-        if (
-            first_valid_idx < candle_count
-            and tails[coin] >= first_valid_idx
-            and not actual_valid[first_valid_idx, coin]
-        ):
+        if first_valid_idx < candle_count and tails[coin] >= first_valid_idx:
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                packed_hlc = np.asarray(values[first_valid_idx, coin, :3], dtype=np.float32)
+            if not np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0)):
+                raise ValueError(
+                    "GPU multicoin proxy requires each first-valid candle's packed "
+                    "float32 H/L/C values to remain finite and positive; "
+                    f"coin={coin}, first_valid_idx={first_valid_idx}, "
+                    f"packed_hlc={packed_hlc.tolist()}"
+                )
+            del packed_hlc
+    from optimization.gpu.residency import PREPARATION_CHUNK_BYTES
+
+    coin_count = int(values.shape[1])
+    # Bound float32 conversion, finite/positive masks and int64 row indices.
+    row_bytes = coin_count * (3 * 4 + 3 * 3 + 1) + 8
+    chunk_rows = max(1, PREPARATION_CHUNK_BYTES // row_bytes)
+    starts_array = np.asarray(starts, dtype=np.int64)[None, :]
+    tails_array = np.asarray(tails, dtype=np.int64)[None, :]
+    for start in range(0, candle_count, chunk_rows):
+        stop = min(candle_count, start + chunk_rows)
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            packed_hlc = np.asarray(values[start:stop, :, :3], dtype=np.float32)
+        invalid = np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2)
+        np.logical_not(invalid, out=invalid)
+        candle_indices = np.arange(start, stop, dtype=np.int64)[:, None]
+        invalid &= candle_indices >= starts_array
+        invalid &= candle_indices <= tails_array
+        if invalid.any():
+            relative_candle, coin = divmod(int(invalid.argmax()), coin_count)
+            candle_index = start + relative_candle
             raise ValueError(
-                "GPU multicoin proxy requires each first-valid candle's packed "
-                "float32 H/L/C values to remain finite and positive; "
-                f"coin={coin}, first_valid_idx={first_valid_idx}, "
-                f"packed_hlc={packed_hlc[first_valid_idx, coin].tolist()}"
+                "GPU multicoin proxy requires contiguous finite positive float32 H/L/C "
+                "inside every declared coin window; non-finite, finite but non-positive "
+                "or float32-unrepresentable values remain fail-closed; "
+                f"coin index {coin}, candle_index={candle_index}, valid_windows={windows}"
             )
-    candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
-    within_declared_window = (
-        candle_indices >= np.asarray(starts, dtype=np.int64)[None, :]
-    ) & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
-    missing = np.argwhere(within_declared_window & ~actual_valid)
-    if missing.size:
-        candle_index, coin = (int(value) for value in missing[0])
-        raise ValueError(
-            "GPU multicoin proxy requires contiguous finite positive float32 H/L/C "
-            "inside every declared coin window; non-finite, finite but non-positive "
-            "or float32-unrepresentable values remain fail-closed; "
-            f"coin index {coin}, candle_index={candle_index}, valid_windows={windows}"
-        )
+        del packed_hlc, invalid, candle_indices
 
 
 def _require_no_internal_invalid_hsl_candles(
@@ -1411,6 +1423,8 @@ def _prepared_multicoin_data(
     markets,
     checkpoint_contract,
     cache=None,
+    stream_tick_inputs=False,
+    compact_hourly_ranges=False,
     limit_order_fill_buffer_pct=0.0,
     market_order_slippage_pct=0.0,
 ):
@@ -1435,6 +1449,8 @@ def _prepared_multicoin_data(
         limit_order_fill_buffer_pct,
         MARKET_EXECUTION_TICKS_ABI,
         market_order_slippage_pct,
+        bool(stream_tick_inputs),
+        bool(compact_hourly_ranges),
     )
     if cache is not None and key in cache:
         data = cache[key]
@@ -1449,6 +1465,9 @@ def _prepared_multicoin_data(
     residency = current_gpu_residency()
     def build(spill_dir=None):
         kwargs = {"spill_dir": spill_dir} if spill_dir is not None else {}
+        if stream_tick_inputs and spill_dir is not None:
+            kwargs["stream_tick_inputs"] = True
+            kwargs["compact_hourly_ranges"] = bool(compact_hourly_ranges)
         return build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
             limit_order_fill_buffer_pct=limit_order_fill_buffer_pct, **kwargs,
@@ -1484,6 +1503,7 @@ class SharedAccountReplay:
         factual_hsl: bool = True,
         factual_capacity_hints: dict | None = None,
         automatic_scratch_budget: bool = False,
+        input_memory_budget=None,
         selection=None,
     ):
         if factual_hsl is not True:
@@ -1861,6 +1881,20 @@ class SharedAccountReplay:
             last_valid_indices=backtest_params["last_valid_indices"],
             require_positive_high_low=True,
         )
+        from optimization.gpu.residency import (
+            current_gpu_residency, prefer_streamed_ticks, discard_readonly_file_pages,
+            capture_mps_input_memory_budget,
+        )
+        if (input_memory_budget is None and gpu_device(torch) == "mps"
+                and current_gpu_residency() is not None):
+            input_memory_budget = capture_mps_input_memory_budget(torch)
+        stream_tick_inputs = bool(
+            self.strategy_kind == "trailing_martingale" and self.temporal_chunking
+            and gpu_device(torch) == "mps" and current_gpu_residency() is not None
+            and prepared_data_cache is not None
+            and prefer_streamed_ticks(len(values), coin_count, input_memory_budget,
+                                      interval_ms=runs[0].interval_ms)
+        )
         self.data = _prepared_multicoin_data(
             values,
             timestamps,
@@ -1868,9 +1902,13 @@ class SharedAccountReplay:
             markets=markets,
             checkpoint_contract=self.checkpoint_contract,
             cache=prepared_data_cache,
+            stream_tick_inputs=stream_tick_inputs,
+            compact_hourly_ranges=stream_tick_inputs and runs[0].interval_ms == 60_000,
             limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
             market_order_slippage_pct=backtest_params.get("market_order_slippage_pct", 0.0),
         )
+        if stream_tick_inputs:
+            discard_readonly_file_pages(values)
         from optimization.gpu.residency import current_gpu_residency
         residency = current_gpu_residency()
         self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None

@@ -26,7 +26,7 @@ class NativeBacktestService:
 
     def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
-                 tuning_mode="auto"):
+                 tuning_mode="auto", input_memory_budget=None, on_inputs_prepared=None):
         from optimization.gpu.autotune import is_auto
         from optimization.gpu.execution_tuning import ExecutionBatchTuner
 
@@ -45,6 +45,10 @@ class NativeBacktestService:
             raise ValueError("dispatch budget must be a positive integer")
         if interrupt_check is not None and not callable(interrupt_check):
             raise TypeError("interrupt_check must be callable")
+        if on_inputs_prepared is not None and not callable(on_inputs_prepared):
+            raise TypeError("input preparation callback must be callable")
+        self._on_inputs_prepared = on_inputs_prepared
+        self._input_memory_budget = input_memory_budget
         self._dispatch_budget = max_dispatch_candidate_bars
         self._interrupt_check = interrupt_check
         self._prepared_cache = {}
@@ -93,6 +97,10 @@ class NativeBacktestService:
         device = gpu_device()
         if self._required_device is not None and device != self._required_device:
             raise RuntimeError("CUDA backtest service requires an NVIDIA CUDA device")
+        if device == "mps" and self._input_memory_budget is None:
+            import torch
+            from optimization.gpu.residency import capture_mps_input_memory_budget
+            self._input_memory_budget = capture_mps_input_memory_budget(torch)
         if self._batch_tuner is not None and device == "mps":
             # Device selection stays on the owner, before prepared replay limits
             # create a controller and clamp its initial width.
@@ -131,10 +139,13 @@ class NativeBacktestService:
                     max_dispatch_candidate_bars=self._dispatch_budget,
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                     factual_hsl=True, selection=selection,
+                    input_memory_budget=self._input_memory_budget,
                     factual_capacity_hints=capacity_hints,
                     automatic_scratch_budget=self._batch_tuner is not None,
                 )
                 try:
+                    if self._on_inputs_prepared is not None:
+                        self._on_inputs_prepared()
                     # Discover physical limits after claiming one ownership request.
                     # The executor fills the first dispatch up to the prepared
                     # ceiling before simulation. Runners remain worker-owned.
