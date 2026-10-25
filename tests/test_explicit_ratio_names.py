@@ -69,7 +69,7 @@ def test_trailing_overview_json_names_enforcer_ratios_explicitly():
         }},
         parameter_source="test",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.5,),
     )
     context = json.loads(json.dumps(overview))["sides"]["long"]["context"]
