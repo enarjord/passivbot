@@ -36,6 +36,8 @@ Canonical repository-wide invariants; task documents link here instead of restat
 
 ## Terminology And Numeric Conventions
 
+- New or renamed numeric interfaces follow [numeric names and units](numeric_conventions.md);
+  distinguish fractions, ratios, multipliers, probabilities, scores and display percentages.
 - `position_side`, `pos_side`, and `pside` mean `long`/`short`; `side` and `order_side` mean
   `buy`/`sell`.
 - `qty` and `pos_size` are signed internally. Use `abs(qty)` only at exchange boundaries requiring
