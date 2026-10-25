@@ -12047,8 +12047,8 @@ def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(
     assert not unavailable
     assert decisions[0].action == "panic"
     payload = json.loads(decisions[0].payload)
-    assert payload["decision"]["raw"] == 1.0
-    assert payload["decision"]["ema"] == 1.0
+    assert payload["decision"]["signal_raw_fraction"] == 1.0
+    assert payload["decision"]["signal_ema_fraction"] == 1.0
 
 
 @pytest.mark.asyncio
