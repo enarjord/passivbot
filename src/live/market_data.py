@@ -271,9 +271,9 @@ async def filter_fresh_market_snapshot_creations(
     return orders
 
 
-def _limit_order_create_max_market_dist_pct(bot) -> float:
+def _limit_order_create_max_market_distance_fraction(bot) -> float:
     raw = get_optional_live_value(
-        bot.config, "limit_order_create_max_market_dist_pct", 0.8
+        bot.config, "limit_order_create_max_market_distance_fraction", 0.8
     )
     try:
         threshold = float(raw)
@@ -291,7 +291,7 @@ def _limit_order_create_max_market_dist_pct(bot) -> float:
 def _filter_limit_order_creations_by_market_distance(
     bot, orders: list[dict], snapshots: dict[str, MarketSnapshot]
 ) -> list[dict]:
-    threshold = _limit_order_create_max_market_dist_pct(bot)
+    threshold = _limit_order_create_max_market_distance_fraction(bot)
     order_market_diff = getattr(_passivbot_module(), "order_market_diff")
     kept: list[dict] = []
     skipped: list[dict] = []

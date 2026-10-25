@@ -15,8 +15,8 @@ def _base_config():
             "end_date": "2025-01-01",
             "start_date": "2024-01-01",
             "exchanges": ["binance"],
-            "btc_collateral_cap": 1.0,
-            "btc_collateral_ltv_cap": None,
+            "btc_collateral_target_ratio": 1.0,
+            "max_usd_debt_to_equity_ratio": None,
             "gap_tolerance_ohlcvs_minutes": 120,
             "suite_enabled": False,
             "scenarios": []
@@ -45,7 +45,7 @@ def _base_config():
                 }
             },
             "portfolio": {"warmup": {
-                    "span_multiplier": 0.2,
+                    "activation_span_fraction": 0.2,
                     "max_minutes": None
                 }}, "global": {"universe": {}}
         },

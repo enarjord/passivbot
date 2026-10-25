@@ -19,17 +19,17 @@ def _build_position(
     current_price=None,
     ema_band_upper=100.0,
     ema_band_lower=100.0,
-    wallet_exposure_limit=1.0,
-    unstuck_threshold=0.0,
-    unstuck_close_pct=0.1,
+    wallet_exposure_limit_ratio=1.0,
+    unstuck_exposure_trigger_ratio=0.0,
+    unstuck_close_fraction=0.1,
     unstuck_ema_gating_enabled=True,
-    unstuck_ema_dist=0.0,
+    unstuck_ema_distance_fraction=0.0,
     qty_step=0.01,
     price_step=0.01,
     min_qty=0.0,
     min_cost=0.0,
     c_mult=1.0,
-    risk_we_excess_allowance_pct=0.0,
+    risk_we_excess_allowance_fraction=0.0,
 ):
     if position_size is None:
         position_size = 2.0 if side == "long" else -2.0
@@ -44,12 +44,12 @@ def _build_position(
         "side": side,
         "position_size": float(position_size),
         "position_price": float(position_price),
-        "wallet_exposure_limit": float(wallet_exposure_limit),
-        "unstuck_threshold": float(unstuck_threshold),
-        "unstuck_close_pct": float(unstuck_close_pct),
+        "wallet_exposure_limit_ratio": float(wallet_exposure_limit_ratio),
+        "unstuck_exposure_trigger_ratio": float(unstuck_exposure_trigger_ratio),
+        "unstuck_close_fraction": float(unstuck_close_fraction),
         "unstuck_ema_gating_enabled": bool(unstuck_ema_gating_enabled),
-        "unstuck_ema_dist": float(unstuck_ema_dist),
-        "risk_we_excess_allowance_pct": float(risk_we_excess_allowance_pct),
+        "unstuck_ema_distance_fraction": float(unstuck_ema_distance_fraction),
+        "risk_we_excess_allowance_fraction": float(risk_we_excess_allowance_fraction),
         "ema_band_upper": float(ema_band_upper),
         "ema_band_lower": float(ema_band_lower),
         "current_price": float(current_price),
@@ -99,7 +99,7 @@ def test_unstucking_emits_short_order_when_triggered():
             position_price=50.0,
             current_price=48.0,
             ema_band_lower=50.0,
-            unstuck_close_pct=0.2,
+            unstuck_close_fraction=0.2,
         )
     ]
     result = pbr.calc_unstucking_close_py(1000.0, 0.0, 10.0, positions)
@@ -154,17 +154,17 @@ def test_unstucking_respects_effective_wel_threshold():
     balance = 1000.0
     wel = 0.2
     allowance_pct = 1.0  # doubles the effective WEL
-    unstuck_threshold = 0.8
+    unstuck_exposure_trigger_ratio = 0.8
     # Exposure threshold -> 0.2 * (1 + 1.0) * 0.8 = 0.32
     base_kwargs = dict(
         side="long",
         position_price=100.0,
         ema_band_upper=100.0,
         current_price=105.0,
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        unstuck_threshold=unstuck_threshold,
-        unstuck_close_pct=0.1,
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_pct,
+        unstuck_exposure_trigger_ratio=unstuck_exposure_trigger_ratio,
+        unstuck_close_fraction=0.1,
         qty_step=0.001,
         price_step=0.01,
     )
@@ -199,14 +199,14 @@ def test_unstucking_prefers_effective_excess_allowance_over_raw():
         position_price=100.0,
         current_price=105.0,
         ema_band_upper=100.0,
-        wallet_exposure_limit=0.2,
-        risk_we_excess_allowance_pct=10.0,
-        unstuck_threshold=0.8,
-        unstuck_close_pct=0.1,
+        wallet_exposure_limit_ratio=0.2,
+        risk_we_excess_allowance_fraction=10.0,
+        unstuck_exposure_trigger_ratio=0.8,
+        unstuck_close_fraction=0.1,
         qty_step=0.001,
         price_step=0.01,
     )
-    position["effective_we_excess_allowance_pct"] = 0.0
+    position["effective_we_excess_allowance_fraction"] = 0.0
 
     result = pbr.calc_unstucking_close_py(1000.0, 100.0, 0.0, [position])
 
@@ -224,16 +224,16 @@ def test_unstucking_respects_effective_wel_threshold_short():
     balance = 1000.0
     wel = 0.2
     allowance_pct = 1.0
-    unstuck_threshold = 0.8
+    unstuck_exposure_trigger_ratio = 0.8
     base_kwargs = dict(
         side="short",
         position_price=100.0,
         ema_band_lower=100.0,
         current_price=95.0,
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        unstuck_threshold=unstuck_threshold,
-        unstuck_close_pct=0.1,
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_pct,
+        unstuck_exposure_trigger_ratio=unstuck_exposure_trigger_ratio,
+        unstuck_close_fraction=0.1,
         qty_step=0.001,
         price_step=0.01,
     )
@@ -265,16 +265,16 @@ def test_unstucking_triggers_with_fractional_allowance():
     balance = 2000.0
     wel = 0.25
     allowance_pct = 0.3  # effective wel = 0.325
-    unstuck_threshold = 0.5
+    unstuck_exposure_trigger_ratio = 0.5
     base_kwargs = dict(
         side="long",
         position_price=200.0,
         ema_band_upper=200.0,
         current_price=210.0,
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        unstuck_threshold=unstuck_threshold,
-        unstuck_close_pct=0.25,
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_pct,
+        unstuck_exposure_trigger_ratio=unstuck_exposure_trigger_ratio,
+        unstuck_close_fraction=0.25,
         qty_step=0.001,
         price_step=0.01,
     )
@@ -312,10 +312,10 @@ def test_unstucking_requires_exposure_when_threshold_above_one():
         position_price=100.0,
         ema_band_lower=100.0,
         current_price=95.0,
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        unstuck_threshold=threshold,
-        unstuck_close_pct=0.1,
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_pct,
+        unstuck_exposure_trigger_ratio=threshold,
+        unstuck_close_fraction=0.1,
         qty_step=0.001,
         price_step=0.01,
     )

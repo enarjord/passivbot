@@ -33,7 +33,7 @@ def freeze_other_score_weights(config):
             config["bot"][side]["forager"]["score_weights"], path=f"bot.{side}.forager.score_weights"
         )
         target = config["optimize"]["bounds"][side]["forager"]
-        for name in ("volume", "volatility", "ema_readiness"):
+        for name in ("volume", "log_range", "ema_readiness"):
             target.setdefault("score_weights", {})[name] = [values[name], values[name]]
 
 def omit_cooldown_bounds(config):
@@ -60,7 +60,7 @@ def test_parsed_template_bounds_freeze_adaptive_defaults():
         weight = forager["score_weights"]["unilateralness"]
         span = forager["unilateralness_ema_span_minutes"]
         assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
-        assert bounds[f"{side}_unilateralness_ema_span_1m"] == [span, span]
+        assert bounds[f"{side}_unilateralness_ema_span_minutes"] == [span, span]
         cooldown = cfg["bot"][side]["entry_cooldown"]
         for key, value in cooldown["weights_minutes"].items():
             assert bounds[f"{side}_entry_cooldown_weights_minutes_{key}"] == [value, value]
@@ -74,7 +74,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     source = get_expanded_config_prototype()
     original = flat_bounds(source)
     for key in (
-        "forager_score_weights_unilateralness", "unilateralness_ema_span_1m",
+        "forager_score_weights_unilateralness", "unilateralness_ema_span_minutes",
         "entry_cooldown_weights_minutes_exposure_ratio",
         "entry_cooldown_weights_minutes_adverse_directionality",
         "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
@@ -82,7 +82,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
         assert f"{side}_{key}" not in original
     source["bot"][side]["forager"].update(
         score_weights={"volume": 1.0, "ema_readiness": 0.0,
-                       "volatility": 0.0, "unilateralness": 1.0},
+                       "log_range": 0.0, "unilateralness": 1.0},
         unilateralness_ema_span_minutes=42.5,
     )
     source["bot"][side]["entry_cooldown"].update(
@@ -91,7 +91,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     )
     expected = {
         "forager_score_weights_unilateralness": 0.5,
-        "unilateralness_ema_span_1m": 42.5,
+        "unilateralness_ema_span_minutes": 42.5,
         "entry_cooldown_weights_minutes_exposure_ratio": 3.25,
         "entry_cooldown_weights_minutes_adverse_directionality": 2.5,
         "entry_cooldown_min_duration_minutes": 20.0,
@@ -128,7 +128,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
         source["bot"][side]["forager"].update(
             unilateralness_ema_span_minutes=span,
             score_weights={"volume": 1.0, "ema_readiness": 1.0,
-                           "volatility": 0.0, "unilateralness": weight},
+                           "log_range": 0.0, "unilateralness": weight},
         )
     freeze_other_score_weights(source)
     omit_unilateralness_bounds(source)
@@ -150,7 +150,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
             weight = forager["score_weights"]["unilateralness"]
             span = forager["unilateralness_ema_span_minutes"]
             assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
-            assert bounds[f"{side}_unilateralness_ema_span_1m"] == [span, span]
+            assert bounds[f"{side}_unilateralness_ema_span_minutes"] == [span, span]
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)
     assert flat_bounds(load_config(path, live_only=live_only, verbose=False)) == flat_bounds(cfg)
@@ -170,13 +170,13 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
             forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
         else:
             source["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0, 0.01]
-            source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
+            source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
     if form != "nested":
         with pytest.raises(ValueError, match="unknown configuration field"):
             prepare_config(source, verbose=False)
         for side in ("long", "short"):
             source["optimize"]["bounds"].pop(f"{side}_forager_score_weights_unilateralness", None)
-            source["optimize"]["bounds"].pop(f"{side}_unilateralness_ema_span_1m", None)
+            source["optimize"]["bounds"].pop(f"{side}_unilateralness_ema_span_minutes", None)
             forager = source["optimize"]["bounds"][side]["forager"]
             forager.pop("score_weights_unilateralness", None)
             forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
@@ -187,14 +187,14 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
     for candidate in (cfg, clean_config(cfg), load_config(path, verbose=False)):
         for side in ("long", "short"):
             assert flat_bounds(candidate)[f"{side}_forager_score_weights_unilateralness"] == [0.0, 1.0, 0.01]
-            assert flat_bounds(candidate)[f"{side}_unilateralness_ema_span_1m"] == [20.5, 240.5, 0.5]
+            assert flat_bounds(candidate)[f"{side}_unilateralness_ema_span_minutes"] == [20.5, 240.5, 0.5]
 
 
 def test_direct_cleaning_keeps_omitted_bounds_and_reloads_fixed_effective_weight():
     source = get_expanded_config_prototype()
     omit_unilateralness_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 2.0,
+        "volume": 1.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 2.0,
     }
     source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
     freeze_other_score_weights(source)
@@ -202,9 +202,9 @@ def test_direct_cleaning_keeps_omitted_bounds_and_reloads_fixed_effective_weight
     cleaned = clean_config(source)
     assert source == snapshot
     assert "long_forager_score_weights_unilateralness" not in flat_bounds(cleaned)
-    assert "long_unilateralness_ema_span_1m" not in flat_bounds(cleaned)
+    assert "long_unilateralness_ema_span_minutes" not in flat_bounds(cleaned)
     assert flat_bounds(cleaned, effective=True)["long_forager_score_weights_unilateralness"] == [0.5, 0.5]
-    assert flat_bounds(cleaned, effective=True)["long_unilateralness_ema_span_1m"] == [42.5, 42.5]
+    assert flat_bounds(cleaned, effective=True)["long_unilateralness_ema_span_minutes"] == [42.5, 42.5]
     assert flat_bounds(prepare_config(cleaned, verbose=False)) == flat_bounds(cleaned, effective=True)
 
 

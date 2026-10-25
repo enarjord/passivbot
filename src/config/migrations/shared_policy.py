@@ -10,7 +10,7 @@ LIVE_POLICY_PATHS = {
     "market_orders_allowed": "bot.portfolio.execution.market_orders_allowed",
     "market_order_near_touch_threshold": "bot.portfolio.execution.market_order_near_touch_fraction",
     "forager_score_hysteresis_pct": "bot.global.forager.score_hysteresis_margin",
-    "warmup_ratio": "bot.portfolio.warmup.span_multiplier",
+    "warmup_ratio": "bot.portfolio.warmup.activation_span_fraction",
     "max_warmup_minutes": "bot.portfolio.warmup.max_minutes",
 }
 MINIMUM_COST_SOURCE_PATHS = {"live.filter_by_min_effective_cost"}

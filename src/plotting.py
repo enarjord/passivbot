@@ -312,10 +312,10 @@ def dump_plots(
             if result["passivbot_mode"] == "clock":
                 spans = sorted(
                     [
-                        result[side]["ema_span_0"],
-                        (result[side]["ema_span_0"] * result[side]["ema_span_1"])
+                        result[side]["ema_span_0_minutes"],
+                        (result[side]["ema_span_0_minutes"] * result[side]["ema_span_1_minutes"])
                         ** 0.5,
-                        result[side]["ema_span_1"],
+                        result[side]["ema_span_1_minutes"],
                     ]
                 )
                 emas = pd.DataFrame(
@@ -536,9 +536,9 @@ def scale_array(xs, bottom, top):
     return scaled_xs
 
 
-def plot_fills_long(hlcvs, fdf, coins, coin, start_pct=0.0, end_pct=1.0):
-    start_idx = int(round(len(hlcvs) * start_pct))
-    end_idx = int(round(len(hlcvs) * end_pct))
+def plot_fills_long(hlcvs, fdf, coins, coin, start_fraction=0.0, end_fraction=1.0):
+    start_idx = int(round(len(hlcvs) * start_fraction))
+    end_idx = int(round(len(hlcvs) * end_fraction))
     coin_idx = coins.index(coin)
     cdf = pd.DataFrame(hlcvs[:, coin_idx, 2]).loc[start_idx:end_idx]
     fdfc = fdf[fdf.coin == coin].set_index("index").loc[start_idx:end_idx]
@@ -554,10 +554,10 @@ def plot_fills_long(hlcvs, fdf, coins, coin, start_pct=0.0, end_pct=1.0):
     return cdf, fdfc
 
 
-def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
+def plot_fills_multi(symbol, sdf, fdf, start_fraction=0.0, end_fraction=1.0):
     plt.clf()
-    start_minute = int(sdf.index[-1] * start_pct)
-    end_minute = int(sdf.index[-1] * end_pct)
+    start_minute = int(sdf.index[-1] * start_fraction)
+    end_minute = int(sdf.index[-1] * end_fraction)
     sdfc = sdf.loc[start_minute:end_minute]
     fdfc = fdf.loc[start_minute:end_minute]
     fdfc = fdfc[fdfc.symbol == symbol]
@@ -588,10 +588,10 @@ def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
     return plt
 
 
-def plot_pnls_long_short(sdf, fdf, start_pct=0.0, end_pct=1.0, symbol=None):
+def plot_pnls_long_short(sdf, fdf, start_fraction=0.0, end_fraction=1.0, symbol=None):
     plt.clf()
-    start_minute = int(sdf.index[-1] * start_pct)
-    end_minute = int(sdf.index[-1] * end_pct)
+    start_minute = int(sdf.index[-1] * start_fraction)
+    end_minute = int(sdf.index[-1] * end_fraction)
     fdfc = fdf.loc[start_minute:end_minute]
     if symbol is not None:
         fdfc = fdfc[fdfc.symbol == symbol]
@@ -604,15 +604,15 @@ def plot_pnls_long_short(sdf, fdf, start_pct=0.0, end_pct=1.0, symbol=None):
     return plt
 
 
-def plot_pnls_separate(sdf, fdf, start_pct=0.0, end_pct=1.0, symbols=None):
+def plot_pnls_separate(sdf, fdf, start_fraction=0.0, end_fraction=1.0, symbols=None):
     plt.clf()
     if symbols is None:
         symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
     elif isinstance(symbols, str):
         symbols = [symbols]
     plt.clf()
-    start_minute = int(sdf.index[-1] * start_pct)
-    end_minute = int(sdf.index[-1] * end_pct)
+    start_minute = int(sdf.index[-1] * start_fraction)
+    end_minute = int(sdf.index[-1] * end_fraction)
     fdfc = fdf.loc[start_minute:end_minute]
     for symbol in symbols:
         ax = fdfc[fdfc.symbol == symbol].pnl.cumsum().plot()
@@ -621,12 +621,12 @@ def plot_pnls_separate(sdf, fdf, start_pct=0.0, end_pct=1.0, symbols=None):
 
 
 def plot_pnls_stuck(
-    sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_threshold=0.9
+    sdf, fdf, symbol=None, start_fraction=0.0, end_fraction=1.0, unstuck_threshold=0.9
 ):
     plt.clf()
     symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
-    start_minute = int(sdf.index[-1] * start_pct)
-    end_minute = int(sdf.index[-1] * end_pct)
+    start_minute = int(sdf.index[-1] * start_fraction)
+    end_minute = int(sdf.index[-1] * end_fraction)
     sdfc = sdf.loc[start_minute:end_minute]
     fdfc = fdf.loc[start_minute:end_minute]
     any_stuck = np.zeros(len(sdfc))
@@ -659,8 +659,8 @@ def plot_pnls_stuck(
 def plot_fills_forager(
     fdf: pd.DataFrame,
     hlcvs_df: pd.DataFrame,
-    start_pct=0.0,
-    end_pct=1.0,
+    start_fraction=0.0,
+    end_fraction=1.0,
     whole=False,
     clear: bool = True,
     *,
@@ -680,8 +680,8 @@ def plot_fills_forager(
         hlcc = hlcvs_df[source_cols].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
     fdfc = fdf.set_index(fdf.minute.astype(int))
 
-    start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
-    end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_pct)
+    start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_fraction)
+    end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_fraction)
     hlcc = hlcc[(hlcc.index >= start_minute) & (hlcc.index <= end_minute)]
     fdfc = fdfc[(fdfc.index >= start_minute) & (fdfc.index <= end_minute)]
 
@@ -1164,8 +1164,8 @@ def create_forager_coin_figures(
     fdf: pd.DataFrame,
     hlcvs: np.ndarray,
     figsize=(21, 13),
-    start_pct=0.0,
-    end_pct=1.0,
+    start_fraction=0.0,
+    end_fraction=1.0,
     coin=None,
     on_figure: Optional[Callable[[str, Figure], None]] = None,
     close_after_callback: bool = True,
@@ -1191,7 +1191,8 @@ def create_forager_coin_figures(
                 hlcvs_df["timestamp"] = ts_arr[: len(hlcvs_df)]
         plt.figure(figsize=figsize)
         plot_fills_forager(
-            fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct
+            fdfc, hlcvs_df, clear=False,
+            start_fraction=start_fraction, end_fraction=end_fraction,
         )
         fig = plt.gcf()
         ax = fig.axes[0] if fig.axes else fig.add_subplot(111)

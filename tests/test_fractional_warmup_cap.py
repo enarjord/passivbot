@@ -18,11 +18,11 @@ from warmup_utils import (
 def _config(span, cap):
     return {
         "bot": {
-            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 1.0, "max_minutes": cap}},
+            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 1.0, "max_minutes": cap}},
             "long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": span, "ema_span_1_minutes": span},
-                "volatility_ema_span_minutes": 0.0,
-                "volatility_ema_span_1h_candles": 0.0,
+                "log_range_ema_span_minutes": 0.0,
+                "log_range_ema_span_1h_candles": 0.0,
             }}},
             "short": {},
         },
@@ -41,7 +41,7 @@ def test_live_and_backtest_acquire_the_same_whole_minutes(span, cap, expected):
     live_cap = live_warmup_cap_minutes(config)
     windows, _, _ = compute_live_warmup_windows(
         {"long": {"BTC"}},
-        lambda _side, key, _coin: span if key in {"ema_span_0", "ema_span_1"} else 0.0,
+        lambda _side, key, _coin: span if key in {"ema_span_0_minutes", "ema_span_1_minutes"} else 0.0,
         max_warmup_minutes=live_cap,
     )
     assert windows == {"BTC": expected}
@@ -69,7 +69,7 @@ def test_direct_live_windows_round_cap_and_keep_native_hour_alignment(
     windows, hours, _ = compute_live_warmup_windows(
         {"long": {"BTC"}},
         lambda _side, key, _coin: {
-            "ema_span_0": 180.25, "entry_volatility_ema_span_1h": 3.25,
+            "ema_span_0_minutes": 180.25, "entry_log_range_ema_span_1h_candles": 3.25,
         }.get(key, 0.0),
         max_warmup_minutes=cap,
         window_candles=181 if explicit_window else None,
@@ -176,12 +176,12 @@ async def test_direct_ranking_readers_keep_float_spans_until_acquisition(reader,
             calls.append((symbol, spans, kwargs))
             return {"qv": 100.0, "log_range": 0.25}
 
-    config = {"bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": cap}}}}
+    config = {"bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": cap}}}}
     original = deepcopy(config)
     bot = SimpleNamespace(
         config=config,
         cm=CandleReader(),
-        bot_value=lambda _side, key: 2.25 if key == "forager_volume_ema_span_1m" else span,
+        bot_value=lambda _side, key: 2.25 if key == "forager_volume_ema_span_minutes" else span,
         _compute_fetch_budget_ttls=lambda symbols, *_: ({s: 60_000 for s in symbols}, set()),
     )
     result = await getattr(Passivbot, reader)(bot, "long", ["BTC/USDT:USDT"])

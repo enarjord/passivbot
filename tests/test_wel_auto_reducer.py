@@ -24,13 +24,13 @@ def test_wel_enforcer_reduces_long_exposure_below_threshold():
         min_qty=0.0,
         min_cost=0.0,
         c_mult=1.0,
-        close_grid_qty_pct=0.5,
-        close_trailing_qty_pct=0.0,
-        close_trailing_retracement_pct=0.0,
-        close_trailing_threshold_pct=0.05,
-        wallet_exposure_limit=0.2,
-        risk_we_excess_allowance_pct=0.5,
-        risk_wel_enforcer_threshold=0.85,
+        close_grid_qty_fraction=0.5,
+        close_trailing_qty_fraction=0.0,
+        close_trailing_retracement_base_fraction=0.0,
+        close_trailing_threshold_base_fraction=0.05,
+        wallet_exposure_limit_ratio=0.2,
+        risk_we_excess_allowance_fraction=0.5,
+        risk_wel_enforcer_threshold_ratio=0.85,
         balance=1000.0,
         position_size=5.0,
         position_price=100.0,
@@ -53,8 +53,8 @@ def test_wel_enforcer_reduces_long_exposure_below_threshold():
     new_exposure = pbr.calc_wallet_exposure(
         params["c_mult"], params["balance"], abs(new_size), params["position_price"]
     )
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
-    target = allowed * params["risk_wel_enforcer_threshold"]
+    allowed = params["wallet_exposure_limit_ratio"] * (1.0 + params["risk_we_excess_allowance_fraction"])
+    target = allowed * params["risk_wel_enforcer_threshold_ratio"]
     assert new_exposure < target
 
 
@@ -66,13 +66,13 @@ def test_wel_enforcer_reduces_short_exposure_below_threshold():
         min_qty=0.0,
         min_cost=0.0,
         c_mult=1.0,
-        close_grid_qty_pct=0.5,
-        close_trailing_qty_pct=0.0,
-        close_trailing_retracement_pct=0.0,
-        close_trailing_threshold_pct=0.05,
-        wallet_exposure_limit=0.2,
-        risk_we_excess_allowance_pct=0.5,
-        risk_wel_enforcer_threshold=0.85,
+        close_grid_qty_fraction=0.5,
+        close_trailing_qty_fraction=0.0,
+        close_trailing_retracement_base_fraction=0.0,
+        close_trailing_threshold_base_fraction=0.05,
+        wallet_exposure_limit_ratio=0.2,
+        risk_we_excess_allowance_fraction=0.5,
+        risk_wel_enforcer_threshold_ratio=0.85,
         balance=1000.0,
         position_size=-5.0,
         position_price=100.0,
@@ -95,6 +95,6 @@ def test_wel_enforcer_reduces_short_exposure_below_threshold():
     new_exposure = pbr.calc_wallet_exposure(
         params["c_mult"], params["balance"], abs(new_size), params["position_price"]
     )
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
-    target = allowed * params["risk_wel_enforcer_threshold"]
+    allowed = params["wallet_exposure_limit_ratio"] * (1.0 + params["risk_we_excess_allowance_fraction"])
+    target = allowed * params["risk_wel_enforcer_threshold_ratio"]
     assert new_exposure < target

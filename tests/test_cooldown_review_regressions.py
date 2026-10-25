@@ -97,9 +97,9 @@ def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
 @pytest.mark.parametrize(
     "key,bound",
     [
-        ("unilateralness_ema_span_1m", [0.0, 60.0]),
-        ("unilateralness_ema_span_1m", [60.0, 100001.0]),
-        ("unilateralness_ema_span_1m", [60.0, float("nan")]),
+        ("unilateralness_ema_span_minutes", [0.0, 60.0]),
+        ("unilateralness_ema_span_minutes", [60.0, 100001.0]),
+        ("unilateralness_ema_span_minutes", [60.0, float("nan")]),
         ("entry_cooldown_weights_minutes_exposure_ratio", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [0.0, float("inf")]),
@@ -128,8 +128,8 @@ def test_adaptive_optimizer_accepts_float_span_boundaries_and_zero_weights():
     validate_optimize_bounds_against_bot_config(
         cfg,
         _nested_bounds({
-            "long_unilateralness_ema_span_1m": [1.0, 100000.0, 0.5],
-            "short_unilateralness_ema_span_1m": [10.5, 20.5],
+            "long_unilateralness_ema_span_minutes": [1.0, 100000.0, 0.5],
+            "short_unilateralness_ema_span_minutes": [10.5, 20.5],
             "long_entry_cooldown_weights_minutes_exposure_ratio": [0.0, 10.0],
             "short_entry_cooldown_weights_minutes_adverse_directionality": 0.0,
         }),

@@ -19,7 +19,7 @@ def test_unsupported_collateral_rejected_before_optional_device_imports(
     from optimization.gpu.service import SharedAccountReplay
 
     config = get_template_config()
-    config["backtest"]["btc_collateral_cap"] = collateral
+    config["backtest"]["btc_collateral_target_ratio"] = collateral
     original = builtins.__import__
 
     def guarded(name, *args, **kwargs):
@@ -28,7 +28,7 @@ def test_unsupported_collateral_rejected_before_optional_device_imports(
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", guarded)
-    with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+    with pytest.raises(ValueError, match="btc_collateral_target_ratio=0"):
         if entrypoint == "parameters":
             prepare_candidate_parameters(config, {}, "binance")
         else:
@@ -41,10 +41,10 @@ def test_suite_overrides_cannot_hide_unsupported_collateral():
     config = get_template_config()
     config["optimize"]["backend"] = "gpu"
     original = deepcopy(config)
-    with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+    with pytest.raises(ValueError, match="btc_collateral_target_ratio=0"):
         _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
             dict(label="cash", overrides={}),
-            dict(label="collateral", overrides={"backtest.btc_collateral_cap": 0.5}),
+            dict(label="collateral", overrides={"backtest.btc_collateral_target_ratio": 0.5}),
         ]))
     assert config == original
 

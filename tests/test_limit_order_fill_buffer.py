@@ -75,7 +75,7 @@ def _native_args():
 
     cfg = get_expanded_config_prototype()
     cfg['backtest']['coins'] = {'binance': ['BTC']}
-    cfg['backtest']['btc_collateral_cap'] = 0.0
+    cfg['backtest']['btc_collateral_target_ratio'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
     cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = False
@@ -90,8 +90,8 @@ def _native_args():
         cfg['bot'][side]['strategy']['trailing_martingale']['entry']['ema_gate_mode'] = 'disabled'
         # This short fixture tests fill admission, not hourly indicators.
         for leg in ['entry', 'close']:
-            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['threshold_volatility_1h_weight'] = 0.0
-            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['retracement_volatility_1h_weight'] = 0.0
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['threshold_log_range_1h_coefficient'] = 0.0
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['retracement_log_range_1h_coefficient'] = 0.0
     mss = {'BTC': dict(maker=0.0002, taker=0.00055, qty_step=0.001,
                        price_step=0.01, min_qty=0.001, min_cost=1.0, c_mult=1.0)}
     bot, strategy, exchange, params = prep_backtest_args(cfg, mss, 'binance')
