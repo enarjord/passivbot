@@ -28,9 +28,9 @@ constant int ADAPTIVE_OVERRIDE_START = 30;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 27;
 #if PASSIVBOT_BTC_RISK_ENABLED
-constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
+constant int DAILY_COLS = 12 + 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #else
-constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
+constant int DAILY_COLS = 9 + 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 68 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
@@ -3021,8 +3021,7 @@ struct EmaMulticoinReplayState {
     bool equity_started;
     float run_peak;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    float raw_strategy_peak;
-    float raw_strategy_day_dd;
+    RawStrategyRiskState raw_strategy_risk;
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
     float raw_strategy_day_end;
@@ -3215,8 +3214,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     bool equity_started = false;
     float run_peak = -INFINITY;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    float raw_strategy_peak = -INFINITY;
-    float raw_strategy_day_dd = 0.0f;
+    RawStrategyRiskState raw_strategy_risk = {-INFINITY, 0.0f, 0.0f, 0.0f, 0.0f};
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
     float raw_strategy_day_end = 0.0f;
@@ -3281,8 +3279,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         equity_started = replay_states[b].equity_started;
         run_peak = replay_states[b].run_peak;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        raw_strategy_peak = replay_states[b].raw_strategy_peak;
-        raw_strategy_day_dd = replay_states[b].raw_strategy_day_dd;
+        raw_strategy_risk = replay_states[b].raw_strategy_risk;
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
         raw_strategy_day_end = replay_states[b].raw_strategy_day_end;
@@ -3361,11 +3358,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+                write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
@@ -3383,7 +3380,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_min = INFINITY;
             day_dd = 0.0f;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            raw_strategy_day_dd = 0.0f;
+            reset_raw_strategy_risk_day(raw_strategy_risk);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             raw_strategy_day_end = 0.0f;
@@ -3696,7 +3693,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 + realized_pnl_cumsum_last + unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
-                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+                raw_strategy_equity, raw_strategy_risk);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             raw_strategy_day_end = raw_strategy_equity;
@@ -3826,8 +3823,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         replay_states[b].equity_started = equity_started;
         replay_states[b].run_peak = run_peak;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        replay_states[b].raw_strategy_peak = raw_strategy_peak;
-        replay_states[b].raw_strategy_day_dd = raw_strategy_day_dd;
+        replay_states[b].raw_strategy_risk = raw_strategy_risk;
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
         replay_states[b].raw_strategy_day_end = raw_strategy_day_end;
@@ -3883,11 +3879,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+        write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
@@ -4383,8 +4379,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    float raw_strategy_peak = -INFINITY;
-    float raw_strategy_day_dd = 0.0f;
+    RawStrategyRiskState raw_strategy_risk = {-INFINITY, 0.0f, 0.0f, 0.0f, 0.0f};
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
     float raw_strategy_day_end = 0.0f;
@@ -4448,8 +4443,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         equity_started = replay_states[b].common.equity_started;
         run_peak = replay_states[b].common.run_peak;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        raw_strategy_peak = replay_states[b].common.raw_strategy_peak;
-        raw_strategy_day_dd = replay_states[b].common.raw_strategy_day_dd;
+        raw_strategy_risk = replay_states[b].common.raw_strategy_risk;
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
         raw_strategy_day_end = replay_states[b].common.raw_strategy_day_end;
@@ -4544,11 +4538,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+                write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
                 daily[output + 3] = fills.day_volume;
                 daily[output + 4] = day_has_fill;
@@ -4566,7 +4560,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             day_min = INFINITY;
             day_dd = 0.0f;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            raw_strategy_day_dd = 0.0f;
+            reset_raw_strategy_risk_day(raw_strategy_risk);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             raw_strategy_day_end = 0.0f;
@@ -5043,7 +5037,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 + account.realized_pnl_short + long_unrealized + short_unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
-                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+                raw_strategy_equity, raw_strategy_risk);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             raw_strategy_day_end = raw_strategy_equity;
@@ -5181,8 +5175,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         replay_states[b].common.equity_started = equity_started;
         replay_states[b].common.run_peak = run_peak;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        replay_states[b].common.raw_strategy_peak = raw_strategy_peak;
-        replay_states[b].common.raw_strategy_day_dd = raw_strategy_day_dd;
+        replay_states[b].common.raw_strategy_risk = raw_strategy_risk;
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
         replay_states[b].common.raw_strategy_day_end = raw_strategy_day_end;
@@ -5244,11 +5237,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+        write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
 #endif
 #if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
         daily[output + 3] = fills.day_volume;
         daily[output + 4] = day_has_fill;

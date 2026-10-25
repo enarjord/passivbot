@@ -12,8 +12,8 @@ from config.optimize_bounds import flatten_optimize_bounds
 
 def _released_config(kind="trailing_martingale"):
     source = get_released_v8_defaults(strategy_kind=kind)
-    source["backtest"]["visible_metrics"] = [name for name in source["backtest"]["visible_metrics"] if not name.endswith("_w")]
-    source["optimize"]["scoring"] = [entry for entry in source["optimize"]["scoring"] if not entry["metric"].endswith("_w")]
+    source["backtest"]["visible_metrics"] = [name for name in source["backtest"]["visible_metrics"] if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")]
+    source["optimize"]["scoring"] = [entry for entry in source["optimize"]["scoring"] if not entry["metric"].endswith("_w") and not entry["metric"].startswith("strategy_eq_underwater_pct_")]
     for side in ("long", "short"):
         for key in ("ema_span_0", "ema_span_1"):
             source["bot"][side]["unstuck"].pop(key)

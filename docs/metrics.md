@@ -160,6 +160,24 @@ Ordinary equity metrics include the full retained equity curve, including period
 Ordinary time-weighted holding/gap summaries remain available; they are not retired `_w` variants.
 
 ## Drawdown and tail metrics
+- `pain_index_strategy_eq`: Mean drawdown from the running peak of collateral-agnostic
+  strategy equity (Pain Index, also known as Zephyr Pain Index).
+- `ulcer_index_strategy_eq`: Root mean square of those same drawdowns (Ulcer Index).
+
+Both indices use every recorded equity observation, including zero drawdowns at peaks:
+`d[t] = (running_peak[t] - strategy_equity[t]) / abs(running_peak[t])`,
+`pain = mean(d)`, and `ulcer = sqrt(mean(d*d))`. They use minute-level observations
+with standard one-minute candles; coarser backtests use their configured candle resolution.
+They include unrealized PnL, retain losses beyond 100% on negative strategy equity,
+and return fractions (`0.05` means 5%). Neither uses daily maxima, HSL smoothing,
+or plot/CSV downsampling. Both optimizer objectives default to minimizing.
+Rust reuses the drawdown traversal; GPU screening accumulates compact per-day sums,
+squared sums and counts of all observations without retaining minute-sized histories.
+
+The former daily-worst `strategy_eq_underwater_pct_mean` and
+`strategy_eq_underwater_pct_median` are removed without aliases. Re-evaluate
+saved results and limits before selecting thresholds for the new definitions.
+
 - `drawdown_worst`: Maximum absolute drawdown over the equity curve.
 - `drawdown_worst_mean_1pct`: Mean of the worst 1% daily worst drawdowns, where drawdown is computed from the full-resolution equity curve before reducing each day to its worst underwater point.
 - `expected_shortfall_1pct`: Average loss of the worst 1% daily min-equity returns.

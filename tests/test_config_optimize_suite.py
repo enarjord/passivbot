@@ -142,7 +142,7 @@ def test_optimizer_scoring_basis_round_trip_preserves_omitted_named_and_null_sce
     base["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max"},
         {
-            "metric": "strategy_eq_underwater_pct_mean",
+            "metric": "pain_index_strategy_eq",
             "goal": "min",
             "scenario": None,
         },
