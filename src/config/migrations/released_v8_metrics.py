@@ -367,12 +367,27 @@ def released_v8_visibility_family(prefix: str) -> tuple[str, ...]:
     return tuple(sorted(name for name in vocabulary if name.startswith(prefix + "_")))
 
 
+RELEASED_V8_STAT_SUFFIXES = ("min", "max", "mean", "std", "median")
+
+
+def released_v8_ew_replacement(name: str) -> str | None:
+    """Retain one released outer aggregate while choosing a known EW family."""
+    raw = str(name).strip()
+    if raw in RELEASED_V8_EW_REPLACEMENTS:
+        return RELEASED_V8_EW_REPLACEMENTS[raw]
+    for stat in RELEASED_V8_STAT_SUFFIXES:
+        suffix = f"_{stat}"
+        if raw.endswith(suffix) and raw[:-len(suffix)] in RELEASED_V8_EW_REPLACEMENTS:
+            return RELEASED_V8_EW_REPLACEMENTS[raw[:-len(suffix)]] + suffix
+    return None
+
+
 def released_v8_metric_name(name: str) -> str:
     """Convert one verified released selector, preserving optional outer stats."""
     raw = str(name).strip()
     if raw in RELEASED_V8_METRIC_NAMES:
         return RELEASED_V8_METRIC_NAMES[raw]
-    for stat in ("min", "max", "mean", "std", "median"):
+    for stat in RELEASED_V8_STAT_SUFFIXES:
         suffix = f"_{stat}"
         if raw.endswith(suffix) and raw[:-len(suffix)] in RELEASED_V8_METRIC_NAMES:
             return RELEASED_V8_METRIC_NAMES[raw[:-len(suffix)]] + suffix

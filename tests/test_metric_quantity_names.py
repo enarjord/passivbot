@@ -10,7 +10,9 @@ from config.metrics import (
     metric_with_curve, resolve_metric_value, split_metric_curve, split_metric_stat_suffix,
 )
 from config.migrations.final_v9 import replace_retired_metrics
-from config.migrations.released_v8_metrics import RELEASED_V8_METRIC_NAMES, released_v8_metric_name
+from config.migrations.released_v8_metrics import (
+    RELEASED_V8_EW_REPLACEMENTS, RELEASED_V8_METRIC_NAMES, released_v8_metric_name,
+)
 from config.schema import get_template_config
 from config.scoring import normalize_scoring_entries
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
@@ -230,3 +232,55 @@ def _score_with_bare_metric(metric, bare, suite):
         elapsed_seconds=0, output_path=None,
     )
     return evaluator.score_scenario_results([row])["objectives"]
+
+
+@pytest.mark.parametrize("old,new", RELEASED_V8_EW_REPLACEMENTS.items())
+@pytest.mark.parametrize("stat", ["min", "max", "mean", "std", "median"])
+def test_best_effort_released_ew_family_preserves_one_outer_statistic(old, new, stat):
+    original = f"{old}_{stat}"
+    expected = canonicalize_metric_name(f"{new}_{stat}")
+    source = {"optimize": {"scoring": [{"metric": original, "goal": "max"}]}}
+    changes = []
+    replace_retired_metrics(source, replacements={}, acknowledge=False,
+                            changes=changes, best_effort=True)
+    assert source["optimize"]["scoring"] == [{"metric": expected, "goal": "max"}]
+    assert source["backtest"]["ew_half_life_days"] == 180.0
+    assert any(row["old"] == original and row["new"] == expected
+               and row.get("best_effort") and "recency formula" in row["reason"]
+               for row in changes)
+
+
+@pytest.mark.parametrize("replacement", [
+    "adg_fraction_usd_ew_max", "sortino_ratio_btc_ew_median", "adg_fraction_strategy_equity",
+])
+def test_explicit_released_formula_choice_owns_the_complete_new_selector(replacement):
+    old = "adg_w_usd_max"
+    source = {"optimize": {"scoring": [{"metric": old, "goal": "max"}]}}
+    changes = []
+    replace_retired_metrics(source, replacements={old: replacement},
+                            acknowledge=True, changes=changes)
+    assert source["optimize"]["scoring"] == [{"metric": replacement, "goal": "max"}]
+    assert changes == [dict(path="optimize.scoring[0].metric", old=old, new=replacement,
+                            reason="acknowledged explicit metric formula replacement")]
+
+
+@pytest.mark.parametrize("metric", ["adg_w_usd_sum", "missing_w_usd_max", "adg_w_usd_max_mean"])
+def test_best_effort_does_not_invent_unknown_ew_families_or_statistics(metric):
+    source = {"optimize": {"scoring": [metric]}}
+    with pytest.raises(ValueError, match="no supported _ew replacement"):
+        replace_retired_metrics(source, replacements={}, acknowledge=False,
+                                changes=[], best_effort=True)
+    assert source == {"optimize": {"scoring": [metric]}}
+
+
+def test_released_outer_stat_lookup_keeps_intrinsic_drawdown_statistics_distinct():
+    from config.migrations.released_v8_metrics import released_v8_ew_replacement
+
+    assert released_v8_ew_replacement("strategy_eq_underwater_pct_mean") is None
+    assert released_v8_ew_replacement("strategy_eq_underwater_pct_median") is None
+    assert released_v8_metric_name("trade_loss_mean_max") == "trade_loss_mean_fraction_max"
+    assert released_v8_metric_name("trade_loss_mean") == "trade_loss_mean_fraction"
+    source = {"optimize": {"scoring": ["strategy_eq_underwater_pct_median"]}}
+    with pytest.raises(ValueError, match="no inferred replacement"):
+        replace_retired_metrics(source, replacements={}, acknowledge=False,
+                                changes=[], best_effort=True)

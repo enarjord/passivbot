@@ -45,7 +45,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
     def convert(name, path):
         from config.ew import is_ew_metric
         from config.metrics import canonicalize_metric_name
-        from .released_v8_metrics import released_v8_metric_name, RELEASED_V8_EW_REPLACEMENTS
+        from .released_v8_metrics import released_v8_metric_name, released_v8_ew_replacement
 
         nonlocal ew_requested
         name = name.strip() if isinstance(name, str) else name
@@ -60,7 +60,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             if name.startswith("strategy_eq_underwater_pct_") and name != "strategy_eq_underwater_pct_mean":
                 raise ValueError(f"{path}: no inferred replacement for {name!r}; supply --metric-replacement explicitly")
             candidate = ("pain_index_fraction_strategy_equity" if name == "strategy_eq_underwater_pct_mean"
-                         else RELEASED_V8_EW_REPLACEMENTS.get(name))
+                         else released_v8_ew_replacement(name))
             if candidate is None:
                 raise ValueError(f"{path}: no supported _ew replacement for {name!r}; supply --metric-replacement explicitly")
         elif name not in replacements:

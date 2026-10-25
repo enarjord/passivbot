@@ -644,11 +644,19 @@ def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
     assert target.read_bytes() == published
 
 
-def test_best_effort_stat_suffix_is_retained_in_objectives():
+@pytest.mark.parametrize("stat", ["min", "max", "mean", "std", "median"])
+def test_best_effort_stat_suffix_is_retained_in_objectives(stat):
     config = v8_config()
-    config["optimize"]["scoring"] = [{"metric": "adg_w_usd_max", "goal": "max"}]
+    old = f"adg_w_usd_{stat}"
+    new = f"adg_fraction_usd_ew_{stat}"
+    config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
+    original = deepcopy(config)
     result = migrate(config, best_effort=True)
-    assert result.config["optimize"]["scoring"][0]["metric"] == "adg_fraction_usd_ew_max"
+    assert config == original
+    assert result.config["optimize"]["scoring"][0]["metric"] == new
+    assert any(change["old"] == old and change["new"] == new
+               and change.get("best_effort") and "recency formula" in change["reason"]
+               for change in result.changes)
 
 
 def test_best_effort_coin_file_guesses_are_reported_and_file_is_unchanged(tmp_path, caplog):

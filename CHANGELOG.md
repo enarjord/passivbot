@@ -9,7 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Make analysis metric units explicit and put curve, position side and exponential weighting
   modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
   strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without
-  changing calculations or value scales. Explicit released-v8 migration emits the current names.
+  changing calculations or value scales. Explicit released-v8 migration emits the current names;
+  best-effort EW formula choices preserve supported outer aggregate statistics.
 
 - Publish immutable analysis quantity metadata and a generated reference covering units,
   denominators, observation populations, aggregation and weighting without changing formulas.
