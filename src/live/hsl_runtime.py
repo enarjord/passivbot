@@ -689,11 +689,11 @@ def capture(
                 .get("bot", {}).get(scope.pside, {})
             )
             payload["exposure_budget"] = dict(
-                wallet_exposure_limit=override.get(
-                    "wallet_exposure_limit_ratio", side_config.get("wallet_exposure_limit", -1.0)
+                wallet_exposure_limit_ratio=override.get(
+                    "wallet_exposure_limit_ratio", side_config.get("wallet_exposure_limit_ratio", -1.0)
                 ),
-                total_wallet_exposure_limit=side_config["risk"]["total_wallet_exposure_limit_ratio"],
-                we_excess_allowance_pct=override.get("risk", {}).get(
+                total_wallet_exposure_limit_ratio=side_config["risk"]["total_wallet_exposure_limit_ratio"],
+                we_excess_allowance_fraction=override.get("risk", {}).get(
                     "we_excess_allowance_fraction", side_config["risk"]["we_excess_allowance_fraction"]
                 ),
             )

@@ -49,7 +49,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
@@ -63,7 +63,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
@@ -328,8 +328,8 @@ def _scale_directional_minute_parameters(
     before calculating their alphas. It separately compounds HSL's one-minute
     EMA decay over the elapsed minutes, so HSL spans are converted to the
     equivalent per-candle alpha. Entry and HSL cooldowns remain expressed in
-    elapsed minutes and are converted to candle counts. Hour-denominated
-    volatility spans remain unchanged.
+    elapsed minutes and are converted to candle counts. Hour-candle
+    log-range spans remain unchanged.
     """
 
     interval_minutes = float(interval_minutes)
@@ -339,26 +339,29 @@ def _scale_directional_minute_parameters(
     minute_keys = {
         "unstuck_ema_span_0_minutes",
         "unstuck_ema_span_1_minutes",
-        "ema_span_0",
-        "ema_span_1",
         "entry_cooldown_minutes",
     }
+    minute_keys.update(
+        ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+        if "entry_ema_span_0_minutes" in keys
+        else ("ema_span_0_minutes", "ema_span_1_minutes")
+    )
     minute_keys.update(ADAPTIVE_PARAM_KEYS[:4])
-    if "offset_volatility_ema_span_1m" in keys:
-        minute_keys.add("offset_volatility_ema_span_1m")
-    if "volatility_ema_span_1m" in keys:
-        minute_keys.add("volatility_ema_span_1m")
-    if "forager_volume_ema_span_1m" in keys:
-        minute_keys.add("forager_volume_ema_span_1m")
-    if "forager_volatility_ema_span_1m" in keys:
-        minute_keys.add("forager_volatility_ema_span_1m")
+    if "offset_log_range_ema_span_minutes" in keys:
+        minute_keys.add("offset_log_range_ema_span_minutes")
+    if "log_range_ema_span_minutes" in keys:
+        minute_keys.add("log_range_ema_span_minutes")
+    if "forager_volume_ema_span_minutes" in keys:
+        minute_keys.add("forager_volume_ema_span_minutes")
+    if "forager_log_range_ema_span_minutes" in keys:
+        minute_keys.add("forager_log_range_ema_span_minutes")
     side_width = len(keys)
     if side_activation is not None and (len(side_activation) != sides
             or any(type(flag) is not bool for flag in side_activation)):
         raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
-        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        span_col = offset + keys.index("unilateralness_ema_span_minutes")
         adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
         score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
         ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]
@@ -413,7 +416,7 @@ def _scale_directional_minute_parameters(
         rms = adverse_demand | ranking
         if side_activation is not None:
             rms &= side_activation[side_index]
-        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
+        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit_ratio")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
         spans = scaled[:, span_col]
@@ -517,10 +520,10 @@ def _scale_ema_multicoin_coin_overrides(
         minute_columns={
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0_minutes"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1_minutes"),
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
-                "offset_volatility_ema_span_1m"
+                "offset_log_range_ema_span_minutes"
             ),
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
@@ -542,9 +545,9 @@ def _scale_tm_multicoin_coin_overrides(
         minute_columns={
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            override_keys.index("ema_span_0"),
-            override_keys.index("ema_span_1"),
-            override_keys.index("volatility_ema_span_1m"),
+            override_keys.index("entry_ema_span_0_minutes"),
+            override_keys.index("entry_ema_span_1_minutes"),
+            override_keys.index("log_range_ema_span_minutes"),
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
         hsl_start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -2643,7 +2646,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
-    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -2883,12 +2886,12 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
@@ -3034,7 +3037,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
     decimal_coin_overrides = True
-    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -3047,7 +3050,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
         metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
         flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
-        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+        for key in ("entry_retracement_base_fraction", "close_retracement_base_fraction"):
             column = keys.index(key)
             underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
             scaled[underflow, column] = np.finfo(np.float32).tiny
@@ -3337,12 +3340,12 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)))
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)

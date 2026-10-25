@@ -42,7 +42,7 @@ def test_underfilled_cuda_cohorts_learn_without_repeating_or_changing_results(mo
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
-    parameter = "long_base_qty_pct" if strategy == "ema_anchor" else "long_entry_initial_qty_pct"
+    parameter = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     cohorts = [[BacktestRequest(str(cohort * 3 + i), "b" if 6 <= cohort < 9 else "a",
                                {parameter: .005 + ((cohort + i) % 4) * .003})
                 for i in range(3)] for cohort in range(12)]
@@ -126,7 +126,7 @@ def test_adaptive_cuda_service_changes_width_without_changing_or_repeating_work(
             config=config, markets=markets, exchange="binance", hlcvs=specs[0], btc=specs[1],
             timestamps=specs[2], candle_coins=("COIN00", "COIN01", "COIN02"), metrics=DEFAULT_METRICS,
         )
-        parameter = "long_base_qty_pct" if strategy == "ema_anchor" else "long_entry_initial_qty_pct"
+        parameter = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
         requests = [BacktestRequest(str(i), "b" if 32 <= i < 64 else "a",
                                    {parameter: 0.005 + (i % 4) * 0.003}) for i in range(96)]
         def evaluate(width):

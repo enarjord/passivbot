@@ -336,11 +336,11 @@ Pymoo-specific settings live under `optimize.pymoo`:
     "pymoo": {
       "algorithm": "auto",
       "shared": {
-        "crossover_eta": 20.0,
-        "crossover_prob_var": 0.5,
-        "mutation_eta": 20.0,
-        "mutation_prob": "auto",
-        "mutation_prob_per_variable": "auto",
+        "crossover_distribution_index": 20.0,
+        "crossover_probability_per_variable": 0.5,
+        "mutation_distribution_index": 20.0,
+        "mutation_probability": "auto",
+        "mutation_probability_per_variable": "auto",
         "eliminate_duplicates": true
       },
       "algorithms": {
@@ -408,26 +408,27 @@ Current meaning of the main pymoo knobs:
   - Default is `auto`.
   - `auto` chooses `nsga2` when `len(optimize.scoring) <= 3`, otherwise `nsga3`.
   - Use explicit `nsga2` or `nsga3` only when you want to override that default selection.
-- `optimize.pymoo.shared.crossover_prob_var`
+- `optimize.pymoo.shared.crossover_probability_per_variable`
   - Per-variable SBX crossover probability.
   - Higher values mix more parameters between parents on each crossover.
   - Default `0.5` is a conservative middle ground for Passivbot's parameter space.
-- `optimize.pymoo.shared.crossover_eta`
+- `optimize.pymoo.shared.crossover_distribution_index`
   - SBX distribution index.
   - Higher values keep offspring closer to the parents; lower values explore more aggressively.
   - Default `20` is a standard conservative setting and is usually a good starting point.
-- `optimize.pymoo.shared.mutation_prob`
+- `optimize.pymoo.shared.mutation_probability`
   - Per-individual polynomial-mutation probability; `"auto"` means `1 / n_params`.
   - The offline v8 converter reports any replacement of the retired `mutation_prob_var` key.
     Normal v9 loading accepts only the canonical control.
-- `optimize.pymoo.shared.mutation_prob_per_variable`
+- `optimize.pymoo.shared.mutation_probability_per_variable`
   - Conditional per-variable mutation probability; `"auto"` means `min(0.5, 1 / n_params)`,
     matching pymoo's historical implicit default.
   - The probability of selecting a coordinate for mutation is the product of the two gates. To experiment
-    with approximately one mutated coordinate per offspring, set `mutation_prob: 1.0` and
+    with approximately one coordinate selected for mutation per offspring when `n_params >= 2`,
+    set `mutation_probability: 1.0` and
     leave this control on `"auto"`. This is a stronger mutation regime, not the default.
   - `n_params` is the CPU problem's vector length or the GPU problem's active vector length.
-- `optimize.pymoo.shared.mutation_eta`
+- `optimize.pymoo.shared.mutation_distribution_index`
   - Polynomial-mutation distribution index.
   - Higher values make smaller, more local mutations.
   - Default `20` keeps mutation fairly local, which is usually appropriate for expensive
@@ -443,10 +444,10 @@ Current meaning of the main pymoo knobs:
 Recommended defaults for typical Passivbot runs:
 
 - Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: auto`.
-- Keep `mutation_prob: "auto"`.
-- Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make
+- Keep `mutation_probability: "auto"`.
+- Keep `crossover_distribution_index: 20` and `mutation_distribution_index: 20` unless you have a specific reason to make
   variation much more local or much more aggressive.
-- Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
+- Keep `crossover_probability_per_variable: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
   NSGA-II resolves null population size to `250`, while NSGA-III uses a default population budget
@@ -461,24 +462,24 @@ Practical interpretation for the default shared block:
 
 ```json
 "shared": {
-  "crossover_eta": 20,
-  "crossover_prob_var": 0.5,
+  "crossover_distribution_index": 20,
+  "crossover_probability_per_variable": 0.5,
   "eliminate_duplicates": true,
-  "mutation_eta": 20,
-  "mutation_prob": "auto",
-  "mutation_prob_per_variable": "auto"
+  "mutation_distribution_index": 20,
+  "mutation_probability": "auto",
+  "mutation_probability_per_variable": "auto"
 }
 ```
 
-- `crossover_eta: 20`
+- `crossover_distribution_index: 20`
   - conservative crossover; offspring stay fairly close to parents
-- `crossover_prob_var: 0.5`
-  - each parameter has a 50% chance of participating in crossover
-- `mutation_eta: 20`
+- `crossover_probability_per_variable: 0.5`
+  - within parent pairs selected for crossover, each parameter has a 50% chance of participating in crossover
+- `mutation_distribution_index: 20`
   - conservative mutation; most mutations are relatively local
-- `mutation_prob: "auto"`
+- `mutation_probability: "auto"`
   - select each offspring for mutation with probability `1 / n_params`
-- `mutation_prob_per_variable: "auto"`
+- `mutation_probability_per_variable: "auto"`
   - within selected offspring, mutate each coordinate with probability `min(0.5, 1 / n_params)`
 - `eliminate_duplicates: true`
   - do not spend backtests on duplicate candidates
@@ -570,11 +571,11 @@ fixed-parameter set before bounds are collapsed.
 
 ### Polishing Around A Selected Config
 
-Use `--polish-pct` to narrow every configured optimizer bound around the current config
+Use `--polish-bounds-fraction` to narrow every configured optimizer bound around the current config
 value before the run starts:
 
 ```bash
-passivbot optimize path/to/config.json --polish-pct 0.25
+passivbot optimize path/to/config.json --polish-bounds-fraction 0.25
 ```
 
 By default this keeps the polished bounds inside the original `optimize.bounds` domain and
@@ -584,7 +585,8 @@ leaves fixed bounds fixed. `--polish-bounds-mode` changes that policy:
 - `override-tunable`: allow tunable bounds to escape the original bounds; fixed bounds stay fixed.
 - `override-all`: allow tunable bounds to escape the original bounds and expand fixed bounds too.
 
-Polish still uses relative bounds: `[value * (1 - pct), value * (1 + pct)]`. A current
+Polish uses a scale-one relative half-width: `0.25` means ±25%, producing
+`[value * (1 - half_width_fraction), value * (1 + half_width_fraction)]`. A current
 value of `0.0` therefore remains fixed at `[0.0, 0.0]`.
 
 `optimize.fixed_params` is applied after polish. That makes it the right way to polish all
@@ -592,7 +594,7 @@ bounds while pinning selected parameters to the config value:
 
 ```bash
 passivbot optimize path/to/config.json \
-  --polish-pct 0.25 \
+  --polish-bounds-fraction 0.25 \
   --polish-bounds-mode override-all \
   --optimize.fixed_params long.risk.max_positions,long.risk.total_wallet_exposure_limit_ratio
 ```

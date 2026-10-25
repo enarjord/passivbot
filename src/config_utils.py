@@ -211,7 +211,7 @@ def _format_config_change_message(
     return "changed %s %s -> %s", (full_path, old_value, new_value)
 
 
-Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
+Path = Tuple[str, ...]  # ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_base_fraction")
 FIELD_RUNTIME_RULES = {
     "backtest.offline": {
         "owner": "backtest",
@@ -1521,12 +1521,10 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimize Common"},
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
-    "optimize.pymoo.shared.mutation_prob": {
-        "visible": ["--optimize.pymoo.shared.mutation_prob"],
+    "optimize.pymoo.shared.mutation_probability": {
+        "visible": ["--optimize.pymoo.shared.mutation_probability"],
         "hidden": [
-            "--optimize_pymoo_shared_mutation_prob",
-            "--optimize.pymoo.shared.mutation_prob_var",
-            "--optimize_pymoo_shared_mutation_prob_var",
+            "--optimize_pymoo_shared_mutation_probability",
             "-psmpv",
         ],
         "type": str,

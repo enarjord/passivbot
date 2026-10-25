@@ -13,19 +13,19 @@ BOT_GROUP_FIELD_MAP = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit_ratio",
         "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
+        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold_ratio",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_fraction",
         "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold_ratio",
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
-        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
-        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_minutes",
+        "log_range_ema_span_minutes": "forager_log_range_ema_span_minutes",
+        "volume_ema_span_minutes": "forager_volume_ema_span_minutes",
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
@@ -53,7 +53,7 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
-STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit": "wallet_exposure_limit_ratio"}
+STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit_ratio": "wallet_exposure_limit_ratio"}
 _MISSING = object()
 
 
@@ -84,7 +84,7 @@ def get_grouped_bot_value(
     if group_path is not None:
         value = get_grouped_path(bot_side, group_path, default=_MISSING)
         if value is not _MISSING:
-            return value
+            return deepcopy(value) if flat_key == "forager_score_weights" else value
     if flat_key in bot_side:
         return bot_side[flat_key]
     return default
@@ -177,7 +177,7 @@ def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
         target = target.setdefault(part, {})
         if not isinstance(target, dict):
             raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
-    target[path[-1]] = value
+    target[path[-1]] = deepcopy(value) if flat_key == "forager_score_weights" else value
 
 
 def resolve_shared_bot_path(
@@ -221,6 +221,8 @@ def canonicalize_shared_bot_side(
         if flat_key not in bot_side:
             continue
         moved_value = bot_side.pop(flat_key)
+        if flat_key == "forager_score_weights":
+            moved_value = deepcopy(moved_value)
         target = bot_side
         for index, part in enumerate(path[:-1]):
             if part not in target:

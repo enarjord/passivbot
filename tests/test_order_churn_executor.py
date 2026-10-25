@@ -46,7 +46,7 @@ class _Bot:
         self.values = {
             "order_replacement_churn_gate_activation_count": 10,
             "order_replacement_churn_gate_window_minutes": 10.0,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "order_replacement_churn_gate_market_distance_fraction": 0.005,
             "max_n_creations_per_batch": 20,
         }
 

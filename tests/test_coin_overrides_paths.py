@@ -68,7 +68,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     assert set(xrp_ov) == {"bot", "live"}
     assert "risk" not in xrp_ov["bot"]
     assert "max_positions" not in xrp_ov["bot"]["long"].get("risk", {})
-    assert "total_wallet_exposure_limit" not in xrp_ov["bot"]["long"].get("risk", {})
+    assert "total_wallet_exposure_limit_ratio" not in xrp_ov["bot"]["long"].get("risk", {})
     assert "forager" not in xrp_ov["bot"]["long"]
 
 

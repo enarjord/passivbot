@@ -1515,7 +1515,7 @@ def test_live_performance_report_startup_readiness_assesses_configured_budgets(
                 "status": "over_budget",
                 "latest_ms": 3000,
                 "budget_ms": 2500,
-                "usage_pct": 120,
+                "usage_percent": 120,
                 "over_budget_by_ms": 500,
                 "source": "config",
             },
@@ -1523,7 +1523,7 @@ def test_live_performance_report_startup_readiness_assesses_configured_budgets(
                 "status": "within_budget",
                 "latest_ms": 1600,
                 "budget_ms": 5000,
-                "usage_pct": 32,
+                "usage_percent": 32,
                 "over_budget_by_ms": 0,
                 "source": "config",
             },
@@ -1583,7 +1583,7 @@ def test_live_performance_report_startup_readiness_rejects_malformed_config_budg
             "status": "invalid_budget",
             "latest_ms": 900,
             "budget_ms": None,
-            "usage_pct": None,
+            "usage_percent": None,
             "over_budget_by_ms": None,
             "source": "config",
         }
@@ -3473,7 +3473,7 @@ def test_live_performance_report_fill_refresh_from_existing_events(tmp_path):
     assert recovered["refresh_mode"] == "periodic"
     assert recovered["total_events"] == 2
     assert recovered["failed"] == 1
-    assert recovered["failure_pct"] == 50
+    assert recovered["failure_percent"] == 50
     assert recovered["recovered"] is True
     assert recovered["latest"]["status"] == "succeeded"
     assert recovered["latest"]["data"]["history_scope"] == "all"
@@ -3966,9 +3966,9 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                 symbol="XLM/USDT:USDT",
                 pside="long",
                 data={
-                    "threshold_pct": 0.031,
+                    "threshold_fraction": 0.031,
                     "threshold_price": 0.20123,
-                    "retracement_pct": 0.012,
+                    "retracement_fraction": 0.012,
                     "retracement_price": 0.19876,
                     "projected_retracement_price": 0.19765,
                     "secret_marker": "trailing-secret",
@@ -4923,7 +4923,7 @@ def test_live_performance_report_exchange_config_refresh_health(tmp_path):
     assert refresh["total"] == 2
     assert refresh["succeeded"] == 1
     assert refresh["failed"] == 1
-    assert refresh["failure_pct"] == 50.0
+    assert refresh["failure_percent"] == 50.0
     assert refresh["bots"] == 1
     assert refresh["failed_bots"] == 1
     assert refresh["latest_failed_bots"] == 1

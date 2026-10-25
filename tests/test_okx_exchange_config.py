@@ -11,7 +11,7 @@ sys.modules.setdefault(
     types.SimpleNamespace(
         qty_to_cost=lambda *args, **kwargs: 0.0,
         round_dynamic=lambda x, y=None: x,
-        calc_order_price_diff=lambda *args, **kwargs: 0.0,
+        calc_order_price_gap_fraction=lambda *args, **kwargs: 0.0,
         hysteresis=lambda x, y, z: x,
     ),
 )

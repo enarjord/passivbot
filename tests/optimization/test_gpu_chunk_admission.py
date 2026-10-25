@@ -90,7 +90,7 @@ def test_cuda_independent_blocks_preserve_every_output(monkeypatch, strategy, mo
     verify_loaded_runtime_extension()
     proxy = make_proxy(mode, strategy, sides, minutes=256, factual_hsl=True)
     runner = proxy.fused_runner or proxy.runners[sides[0]]
-    candidates = [{}, {"long_entry_initial_qty_pct": .03}, {}]
+    candidates = [{}, {"long_entry_initial_qty_fraction": .03}, {}]
     ends = np.array([1, 137, 256], dtype=np.int32)
     _, expected = raw(proxy, candidates, end_steps=ends)
     expected = {key: value.clone() if isinstance(value, torch.Tensor) else value

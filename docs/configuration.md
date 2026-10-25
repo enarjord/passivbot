@@ -272,6 +272,17 @@ behavior.
   - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 
+### EMA-Anchor Exposure Coefficients
+
+`strategy.ema_anchor.entry_qty_exposure_coefficient` scales additional entry quantity by
+`max(1, 1 + same_side_exposure_ratio * coefficient)`. The ratio uses signed position exposure
+at the order-book midpoint divided by the effective per-position exposure limit. This sizing
+adjustment uses `max(0, signed_ratio)` for long and `max(0, -signed_ratio)` for short.
+
+`strategy.ema_anchor.inventory_offset_exposure_coefficient` multiplies that signed exposure
+ratio without the same-side clamp. The resulting price fraction is subtracted from both bid
+and ask EMA anchor factors. Exchange rounding, sizing floors, and exposure caps still apply.
+
 ### Trailing Martingale Entries
 
 The retained strategy kinds are `trailing_martingale` and `ema_anchor`.
@@ -280,30 +291,30 @@ acts as recursive DCA spacing; with retracement enabled it is the required excur
 confirmation. The v7 strategy and its dedicated migration command have been removed.
 Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 
-- **strategy.trailing_martingale.entry.double_down_factor**:
-  - Quantity of the next re-entry is position size times the double down factor.
-  - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
+- **strategy.trailing_martingale.entry.reentry_qty_multiplier**:
+  - Additional re-entry quantity starts from absolute current position size times this multiplier, before minimum/initial sizing floors, exchange rounding, and exposure caps.
+  - Example: Absolute position size `1.4` and multiplier `0.9` give `1.4 * 0.9 = 1.26` before those safeguards; multiplier `1.0` adds the current position quantity.
 - **strategy.trailing_martingale.entry.threshold_base_fraction**:
   - Re-entry threshold from the current position price.
   - If entry retracement is disabled:
     - `next_reentry_price_long = pos_price * (1 - effective_threshold)`
     - `next_reentry_price_short = pos_price * (1 + effective_threshold)`
   - If entry retracement is enabled, price must first move at least this far in the favorable direction before the retracement condition may place an order.
-- **strategy.trailing_martingale.entry.threshold_we_weight**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient**, **threshold_log_range_1h_coefficient**, **threshold_log_range_1m_coefficient**:
   - Entry threshold is widened multiplicatively:
-    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
-  - `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
-  - Positive weights make entries less eager as exposure or volatility rises.
+    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_exposure_ratio_coefficient + log_range_1h * threshold_log_range_1h_coefficient + log_range_1m * threshold_log_range_1m_coefficient)`
+  - `we_ratio = wallet_exposure / effective_wallet_exposure_limit_ratio`.
+  - Positive coefficients make entries less eager as exposure or log range rises.
 - **strategy.trailing_martingale.entry.retracement_base_fraction**:
   - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
-- **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.retracement_exposure_ratio_coefficient**, **retracement_log_range_1h_coefficient**, **retracement_log_range_1m_coefficient**:
   - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
-- **strategy.trailing_martingale.volatility_ema_span_1h_candles**, **volatility_ema_span_minutes**:
+- **strategy.trailing_martingale.log_range_ema_span_1h_candles**, **log_range_ema_span_minutes**:
   - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
   - The hourly horizon is a floating count of calendar-hour candle samples. The minute horizon
     is converted to base-candle periods when backtests aggregate their input candles.
-  - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
+  - A log-range coefficient of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
@@ -334,18 +345,18 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
     - `close_price_long = pos_price * (1 + effective_threshold)`
     - `close_price_short = pos_price * (1 - effective_threshold)`
   - With retracement enabled, this is the first trailing condition: market price must first reach the threshold before retracement can trigger the close.
-- **strategy.trailing_martingale.close.threshold_we_weight**:
+- **strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient**:
   - Close threshold is adjusted additively by exposure:
-    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
+    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_exposure_ratio_coefficient + log_range_1h * threshold_log_range_1h_coefficient + log_range_1m * threshold_log_range_1m_coefficient`
   - Negative values make closes more eager as position exposure grows, including break-even or negative-markup closes.
   - Positive values make closes less eager as exposure grows.
-- **strategy.trailing_martingale.close.threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+- **strategy.trailing_martingale.close.threshold_log_range_1h_coefficient**, **threshold_log_range_1m_coefficient**:
   - Positive values shift close thresholds farther from position price during volatile periods.
 - **strategy.trailing_martingale.close.retracement_base_fraction**:
   - If `<= 0.0`, close trailing is disabled and closes are resting limit orders.
   - If `> 0.0`, the bot waits for price to reach the close threshold and then retrace by the effective retracement.
-- **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
-  - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
+- **strategy.trailing_martingale.close.retracement_log_range_1h_coefficient**, **retracement_log_range_1m_coefficient**:
+  - Close retracement is widened multiplicatively by log range only. There is intentionally no close retracement wallet-exposure weight.
 
 The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_fraction`. The v7 compatibility strategy is removed.
 
@@ -354,7 +365,7 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 If a position is stuck, the bot uses profits from other positions to realize losses for the stuck position. If multiple positions are stuck, the position with the lowest price action distance is selected for unstucking.
 
 These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
-allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)`.
+allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`.
 
 - **unstuck.close_fraction**:
   - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
@@ -392,14 +403,14 @@ Final reducer quantities compete largest-first across the shared batch loss allo
 
 ### Filter Parameters
 
-Forager ranks eligible candidates using volume, EMA readiness, volatility and unilateralness.
+Forager ranks eligible candidates using volume, EMA readiness, log range and unilateralness.
 The old volume-drop filter is removed; volume continues to contribute through its configured weight.
 
-- **forager.volatility_ema_span_minutes / forager.volume_ema_span_minutes**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
-  - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - These spans control the raw inputs to forager ranking; they are separate from strategy volatility spans such as `volatility_ema_span_1h_candles` and `offset_volatility_ema_span_1h_candles`.
-- **forager_score_weights**: Final weighted forager ranking weights.
-  - Required keys: `volume`, `ema_readiness`, `volatility`, `unilateralness`.
+- **forager.log_range_ema_span_minutes / forager.volume_ema_span_minutes**: Floating-point spans in minutes for the log-range and quote-volume EMAs used by forager mode.
+  - The log-range component is the EMA of `ln(high / low)` from completed candles.
+  - These spans control the raw inputs to forager ranking; they are separate from strategy log-range spans such as `log_range_ema_span_1h_candles` and `offset_log_range_ema_span_1h_candles`.
+- **forager.score_weights**: Final weighted forager ranking weights.
+  - Required keys: `volume`, `ema_readiness`, `log_range`, `unilateralness`.
   - The unilateralness weight defaults to zero; see the canonical template for other weights.
   - Positive weights are relative and normalized to unit sum before use.
   - If all weights are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
@@ -417,16 +428,16 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        entry.ema_span_0_minutes, entry.ema_span_1_minutes, volatility_ema_span_1h_candles, volatility_ema_span_minutes,
-        entry.double_down_factor, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
-        entry.threshold_base_fraction, entry.threshold_we_weight,
-        entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
-        entry.retracement_base_fraction, entry.retracement_we_weight,
-        entry.retracement_volatility_1h_weight, entry.retracement_volatility_1m_weight,
-        close.qty_fraction, close.threshold_base_fraction, close.threshold_we_weight,
-        close.threshold_volatility_1h_weight, close.threshold_volatility_1m_weight,
+        entry.ema_span_0_minutes, entry.ema_span_1_minutes, log_range_ema_span_1h_candles, log_range_ema_span_minutes,
+        entry.reentry_qty_multiplier, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
+        entry.threshold_base_fraction, entry.threshold_exposure_ratio_coefficient,
+        entry.threshold_log_range_1h_coefficient, entry.threshold_log_range_1m_coefficient,
+        entry.retracement_base_fraction, entry.retracement_exposure_ratio_coefficient,
+        entry.retracement_log_range_1h_coefficient, entry.retracement_log_range_1m_coefficient,
+        close.qty_fraction, close.threshold_base_fraction, close.threshold_exposure_ratio_coefficient,
+        close.threshold_log_range_1h_coefficient, close.threshold_log_range_1m_coefficient,
         close.retracement_base_fraction,
-        close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
+        close.retracement_log_range_1h_coefficient, close.retracement_log_range_1m_coefficient
       ]
       ```
     - `config.bot.long/short` shared fields:
@@ -577,7 +588,7 @@ shared source.
 - **bot.portfolio.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.portfolio.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 
 - **bot.<side>.universe.filter_by_min_effective_cost**: Each side defaults to `true` and disallows flat initial entries where
-  `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
+  `balance * allowed_wallet_exposure_limit_ratio * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
@@ -675,7 +686,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
   not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
   equivalence from an old rolling duration.
 - **live.startup.risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
-- **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
+- **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
 - **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+position_side. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
   `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.
@@ -800,7 +811,7 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
             },
             "forager": {"score_weights": {
                 "volume": [0.0, 1.0, 0.01],
-                "volatility": [0.0, 1.0, 0.01],
+                "log_range": [0.0, 1.0, 0.01],
                 "ema_readiness": [0.0, 1.0, 0.01]
             }},
             "strategy": {

@@ -50,15 +50,15 @@ def _request_owned_paths(config):
         for key in get_strategy_param_keys(kind):
             yield ("bot", side, "strategy", kind, *key.split("."))
         dynamic_keys = (
-            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
-            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
-            "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
-            "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
+            "n_positions", "total_wallet_exposure_limit_ratio", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_fraction", "risk_twel_enforcer_threshold_ratio", "risk_wel_enforcer_threshold_ratio",
+            "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
+            "unilateralness_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
             "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
             "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
-            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
+            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "unilateralness")),
         )
         dynamic_bound_keys.extend(f"{side}_{key}" for key in dynamic_keys)
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
@@ -96,15 +96,15 @@ def _static_contract(config):
         for key in get_strategy_param_keys(kind):
             _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))
         dynamic_keys = (
-            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
-            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
-            "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
-            "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
+            "n_positions", "total_wallet_exposure_limit_ratio", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_fraction", "risk_twel_enforcer_threshold_ratio", "risk_wel_enforcer_threshold_ratio",
+            "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
+            "unilateralness_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
             "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
             "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
-            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
+            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "unilateralness")),
         )
         dynamic_bound_keys.extend(f"{side}_{key}" for key in dynamic_keys)
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):

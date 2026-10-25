@@ -261,7 +261,7 @@ mod tests {
             }
             for definition in [
                 "inline void advance_joint_realized_memory(",
-                "inline float allowed_wallet_exposure_limit(",
+                "inline float allowed_wallet_exposure_limit_ratio(",
                 "inline float coin_hsl_budget_multiplier(",
             ] {
                 if source.contains(definition) {
@@ -458,7 +458,7 @@ mod tests {
             "inline void record_gross_pnl(",
             "inline int wallet_exposure_denominator_n_positions(",
             "inline float coin_override_or(",
-            "inline float allowed_wallet_exposure_limit(",
+            "inline float allowed_wallet_exposure_limit_ratio(",
             "inline float clamped_market_price(",
             "inline JointPortfolioAccount init_joint_portfolio_account(",
             "inline void record_joint_portfolio_fill(",
@@ -841,7 +841,7 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
             .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit"));
+        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
         assert!(source.contains("scalars[scalar_offset + 22] = total_wallet_exposure_max"));
         assert!(source.contains("scalars[scalar_offset + 23] = total_wallet_exposure_mean"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
@@ -871,7 +871,7 @@ mod tests {
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(!source.contains("volume_drop"));
-        assert!(source.contains("config.forager_volume_span = params[po + 12]"));
+        assert!(source.contains("config.forager_volume_ema_span_candles = params[po + 12]"));
         assert!(source.contains("config.w_volume = params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains(
@@ -884,7 +884,7 @@ mod tests {
         assert!(source.contains("incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
-        assert!(source.contains("allowed_wallet_exposure_limit"));
+        assert!(source.contains("allowed_wallet_exposure_limit_ratio"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert!(source.contains("twel_enforcer_enabled"));
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
@@ -1112,7 +1112,7 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
             .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit"));
+        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
         assert!(source.contains("scalars[scalar_offset + 22] = total_wallet_exposure_max"));
         assert!(source.contains("scalars[scalar_offset + 23] = total_wallet_exposure_mean"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
@@ -1145,7 +1145,7 @@ mod tests {
             2
         );
         assert!(source.contains("coin_wel_enforcer_enabled"));
-        assert!(source.contains("coin_wel_enforcer_threshold"));
+        assert!(source.contains("coin_wel_enforcer_threshold_ratio"));
         assert!(source.contains("twel_enforcer_enabled"));
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("twel_close_qty"));
@@ -1197,7 +1197,7 @@ mod tests {
         assert!(source.contains("max_since_open"));
         assert!(source.contains("min_since_max"));
         assert!(source.contains("effective_n_positions"));
-        assert!(source.contains("allowed_wallet_exposure_limit"));
+        assert!(source.contains("allowed_wallet_exposure_limit_ratio"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("entry_retracement_base"));

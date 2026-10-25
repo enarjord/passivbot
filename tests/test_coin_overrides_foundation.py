@@ -221,7 +221,7 @@ def test_unknown_and_disallowed_inline_paths_fail():
     with pytest.raises(ValueError, match=r"coin_overrides\.BTC\.bot\.long\.mystery"):
         _parse({"BTC": {"bot": {"long": {"mystery": 1.0}}}})
     with pytest.raises(
-        ValueError, match=r"total_wallet_exposure_limit.*not overridable"
+        ValueError, match=r"total_wallet_exposure_limit_ratio.*not overridable"
     ):
         _parse(
             {"BTC": {"bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}}}}}
@@ -301,7 +301,7 @@ def test_invalid_normalized_coin_fails():
         _parse({"???": {}}, symbol_normalizer=lambda coin: "")
 
 
-def test_wallet_exposure_limit_from_partial_file_is_retained_and_validated():
+def test_wallet_exposure_limit_ratio_from_partial_file_is_retained_and_validated():
     parsed = _parse(
         {"BTC": {"override_config_path": "unused-by-test.json"}},
         loaded={"bot": {"short": {"wallet_exposure_limit_ratio": 0.125}}},

@@ -586,12 +586,12 @@ def test_real_cuda_multicoin_filter_preserves_funded_cpu_and_gpu_runs(
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("initial_qty_pct, funded", [
+@pytest.mark.parametrize("initial_qty_fraction, funded", [
     (0.01 * (1 - 1e-4), False), (float(np.nextafter(0.01, 0.0)), False),
     (0.01, True), (0.01 * (1 + 1e-4), True),
 ])
 def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
-    require_real_passivbot_rust_module, strategy, initial_qty_pct, funded
+    require_real_passivbot_rust_module, strategy, initial_qty_fraction, funded
 ):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
@@ -602,9 +602,9 @@ def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
     config, candles, markets, _btc, _timestamps = inputs
     strategy_config = config["bot"]["long"]["strategy"][strategy]
     if strategy == "ema_anchor":
-        strategy_config["base_qty_pct"] = initial_qty_pct
+        strategy_config["base_qty_fraction"] = initial_qty_fraction
     else:
-        strategy_config["entry"]["initial_qty_pct"] = initial_qty_pct
+        strategy_config["entry"]["initial_qty_fraction"] = initial_qty_fraction
     candles[:, :, :3] = (101.0, 99.0, 100.0)
     for coin in config["backtest"]["coins"]["binance"]:
         markets[coin].update(min_cost=5.0, maker=0.0, taker=0.0)
@@ -613,7 +613,7 @@ def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
     )
     metric = report["metrics"]["fills_per_day"]
     assert (metric["cpu"] > 0) is funded
-    if initial_qty_pct == float(np.nextafter(0.01, 0.0)):
+    if initial_qty_fraction == float(np.nextafter(0.01, 0.0)):
         # This input and exactly 0.01 have identical float32 payloads. CPU
         # rejects its sub-minimum float64 projection; GPU rounding may admit
         # it. Do not require perfect identity or conceal the discontinuity.

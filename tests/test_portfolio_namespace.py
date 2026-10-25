@@ -15,7 +15,7 @@ from config.json_schema import generate_schema
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
 from config.schema import get_template_config
-from config.strategy_paths import project_native_strategy_side
+
 from released_v8_fixtures import released_v8_policy
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
@@ -199,8 +199,10 @@ def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changi
     original = deepcopy(source)
     output = migrate(source, memory_span_minutes=123.5).config
     defaults = get_released_v8_defaults(strategy_kind=kind)
+    from config.public_names import rewrite_released_public_names
+    rewrite_released_public_names(defaults, strategy_kind=kind)
     for side in ("long", "short"):
-        expected = project_native_strategy_side(kind, defaults["optimize"]["bounds"][side]["strategy"][kind])
+        expected = deepcopy(defaults["optimize"]["bounds"][side]["strategy"][kind])
         assert output["optimize"]["bounds"][side]["strategy"] == {kind: expected}
         assert ("hsl" in output["optimize"]["bounds"][side]) == (scope != "portfolio")
     assert output["bot"]["portfolio"]["hsl"]["scope"] == scope

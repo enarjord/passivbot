@@ -146,7 +146,7 @@ def test_explicit_alias_presence_precedes_frozen_root_defaults(path, value):
         ("n_positions",): ("risk", "max_positions"),
         ("risk_entry_cooldown_minutes",): ("entry_cooldown", "base_duration_minutes"),
         ("risk", "we_excess_allowance_fraction"): ("risk", "we_excess_allowance_fraction"),
-        ("forager_volatility_ema_span_1m",): ("forager", "volatility_ema_span_minutes"),
+        ("forager_volatility_ema_span_1m",): ("forager", "log_range_ema_span_minutes"),
         ("strategy", "trailing_martingale", "entry", "ema_span_0_minutes"): path,
     }
     selected = result.config["bot"]["long"]
