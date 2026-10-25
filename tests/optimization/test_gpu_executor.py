@@ -1067,7 +1067,6 @@ def warm_preparing_service(service, dataset, now):
     policy.arrived(dataset, now - 1, active=False)
     for step in range(1, 5):
         policy.arrived(dataset, now - 1 + step * 0.2, active=True)
-    policy.observe(dataset, 4, 100)
     policy.observe(dataset, 4, 2)
 
 
@@ -1147,6 +1146,49 @@ def test_abandoned_preparing_hint_expires_at_the_original_absolute_deadline(monk
         service.close(cancel_pending=True)
 
 
+@pytest.mark.parametrize("seal", [True, False])
+def test_cold_preparing_hint_survives_gaps_until_sealed_or_expired(monkeypatch, seal):
+    import optimization.gpu.executor as executor
+
+    clock, waiting, replay = [100.0], Queue(), Replay()
+    monkeypatch.setattr(executor, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=time.perf_counter,
+    ))
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    ordinary = service._coalescing.preparing_deadline
+
+    def deadline(dataset, started):
+        value = ordinary(dataset, started)
+        waiting.put(value)
+        return value
+
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market"})
+    try:
+        first = service.submit(request(1))
+        assert waiting.get(timeout=3) == 160
+        clock[0] = 101  # Exceeds the ordinary five-millisecond idle delay.
+        second = service.submit(request(2))
+        assert waiting.get(timeout=3) == 160
+        assert not replay.calls and not first.done()
+        if seal:
+            service.set_preparing(())
+        else:
+            # Repeating readiness cannot renew the original deadline. A new
+            # arrival wakes the worker after the abandoned hint has expired.
+            clock[0] = 161
+            service.set_preparing({"market"})
+            third = service.submit(request(3))
+            assert third.result(timeout=3).request_id == "3"
+        assert first.result(timeout=3).request_id == "1"
+        assert second.result(timeout=3).request_id == "2"
+        batches = [[row["value"] for row in batch] for batch in replay.calls]
+        assert batches == ([[1, 2]] if seal else [[1, 2, 3]])
+    finally:
+        service.close(cancel_pending=True)
+
+
 def test_sealing_preparing_producer_releases_a_partial_batch(monkeypatch):
     replay, waiting = Replay(), Event()
     service = GpuBacktestService(batch_size=4, max_batch_delay=None)
@@ -1166,7 +1208,8 @@ def test_sealing_preparing_producer_releases_a_partial_batch(monkeypatch):
         service.close(cancel_pending=True)
 
 
-def test_unrelated_ready_dataset_keeps_the_ordinary_fairness_bound(monkeypatch):
+@pytest.mark.parametrize("cold", [False, True])
+def test_unrelated_ready_dataset_keeps_the_ordinary_fairness_bound(monkeypatch, cold):
     import optimization.gpu.executor as executor
 
     clock, waiting, order = [100.0], Queue(), []
@@ -1180,7 +1223,8 @@ def test_unrelated_ready_dataset_keeps_the_ordinary_fairness_bound(monkeypatch):
                 order.append(dataset)
                 return super().evaluate(candidates)
         service.register_dataset(dataset, OrderedReplay())
-    warm_preparing_service(service, "a", clock[0])
+    if not cold:
+        warm_preparing_service(service, "a", clock[0])
     ordinary = service._coalescing.preparing_deadline
     def deadline(dataset, started):
         value = ordinary(dataset, started)

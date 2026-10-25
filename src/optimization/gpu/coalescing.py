@@ -1,4 +1,4 @@
-"""Run-local queue coalescing from arrival cadence and successful warm work.
+"""Run-local queue coalescing from arrival cadence and successful work.
 
 Only the service owns this advisory state. No device, candidate scoring, search
 policy or checkpoint state belongs here; losing the observations changes timing.
@@ -21,7 +21,8 @@ class _Stream:
 class BatchCoalescer:
     minimum_delay = 0.005
     maximum_delay = 0.5
-    maximum_preparing_delay = 60.0
+    cold_preparing_delay = 60.0
+    maximum_preparing_delay = 300.0
 
     def __init__(self):
         self._streams: dict[str, _Stream] = {}
@@ -37,13 +38,13 @@ class BatchCoalescer:
         stream.last_arrival = now
 
     def observe(self, dataset_id, count, seconds):
-        if not math.isfinite(seconds) or seconds <= 0:
+        if type(count) is not int or count < 1 or not math.isfinite(seconds) or seconds <= 0:
             return
         stream = self._streams[dataset_id]
-        # Do not learn compilation or first allocation of a replay batch shape.
-        if count not in stream.seen_counts:
-            stream.seen_counts.add(count)
-            return
+        # Scheduling can use the first completed replay, including its setup:
+        # overestimating cost only extends a bounded producer allowance. New
+        # integer counts do not imply compilation of a new feature variant.
+        stream.seen_counts.add(count)
         stream.replay_seconds = (
             seconds if stream.replay_seconds is None
             else stream.replay_seconds * 0.8 + seconds * 0.2
@@ -64,16 +65,17 @@ class BatchCoalescer:
         return min(started + ceiling, stream.last_arrival + idle)
 
     def preparing_deadline(self, dataset_id, started):
-        """Accumulate active CPU production within a fixed warm-cost allowance.
+        """Accumulate declared CPU production within an absolute cost allowance.
 
         The producer hint survives individual CPU preparation/collection pauses;
         an arrival-gap heuristic must not contradict that readiness declaration.
         Neither arrivals nor readiness updates restart the absolute deadline, so
-        even an abandoned hint expires. Cold shapes retain the ordinary policy.
+        even an abandoned hint expires. Before any completed work, an explicit
+        producer hint receives a finite startup allowance.
         """
         stream = self._streams[dataset_id]
         if stream.replay_seconds is None:
-            return self.deadline(dataset_id, started)
+            return started + self.cold_preparing_delay
         allowance = min(self.maximum_preparing_delay,
                         max(self.minimum_delay, stream.replay_seconds * 1.5))
         return started + allowance
