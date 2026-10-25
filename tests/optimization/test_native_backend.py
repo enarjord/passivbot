@@ -37,7 +37,7 @@ def inputs(manager, *, n_obj=2):
     config["optimize"]["pymoo"]["algorithm"] = "nsga2" if n_obj == 2 else "nsga3"
     # This tiny search varies two coordinates among many fixed policy leaves.
     config["optimize"]["pymoo"]["shared"].update(
-        mutation_prob=1.0, mutation_prob_per_variable=0.5,
+        mutation_probability=1.0, mutation_probability_per_variable=0.5,
     )
     config["optimize"]["bounds"] = {
         side: {

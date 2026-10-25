@@ -6807,16 +6807,24 @@
                 "shared": {
                   "type": "object",
                   "properties": {
-                    "crossover_eta": {
+                    "crossover_distribution_index": {
                       "type": "number",
                       "default": 20.0,
+                      "description": "Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "distribution index",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "crossover_prob_var": {
+                    "crossover_probability_per_variable": {
                       "type": "number",
                       "default": 0.5,
+                      "description": "Per-variable simulated-binary-crossover gate; external pymoo candidate crossover policy is unchanged.",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "parent-pair coordinates conditional on crossover",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
@@ -6828,29 +6836,42 @@
                         "optimize"
                       ]
                     },
-                    "mutation_eta": {
+                    "mutation_distribution_index": {
                       "type": "number",
                       "default": 20.0,
+                      "description": "Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "distribution index",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "mutation_prob": {
+                    "mutation_probability": {
                       "type": [
                         "number",
                         "string"
                       ],
                       "default": "auto",
+                      "description": "Per-candidate polynomial-mutation gate; auto is 1 / max(1, vector length).",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "offspring candidates",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "mutation_prob_per_variable": {
+                    "mutation_probability_per_variable": {
                       "type": [
                         "number",
                         "string"
                       ],
                       "default": "auto",
+                      "description": "Conditional per-variable polynomial-mutation gate; auto is min(0.5, 1 / max(1, vector length)).",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "candidate coordinates conditional on mutation",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
@@ -19629,23 +19650,23 @@
         "optimize.pymoo.shared": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared"
         },
-        "optimize.pymoo.shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "optimize.pymoo.shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "optimize.pymoo.shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "optimize.pymoo.shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "optimize.pymoo.shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "optimize.pymoo.shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "optimize.pymoo.shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "optimize.pymoo.shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "optimize.pymoo.shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "optimize.pymoo.shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "optimize.pymoo.shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         },
         "optimize.round_to_n_significant_digits": {
           "$ref": "#/$defs/config/properties/optimize/properties/round_to_n_significant_digits"
@@ -25120,23 +25141,23 @@
         "pymoo.shared": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared"
         },
-        "pymoo.shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "pymoo.shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "pymoo.shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "pymoo.shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "pymoo.shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "pymoo.shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "pymoo.shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "pymoo.shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "pymoo.shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "pymoo.shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "pymoo.shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         },
         "round_to_n_significant_digits": {
           "$ref": "#/$defs/config/properties/optimize/properties/round_to_n_significant_digits"
@@ -25964,23 +25985,23 @@
         "shared": {
           "$ref": "#/$defs/scenarioPatch:optimize.pymoo.shared"
         },
-        "shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         }
       },
       "patternProperties": {},
@@ -26046,23 +26067,23 @@
     "scenarioPatch:optimize.pymoo.shared": {
       "type": "object",
       "properties": {
-        "crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         }
       },
       "patternProperties": {},

@@ -186,35 +186,35 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
 
     shared_defaults = template_pymoo["shared"]
     ref_dir_defaults = template_pymoo["algorithms"]["nsga3"]["ref_dirs"]
-    mutation_prob = shared.get("mutation_prob", shared_defaults["mutation_prob"])
+    mutation_probability = shared.get("mutation_probability", shared_defaults["mutation_probability"])
     eliminate_duplicates = shared.get("eliminate_duplicates", shared_defaults["eliminate_duplicates"])
     if type(eliminate_duplicates) is not bool:
         raise TypeError("config.optimize.pymoo.shared.eliminate_duplicates must be a boolean")
 
     normalized_shared = {
-        "crossover_eta": normalize_pymoo_positive_float(
-            shared.get("crossover_eta", shared_defaults["crossover_eta"]),
-            "config.optimize.pymoo.shared.crossover_eta",
+        "crossover_distribution_index": normalize_pymoo_positive_float(
+            shared.get("crossover_distribution_index", shared_defaults["crossover_distribution_index"]),
+            "config.optimize.pymoo.shared.crossover_distribution_index",
         ),
-        "crossover_prob_var": normalize_pymoo_probability(
-            shared.get("crossover_prob_var", shared_defaults["crossover_prob_var"]),
-            "config.optimize.pymoo.shared.crossover_prob_var",
+        "crossover_probability_per_variable": normalize_pymoo_probability(
+            shared.get("crossover_probability_per_variable", shared_defaults["crossover_probability_per_variable"]),
+            "config.optimize.pymoo.shared.crossover_probability_per_variable",
         ),
-        "mutation_eta": normalize_pymoo_positive_float(
-            shared.get("mutation_eta", shared_defaults["mutation_eta"]),
-            "config.optimize.pymoo.shared.mutation_eta",
+        "mutation_distribution_index": normalize_pymoo_positive_float(
+            shared.get("mutation_distribution_index", shared_defaults["mutation_distribution_index"]),
+            "config.optimize.pymoo.shared.mutation_distribution_index",
         ),
-        "mutation_prob": normalize_pymoo_probability(
-            mutation_prob,
-            "config.optimize.pymoo.shared.mutation_prob",
+        "mutation_probability": normalize_pymoo_probability(
+            mutation_probability,
+            "config.optimize.pymoo.shared.mutation_probability",
             allow_auto=True,
         ),
-        "mutation_prob_per_variable": normalize_pymoo_probability(
+        "mutation_probability_per_variable": normalize_pymoo_probability(
             shared.get(
-                "mutation_prob_per_variable",
-                shared_defaults["mutation_prob_per_variable"],
+                "mutation_probability_per_variable",
+                shared_defaults["mutation_probability_per_variable"],
             ),
-            "config.optimize.pymoo.shared.mutation_prob_per_variable",
+            "config.optimize.pymoo.shared.mutation_probability_per_variable",
             allow_auto=True,
         ),
         "eliminate_duplicates": eliminate_duplicates,

@@ -111,6 +111,11 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
 def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
     """Preserve effective pymoo policy; DEAP algorithm changes require consent."""
+    from config.public_names import released_public_path
+
+    def public_shared_target(key):
+        return released_public_path(("optimize", "pymoo", "shared", key))[-1]
+
     optimize = config.get("optimize", {})
     legacy_backend = optimize.get("backend", "pymoo")
     pymoo = optimize.setdefault("pymoo", {})
@@ -121,7 +126,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             raise ValueError("optimize.pymoo.shared.mutation_prob_var conflicts with mutation_prob")
         shared["mutation_prob"] = value
         changes.append(dict(path="optimize.pymoo.shared.mutation_prob_var", old=value,
-                            new={"mutation_prob": value}, reason="explicit released pymoo spelling migration"))
+                            new={public_shared_target("mutation_prob"): value}, reason="explicit released pymoo spelling migration"))
     if legacy_backend == "deap":
         if best_effort:
             from .released_v8 import get_released_v8_defaults
@@ -154,7 +159,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                 if key == "mutation_prob_per_variable" and legacy == "mutation_indpb" and value == 0:
                     value = default
                 shared[key] = deepcopy(value)
-                record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,
+                record_guess(changes, f"optimize.pymoo.shared.{public_shared_target(key)}", None, value,
                              f"approximate DEAP policy using {legacy or 'released pymoo default'}; search evolution differs")
             if not acknowledge:
                 record_guess(changes, "optimize.backend", "deap", "pymoo",
@@ -179,7 +184,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             if key != "mutation_indpb" or (not isinstance(value, bool) and float(value) > 0):
                 shared[target] = deepcopy(value)
                 changes.append(dict(path=f"optimize.{key}", old=value,
-                                    new={f"optimize.pymoo.shared.{target}": value},
+                                    new={f"optimize.pymoo.shared.{public_shared_target(target)}": value},
                                     reason="materialized effective released pymoo fallback without changing its value"))
                 continue
         changes.append(dict(path=f"optimize.{key}", old=value, new=None,
