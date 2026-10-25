@@ -35,7 +35,7 @@ def facts(now, size, mode, side, *, slow=1.0):
         },
         "slots": 1, "scale_budget_with_excess_allowance": False,
         "exposure_budget": None, "memory_ema_span_minutes": slow,
-        "drawdown_ratio_ema_span_minutes": 1.0, "threshold": 0.05,
+        "drawdown_fraction_ema_span_minutes": 1.0, "drawdown_threshold_fraction": 0.05,
         "cooldown_ms": 60_000,
         "budget_observations": [{
             "timestamp": 0, "order": -1, "balance": 100.0, "slots": 1,

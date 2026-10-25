@@ -48,12 +48,12 @@ fn equity_shared_references_match_current_producers() {
     let mut bp_pair = BotParamsPair::default();
     bp_pair.long.n_positions = 1;
     bp_pair.short.n_positions = 1;
-    bp_pair.long.total_wallet_exposure_limit = 1.0;
-    bp_pair.short.total_wallet_exposure_limit = 1.0;
-    bp_pair.long.ema_span_0 = 10.0;
-    bp_pair.long.ema_span_1 = 20.0;
-    bp_pair.short.ema_span_0 = 10.0;
-    bp_pair.short.ema_span_1 = 20.0;
+    bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.long.ema_span_0_minutes = 10.0;
+    bp_pair.long.ema_span_1_minutes = 20.0;
+    bp_pair.short.ema_span_0_minutes = 10.0;
+    bp_pair.short.ema_span_1_minutes = 20.0;
     bp_pair.long.hsl_enabled = true;
     bp_pair.short.hsl_enabled = true;
 
@@ -64,8 +64,8 @@ fn equity_shared_references_match_current_producers() {
         minimum_coin_age_days: [0.0; 2],
         inception_timestamps_ms: vec![],
         starting_balance: 100.0,
-        maker_fee: 0.0,
-        taker_fee: 0.0,
+        maker_fee_fraction: 0.0,
+        taker_fee_fraction: 0.0,
         coins: vec!["TEST".to_string()],
         active_coin_indices: None,
         first_timestamp_ms: 0,
@@ -75,8 +75,8 @@ fn equity_shared_references_match_current_producers() {
         warmup_minutes: vec![0],
         trade_start_indices: vec![0],
         global_warmup_bars: 0,
-        btc_collateral_cap: 0.0,
-        btc_collateral_ltv_cap: None,
+        btc_collateral_target_ratio: 0.0,
+        max_usd_debt_to_wallet_value_ratio: None,
         metrics_only: true,
         ew_half_life_days: None,
         hsl_detailed_report: false,
@@ -84,14 +84,14 @@ fn equity_shared_references_match_current_producers() {
         filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
-        max_realized_loss_pct: 1.0,
+        loss_gate_max_drawdown_fraction: 1.0,
         unstuck_memory_ema_span_minutes: 43_200.0,
         loss_gate_memory_ema_span_minutes: 43_200.0,
-        liquidation_threshold: 0.05,
+        equity_floor_fraction: 0.05,
         market_orders_allowed: false,
-        market_order_near_touch_threshold: 0.001,
-        market_order_slippage_pct: 0.0,
-        limit_order_fill_buffer_pct: 0.0,
+        market_order_near_touch_fraction: 0.001,
+        market_order_slippage_fraction: 0.0,
+        limit_order_fill_buffer_fraction: 0.0,
         forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
         equity_hard_stop_loss: hs,
         candle_interval_minutes: 1,

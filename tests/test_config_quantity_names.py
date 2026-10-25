@@ -40,10 +40,10 @@ def test_public_scope_and_policy_are_adapted_only_at_the_native_boundary(scope, 
     elif scope == "coin":
         transported.extend(payload["coins"]["TEST"])
     for policy in transported:
-        assert "red_threshold" in policy
-        assert "drawdown_ratio_threshold" not in policy
+        assert "drawdown_threshold_fraction" in policy
+        assert "red_threshold" not in policy
     public = config["bot"]["long"]["hsl"]
-    assert native_hsl_policy(public)["red_threshold"] == public["drawdown_ratio_threshold"]
+    assert native_hsl_policy(public)["drawdown_threshold_fraction"] == public["drawdown_threshold_fraction"]
     if scope == "coin":
         from optimization.gpu.hsl import project_bot
 
@@ -52,37 +52,37 @@ def test_public_scope_and_policy_are_adapted_only_at_the_native_boundary(scope, 
         request.bot_params_list[0]["long"]["n_positions"] = 1
         request.backtest_params["dynamic_wel_by_tradability"] = False
         projected = project_bot(request, 0, "long", config, base=True)
-        assert projected["hsl_red_threshold"] == public["drawdown_ratio_threshold"]
+        assert projected["hsl_drawdown_threshold_fraction"] == public["drawdown_threshold_fraction"]
         assert "hsl_drawdown_ratio_threshold" not in projected
     assert (config, policies) == original
 
 
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
-def test_public_bounds_keep_stable_optimizer_ids_and_roundtrip_through_the_writer(scope):
+def test_public_bounds_use_canonical_hsl_optimizer_ids_and_roundtrip_through_the_writer(scope):
     config = prepare_config(generated_template(get_template_config(), scope), verbose=False)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
-    key = "hsl_red_threshold" if scope == "portfolio" else "long_hsl_red_threshold"
+    key = "hsl_drawdown_threshold_fraction" if scope == "portfolio" else "long_hsl_drawdown_threshold_fraction"
     owner = "portfolio" if scope == "portfolio" else "long"
     assert key in flat
-    assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_ratio_threshold")
-    assert resolve_optimizer_key_path(config, "long_unstuck_ema_dist") == (
+    assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_threshold_fraction")
+    assert resolve_optimizer_key_path(config, "long_unstuck_ema_distance_fraction") == (
         "bot", "long", "unstuck", "ema_distance_fraction",
     )
     result = {}
     set_flat_optimize_bound(result, "trailing_martingale", key, [0.05, 0.1])
-    assert result[owner]["hsl"] == {"drawdown_ratio_threshold": [0.05, 0.1]}
+    assert result[owner]["hsl"] == {"drawdown_threshold_fraction": [0.05, 0.1]}
     assert flatten_optimize_bounds(result, strategy_kind="trailing_martingale") == {key: [0.05, 0.1]}
 
 
 @pytest.mark.parametrize("selector,keys", [
-    ("red_threshold", {"long_hsl_red_threshold", "short_hsl_red_threshold"}),
-    ("hsl.red_threshold", {"long_hsl_red_threshold", "short_hsl_red_threshold"}),
-    ("long.hsl.red_threshold", {"long_hsl_red_threshold"}),
-    ("bot.*.hsl.red_threshold", {"long_hsl_red_threshold", "short_hsl_red_threshold"}),
-    ("ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
-    ("unstuck.ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
-    ("short.unstuck.ema_dist", {"short_unstuck_ema_dist"}),
-    ("bot.*.unstuck.ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
+    ("red_threshold", {"long_hsl_drawdown_threshold_fraction", "short_hsl_drawdown_threshold_fraction"}),
+    ("hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction", "short_hsl_drawdown_threshold_fraction"}),
+    ("long.hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction"}),
+    ("bot.*.hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction", "short_hsl_drawdown_threshold_fraction"}),
+    ("ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
+    ("unstuck.ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
+    ("short.unstuck.ema_dist", {"short_unstuck_ema_distance_fraction"}),
+    ("bot.*.unstuck.ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
 ])
 def test_released_quantity_selector_suffixes_preserve_exact_gene_authority(selector, keys):
     source = released_v8_policy()
@@ -106,7 +106,7 @@ def test_released_scope_conversion_reports_the_authored_value_without_rescaling(
     assert any(change["path"] == "live.hsl_signal_mode" and change["old"] == old
                and change["new"] == {"bot.portfolio.hsl.scope": new} for change in migration.changes)
     for side in ("long", "short"):
-        assert migration.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] == source["bot"][side]["hsl"]["red_threshold"]
+        assert migration.config["bot"][side]["hsl"]["drawdown_threshold_fraction"] == source["bot"][side]["hsl"]["red_threshold"]
         assert migration.config["bot"][side]["unstuck"]["ema_distance_fraction"] == source["bot"][side]["unstuck"]["ema_dist"]
 
 
@@ -154,7 +154,7 @@ def test_released_portfolio_threshold_selectors_preserve_the_global_gene(selecto
     source["optimize"]["fixed_params"] = [selector]
     config = migrate(source, memory_span_minutes=123.5).config
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
-    assert set(resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)) == {"hsl_red_threshold"}
+    assert set(resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)) == {"hsl_drawdown_threshold_fraction"}
 
 
 @pytest.mark.parametrize("owner", ["fixed", "scenario"])
@@ -176,7 +176,7 @@ def test_released_scope_override_reports_exact_old_value(owner):
 
 
 @pytest.mark.parametrize("group,old,new", [
-    ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+    ("hsl", "red_threshold", "drawdown_threshold_fraction"),
     ("unstuck", "ema_dist", "ema_distance_fraction"),
 ])
 @pytest.mark.parametrize("reverse", [False, True])
@@ -191,7 +191,7 @@ def test_released_quantity_alias_conflicts_fail_in_both_authoring_orders(group, 
 
 
 @pytest.mark.parametrize("group,old,new", [
-    ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+    ("hsl", "red_threshold", "drawdown_threshold_fraction"),
     ("unstuck", "ema_dist", "ema_distance_fraction"),
 ])
 def test_equal_released_quantity_aliases_are_reported_once_without_mutating_input(group, old, new):
@@ -206,7 +206,7 @@ def test_equal_released_quantity_aliases_are_reported_once_without_mutating_inpu
 
 
 @pytest.mark.parametrize("group,old,new", [
-    ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+    ("hsl", "red_threshold", "drawdown_threshold_fraction"),
     ("unstuck", "ema_dist", "ema_distance_fraction"),
 ])
 def test_released_inline_quantities_replace_file_values_after_independent_conversion(tmp_path, group, old, new):

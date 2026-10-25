@@ -631,8 +631,8 @@
     const totalShort = rows
       .filter((row) => row.pside === "short")
       .reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
-    const twelLong = rows.find((row) => row.pside === "long")?.side.total_wallet_exposure_limit || 0;
-    const twelShort = rows.find((row) => row.pside === "short")?.side.total_wallet_exposure_limit || 0;
+    const twelLong = rows.find((row) => row.pside === "long")?.side.total_wallet_exposure_limit_ratio || 0;
+    const twelShort = rows.find((row) => row.pside === "short")?.side.total_wallet_exposure_limit_ratio || 0;
     els.positionsMeta.textContent = `TWE L ${fmtCompact(totalLong)}/${fmtCompact(twelLong)} | S ${fmtCompact(totalShort)}/${fmtCompact(twelShort)}`;
     els.positionsBody.innerHTML = "";
     if (!rows.length) {
@@ -699,7 +699,7 @@
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${escapeHtml(side.enabled ? "enabled" : "off")}</span></p>
         <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(shortSymbol(side.next_symbol))}</p>
-        <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_volatility))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
+        <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_log_range))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
       `;
       els.foragerDetails.appendChild(item);
     }
@@ -717,7 +717,7 @@
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.status === "ok" ? "is-ok" : side.status === "disabled" ? "" : "is-warn"}">${escapeHtml(side.status || "-")}</span></p>
         <p class="subline">allowance ${escapeHtml(fmtCompact(side.allowance_live, 4))} · next ${escapeHtml(side.next_symbol || "-")}</p>
-        <p class="minor">target ${escapeHtml(fmtCompact(side.next_target_price))} · dist ${escapeHtml(fmtPctRatio(side.next_target_distance_ratio))} · ema ${escapeHtml(fmtPctRatio(side.next_unstuck_trigger_distance_ratio))}</p>
+        <p class="minor">target ${escapeHtml(fmtCompact(side.next_target_price))} · dist ${escapeHtml(fmtPctRatio(side.next_target_price_offset_fraction))} · ema ${escapeHtml(fmtPctRatio(side.next_unstuck_trigger_price_offset_fraction))}</p>
       `;
       els.unstuckDetails.appendChild(item);
     }

@@ -553,7 +553,7 @@ gate maintains its own realized D with `bot.portfolio.loss_gate.memory_ema_span_
 Every ordinary, protective or unstuck fill contributes its net economics to each
 enabled memory, including signed fees and rebates, while the economic ledger records
 the fill once. Both memories exclude UPNL and survive HSL episode boundaries. The
-gate uses `bot.portfolio.loss_gate.max_drawdown_ratio` directly in the allowance formula,
+gate uses `bot.portfolio.loss_gate.max_drawdown_fraction` directly in the allowance formula,
 without a TWEL multiplier. Its configured
 enablement is preserved separately from float32 packing, including fractions that
 round to 1. The independent rolling window and its history scratch storage are

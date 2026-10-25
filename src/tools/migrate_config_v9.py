@@ -328,7 +328,11 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         # authorization leaves for the explicit v9 migration pass below.
         from config.migrations.entry_cooldown import migrate_entry_cooldown_tree
         from config.migrations.entry_ema import migrate_entry_ema_tree
-        from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
+        from config.migrations.final_v9 import (
+            released_shared_bot_paths,
+            canonicalize_released_shared_bot_side as canonicalize_shared_bot_side,
+        )
+        FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
 
         migrate_entry_cooldown_tree(inline, path=f"coin_overrides.{coin}")
         migrate_entry_ema_tree(inline, path=f"coin_overrides.{coin}")
@@ -380,7 +384,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     reason="explicit released-v8 enforcer conversion before file/inline merge",
                 ))
             for group, old, new in (
-                ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+                ("hsl", "red_threshold", "drawdown_threshold_fraction"),
                 ("unstuck", "ema_dist", "ema_distance_fraction"),
             ):
                 block = values.get(group, {})

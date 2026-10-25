@@ -151,7 +151,7 @@ def test_native_gap_capture_temporal_partial_and_compact_join(sides, interval_mi
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=3,
         needed_metrics=set(ENTRY_INTERVAL_NAMES), factual_hsl=True)
     runner = replay.fused_runner if sides == "both" else replay.runners[sides]
-    candidates = [{}, {f"{replay.sides[0]}_entry_initial_qty_pct": .03}, {}]
+    candidates = [{}, {f"{replay.sides[0]}_entry_initial_qty_fraction": .03}, {}]
     params = np.concatenate([replay._parameter_matrix(candidates, side) for side in replay.sides], axis=1)
     runner.max_dispatch_candidate_bars = None
     full = {k: v.clone() for k, v in runner.run(params).items()}

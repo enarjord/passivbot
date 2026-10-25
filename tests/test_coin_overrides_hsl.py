@@ -37,12 +37,12 @@ def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
 
 HSL_LEAF_CASES = [
     (("cooldown_after_red_minutes",), 12.5),
-    (("drawdown_ratio_ema_span_minutes",), 5.5),
+    (("drawdown_fraction_ema_span_minutes",), 5.5),
     (("memory_ema_span_minutes",), 19.5),
     (("scale_budget_with_excess_allowance",), True),
     (("enabled",), False),
     (("panic_close_order_type",), "market"),
-    (("drawdown_ratio_threshold",), 0.2),
+    (("drawdown_threshold_fraction",), 0.2),
 ]
 
 
@@ -74,19 +74,19 @@ def test_complete_hsl_group_is_allowed_for_coin_signal_mode(pside, path, value):
 def test_hsl_policy_registry_covers_every_canonical_leaf():
     assert CONDITIONAL_HSL_OVERRIDE_PATHS == {
         "hsl.cooldown_after_red_minutes",
-        "hsl.drawdown_ratio_ema_span_minutes",
+        "hsl.drawdown_fraction_ema_span_minutes",
         "hsl.memory_ema_span_minutes",
         "hsl.scale_budget_with_excess_allowance",
         "hsl.enabled",
         "hsl.panic_close_order_type",
-        "hsl.drawdown_ratio_threshold",
+        "hsl.drawdown_threshold_fraction",
     }
 
 
 @pytest.mark.parametrize("field,value", [
-    ("hsl_red_threshold", 0.2),
-    ("unstuck_ema_span_0", 12.5),
-    ("risk_we_excess_allowance_pct", 0.1),
+    ("hsl_drawdown_threshold_fraction", 0.2),
+    ("unstuck_ema_span_0_minutes", 12.5),
+    ("risk_we_excess_allowance_fraction", 0.1),
 ])
 @pytest.mark.parametrize("location", ["inline", "file"])
 def test_final_coin_patch_rejects_retired_flat_shared_fields(field, value, location):
@@ -102,9 +102,9 @@ def test_final_coin_patch_rejects_retired_flat_shared_fields(field, value, locat
 @pytest.mark.parametrize("spelling", ["grouped", "flat"])
 def test_inline_hsl_patch_is_rejected_outside_coin_mode(mode, spelling):
     side = (
-        {"hsl": {"drawdown_ratio_threshold": 0.2}}
+        {"hsl": {"drawdown_threshold_fraction": 0.2}}
         if spelling == "grouped"
-        else {"hsl_red_threshold": 0.2}
+        else {"hsl_drawdown_threshold_fraction": 0.2}
     )
 
     with pytest.raises(
@@ -121,7 +121,7 @@ def test_full_file_hsl_patch_is_ignored_outside_coin_mode(caplog):
         loaded={
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_ratio_threshold": 0.2},
+                    "hsl": {"drawdown_threshold_fraction": 0.2},
                     "unstuck": {"loss_allowance_fraction": 0.023},
                 }
             }
@@ -176,7 +176,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
             "BTC": {
                 "override_config_path": "unused-by-test.json",
                 "bot": {
-                    "long": {"hsl": {"drawdown_ratio_threshold": 0.25}},
+                    "long": {"hsl": {"drawdown_threshold_fraction": 0.25}},
                     "short": {"hsl": {"panic_close_order_type": "market"}},
                 },
             }
@@ -185,8 +185,8 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
             "bot": {
                 "long": {
                     "hsl": {
-                        "drawdown_ratio_threshold": 0.15,
-                        "drawdown_ratio_ema_span_minutes": 4.5,
+                        "drawdown_threshold_fraction": 0.15,
+                        "drawdown_fraction_ema_span_minutes": 4.5,
                     }
                 },
                 "short": {
@@ -200,16 +200,16 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
     )
 
     bot = parsed["coin_overrides"]["BTC"]["bot"]
-    assert bot["long"]["hsl"]["drawdown_ratio_threshold"] == 0.25
-    assert bot["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 4.5
+    assert bot["long"]["hsl"]["drawdown_threshold_fraction"] == 0.25
+    assert bot["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 4.5
     assert bot["short"]["hsl"]["panic_close_order_type"] == "market"
     assert bot["short"]["hsl"]["cooldown_after_red_minutes"] == 17.5
 
 
 def test_threshold_override_does_not_add_unrequested_policy_fields():
-    parsed = _parse({"BTC": {"bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.2}}}}})
+    parsed = _parse({"BTC": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}})
     assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["hsl"] == {
-        "drawdown_ratio_threshold": 0.2
+        "drawdown_threshold_fraction": 0.2
     }
 
 
@@ -217,7 +217,7 @@ def test_threshold_override_does_not_add_unrequested_policy_fields():
     "hsl_patch",
     [
         {"panic_close_order_type": "invalid"},
-        {"drawdown_ratio_threshold": 1.1},
+        {"drawdown_threshold_fraction": 1.1},
     ],
 )
 def test_invalid_hsl_combinations_fail_effective_validation(hsl_patch):

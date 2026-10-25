@@ -61,7 +61,7 @@ def test_policy_registry_and_legacy_aliases_are_derived_consistently():
     flat = allowed_flat_bot_side_modification_keys()
     assert "risk_entry_cooldown_minutes" in flat
     assert "unstuck_ema_gating_enabled" in flat
-    assert "unstuck_loss_allowance_pct" in flat
+    assert "unstuck_loss_allowance_fraction" in flat
     assert "risk_we_excess_allowance_mode" not in flat
 
 

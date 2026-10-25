@@ -19,12 +19,12 @@ def test_scenario_override_stays_canonical_and_lowers_effective_policy_once(mode
     policy = config
     for key in scope:
         policy = policy[key]
-    policy.update(enabled=True, drawdown_ratio_threshold=0.2)
+    policy.update(enabled=True, drawdown_threshold_fraction=0.2)
     original = deepcopy(config)
     context = SimpleNamespace(
         label="scenario", config=deepcopy(config), msss={},
         overrides={"bot.long.risk.max_positions": 2.0,
-                   ".".join((*scope, "drawdown_ratio_threshold")): 0.3},
+                   ".".join((*scope, "drawdown_threshold_fraction")): 0.3},
     )
     suite = SuiteEvaluator.__new__(SuiteEvaluator)
     suite.base = SimpleNamespace(scoring_specs=[], limit_checks=[])
@@ -39,7 +39,7 @@ def test_scenario_override_stays_canonical_and_lowers_effective_policy_once(mode
     effective = runtime
     for key in scope:
         effective = effective[key]
-    assert effective["drawdown_ratio_threshold"] == 0.3
+    assert effective["drawdown_threshold_fraction"] == 0.3
     assert config == original
     # Lowered transport never becomes an accepted alternate public layout.
     with pytest.raises(ValueError, match="n_positions.*retired"):

@@ -143,11 +143,11 @@ def test_prepared_data_cache_separates_original_f64_market_slippage(builds):
     slip = 0.0005
     adjacent = np.nextafter(slip, np.inf)
     assert np.float32(slip) == np.float32(adjacent)
-    first = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=slip)
-    assert service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=slip) is first
-    second = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=adjacent)
+    first = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_fraction=slip)
+    assert service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_fraction=slip) is first
+    second = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_fraction=adjacent)
     assert second is not first
-    assert [row[1]["market_order_slippage_pct"] for row in builds] == [slip, adjacent]
+    assert [row[1]["market_order_slippage_fraction"] for row in builds] == [slip, adjacent]
 
 
 def test_market_execution_preparation_abi_invalidates_cached_market_data(builds, monkeypatch):

@@ -83,11 +83,11 @@ def test_coupled_coin_spans_reuse_views_but_preserve_request_identity(monkeypatc
             assert len(registry.bindings) == (2 if suite else 1)
             assert low.effective_key != high.effective_key
             assert [row.dataset_id for row in low.requests] == [row.dataset_id for row in high.requests]
-            assert all(row.parameters["long_unstuck_ema_span_0"] == 2.0 for row in low.requests)
-            assert all(row.parameters["long_unstuck_ema_span_0"] == 20.0 for row in high.requests)
+            assert all(row.parameters["long_unstuck_ema_span_0_minutes"] == 2.0 for row in low.requests)
+            assert all(row.parameters["long_unstuck_ema_span_0_minutes"] == 20.0 for row in high.requests)
             if suite:
-                assert low.requests[1].parameters["long_unstuck_ema_span_1"] == 3.5
-                assert high.requests[1].parameters["long_unstuck_ema_span_1"] == 3.5
+                assert low.requests[1].parameters["long_unstuck_ema_span_1_minutes"] == 3.5
+                assert high.requests[1].parameters["long_unstuck_ema_span_1_minutes"] == 3.5
             registered = []
             registry.register(SimpleNamespace(register_dataset=lambda *_args: registered.append(_args)))
             for _identity, dataset in registered:

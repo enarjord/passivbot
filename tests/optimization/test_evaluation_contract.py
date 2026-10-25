@@ -31,7 +31,7 @@ def _record(config):
         ("warmup_ratio", 0.7),
         ("max_warmup_minutes", 200),
         ("minimum_coin_age_days", 17),
-        ("forager_score_hysteresis_pct", 0.07),
+        ("forager_score_hysteresis_margin", 0.07),
     ],
 )
 def test_resume_rejects_changed_shared_bot_simulation_inputs(key, value):
@@ -117,7 +117,7 @@ def test_resume_ignores_machine_settings_and_overridden_source_values():
 
 
 @pytest.mark.parametrize("path,value", [
-    ("bot.long.hsl.drawdown_ratio_threshold", 0.123),
+    ("bot.long.hsl.drawdown_threshold_fraction", 0.123),
     ("bot.long.risk.max_positions", 3),
     ("bot.portfolio.unstuck.memory_ema_span_minutes", 1000.5),
     ("bot.portfolio.loss_gate.memory_ema_span_minutes", 2000.5),

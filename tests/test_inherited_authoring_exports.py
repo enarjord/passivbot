@@ -18,9 +18,9 @@ def authored(kind="trailing_martingale"):
         "portfolio": {"strategy_kind": kind},
         "global": {
                    "universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": []},
-                   "risk": {"total_wallet_exposure_limit": 1.5}},
+                   "risk": {"total_wallet_exposure_limit_ratio": 1.5}},
         "long": {"enabled": True},
-        "short": {"enabled": False, "risk": {"total_wallet_exposure_limit": 1.5},
+        "short": {"enabled": False, "risk": {"total_wallet_exposure_limit_ratio": 1.5},
                   "universe": {"ignored_coins": None}},
     }}
 
@@ -39,15 +39,15 @@ def test_authored_export_reload_preserves_equal_pins_and_missing_leaf_inheritanc
     assert get_bot_policy(prepared) is not None
     output = export(prepared)
     assert source == before
-    assert output["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert output["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert "risk" not in output["bot"]["long"]
     assert output["bot"]["short"]["universe"]["ignored_coins"] is None
     assert "universe" not in output["bot"]["long"]
     reloaded_json = json.loads(json.dumps(output))
-    reloaded_json["bot"]["global"].setdefault("risk", {})["total_wallet_exposure_limit"] = 2.0
+    reloaded_json["bot"]["global"].setdefault("risk", {})["total_wallet_exposure_limit_ratio"] = 2.0
     reloaded = load(reloaded_json)
-    assert reloaded["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.0
-    assert reloaded["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert reloaded["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.0
+    assert reloaded["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert output == export(output)
 
 
@@ -99,7 +99,7 @@ def test_format_preserves_raw_declarations_and_semantic_cleanup_keeps_equal_pins
     formatted = render_source(text, source=tmp_path / "input.json", mode="format")
     assert json.loads(formatted) == source
     output = cleanup_config(source)
-    assert output["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert output["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert "risk" not in output["bot"]["long"]
     assert source == json.loads(text)
 

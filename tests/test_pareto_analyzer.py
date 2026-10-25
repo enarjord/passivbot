@@ -22,7 +22,7 @@ def _write_candidate(
     pareto_dir: Path,
     name: str,
     *,
-    qty_pct: float,
+    qty_fraction: float,
     twe: float,
     adg_fraction: float,
     drawdown: float,
@@ -34,11 +34,11 @@ def _write_candidate(
             "long": {
                 "risk": {
                     "n_positions": 2,
-                    "total_wallet_exposure_limit": twe,
+                    "total_wallet_exposure_limit_ratio": twe,
                 },
                 "strategy": {
                     "trailing_martingale": {
-                        "entry": {"initial_qty_pct": qty_pct},
+                        "entry": {"initial_qty_fraction": qty_fraction},
                     }
                 },
             }
@@ -77,9 +77,9 @@ def _write_candidate(
 def sample_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir = tmp_path / "run" / "pareto"
     pareto_dir.mkdir(parents=True)
-    _write_candidate(pareto_dir, "a", qty_pct=0.01, twe=1.0, adg_fraction=0.001, drawdown=0.30)
-    _write_candidate(pareto_dir, "b", qty_pct=0.02, twe=1.5, adg_fraction=0.002, drawdown=0.35)
-    _write_candidate(pareto_dir, "c", qty_pct=0.03, twe=2.0, adg_fraction=0.003, drawdown=0.45)
+    _write_candidate(pareto_dir, "a", qty_fraction=0.01, twe=1.0, adg_fraction=0.001, drawdown=0.30)
+    _write_candidate(pareto_dir, "b", qty_fraction=0.02, twe=1.5, adg_fraction=0.002, drawdown=0.35)
+    _write_candidate(pareto_dir, "c", qty_fraction=0.03, twe=2.0, adg_fraction=0.003, drawdown=0.45)
     return pareto_dir
 
 
@@ -90,9 +90,9 @@ def test_analyze_summarizes_config_params_and_scoring_metrics(sample_pareto_dir:
     payload = analyze_from_args(args)
 
     param_by_name = {item["name"]: item for item in payload["params"]}
-    assert param_by_name["bot.long.risk.total_wallet_exposure_limit"]["min"] == 1.0
-    assert param_by_name["bot.long.risk.total_wallet_exposure_limit"]["max"] == 2.0
-    assert param_by_name["bot.long.strategy.trailing_martingale.entry.initial_qty_pct"]["median"] == 0.02
+    assert param_by_name["bot.long.risk.total_wallet_exposure_limit_ratio"]["min"] == 1.0
+    assert param_by_name["bot.long.risk.total_wallet_exposure_limit_ratio"]["max"] == 2.0
+    assert param_by_name["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"]["median"] == 0.02
 
     metric_by_name = {item["name"]: item for item in payload["metrics"]}
     assert set(metric_by_name) == {"adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"}
@@ -109,7 +109,7 @@ def test_analyze_applies_limits_and_writes_outputs(sample_pareto_dir: Path, tmp_
             "--limit",
             "adg_fraction_strategy_equity>0.0005",
             "--params",
-            "bot.long.risk.total_wallet_exposure_limit",
+            "bot.long.risk.total_wallet_exposure_limit_ratio",
             "--metrics",
             "all",
             "--output-dir",

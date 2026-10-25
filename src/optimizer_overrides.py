@@ -7,7 +7,7 @@ from config.shared_bot import BOT_SHARED_GROUPS
 from config.strategy import DEFAULT_STRATEGY_KIND, normalize_strategy_kind
 
 COUPLED_UNSTUCK_EMA_BOUND_KEYS = frozenset(
-    f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
+    f"{side}_unstuck_ema_span_{i}_minutes" for side in ("long", "short") for i in (0, 1)
 )
 
 KNOWN_OPTIMIZER_OVERRIDES = frozenset(
@@ -182,7 +182,7 @@ def couple_unstuck_ema_spans(config, pside, *, trace=None):
                 trace("couple_unstuck_ema_spans", (*target_path, "unstuck", key),
                       (source_path,), value, "copy")
             # Refresh transport aliases only when this config already carries them.
-            alias = f"unstuck_{key.removesuffix('_minutes')}"
+            alias = f"unstuck_{key}"
             if alias in target:
                 target[alias] = value
     return config

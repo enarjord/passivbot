@@ -12,8 +12,8 @@ def evaluate_snapshot(snapshot, mode="portfolio", *, slots=1, span=1.0,
     """Compose factual dataclass fixtures through the sole v9 runtime API."""
     from test_hsl_snapshot import payload
     import passivbot_rust
-    value=dict(snapshot=payload(snapshot,mode,**selectors),slots=slots,drawdown_ratio_ema_span_minutes=span,
-               threshold=threshold,cooldown_ms=cooldown_ms,
+    value=dict(snapshot=payload(snapshot,mode,**selectors),slots=slots,drawdown_fraction_ema_span_minutes=span,
+               drawdown_threshold_fraction=threshold,cooldown_ms=cooldown_ms,
                memory_ema_span_minutes=slow_span,scale_budget_with_excess_allowance=False,
                exposure_budget=None,budget_observations=[])
     return evaluate(passivbot_rust,value)
@@ -30,7 +30,7 @@ def closed_request(*, mode="coin", side="long", now=120_000, duration=120_000,
     pair["prices"]={"0":100.0,"60000":100.0}
     pair["fills"].append(dict(identity="manual-close",timestamp=120_000,
         delta=-direction,price=price,realized=-10.0,fee=1.0,sequence=1,revision=0))
-    value.update(drawdown_ratio_ema_span_minutes=1.0,threshold=0.095,cooldown_ms=duration)
+    value.update(drawdown_fraction_ema_span_minutes=1.0,drawdown_threshold_fraction=0.095,cooldown_ms=duration)
     for fact in value["budget_observations"]:
         fact["balance"]=100.0
     value["budget_observations"][-1].update(order=0,balance=91.0)
@@ -45,8 +45,8 @@ def closed_request(*, mode="coin", side="long", now=120_000, duration=120_000,
 def test_pre_red_post_green_manual_flatten_starts_finite_deadline(native,mode,side):
     value=closed_request(mode=mode,side=side)
     actual=evaluate(native,value)
-    assert actual["risk"]["signal_raw_fraction"] < value["threshold"]
-    assert actual["risk"]["signal_ema_fraction"] < value["threshold"]
+    assert actual["risk"]["signal_raw_fraction"] < value["drawdown_threshold_fraction"]
+    assert actual["risk"]["signal_ema_fraction"] < value["drawdown_threshold_fraction"]
     assert actual["decision"]["action"] == "halted"
     assert actual["risk"]["cooldown_until"] == 240_000
     assert actual["decision"]["flat_at"] == 120_000

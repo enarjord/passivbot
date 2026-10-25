@@ -17,7 +17,7 @@ def test_benchmark_inputs_pass_canonical_candidate_admission(coins, slots):
     assert config["bot"]["long"]["risk"]["max_positions"] == slots
     assert "n_positions" not in config["bot"]["long"]["risk"]
     assert candidate["long_n_positions"] == slots
-    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert candles.shape[:2] == (128, coins)
     assert set(markets) == {"__meta__", *(f"COIN{i:02d}" for i in range(coins))}
     assert isinstance(markets["__meta__"]["requested_start_ts"], int)

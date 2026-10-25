@@ -92,7 +92,7 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
                     "overrides": {
                         "live": {},
                         "bot": {
-                            "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
+                            "short": {"risk": {"total_wallet_exposure_limit_ratio": 0.0}},
                             "portfolio": {"hedge_mode": True},
                         },
                         "coin_overrides": {
@@ -107,7 +107,7 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
 
     assert scenarios[0].overrides == {
         "bot.portfolio.hedge_mode": True,
-        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "bot.short.risk.total_wallet_exposure_limit_ratio": 0.0,
         "coin_overrides": {"ETH": {"live": {"modes": {"long": "normal"}}}},
     }
 
@@ -668,7 +668,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
         "live": {},
         "bot": {
             "long": {
-                "hsl": {"drawdown_ratio_threshold": 0.3},
+                "hsl": {"drawdown_threshold_fraction": 0.3},
                 "entry_cooldown": {"base_duration_minutes": 0.0},
                 "universe": {"approved_coins": [], "ignored_coins": []},
             },
@@ -682,7 +682,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
         coins=["BTC"],
         ignored_coins=[],
         overrides={
-            "bot.long.hsl.drawdown_ratio_threshold": 1.0,
+            "bot.long.hsl.drawdown_threshold_fraction": 1.0,
             "bot.long.entry_cooldown.base_duration_minutes": 2.5,
         },
     )
@@ -697,9 +697,9 @@ def test_apply_scenario_overrides_use_canonical_paths():
         base_coin_sources={"BTC": "binance"},
     )
 
-    assert cfg["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(1.0)
+    assert cfg["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(1.0)
     assert cfg["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
-    assert "hsl_red_threshold" not in cfg["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 
 
@@ -1014,7 +1014,7 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
             "end_date": "1970-01-01T00:03:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr(
@@ -1060,7 +1060,7 @@ def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
             "end_date": "1970-01-01T00:05:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'activation_span_fraction': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
@@ -1111,7 +1111,7 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
         "bot": {
             "long": {"enabled": False},
             "short": {"enabled": False},
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}},
         },
         "optimize": {"bounds": {}},
     }
