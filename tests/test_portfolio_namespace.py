@@ -15,7 +15,7 @@ from config.json_schema import generate_schema
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
 from config.schema import get_template_config
-from config.strategy_paths import project_native_strategy_side
+
 from released_v8_fixtures import released_v8_policy
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
@@ -23,7 +23,7 @@ from tools.migrate_config_v9 import migrate
 
 PORTFOLIO_PATHS = (
     "strategy_kind", "hedge_mode", "execution.market_orders_allowed",
-    "execution.market_order_near_touch_fraction", "warmup.span_multiplier",
+    "execution.market_order_near_touch_fraction", "warmup.activation_span_fraction",
     "warmup.max_minutes", "loss_gate.max_drawdown_fraction",
     "loss_gate.memory_ema_span_minutes", "unstuck.memory_ema_span_minutes",
     "hsl.scope", "hsl.enabled", "hsl.drawdown_threshold_fraction",
@@ -175,7 +175,7 @@ def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported
     migration = migrate(source, memory_span_minutes=123.5)
     patch = (migration.config["optimize"]["fixed_runtime_overrides"] if owner == "fixed" else
              migration.config["backtest"]["scenarios"][0]["overrides"])
-    expected = {"bot.portfolio.hedge_mode": True, "bot.portfolio.warmup.span_multiplier": 0.625,
+    expected = {"bot.portfolio.hedge_mode": True, "bot.portfolio.warmup.activation_span_fraction": 0.625,
                 "bot.portfolio.execution.market_order_near_touch_fraction": 0.0125}
     assert patch == expected
     for path in expected:
@@ -199,8 +199,10 @@ def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changi
     original = deepcopy(source)
     output = migrate(source, memory_span_minutes=123.5).config
     defaults = get_released_v8_defaults(strategy_kind=kind)
+    from config.public_names import rewrite_released_public_names
+    rewrite_released_public_names(defaults, strategy_kind=kind)
     for side in ("long", "short"):
-        expected = project_native_strategy_side(kind, defaults["optimize"]["bounds"][side]["strategy"][kind])
+        expected = deepcopy(defaults["optimize"]["bounds"][side]["strategy"][kind])
         assert output["optimize"]["bounds"][side]["strategy"] == {kind: expected}
         assert ("hsl" in output["optimize"]["bounds"][side]) == (scope != "portfolio")
     assert output["bot"]["portfolio"]["hsl"]["scope"] == scope

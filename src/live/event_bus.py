@@ -1821,9 +1821,9 @@ def _console_min_effective_cost_summary(event: LiveEvent) -> list[str]:
     effective_limit = _data_number(data, "effective_limit")
     if effective_limit is not None:
         parts.append(f"effective_limit={effective_limit * 100.0:.4f}%")
-    entry_qty_pct = _data_number(data, "entry_initial_qty_pct")
-    if entry_qty_pct is not None:
-        parts.append(f"initial_qty={entry_qty_pct * 100.0:.4f}%")
+    entry_qty_fraction = _data_number(data, "entry_initial_qty_fraction")
+    if entry_qty_fraction is not None:
+        parts.append(f"initial_qty={entry_qty_fraction * 100.0:.4f}%")
     return parts
 
 
@@ -1848,7 +1848,7 @@ def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
     balance_floor = _data_float(data, "balance_floor")
     if balance_floor:
         parts.append(f"floor={balance_floor}")
-    max_loss = _data_number(data, "max_realized_loss_pct")
+    max_loss = _data_number(data, "loss_gate_max_drawdown_fraction")
     if max_loss is not None:
         parts.append(f"max_loss={max_loss * 100.0:.4f}%")
     return parts
@@ -2104,7 +2104,7 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
 def format_memory_snapshot_console(data: Mapping[str, Any]) -> str:
     """Project a bounded memory snapshot without retaining diagnostic samples."""
     rss_bytes = _data_int(data, "rss_bytes")
-    delta_pct = _data_number(data, "rss_delta_pct")
+    delta_pct = _data_number(data, "rss_delta_percent")
     cache = data.get("cache") if isinstance(data.get("cache"), Mapping) else {}
     timeframe_cache = (
         data.get("timeframe_cache")
@@ -2626,23 +2626,23 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
     if gate_states:
         parts.append(f"gates={'/'.join(gate_states)}")
 
-    threshold_pct = _data_number(data, "threshold_pct")
+    threshold_fraction = _data_number(data, "threshold_fraction")
     threshold_price = _data_number(data, "threshold_price")
-    if threshold_pct is not None and threshold_price:
-        parts.append(f"threshold={threshold_pct * 100.0:.4f}%@{threshold_price:g}")
-    elif threshold_pct is not None:
-        parts.append(f"threshold={threshold_pct * 100.0:.4f}%")
+    if threshold_fraction is not None and threshold_price:
+        parts.append(f"threshold={threshold_fraction * 100.0:.4f}%@{threshold_price:g}")
+    elif threshold_fraction is not None:
+        parts.append(f"threshold={threshold_fraction * 100.0:.4f}%")
     elif threshold_price:
         parts.append(f"threshold={threshold_price:g}")
 
-    retracement_pct = _data_number(data, "retracement_pct")
+    retracement_fraction = _data_number(data, "retracement_fraction")
     retracement_price = _data_number(data, "retracement_price")
-    if retracement_pct is not None and retracement_price:
+    if retracement_fraction is not None and retracement_price:
         parts.append(
-            f"retracement={retracement_pct * 100.0:.4f}%@{retracement_price:g}"
+            f"retracement={retracement_fraction * 100.0:.4f}%@{retracement_price:g}"
         )
-    elif retracement_pct is not None:
-        parts.append(f"retracement={retracement_pct * 100.0:.4f}%")
+    elif retracement_fraction is not None:
+        parts.append(f"retracement={retracement_fraction * 100.0:.4f}%")
     elif retracement_price:
         parts.append(f"retracement={retracement_price:g}")
 
@@ -2701,7 +2701,7 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"current={current_price:g}")
-    diff_pct = _data_number(data, "price_diff_pct")
+    diff_pct = _data_number(data, "price_change_percent")
     if diff_pct is not None:
         parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
     allowance = _data_number(data, "allowance")

@@ -8,7 +8,7 @@ optimization-specific bounds logic.
 import math
 from typing import List, Tuple
 
-from config.bot import validate_unstuck_ema_dist_value
+from config.bot import validate_unstuck_ema_distance_fraction_value
 from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
@@ -18,7 +18,7 @@ from config.param_paths import (
 )
 from config.optimize_bounds import flatten_optimize_bounds
 from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
-from config.shared_bot import flatten_shared_bot_side, native_forager_weight_name
+from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
 from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
 from config.strategy_spec import (
@@ -178,7 +178,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 f"got {type(value).__name__}"
             )
         target_key = canonical_key or bound_key
-        if key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+        if key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             if (
                 not math.isfinite(bound.low)
@@ -188,18 +188,18 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 raise ValueError(
                     f"optimize.bounds.{target_key} must be positive and finite"
                 )
-        if target_key == "long_unstuck_ema_dist":
+        if target_key == "long_unstuck_ema_distance_fraction":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
-            validate_unstuck_ema_dist_value(
+            validate_unstuck_ema_distance_fraction_value(
                 bound.low,
-                path="optimize.bounds.long_unstuck_ema_dist lower bound",
+                path="optimize.bounds.long_unstuck_ema_distance_fraction lower bound",
                 pside="long",
             )
-        elif target_key == "short_unstuck_ema_dist":
+        elif target_key == "short_unstuck_ema_distance_fraction":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
-            validate_unstuck_ema_dist_value(
+            validate_unstuck_ema_distance_fraction_value(
                 bound.high,
-                path="optimize.bounds.short_unstuck_ema_dist upper bound",
+                path="optimize.bounds.short_unstuck_ema_distance_fraction upper bound",
                 pside="short",
             )
 
@@ -342,7 +342,7 @@ def _validate_inherited_forager_weight_context(
                 raise ValueError(f"{context}{exc}") from exc
             raise
 
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "unilateralness")
     plan = get_bound_plan(config)
     bindings = {binding.authoring_path: binding for binding in plan.bindings}
     values = {}
@@ -441,7 +441,7 @@ def _validate_forager_weight_context(
             )
         return configured, pinned
 
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
         weight_source = optimizer_numeric_group_source_side(config, side, "forager")
         bot = config.get("bot", {}).get(weight_source, {})
@@ -476,7 +476,7 @@ def _validate_forager_weight_context(
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
         for name in names:
-            key = f"{weight_source}_forager_score_weights_{native_forager_weight_name(name)}"
+            key = f"{weight_source}_forager_score_weights_{name}"
             configured, runtime_pinned = pinned_value(
                 ("bot", weight_source, "forager", "score_weights", name),
                 weights[name], runtime_pins,

@@ -50,10 +50,10 @@ fn equity_shared_references_match_current_producers() {
     bp_pair.short.n_positions = 1;
     bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
     bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
-    bp_pair.long.ema_span_0 = 10.0;
-    bp_pair.long.ema_span_1 = 20.0;
-    bp_pair.short.ema_span_0 = 10.0;
-    bp_pair.short.ema_span_1 = 20.0;
+    bp_pair.long.ema_span_0_minutes = 10.0;
+    bp_pair.long.ema_span_1_minutes = 20.0;
+    bp_pair.short.ema_span_0_minutes = 10.0;
+    bp_pair.short.ema_span_1_minutes = 20.0;
     bp_pair.long.hsl_enabled = true;
     bp_pair.short.hsl_enabled = true;
 
@@ -84,7 +84,7 @@ fn equity_shared_references_match_current_producers() {
         filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
-        max_realized_loss_pct: 1.0,
+        loss_gate_max_drawdown_fraction: 1.0,
         unstuck_memory_ema_span_minutes: 43_200.0,
         loss_gate_memory_ema_span_minutes: 43_200.0,
         liquidation_threshold: 0.05,

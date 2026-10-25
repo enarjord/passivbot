@@ -13,16 +13,16 @@ from risk_limits import (
 
 
 ENTRY_CONFIG_KEYS = [
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
+    "entry_grid_reentry_qty_multiplier",
+    "entry_grid_threshold_base_fraction",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_trailing_reentry_qty_multiplier",
+    "entry_trailing_retracement_base_fraction",
+    "entry_trailing_threshold_base_fraction",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
+    "entry_exposure_ratio_coefficient",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
     "risk_we_excess_allowance_fraction",
@@ -30,12 +30,12 @@ ENTRY_CONFIG_KEYS = [
 
 
 CLOSE_CONFIG_KEYS = [
-    "close_grid_qty_pct",
-    "close_trailing_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_threshold_pct",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
+    "close_grid_qty_fraction",
+    "close_trailing_qty_fraction",
+    "close_trailing_retracement_base_fraction",
+    "close_trailing_threshold_base_fraction",
+    "close_log_range_1h_coefficient",
+    "close_log_range_1m_coefficient",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
     "risk_we_excess_allowance_fraction",
@@ -182,7 +182,7 @@ def entry_trailing_limit_cap(
     wallet_exposure_limit_ratio: float,
     risk_we_excess_allowance_fraction: float,
     total_wallet_exposure_limit_ratio: float = 0.0,
-    entry_trailing_retracement_pct: float,
+    entry_trailing_retracement_base_fraction: float,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
     allowed_limit = wallet_exposure_limit_ratio_with_allowance(
@@ -192,7 +192,7 @@ def entry_trailing_limit_cap(
     )
     if allowed_limit <= 0.0:
         return None, None
-    if float(entry_trailing_retracement_pct) > 0.0:
+    if float(entry_trailing_retracement_base_fraction) > 0.0:
         return allowed_limit, "trailing_only"
     return None, "grid_only"
 
@@ -220,7 +220,7 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         wallet_exposure_limit_ratio=_float(inputs.get("wallet_exposure_limit_ratio")),
         risk_we_excess_allowance_fraction=_float(inputs.get("risk_we_excess_allowance_fraction")),
         total_wallet_exposure_limit_ratio=_float(inputs.get("total_wallet_exposure_limit_ratio")),
-        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
+        entry_trailing_retracement_base_fraction=_float(inputs.get("entry_trailing_retracement_base_fraction")),
         wallet_exposure=wallet_exposure,
     )
     if limit_cap is None:
@@ -242,16 +242,16 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_qty")),
         _float(inputs.get("min_cost")),
         c_mult,
-        _float(inputs.get("entry_grid_double_down_factor")),
-        _float(inputs.get("entry_grid_spacing_pct")),
-        _float(inputs.get("entry_initial_ema_dist")),
-        _float(inputs.get("entry_initial_qty_pct")),
-        _float(inputs.get("entry_trailing_double_down_factor")),
-        _float(inputs.get("entry_trailing_retracement_pct")),
-        _float(inputs.get("entry_trailing_threshold_pct")),
-        _float(inputs.get("entry_weight_volatility_1h")),
-        _float(inputs.get("entry_weight_volatility_1m")),
-        _float(inputs.get("entry_we_weight")),
+        _float(inputs.get("entry_grid_reentry_qty_multiplier")),
+        _float(inputs.get("entry_grid_threshold_base_fraction")),
+        _float(inputs.get("entry_initial_ema_distance_fraction")),
+        _float(inputs.get("entry_initial_qty_fraction")),
+        _float(inputs.get("entry_trailing_reentry_qty_multiplier")),
+        _float(inputs.get("entry_trailing_retracement_base_fraction")),
+        _float(inputs.get("entry_trailing_threshold_base_fraction")),
+        _float(inputs.get("entry_log_range_1h_coefficient")),
+        _float(inputs.get("entry_log_range_1m_coefficient")),
+        _float(inputs.get("entry_exposure_ratio_coefficient")),
         _float(inputs.get("wallet_exposure_limit_ratio")),
         effective_allowance_fraction,
         balance_raw,
@@ -277,41 +277,41 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     entry_multiplier = max(
         1.0,
         1.0
-        + entry_volatility_1h * _float(inputs.get("entry_weight_volatility_1h"))
-        + entry_volatility_1m * _float(inputs.get("entry_weight_volatility_1m"))
+        + entry_volatility_1h * _float(inputs.get("entry_log_range_1h_coefficient"))
+        + entry_volatility_1m * _float(inputs.get("entry_log_range_1m_coefficient"))
         + (
-            (wallet_exposure / limit_cap) * _float(inputs.get("entry_we_weight"))
+            (wallet_exposure / limit_cap) * _float(inputs.get("entry_exposure_ratio_coefficient"))
             if limit_cap > 0.0
             else 0.0
         ),
     )
-    threshold_pct = _float(inputs.get("entry_trailing_threshold_pct")) * entry_multiplier
-    retracement_pct = _float(inputs.get("entry_trailing_retracement_pct")) * entry_multiplier
+    threshold_fraction = _float(inputs.get("entry_trailing_threshold_base_fraction")) * entry_multiplier
+    retracement_fraction = _float(inputs.get("entry_trailing_retracement_base_fraction")) * entry_multiplier
 
     if pside == "long":
-        threshold_price = position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
-        threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
+        threshold_price = position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
+        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
         retracement_price = (
-            trailing_bundle["min_since_open"] * (1.0 + retracement_pct)
-            if retracement_pct > 0.0
+            trailing_bundle["min_since_open"] * (1.0 + retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
         retracement_met = (
             True
-            if retracement_pct <= 0.0
+            if retracement_fraction <= 0.0
             else trailing_bundle["max_since_min"] > float(retracement_price)
         )
     else:
-        threshold_price = position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
-        threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
+        threshold_price = position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
+        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
         retracement_price = (
-            trailing_bundle["max_since_open"] * (1.0 - retracement_pct)
-            if retracement_pct > 0.0
+            trailing_bundle["max_since_open"] * (1.0 - retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
         retracement_met = (
             True
-            if retracement_pct <= 0.0
+            if retracement_fraction <= 0.0
             else trailing_bundle["min_since_max"] < float(retracement_price)
         )
     triggered = bool(is_trailing_order and has_order)
@@ -333,10 +333,10 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "qty": float(qty),
         "price": float(price),
         "current_price": float(current_price),
-        "threshold_pct": float(threshold_pct),
+        "threshold_fraction": float(threshold_fraction),
         "threshold_price": float(threshold_price) if threshold_price is not None else None,
         "threshold_met": bool(threshold_met),
-        "retracement_pct": float(retracement_pct),
+        "retracement_fraction": float(retracement_fraction),
         "retracement_price": float(retracement_price) if retracement_price is not None else None,
         "retracement_met": bool(retracement_met),
         "current_vs_threshold_ratio": (
@@ -376,10 +376,10 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_qty")),
         _float(inputs.get("min_cost")),
         _float(inputs.get("c_mult")),
-        _float(inputs.get("close_grid_qty_pct")),
-        _float(inputs.get("close_trailing_qty_pct")),
-        _float(inputs.get("close_trailing_retracement_pct")),
-        _float(inputs.get("close_trailing_threshold_pct")),
+        _float(inputs.get("close_grid_qty_fraction")),
+        _float(inputs.get("close_trailing_qty_fraction")),
+        _float(inputs.get("close_trailing_retracement_base_fraction")),
+        _float(inputs.get("close_trailing_threshold_base_fraction")),
         _float(inputs.get("wallet_exposure_limit_ratio")),
         effective_allowance_fraction,
         _float(inputs.get("risk_wel_enforcer_threshold_ratio")),
@@ -394,8 +394,8 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         0.0,
         close_volatility_1h,
         close_volatility_1m,
-        _float(inputs.get("close_weight_volatility_1h")),
-        _float(inputs.get("close_weight_volatility_1m")),
+        _float(inputs.get("close_log_range_1h_coefficient")),
+        _float(inputs.get("close_log_range_1m_coefficient")),
     ]
     if pside == "long":
         qty, price, order_type = pbr.calc_next_close_long_py(*common_args)
@@ -408,35 +408,35 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     close_multiplier = max(
         1.0,
         1.0
-        + close_volatility_1h * _float(inputs.get("close_weight_volatility_1h"))
-        + close_volatility_1m * _float(inputs.get("close_weight_volatility_1m")),
+        + close_volatility_1h * _float(inputs.get("close_log_range_1h_coefficient"))
+        + close_volatility_1m * _float(inputs.get("close_log_range_1m_coefficient")),
     )
-    threshold_pct = _float(inputs.get("close_trailing_threshold_pct")) * close_multiplier
-    retracement_pct = _float(inputs.get("close_trailing_retracement_pct")) * close_multiplier
+    threshold_fraction = _float(inputs.get("close_trailing_threshold_base_fraction")) * close_multiplier
+    retracement_fraction = _float(inputs.get("close_trailing_retracement_base_fraction")) * close_multiplier
     if pside == "long":
-        threshold_price = position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
-        threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
+        threshold_price = position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
+        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
         retracement_price = (
-            trailing_bundle["max_since_open"] * (1.0 - retracement_pct)
-            if retracement_pct > 0.0
+            trailing_bundle["max_since_open"] * (1.0 - retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
         retracement_met = (
             True
-            if retracement_pct <= 0.0
+            if retracement_fraction <= 0.0
             else trailing_bundle["min_since_max"] < float(retracement_price)
         )
     else:
-        threshold_price = position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
-        threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
+        threshold_price = position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
+        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
         retracement_price = (
-            trailing_bundle["min_since_open"] * (1.0 + retracement_pct)
-            if retracement_pct > 0.0
+            trailing_bundle["min_since_open"] * (1.0 + retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
         retracement_met = (
             True
-            if retracement_pct <= 0.0
+            if retracement_fraction <= 0.0
             else trailing_bundle["max_since_min"] > float(retracement_price)
         )
     triggered = bool(is_trailing_order and has_order)
@@ -455,10 +455,10 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "qty": float(qty),
         "price": float(price),
         "current_price": float(current_price),
-        "threshold_pct": float(threshold_pct),
+        "threshold_fraction": float(threshold_fraction),
         "threshold_price": float(threshold_price) if threshold_price is not None else None,
         "threshold_met": bool(threshold_met),
-        "retracement_pct": float(retracement_pct),
+        "retracement_fraction": float(retracement_fraction),
         "retracement_price": float(retracement_price) if retracement_price is not None else None,
         "retracement_met": bool(retracement_met),
         "current_vs_threshold_ratio": (
@@ -493,25 +493,25 @@ def build_trailing_martingale_close_diagnostic(
     if not isinstance(payload, dict):
         raise TypeError("Rust trailing_martingale close diagnostic must return an object")
     pside = str(inputs.get("pside") or "long")
-    threshold_pct = _float(payload.get("threshold_pct"))
-    retracement_pct = _float(payload.get("retracement_pct"))
+    threshold_fraction = _float(payload.get("threshold_fraction"))
+    retracement_fraction = _float(payload.get("retracement_fraction"))
     extrema = normalize_trailing_extrema(payload.get("extrema", {}))
     if pside == "long":
         threshold_price = (
-            position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
+            position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
         )
         retracement_price = (
-            extrema["max_since_open"] * (1.0 - retracement_pct)
-            if retracement_pct > 0.0
+            extrema["max_since_open"] * (1.0 - retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
     else:
         threshold_price = (
-            position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
+            position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
         )
         retracement_price = (
-            extrema["min_since_open"] * (1.0 + retracement_pct)
-            if retracement_pct > 0.0
+            extrema["min_since_open"] * (1.0 + retracement_fraction)
+            if retracement_fraction > 0.0
             else None
         )
     payload.update(
@@ -558,7 +558,7 @@ def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:
         wallet_exposure_limit_ratio=_float(inputs.get("wallet_exposure_limit_ratio")),
         risk_we_excess_allowance_fraction=_float(inputs.get("risk_we_excess_allowance_fraction")),
         total_wallet_exposure_limit_ratio=_float(inputs.get("total_wallet_exposure_limit_ratio")),
-        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
+        entry_trailing_retracement_base_fraction=_float(inputs.get("entry_trailing_retracement_base_fraction")),
         wallet_exposure=wallet_exposure,
     )
     return {

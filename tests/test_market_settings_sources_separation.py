@@ -235,7 +235,7 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }
@@ -324,7 +324,7 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }
@@ -412,7 +412,7 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }

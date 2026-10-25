@@ -622,7 +622,7 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
-            max_realized_loss_pct: 1.0,
+            loss_gate_max_drawdown_fraction: 1.0,
             unstuck_memory_ema_span_minutes: 3.0,
             loss_gate_memory_ema_span_minutes: 3.0,
             liquidation_threshold: 0.05,
@@ -643,11 +643,11 @@ mod tests {
                 for side in [&mut pair.long, &mut pair.short] {
                     side.n_positions = coins;
                     side.total_wallet_exposure_limit_ratio = 1.0;
-                    side.unstuck_loss_allowance_pct = 0.01;
-                    side.unstuck_close_pct = 0.1;
-                    side.unstuck_threshold = 0.95;
-                    side.ema_span_0 = 1.0;
-                    side.ema_span_1 = 2.0;
+                    side.unstuck_loss_allowance_fraction = 0.01;
+                    side.unstuck_close_fraction = 0.1;
+                    side.unstuck_exposure_trigger_ratio = 0.95;
+                    side.ema_span_0_minutes = 1.0;
+                    side.ema_span_1_minutes = 2.0;
                 }
                 pair
             })
@@ -986,7 +986,7 @@ mod tests {
         let values = candles(2, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 2);
-        p.max_realized_loss_pct = 0.05;
+        p.loss_gate_max_drawdown_fraction = 0.05;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(2);
         for pair in &mut bot_params {
@@ -1073,16 +1073,16 @@ mod tests {
         let values = candles(1, 90.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 1);
-        p.max_realized_loss_pct = 0.15;
+        p.loss_gate_max_drawdown_fraction = 0.15;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(1);
         bot_params[0].short.unstuck_enabled = false;
         let long = &mut bot_params[0].long;
         long.unstuck_enabled = true;
         long.unstuck_ema_gating_enabled = false;
-        long.unstuck_loss_allowance_pct = 0.02;
-        long.unstuck_close_pct = 0.5;
-        long.unstuck_threshold = 0.5;
+        long.unstuck_loss_allowance_fraction = 0.02;
+        long.unstuck_close_fraction = 0.5;
+        long.unstuck_exposure_trigger_ratio = 0.5;
         long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
         long.risk_twel_enforcer_enabled = false;
@@ -1108,7 +1108,7 @@ mod tests {
         assert_eq!(input.global.unstuck_realized_pnl_drawdown, 50.0);
         assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
         assert_eq!(
-            crate::hsl_decay::allowance(input.balance_raw, p.max_realized_loss_pct, 50.0).unwrap(),
+            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction, 50.0).unwrap(),
             0.15_f32.mul_add(1000.0, -50.0) as f64,
         );
         let actual = orchestrator::compute_ideal_orders(&input).unwrap();
@@ -1133,7 +1133,7 @@ mod tests {
         let btc = Array1::from_elem(6, 20_000.0);
         for interval in [1, 5] {
             let mut p = params("coin", 1);
-            p.max_realized_loss_pct = 0.0;
+            p.loss_gate_max_drawdown_fraction = 0.0;
             p.candle_interval_minutes = interval;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
@@ -1177,7 +1177,7 @@ mod tests {
         let btc = Array1::from_elem(6, 20_000.0);
         for pct in [0.0, 1.0 - f64::EPSILON, 1.0, 2.0] {
             let mut p = params("coin", 1);
-            p.max_realized_loss_pct = pct;
+            p.loss_gate_max_drawdown_fraction = pct;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
             bot_params[0].long.unstuck_enabled = false;
@@ -1221,7 +1221,7 @@ mod tests {
         let values = candles(1, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 1);
-        p.max_realized_loss_pct = 0.15;
+        p.loss_gate_max_drawdown_fraction = 0.15;
         p.unstuck_memory_ema_span_minutes = 3.0;
         p.loss_gate_memory_ema_span_minutes = 7.0;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();

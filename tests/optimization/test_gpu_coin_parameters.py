@@ -29,7 +29,7 @@ from optimization.gpu.model import EMA_ANCHOR_COIN_OVERRIDE_COLS
 policy = dict(enabled=False, drawdown_threshold_fraction=0.1, ema_span_minutes=30,
               cooldown_minutes_after_red=0)
 payload = SimpleNamespace(
-    strategy_params_list=[{"long": {"offset": 0.125}}],
+    strategy_params_list=[{"long": {"offset_fraction": 0.125}}],
     bot_params_list=[{"long": {"n_positions": 1}}],
     backtest_params={"coins": ["COIN"], "dynamic_wel_by_tradability": True, "lookback_ema_span_minutes": 1440.0,
                      "equity_hard_stop_loss": {"engine": "hsl", "mode": "coin",
@@ -74,8 +74,8 @@ def test_canonical_coin_unstuck_trigger_matches_cpu_payload(strategy, side, trig
     patch = {"bot": {side: {"unstuck": {"exposure_trigger_ratio": trigger}}}}
     config["coin_overrides"] = {coins[0]: patch}
     payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps)
-    assert payload.bot_params_list[0][side]["unstuck_threshold"] == trigger
-    assert payload.bot_params_list[1][side]["unstuck_threshold"] == global_trigger
+    assert payload.bot_params_list[0][side]["unstuck_exposure_trigger_ratio"] == trigger
+    assert payload.bot_params_list[1][side]["unstuck_exposure_trigger_ratio"] == global_trigger
 
     matrix, contract = build_coin_override_parameters(
         config=config, mss=markets, exchange="binance", coins=coins, payload=payload,

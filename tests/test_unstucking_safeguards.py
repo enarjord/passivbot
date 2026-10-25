@@ -172,26 +172,26 @@ def _make_mock_pbr():
         if normalized not in {"trailing_martingale", "ema_anchor"}:
             raise ValueError(f"unsupported strategy kind {normalized!r}")
         defaults = {
-            "ema_span_0": 1.0,
-            "ema_span_1": 2.0,
-            "entry_volatility_ema_span_1h": 0.0,
-            "entry_volatility_ema_span_1m": 60.0,
-            "entry_grid_spacing_pct": 0.0,
-            "entry_initial_qty_pct": 0.0,
-            "entry_grid_double_down_factor": 1.0,
-            "entry_weight_volatility_1h": 0.0,
-            "entry_weight_volatility_1m": 0.0,
-            "entry_we_weight": 0.0,
-            "entry_initial_ema_dist": 0.0,
-            "entry_trailing_double_down_factor": 0.0,
-            "entry_trailing_retracement_pct": 0.0,
-            "entry_trailing_threshold_pct": 0.0,
-            "entry.retracement_base_pct": 0.0,
-            "close_grid_qty_pct": 0.0,
-            "close_trailing_qty_pct": 0.0,
-            "close_trailing_retracement_pct": 0.0,
-            "close_trailing_threshold_pct": 0.0,
-            "close.retracement_base_pct": 0.0,
+            "ema_span_0_minutes": 1.0,
+            "ema_span_1_minutes": 2.0,
+            "entry_log_range_ema_span_1h_candles": 0.0,
+            "entry_log_range_ema_span_minutes": 60.0,
+            "entry_grid_threshold_base_fraction": 0.0,
+            "entry_initial_qty_fraction": 0.0,
+            "entry_grid_reentry_qty_multiplier": 1.0,
+            "entry_log_range_1h_coefficient": 0.0,
+            "entry_log_range_1m_coefficient": 0.0,
+            "entry_exposure_ratio_coefficient": 0.0,
+            "entry_initial_ema_distance_fraction": 0.0,
+            "entry_trailing_reentry_qty_multiplier": 0.0,
+            "entry_trailing_retracement_base_fraction": 0.0,
+            "entry_trailing_threshold_base_fraction": 0.0,
+            "entry.retracement_base_fraction": 0.0,
+            "close_grid_qty_fraction": 0.0,
+            "close_trailing_qty_fraction": 0.0,
+            "close_trailing_retracement_base_fraction": 0.0,
+            "close_trailing_threshold_base_fraction": 0.0,
+            "close.retracement_base_fraction": 0.0,
         }
         parameters = []
         for pside in ("long", "short"):
@@ -212,14 +212,14 @@ def _make_mock_pbr():
                 )
         return {
             "defaults": {
-                "long": {"ema_span_0": 1.0, "ema_span_1": 1.0},
-                "short": {"ema_span_0": 1.0, "ema_span_1": 1.0},
+                "long": {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 1.0},
+                "short": {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 1.0},
             },
             "optimize_bounds": {
-                "long_ema_span_0": [1.0, 1440.0, 1.0],
-                "long_ema_span_1": [1.0, 1440.0, 1.0],
-                "short_ema_span_0": [1.0, 1440.0, 1.0],
-                "short_ema_span_1": [1.0, 1440.0, 1.0],
+                "long_ema_span_0_minutes": [1.0, 1440.0, 1.0],
+                "long_ema_span_1_minutes": [1.0, 1440.0, 1.0],
+                "short_ema_span_0_minutes": [1.0, 1440.0, 1.0],
+                "short_ema_span_1_minutes": [1.0, 1440.0, 1.0],
             },
             "parameters": parameters,
             "strategy_kind": normalized,
@@ -445,26 +445,26 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "adverse_directionality": 0.0,
                 },
                 "unilateralness_ema_span_minutes": 60.0,
-                "ema_span_0": 1.0,
-                "ema_span_1": 2.0,
-                "entry_volatility_ema_span_1h": 0.0,
-                "entry_volatility_ema_span_1m": 60.0,
-                "entry_grid_spacing_pct": 0.0,
-                "entry_initial_qty_pct": 0.0,
-                "entry_grid_double_down_factor": 1.0,
-                "entry_weight_volatility_1h": 0.0,
-                "entry_weight_volatility_1m": 0.0,
-                "entry_we_weight": 0.0,
-                "entry_initial_ema_dist": 0.0,
-                "entry_trailing_double_down_factor": 0.0,
-                "entry_trailing_retracement_pct": 0.0,
-                "entry_trailing_threshold_pct": 0.0,
+                "ema_span_0_minutes": 1.0,
+                "ema_span_1_minutes": 2.0,
+                "entry_log_range_ema_span_1h_candles": 0.0,
+                "entry_log_range_ema_span_minutes": 60.0,
+                "entry_grid_threshold_base_fraction": 0.0,
+                "entry_initial_qty_fraction": 0.0,
+                "entry_grid_reentry_qty_multiplier": 1.0,
+                "entry_log_range_1h_coefficient": 0.0,
+                "entry_log_range_1m_coefficient": 0.0,
+                "entry_exposure_ratio_coefficient": 0.0,
+                "entry_initial_ema_distance_fraction": 0.0,
+                "entry_trailing_reentry_qty_multiplier": 0.0,
+                "entry_trailing_retracement_base_fraction": 0.0,
+                "entry_trailing_threshold_base_fraction": 0.0,
                 "wallet_exposure_limit_ratio": 1.0,
                 "risk_we_excess_allowance_fraction": 0.0,
-                "close_grid_qty_pct": 0.0,
-                "close_trailing_qty_pct": 0.0,
-                "close_trailing_retracement_pct": 0.0,
-                "close_trailing_threshold_pct": 0.0,
+                "close_grid_qty_fraction": 0.0,
+                "close_trailing_qty_fraction": 0.0,
+                "close_trailing_retracement_base_fraction": 0.0,
+                "close_trailing_threshold_base_fraction": 0.0,
                 "forager_score_weights": {
                     "unilateralness": 0.0,
                     "volume": 0.0,
@@ -472,9 +472,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "volatility": 1.0,
                 },
                 "risk_wel_enforcer_threshold_ratio": 0.0,
-                "unstuck_threshold": 0.0,
-                "unstuck_close_pct": 0.0,
-                "unstuck_ema_dist": 0.0,
+                "unstuck_exposure_trigger_ratio": 0.0,
+                "unstuck_close_fraction": 0.0,
+                "unstuck_ema_distance_fraction": 0.0,
             }
             self._bot_value_defaults = {
                 "n_positions": 0,
@@ -491,13 +491,13 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
                 },
-                "unstuck_loss_allowance_pct": 0.0,
+                "unstuck_loss_allowance_fraction": 0.0,
             }
             self._live_values = {
                 "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": False,
-                "order_match_tolerance_pct": 0.0,
+                "order_match_tolerance_fraction": 0.0,
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):
@@ -3238,14 +3238,14 @@ def _make_order(
 @pytest.mark.asyncio
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
-    cfg["live"]["max_realized_loss_pct"] = 0.02
+    cfg["live"]["loss_gate_max_drawdown_fraction"] = 0.02
     bot = _make_dummy_bot(cfg)
     bot._bp_defaults.update(
         {
             "unstuck_enabled": True,
-            "unstuck_loss_allowance_pct": 0.01,
-            "unstuck_close_pct": 0.1,
-            "unstuck_threshold": 0.5,
+            "unstuck_loss_allowance_fraction": 0.01,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.5,
         }
     )
     bot._bot_value_defaults["total_wallet_exposure_limit_ratio"] = 0.5

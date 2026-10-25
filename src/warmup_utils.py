@@ -150,9 +150,9 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     if pinned.get("wallet_exposure_limit_ratio") == 0:
         return False
     for key in (
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit_ratio",
         "n_positions",
     ):
@@ -406,10 +406,10 @@ def compute_backtest_warmup_minutes(
     max_minutes = 0.0
     unstuck_gate_sides = set()
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "forager_volume_ema_span_minutes",
         "forager_log_range_ema_span_minutes",
     ]
@@ -461,7 +461,7 @@ def compute_backtest_warmup_minutes(
         "short_forager_log_range_ema_span_minutes",
     ]
     bound_keys_minutes.extend(
-        f"{side}_unstuck_ema_span_{i}"
+        f"{side}_unstuck_ema_span_{i}_minutes"
         for side in sorted(unstuck_gate_sides)
         for i in (0, 1)
     )
@@ -479,13 +479,13 @@ def compute_backtest_warmup_minutes(
             return 0
         max_minutes = max(max_minutes, extracted * 60.0)
 
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
 
-    warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+    warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
     if limit is not None:
         warmup_minutes = min(warmup_minutes, limit)
     if include_rms:
@@ -512,9 +512,9 @@ def compute_backtest_warmup_minutes(
 def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
@@ -525,10 +525,10 @@ def compute_per_coin_warmup_minutes(
             config, {}, param_sets=param_sets, for_trade_activation=for_trade_activation)
     } if include_rms else {}
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "forager_volume_ema_span_minutes",
         "forager_log_range_ema_span_minutes",
     ]
@@ -561,7 +561,7 @@ def compute_per_coin_warmup_minutes(
                 requirements.max_1m_span_minutes,
                 requirements.max_h1_span_hours * 60.0,
             )
-        warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+        warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
         if limit is not None:
             warmup_minutes = min(warmup_minutes, limit)
         if include_rms:

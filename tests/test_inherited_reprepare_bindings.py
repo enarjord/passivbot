@@ -89,7 +89,7 @@ def test_binding_canonicalization_preserves_numeric_origins_and_sparse_equal_pin
     from config.bot_inheritance import get_bot_policy
     from config.inherited_bounds import get_bound_plan
     a, _ = paths(tmp_path)
-    weights = {"volume": 2.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 0.0}
+    weights = {"volume": 2.0, "log_range": 1.0, "ema_readiness": 0.0, "unilateralness": 0.0}
     raw = {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
         "global": {"risk": {"total_wallet_exposure_limit_ratio": 1.5},

@@ -70,8 +70,8 @@ def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
-@pytest.mark.parametrize("loss_pct", [2e38, 1e36], ids=["product", "fused-result"])
-def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, loss_pct):
+@pytest.mark.parametrize("loss_allowance_fraction", [2e38, 1e36], ids=["product", "fused-result"])
+def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, loss_allowance_fraction):
     """Both single-side generation and fused preselection must publish failure."""
     _require_device()
     from copy import deepcopy
@@ -89,12 +89,15 @@ def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, los
     _, ordinary = raw(proxy, [{}], end_steps=end)
     assert ordinary["fill_count"].item() > 0, "the allowance consumer requires actual exposure"
     # The unchanged fixture has TWEL=2 and a positive ordinary balance. Each
-    # supplied percentage is finite f32; the authored product or FMA overflows.
+    # supplied fraction is finite f32; the authored product or FMA overflows.
+    candidate = {f"{sides[0]}_unstuck_loss_allowance_fraction": loss_allowance_fraction}
+    allowance_column = proxy.param_keys.index("unstuck_loss_allowance_fraction")
+    assert proxy._parameter_matrix([candidate], sides[0])[0, allowance_column] == loss_allowance_fraction
     with pytest.raises(ValueError, match="realized-loss memory or allowance"):
-        raw(proxy, [{f"{sides[0]}_unstuck_loss_allowance_pct": loss_pct}], end_steps=end)
+        raw(proxy, [candidate], end_steps=end)
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["bot"][sides[0]]["unstuck"]["loss_allowance_pct"] = loss_pct
+    config["bot"][sides[0]]["unstuck"]["loss_allowance_fraction"] = loss_allowance_fraction
     with pytest.raises(
         ValueError,
         match=r"v9 (?:unstuck|realized-loss allowance) .*finite risk domain|global\.(?:unstuck_allowance|realized_pnl_drawdown_or_allowance)",

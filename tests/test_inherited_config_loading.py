@@ -126,7 +126,7 @@ def test_prepared_global_ignored_file_and_approval_survive_deleted_sources(tmp_p
 
 def test_normalization_overlay_is_not_source_or_candidate_pin_and_clears_on_gene_write():
     raw = source()
-    weights = {"volume": 2.0, "volatility": 1.0, "ema_readiness": 1.0, "unilateralness": 0.0}
+    weights = {"volume": 2.0, "log_range": 1.0, "ema_readiness": 1.0, "unilateralness": 0.0}
     raw["bot"]["global"]["forager"] = {"score_weights": weights}
     raw["bot"]["short"]["forager"] = {"score_weights": deepcopy(weights)}
     prepared = prepare_config(raw, verbose=False)

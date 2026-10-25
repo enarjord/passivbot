@@ -44,26 +44,26 @@ def require_real_passivbot_rust_module():
 
 
 ADAPTIVE_STRATEGY_KEYS = {
-    "close_grid_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_qty_pct",
-    "close_trailing_threshold_pct",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_volatility_ema_span_1h",
-    "entry_volatility_ema_span_1m",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
-    "ema_span_0",
-    "ema_span_1",
+    "close_grid_qty_fraction",
+    "close_trailing_retracement_base_fraction",
+    "close_trailing_qty_fraction",
+    "close_trailing_threshold_base_fraction",
+    "close_log_range_1h_coefficient",
+    "close_log_range_1m_coefficient",
+    "entry_grid_reentry_qty_multiplier",
+    "entry_grid_threshold_base_fraction",
+    "entry_log_range_ema_span_1h_candles",
+    "entry_log_range_ema_span_minutes",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
+    "entry_exposure_ratio_coefficient",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_trailing_reentry_qty_multiplier",
+    "entry_trailing_retracement_base_fraction",
+    "entry_trailing_threshold_base_fraction",
+    "ema_span_0_minutes",
+    "ema_span_1_minutes",
 }
 
 
@@ -75,56 +75,56 @@ def _set_nested(mapping, path, value):
 
 
 LEGACY_STRATEGY_KEY_MAP = {
-    "close_grid_qty_pct": ("close", "qty_pct"),
-    "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
-    "close_trailing_qty_pct": ("close", "qty_pct"),
-    "close_trailing_threshold_pct": ("close", "threshold_base_pct"),
-    "close_weight_volatility_1h": ("close", "threshold_volatility_1h_weight"),
-    "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
-    "entry_grid_double_down_factor": ("entry", "double_down_factor"),
-    "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
-    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
-    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
-    "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
-    "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
-    "entry_we_weight": ("entry", "threshold_we_weight"),
-    "entry_initial_ema_dist": ("entry", "initial_ema_dist"),
-    "entry_initial_qty_pct": ("entry", "initial_qty_pct"),
-    "entry_trailing_double_down_factor": ("entry", "double_down_factor"),
-    "entry_trailing_retracement_pct": ("entry", "retracement_base_pct"),
-    "entry_trailing_threshold_pct": ("entry", "threshold_base_pct"),
+    "close_grid_qty_fraction": ("close", "qty_fraction"),
+    "close_trailing_retracement_base_fraction": ("close", "retracement_base_fraction"),
+    "close_trailing_qty_fraction": ("close", "qty_fraction"),
+    "close_trailing_threshold_base_fraction": ("close", "threshold_base_fraction"),
+    "close_log_range_1h_coefficient": ("close", "threshold_log_range_1h_coefficient"),
+    "close_log_range_1m_coefficient": ("close", "threshold_log_range_1m_coefficient"),
+    "entry_grid_reentry_qty_multiplier": ("entry", "reentry_qty_multiplier"),
+    "entry_grid_threshold_base_fraction": ("entry", "threshold_base_fraction"),
+    "entry_log_range_ema_span_1h_candles": ("log_range_ema_span_1h_candles",),
+    "entry_log_range_ema_span_minutes": ("log_range_ema_span_minutes",),
+    "entry_log_range_1h_coefficient": ("entry", "threshold_log_range_1h_coefficient"),
+    "entry_log_range_1m_coefficient": ("entry", "threshold_log_range_1m_coefficient"),
+    "entry_exposure_ratio_coefficient": ("entry", "threshold_exposure_ratio_coefficient"),
+    "entry_initial_ema_distance_fraction": ("entry", "initial_ema_distance_fraction"),
+    "entry_initial_qty_fraction": ("entry", "initial_qty_fraction"),
+    "entry_trailing_reentry_qty_multiplier": ("entry", "reentry_qty_multiplier"),
+    "entry_trailing_retracement_base_fraction": ("entry", "retracement_base_fraction"),
+    "entry_trailing_threshold_base_fraction": ("entry", "threshold_base_fraction"),
 }
 
 
 def adaptive_strategy_params(**overrides):
     base = {
-        "volatility_ema_span_1h": 0.0,
-        "volatility_ema_span_1m": 60.0,
+        "log_range_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 60.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "double_down_factor": 1.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
+            "reentry_qty_multiplier": 1.0,
             "ema_gate_mode": "initial",
-            "initial_ema_dist": 0.0,
-            "initial_qty_pct": 0.1,
-            "threshold_base_pct": 0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_we_weight": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "initial_ema_distance_fraction": 0.0,
+            "initial_qty_fraction": 0.1,
+            "threshold_base_fraction": 0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_exposure_ratio_coefficient": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
         "close": {
-            "qty_pct": 1.0,
-            "threshold_base_pct": 0.01,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "qty_fraction": 1.0,
+            "threshold_base_fraction": 0.01,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
     }
     for key, value in overrides.items():
@@ -161,12 +161,12 @@ def bot_params(**overrides):
         "risk_we_excess_allowance_fraction": 0.0,
         "risk_entry_cooldown_minutes": 0.0,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     base.update(overrides)
     return base
@@ -334,7 +334,7 @@ def make_input(
             "loss_gate_realized_pnl_drawdown": 0.0,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": strategy_kind,
@@ -440,7 +440,7 @@ def test_execution_validation_matches_rust_for_representation_noisy_aligned_book
         ask=book_price,
         long_pos_size=1.0,
         long_pos_price=9.9e-05,
-        long_strategy=adaptive_strategy_params(entry={"initial_qty_pct": 0.0}),
+        long_strategy=adaptive_strategy_params(entry={"initial_qty_fraction": 0.0}),
     )
     symbol["exchange"].update(
         price_step=0.0001,
@@ -472,8 +472,8 @@ def test_short_close_rounds_to_positive_minimum_tick(strategy_kind):
 
     short_strategy = (
         adaptive_strategy_params(
-            entry={"initial_qty_pct": 0.0},
-            close={"threshold_base_pct": 0.6, "qty_pct": 1.0},
+            entry={"initial_qty_fraction": 0.0},
+            close={"threshold_base_fraction": 0.6, "qty_fraction": 1.0},
         )
     )
     symbol_kwargs = {"short_strategy": short_strategy}
@@ -521,7 +521,7 @@ def test_limit_close_minimum_uses_emitted_price_and_exact_remaining_position(
     import passivbot_rust as pbr
 
     short_strategy = (
-        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        adaptive_strategy_params(entry={"initial_qty_fraction": 0.0})
     )
     symbol_kwargs = {"short_strategy": short_strategy}
     symbol = make_symbol(
@@ -639,8 +639,8 @@ def test_live_missing_entry_trailing_preserves_close_and_other_side():
 
     enabled_short = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0}
     strategy = adaptive_strategy_params(
-        entry={"retracement_base_pct": 0.01},
-        close={"retracement_base_pct": 0.0},
+        entry={"retracement_base_fraction": 0.01},
+        close={"retracement_base_fraction": 0.0},
     )
     symbol = make_symbol(
         0,
@@ -693,8 +693,8 @@ def test_live_missing_close_trailing_still_emits_wel_reducer():
         "n_positions": 1,
     }
     strategy = adaptive_strategy_params(
-        entry={"retracement_base_pct": 0.0},
-        close={"retracement_base_pct": 0.01},
+        entry={"retracement_base_fraction": 0.0},
+        close={"retracement_base_fraction": 0.01},
     )
     symbol = make_symbol(
         0,
@@ -792,8 +792,8 @@ def test_live_authorized_missing_entry_volatility_preserves_independent_closes()
     import passivbot_rust as pbr
 
     strategy = adaptive_strategy_params(
-        entry_volatility_ema_span_1h=4.0,
-        entry_weight_volatility_1h=1.0,
+        entry_log_range_ema_span_1h_candles=4.0,
+        entry_log_range_1h_coefficient=1.0,
     )
     symbol = make_symbol(
         0,
@@ -964,8 +964,8 @@ def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
         short_pos_price=100.0,
         short_bp=enabled_short,
         long_strategy=adaptive_strategy_params(
-            entry_volatility_ema_span_1h=4.0,
-            entry_weight_volatility_1h=1.0,
+            entry_log_range_ema_span_1h_candles=4.0,
+            entry_log_range_1h_coefficient=1.0,
         ),
         short_strategy=adaptive_strategy_params(),
         emas=ema_bundle(h1_log_range=[]),
@@ -1007,8 +1007,8 @@ def test_trailing_martingale_close_only_ignores_entry_only_emas():
     import passivbot_rust as pbr
 
     strategy = adaptive_strategy_params(
-        entry_weight_volatility_1h=1.0,
-        entry_volatility_ema_span_1h=4.0,
+        entry_log_range_1h_coefficient=1.0,
+        entry_log_range_ema_span_1h_candles=4.0,
     )
     symbol = make_symbol(
         0,
@@ -1071,7 +1071,7 @@ def test_ema_gate_mode_disabled_initial_long_uses_best_bid_without_ema():
                 bid=100.0,
                 ask=101.0,
                 long_strategy=adaptive_strategy_params(
-                    entry={"ema_gate_mode": "disabled", "initial_ema_dist": -0.25}
+                    entry={"ema_gate_mode": "disabled", "initial_ema_distance_fraction": -0.25}
                 ),
                 emas=ema_bundle(m1_close=[]),
             )
@@ -1099,7 +1099,7 @@ def test_ema_gate_mode_reentry_leaves_flat_initial_at_best_bid_without_ema():
                 bid=100.0,
                 ask=101.0,
                 long_strategy=adaptive_strategy_params(
-                    entry={"ema_gate_mode": "reentry", "initial_ema_dist": -0.25}
+                    entry={"ema_gate_mode": "reentry", "initial_ema_distance_fraction": -0.25}
                 ),
                 emas=ema_bundle(m1_close=[]),
             )
@@ -1129,7 +1129,7 @@ def test_ema_gate_mode_reentry_leaves_partial_initial_at_best_bid_without_ema():
                 long_pos_size=0.5,
                 long_pos_price=100.0,
                 long_strategy=adaptive_strategy_params(
-                    entry={"ema_gate_mode": "reentry", "initial_ema_dist": -0.25}
+                    entry={"ema_gate_mode": "reentry", "initial_ema_distance_fraction": -0.25}
                 ),
                 emas=ema_bundle(m1_close=[]),
             )
@@ -1159,7 +1159,7 @@ def test_ema_gate_mode_all_gates_long_reentry_price():
                 long_pos_size=1.0,
                 long_pos_price=100.0,
                 long_strategy=adaptive_strategy_params(
-                    entry={"ema_gate_mode": "all", "threshold_base_pct": 0.02}
+                    entry={"ema_gate_mode": "all", "threshold_base_fraction": 0.02}
                 ),
                 emas=ema_bundle(
                     m1_close=[
@@ -1354,8 +1354,8 @@ def test_json_rejects_missing_realized_loss_gate_param():
         balance=1_000.0,
         symbols=[make_symbol(0, bid=100.0, ask=100.0)],
     )
-    del inp["global"]["max_realized_loss_pct"]
-    with pytest.raises(ValueError, match=r"missing field `max_realized_loss_pct`"):
+    del inp["global"]["loss_gate_max_drawdown_fraction"]
+    with pytest.raises(ValueError, match=r"missing field `loss_gate_max_drawdown_fraction`"):
         compute(pbr, inp)
 
 
@@ -1375,7 +1375,7 @@ def test_adaptive_grid_long_entry_output_regression():
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_bp={"entry_initial_ema_dist": -0.01},
+                long_bp={"entry_initial_ema_distance_fraction": -0.01},
                 short_bp={
                     "n_positions": 0,
                     "total_wallet_exposure_limit_ratio": 0.0,
@@ -1462,7 +1462,7 @@ def test_adaptive_grid_short_entry_output_regression():
                 short_bp={
                     "n_positions": 1,
                     "total_wallet_exposure_limit_ratio": 1.0,
-                    "entry_initial_ema_dist": 0.01,
+                    "entry_initial_ema_distance_fraction": 0.01,
                 },
             )
         ],
@@ -1589,7 +1589,7 @@ def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
                 bid=100.0,
                 ask=100.0,
                 long_strategy=adaptive_strategy_params(
-                    entry={"retracement_base_pct": 0.001}
+                    entry={"retracement_base_fraction": 0.001}
                 ),
             )
         ],
@@ -1876,18 +1876,18 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
                 long_pos_size=1.0,
                 long_pos_price=100.0,
                 long_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
             )
         ],
@@ -1948,11 +1948,11 @@ def test_ema_anchor_final_close_preserves_only_valid_minimum_remainders(
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 1.0,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 1.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     bp = {
         "wallet_exposure_limit_ratio": 1.0,
@@ -1999,11 +1999,11 @@ def test_ema_anchor_market_close_uses_executable_touch_minimum():
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     symbol = make_symbol(
         0,
@@ -2052,9 +2052,9 @@ def test_grid_market_close_uses_executable_touch_minimum(strategy_kind):
     strategy = (
         adaptive_strategy_params(
             close={
-                "qty_pct": 0.1,
-                "threshold_base_pct": 0.005,
-                "threshold_we_weight": 0.001,
+                "qty_fraction": 0.1,
+                "threshold_base_fraction": 0.005,
+                "threshold_exposure_ratio_coefficient": 0.001,
             }
         )
     )
@@ -2093,11 +2093,11 @@ def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     inp = make_input(
         balance=1_000.0,
@@ -2139,7 +2139,7 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
     import passivbot_rust as pbr
 
     strategy = (
-        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        adaptive_strategy_params(entry={"initial_qty_fraction": 0.0})
     )
     symbol = make_symbol(
         0,
@@ -2227,7 +2227,7 @@ def test_next_only_short_entry_recrops_quantity_after_price_quantization(strateg
     import passivbot_rust as pbr
 
     strategy = (
-        adaptive_strategy_params(entry={"initial_qty_pct": 1.0})
+        adaptive_strategy_params(entry={"initial_qty_fraction": 1.0})
     )
     disabled = {"n_positions": 0, "total_wallet_exposure_limit_ratio": 0.0}
     enabled = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0}
@@ -2271,7 +2271,7 @@ def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
     import passivbot_rust as pbr
 
     strategy = (
-        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        adaptive_strategy_params(entry={"initial_qty_fraction": 0.0})
     )
     disabled = {"n_positions": 0, "total_wallet_exposure_limit_ratio": 0.0}
     enabled = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0}
@@ -2341,11 +2341,11 @@ def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     inp = make_input(
         balance=1_000.0,
@@ -2391,11 +2391,11 @@ def test_sub_tick_ema_anchor_bid_suppresses_long_entry_above_the_book():
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     symbol = make_symbol(
         0,
@@ -2428,11 +2428,11 @@ def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
     import passivbot_rust as pbr
 
     strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     symbol = make_symbol(
         0,
@@ -2473,16 +2473,16 @@ def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
     assert short_entry["price"] == 0.2
 
 
-def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
+def test_ema_anchor_entry_qty_exposure_coefficient_scales_same_side_qty_only():
     import passivbot_rust as pbr
 
     base_strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.0,
-        "offset_psize_weight": 0.0,
-        "entry_double_down_factor": 2.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.0,
+        "inventory_offset_exposure_coefficient": 0.0,
+        "entry_qty_exposure_coefficient": 2.0,
     }
     long_inp = make_input(
         balance=1_000.0,
@@ -2572,18 +2572,18 @@ def test_ema_anchor_respects_runtime_budget_for_base_clip_size():
                     "risk_we_excess_allowance_fraction": 0.0,
                 },
                 long_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.0,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.0,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.0,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.0,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
             )
         ],
@@ -2754,15 +2754,15 @@ def test_ema_anchor_volatility_weights_widen_quotes():
     import passivbot_rust as pbr
 
     base_strategy = {
-        "base_qty_pct": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "offset": 0.01,
-        "offset_volatility_ema_span_1m": 15.0,
-        "offset_volatility_1m_weight": 2.0,
-        "offset_volatility_ema_span_1h": 8.0,
-        "offset_volatility_1h_weight": 3.0,
-        "offset_psize_weight": 0.0,
+        "base_qty_fraction": 0.1,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
+        "offset_fraction": 0.01,
+        "offset_log_range_ema_span_minutes": 15.0,
+        "offset_log_range_1m_coefficient": 2.0,
+        "offset_log_range_ema_span_1h_candles": 8.0,
+        "offset_log_range_1h_coefficient": 3.0,
+        "inventory_offset_exposure_coefficient": 0.0,
     }
     calm = make_input(
         balance=1_000.0,
@@ -2840,18 +2840,18 @@ def test_ema_anchor_one_way_mode_blocks_short_entries_while_long_position_exists
                 long_pos_size=1.0,
                 long_pos_price=100.0,
                 long_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
             )
         ],
@@ -2895,18 +2895,18 @@ def test_ema_anchor_one_way_mode_blocks_long_entries_while_short_position_exists
                 short_pos_size=-1.0,
                 short_pos_price=100.0,
                 long_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
-                    "base_qty_pct": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "offset": 0.01,
-                    "offset_psize_weight": 0.0,
+                    "base_qty_fraction": 0.1,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "offset_fraction": 0.01,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 },
             )
         ],
@@ -3179,7 +3179,7 @@ def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
         0,
         bid=100.0,
         ask=100.0,
-        long_bp={"entry_initial_qty_pct": 0.0},
+        long_bp={"entry_initial_qty_fraction": 0.0},
     )
     symbol["exchange"].update(
         {"qty_step": qty_step, "min_qty": min_qty, "min_cost": 0.0}
@@ -3204,7 +3204,7 @@ def test_positive_sub_step_effective_minimum_emits_one_contract():
         long_bp={
             "wallet_exposure_limit_ratio": 2.0,
             "total_wallet_exposure_limit_ratio": 2.0,
-            "entry_initial_qty_pct": 0.1,
+            "entry_initial_qty_fraction": 0.1,
         },
     )
     symbol["exchange"].update({"qty_step": 1.0, "min_qty": 0.0, "min_cost": 1.0})
@@ -3313,7 +3313,7 @@ def test_panic_close_order_type_rejects_invalid_symbol_value():
             {"risk_we_excess_allowance_fraction": -0.01},
             r"bot\.long\.risk_we_excess_allowance_fraction",
         ),
-        ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
+        ({"unstuck_ema_distance_fraction": -1.0}, r"bot\.long\.unstuck_ema_distance_fraction"),
     ],
 )
 def test_json_rejects_invalid_global_hsl_risk_unstuck_values(overrides, match):
@@ -3339,13 +3339,13 @@ def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
                 0,
                 bid=100.0,
                 ask=101.0,
-                long_bp={"unstuck_close_pct": 1.01},
+                long_bp={"unstuck_close_fraction": 1.01},
             )
         ],
     )
 
     with pytest.raises(
-        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"
+        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_fraction"
     ):
         compute(pbr, inp)
 
@@ -3692,7 +3692,7 @@ def test_select_forager_candidates_all_zero_weights_fall_back_to_ema_readiness_o
             "ask": 100.0,
             "ema_lower": 100.0,
             "ema_upper": 100.0,
-            "entry_initial_ema_dist": 0.0,
+            "entry_initial_ema_distance_fraction": 0.0,
         },
         {
             "index": 1,
@@ -3703,7 +3703,7 @@ def test_select_forager_candidates_all_zero_weights_fall_back_to_ema_readiness_o
             "ask": 100.0,
             "ema_lower": 90.0,
             "ema_upper": 100.0,
-            "entry_initial_ema_dist": 0.0,
+            "entry_initial_ema_distance_fraction": 0.0,
         },
     ]
     selected = pbr.select_forager_candidates_py(
@@ -3741,10 +3741,10 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
 
     balance = 1_000.0
     long_bp = {
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
 
@@ -3756,7 +3756,7 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
         long_pos_price=100.0,
         long_bp=long_bp,
         long_strategy=adaptive_strategy_params(
-            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+            close={"qty_fraction": 1.0, "threshold_base_fraction": 0.01},
         ),
         emas=ema_bundle(
             m1_close=[
@@ -3787,10 +3787,10 @@ def test_unstuck_allowance_uses_only_its_independent_realized_memory():
     import passivbot_rust as pbr
 
     params = {
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_loss_allowance_fraction": 0.01,
         "risk_wel_enforcer_enabled": False,
         "risk_twel_enforcer_enabled": False,
     }
@@ -3822,12 +3822,12 @@ def test_trailing_martingale_emits_compatible_unstuck_and_trailing_closes_togeth
         "risk_wel_enforcer_enabled": False,
         "risk_twel_enforcer_enabled": False,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_close_pct": 0.0195,
-        "unstuck_threshold": 0.9,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.0195,
+        "unstuck_exposure_trigger_ratio": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     strategy = adaptive_strategy_params(
-        close={"qty_pct": 0.2624, "retracement_base_pct": 0.005, "threshold_base_pct": 0.01}
+        close={"qty_fraction": 0.2624, "retracement_base_fraction": 0.005, "threshold_base_fraction": 0.01}
     )
     sym = make_symbol(
         0,
@@ -3871,15 +3871,15 @@ def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     global_bp = bot_params_pair(
         long_overrides={
             "total_wallet_exposure_limit_ratio": 1.5,
-            "unstuck_loss_allowance_pct": 0.02,
+            "unstuck_loss_allowance_fraction": 0.02,
         }
     )
     sym = make_symbol(
@@ -3921,10 +3921,10 @@ def test_auto_unstuck_quantizes_off_tick_book_price_before_live_validation(
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     symbol_kwargs = {
         f"{pside}_pos_size": position_size,
@@ -3960,10 +3960,10 @@ def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     sym = make_symbol(
         0,
@@ -3991,11 +3991,11 @@ def test_unstuck_ema_gating_disabled_skips_missing_ema_requirement():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
+        "unstuck_close_fraction": 0.5,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     sym = make_symbol(
         0,
@@ -4033,8 +4033,8 @@ def test_orders_include_entries_and_closes():
         long_pos_price=100.0,
         long_bp=long_bp,
         long_strategy=adaptive_strategy_params(
-            entry={"initial_qty_pct": 0.1, "threshold_base_pct": 0.01},
-            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+            entry={"initial_qty_fraction": 0.1, "threshold_base_fraction": 0.01},
+            close={"qty_fraction": 1.0, "threshold_base_fraction": 0.01},
         ),
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
@@ -4054,7 +4054,7 @@ def test_long_grid_close_uses_position_price_anchor():
         long_pos_size=1.0,
         long_pos_price=100.0,
         long_strategy=adaptive_strategy_params(
-            close={"threshold_base_pct": 0.01},
+            close={"threshold_base_fraction": 0.01},
         ),
         emas=ema_bundle(
             m1_close=[
@@ -4088,7 +4088,7 @@ def test_short_grid_close_uses_position_price_anchor():
         short_mode="normal",
         short_bp=short_bp,
         short_strategy=adaptive_strategy_params(
-            close={"threshold_base_pct": 0.01},
+            close={"threshold_base_fraction": 0.01},
         ),
         emas=ema_bundle(
             m1_close=[
@@ -4115,9 +4115,9 @@ def test_twel_entry_gating_blocks_new_entries():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_initial_ema_dist": -0.01,
-        "entry_grid_spacing_pct": 0.01,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_initial_ema_distance_fraction": -0.01,
+        "entry_grid_threshold_base_fraction": 0.01,
         "total_wallet_exposure_limit_ratio": 0.1,
         "wallet_exposure_limit_ratio": 0.1,
         "risk_twel_enforcer_threshold_ratio": 1.0,
@@ -4137,11 +4137,11 @@ def test_twel_entry_gating_blocks_new_entries():
     assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
 
 
-def test_min_effective_cost_uses_strategy_initial_qty_pct():
+def test_min_effective_cost_uses_strategy_initial_qty_fraction():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.0,
+        "entry_initial_qty_fraction": 0.0,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
@@ -4152,7 +4152,7 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
         ask=100.0,
         effective_min_cost=10.0,
         long_bp=long_bp,
-        long_strategy=adaptive_strategy_params(entry={"initial_qty_pct": 0.1}),
+        long_strategy=adaptive_strategy_params(entry={"initial_qty_fraction": 0.1}),
     )
     inp = make_input(
         balance=1_000.0,
@@ -4171,7 +4171,7 @@ def test_live_validator_accepts_real_min_effective_cost_diagnostic():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.01,
+        "entry_initial_qty_fraction": 0.01,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
@@ -4200,9 +4200,9 @@ def test_manual_positions_consume_twel_entry_gate_budget():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.01,
-        "entry_initial_ema_dist": 0.0,
-        "entry_grid_spacing_pct": 0.01,
+        "entry_initial_qty_fraction": 0.01,
+        "entry_initial_ema_distance_fraction": 0.0,
+        "entry_grid_threshold_base_fraction": 0.01,
         "total_wallet_exposure_limit_ratio": 0.1,
         "wallet_exposure_limit_ratio": 0.1,
         "risk_twel_enforcer_threshold_ratio": 1.0,
@@ -4240,9 +4240,9 @@ def test_twel_entry_gating_uses_snapped_balance_not_raw():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_grid_double_down_factor": 10.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_grid_reentry_qty_multiplier": 10.0,
         "total_wallet_exposure_limit_ratio": 0.2,
         "wallet_exposure_limit_ratio": 1.0,
         "risk_twel_enforcer_threshold_ratio": 1.0,
@@ -4289,10 +4289,10 @@ def test_unconditional_twel_entry_cap_blocks_entry_above_threshold():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_initial_ema_dist": -0.01,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_grid_double_down_factor": 10.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_initial_ema_distance_fraction": -0.01,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_grid_reentry_qty_multiplier": 10.0,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 0.5,
         "risk_we_excess_allowance_fraction": 0.25,
@@ -4331,9 +4331,9 @@ def test_twel_entry_gate_uses_thresholded_cap_below_one():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_grid_double_down_factor": 10.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_grid_reentry_qty_multiplier": 10.0,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 1.0,
         "risk_twel_enforcer_enabled": False,
@@ -4359,9 +4359,9 @@ def test_twel_entry_gate_caps_threshold_above_one_at_raw_twel():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_grid_double_down_factor": 10.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_grid_reentry_qty_multiplier": 10.0,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 1.0,
         "risk_twel_enforcer_enabled": False,
@@ -4576,10 +4576,10 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4618,10 +4618,10 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
@@ -4667,10 +4667,10 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.4,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.4,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4683,7 +4683,7 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["global"]["unstuck_allowance_long"] = 1e9
-    inp["global"]["max_realized_loss_pct"] = 0.019
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.019
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
@@ -4720,7 +4720,7 @@ def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
         {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee": 0.0}
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp["global"]["max_realized_loss_pct"] = 0.105
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.105
 
     out = compute(pbr, inp)
 
@@ -4765,7 +4765,7 @@ def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
     sym0["exchange"]["maker_fee"] = 0.0
     sym1["exchange"]["maker_fee"] = 0.0
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
-    inp["global"]["max_realized_loss_pct"] = 0.07
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.07
 
     out = compute(pbr, inp)
     wel_orders = [
@@ -4798,10 +4798,10 @@ def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4841,10 +4841,10 @@ def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
@@ -5090,7 +5090,7 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 1_000.0
-    inp["global"]["max_realized_loss_pct"] = 0.0
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.0
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 0.0
 
     out = compute(pbr, inp)
@@ -5154,7 +5154,7 @@ def test_realized_loss_gate_uses_balance_raw(unstuck_drawdown):
     # so a negative projected close is blocked without using snapped balance.
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 980.0
-    inp["global"]["max_realized_loss_pct"] = 0.001  # very tight gate
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.001  # very tight gate
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 70.0
     inp["global"]["unstuck_realized_pnl_drawdown"] = unstuck_drawdown
 
@@ -5190,8 +5190,8 @@ def test_balance_raw_is_required_even_when_sizing_balance_is_supplied():
             r"balance must be finite and > 0",
         ),
         (
-            lambda inp: inp["global"].__setitem__("max_realized_loss_pct", -0.01),
-            r"global\.max_realized_loss_pct must be finite and >= 0",
+            lambda inp: inp["global"].__setitem__("loss_gate_max_drawdown_fraction", -0.01),
+            r"global\.loss_gate_max_drawdown_fraction must be finite and >= 0",
         ),
         (
             lambda inp: inp["global"].__setitem__("unstuck_allowance_long", -1.0),
@@ -5238,13 +5238,13 @@ def test_balance_raw_zero_rejected():
         long_pos_price=100.0,
         long_bp=long_bp,
         long_strategy=adaptive_strategy_params(
-            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+            close={"qty_fraction": 1.0, "threshold_base_fraction": 0.01},
         ),
     )
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 0.0
-    inp["global"]["max_realized_loss_pct"] = 0.05
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
@@ -5265,13 +5265,13 @@ def test_balance_raw_negative_rejected():
         long_pos_price=100.0,
         long_bp=long_bp,
         long_strategy=adaptive_strategy_params(
-            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+            close={"qty_fraction": 1.0, "threshold_base_fraction": 0.01},
         ),
     )
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = -1.0
-    inp["global"]["max_realized_loss_pct"] = 0.05
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
@@ -5331,7 +5331,7 @@ def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
         },
     )
     inp_blocked = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp_blocked["global"]["max_realized_loss_pct"] = 0.01
+    inp_blocked["global"]["loss_gate_max_drawdown_fraction"] = 0.01
 
     out_blocked = compute(pbr, inp_blocked)
     blocked_types = [o["order_type"] for o in out_blocked["orders"]]
@@ -5404,7 +5404,7 @@ def test_loss_gate_rejects_non_positive_raw_balance():
         },
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp["global"]["max_realized_loss_pct"] = 0.01
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.01
 
     for raw_balance in [0.0, -1.0]:
         inp_case = copy.deepcopy(inp)
@@ -5420,12 +5420,12 @@ def test_unstuck_uses_independent_spans_and_scopes_missing_emas(side):
     params = dict(
         n_positions=1,
         total_wallet_exposure_limit_ratio=1.0,
-        unstuck_close_pct=0.1,
-        unstuck_threshold=0.001,
-        unstuck_loss_allowance_pct=0.01,
-        unstuck_ema_dist=0.0,
-        unstuck_ema_span_0=30.5,
-        unstuck_ema_span_1=80.5,
+        unstuck_close_fraction=0.1,
+        unstuck_exposure_trigger_ratio=0.001,
+        unstuck_loss_allowance_fraction=0.01,
+        unstuck_ema_distance_fraction=0.0,
+        unstuck_ema_span_0_minutes=30.5,
+        unstuck_ema_span_1_minutes=80.5,
     )
     sym = make_symbol(
         0,

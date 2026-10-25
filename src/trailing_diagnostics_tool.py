@@ -10,18 +10,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 ENTRY_CONFIG_KEYS = [
-    "entry_grid_double_down_factor",
+    "entry_grid_reentry_qty_multiplier",
     "entry_grid_spacing_volatility_weight",
     "entry_grid_spacing_we_weight",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_retracement_we_weight",
+    "entry_grid_threshold_base_fraction",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_trailing_reentry_qty_multiplier",
+    "entry_trailing_retracement_base_fraction",
+    "entry_trailing_retracement_exposure_ratio_coefficient",
     "entry_trailing_retracement_volatility_weight",
-    "entry_trailing_threshold_pct",
-    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_base_fraction",
+    "entry_trailing_threshold_exposure_ratio_coefficient",
     "entry_trailing_threshold_volatility_weight",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
@@ -29,10 +29,10 @@ ENTRY_CONFIG_KEYS = [
 ]
 
 CLOSE_CONFIG_KEYS = [
-    "close_grid_qty_pct",
-    "close_trailing_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_threshold_pct",
+    "close_grid_qty_fraction",
+    "close_trailing_qty_fraction",
+    "close_trailing_retracement_base_fraction",
+    "close_trailing_threshold_base_fraction",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
     "risk_we_excess_allowance_fraction",
@@ -94,14 +94,14 @@ WIZARD_CORE_KEYS = [
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
     "risk_we_excess_allowance_fraction",
-    "entry_trailing_threshold_pct",
-    "entry_trailing_retracement_pct",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
-    "close_trailing_qty_pct",
-    "close_trailing_threshold_pct",
-    "close_trailing_retracement_pct",
+    "entry_trailing_threshold_base_fraction",
+    "entry_trailing_retracement_base_fraction",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
+    "entry_exposure_ratio_coefficient",
+    "close_trailing_qty_fraction",
+    "close_trailing_threshold_base_fraction",
+    "close_trailing_retracement_base_fraction",
 ]
 
 WIZARD_ADVANCED_KEYS = [
@@ -110,15 +110,15 @@ WIZARD_ADVANCED_KEYS = [
     "min_qty",
     "min_cost",
     "c_mult",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "close_grid_qty_pct",
+    "entry_grid_reentry_qty_multiplier",
+    "entry_grid_threshold_base_fraction",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
+    "entry_exposure_ratio_coefficient",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_trailing_reentry_qty_multiplier",
+    "close_grid_qty_fraction",
     "risk_wel_enforcer_threshold_ratio",
 ]
 
@@ -597,8 +597,8 @@ def _render_side_box(title: str, payload: Optional[dict[str, Any]], width: int) 
             f"met={payload.get('retracement_met')}"
         ),
         (
-            f"thr_pct={_fmt_ratio_pct(payload.get('threshold_pct'))} "
-            f"ret_pct={_fmt_ratio_pct(payload.get('retracement_pct'))}"
+            f"thr_pct={_fmt_ratio_pct(payload.get('threshold_fraction'))} "
+            f"ret_pct={_fmt_ratio_pct(payload.get('retracement_fraction'))}"
         ),
         (
             f"vs_thr={_fmt_ratio_pct(payload.get('current_vs_threshold_ratio'))} "
@@ -621,14 +621,14 @@ def _render_side_box(title: str, payload: Optional[dict[str, Any]], width: int) 
 
 def _render_inputs_box(state: TrailingDiagnosticsState, width: int) -> list[str]:
     important = [
-        "entry_trailing_threshold_pct",
-        "entry_trailing_retracement_pct",
-        "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m",
-        "entry_we_weight",
-        "close_trailing_qty_pct",
-        "close_trailing_threshold_pct",
-        "close_trailing_retracement_pct",
+        "entry_trailing_threshold_base_fraction",
+        "entry_trailing_retracement_base_fraction",
+        "entry_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient",
+        "entry_exposure_ratio_coefficient",
+        "close_trailing_qty_fraction",
+        "close_trailing_threshold_base_fraction",
+        "close_trailing_retracement_base_fraction",
         "wallet_exposure_limit_ratio",
         "total_wallet_exposure_limit_ratio",
         "risk_we_excess_allowance_fraction",

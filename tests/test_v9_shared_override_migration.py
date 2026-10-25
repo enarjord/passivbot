@@ -93,8 +93,8 @@ def test_flat_shared_dictionary_map_preserves_each_authored_leaf(owner, nested):
         return
     output = migrate(source, memory_span_minutes=123.5).config
     expected = ({"bot.long.forager.score_weights.volume": 0.375,
-                 "bot.long.forager.score_weights.volatility": 0.625} if nested else
-                {"bot.long.forager.score_weights": weights})
+                 "bot.long.forager.score_weights.log_range": 0.625} if nested else
+                {"bot.long.forager.score_weights": {"volume": 0.375, "log_range": 0.625}})
     assert get_patch(output, owner) == expected
     assert source == before
 
@@ -190,10 +190,10 @@ def test_shared_conversion_preserves_separate_gate_acknowledgment(owner):
     ("*.n_positions", "*.max_positions", "n_positions", {"long", "short"}),
     ("long.n_positions", "bot.long.risk.max_positions", "n_positions", {"long"}),
     ("bot.*.risk.n_positions", "bot.*.risk.max_positions", "n_positions", {"long", "short"}),
-    ("threshold", "exposure_trigger_ratio", "unstuck_threshold", {"long", "short"}),
-    ("unstuck.threshold", "unstuck.exposure_trigger_ratio", "unstuck_threshold", {"long", "short"}),
-    ("*.unstuck.threshold", "bot.*.unstuck.exposure_trigger_ratio", "unstuck_threshold", {"long", "short"}),
-    ("short.unstuck_threshold", "bot.short.unstuck.exposure_trigger_ratio", "unstuck_threshold", {"short"}),
+    ("threshold", "exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
+    ("unstuck.threshold", "unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
+    ("*.unstuck.threshold", "bot.*.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
+    ("short.unstuck_threshold", "bot.short.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"short"}),
     ("ema_span_minutes", "drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
     ("hsl.ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
     ("*.hsl.ema_span_minutes", "bot.*.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),

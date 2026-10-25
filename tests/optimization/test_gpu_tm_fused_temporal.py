@@ -49,7 +49,7 @@ def _replay(hsl, hedge_mode, monkeypatch):
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=3,
         needed_metrics=metrics)
     assert replay.fused_runner is not None
-    candidates = [{}, {"long_entry_initial_qty_pct": .03}, {}]
+    candidates = [{}, {"long_entry_initial_qty_fraction": .03}, {}]
     params = np.concatenate([replay._parameter_matrix(candidates, side)
                              for side in ("long", "short")], axis=1)
     return replay, params

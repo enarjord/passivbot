@@ -81,7 +81,7 @@ def test_cpu_packet_requires_current_forager_duration_names_without_fallback(old
 def candidates():
     return [dict(index=i, enabled=True, volume_ema=volume, log_range_ema=log_range,
                  unilateralness_score=0.0, bid=100.0, ask=100.0,
-                 ema_lower=lower, ema_upper=100.0, entry_initial_ema_dist=0.0)
+                 ema_lower=lower, ema_upper=100.0, entry_initial_ema_distance_fraction=0.0)
             for i, volume, log_range, lower in (
                 (0, 10.0, 0.2, 100.0), (1, 100.0, 0.7, 90.0),
             )]
@@ -113,24 +113,26 @@ def test_native_candidate_requires_raw_quantity_names_without_alias_fallback(old
         )
 
 
-def test_public_to_native_forager_projection_preserves_independent_weight_values():
+def test_matching_public_and_native_forager_names_preserve_independent_weight_values():
     config = prepare_config(get_template_config(), verbose=False)
     side = config["bot"]["long"]
     public = deepcopy(side["forager"]["score_weights"])
     flat = flatten_shared_bot_side(side)
-    assert flat["forager_score_weights"]["log_range"] == public["volatility"]
+    assert flat["forager_score_weights"]["log_range"] == public["log_range"]
     assert "volatility" not in flat["forager_score_weights"]
     flat["forager_score_weights"]["log_range"] = 0.375
     assert side["forager"]["score_weights"] == public
     set_grouped_bot_value(side, "forager_score_weights", flat["forager_score_weights"])
-    assert side["forager"]["score_weights"]["volatility"] == 0.375
-    assert "log_range" not in side["forager"]["score_weights"]
+    assert side["forager"]["score_weights"]["log_range"] == 0.375
+    assert "volatility" not in side["forager"]["score_weights"]
+    flat["forager_score_weights"]["log_range"] = 0.5
+    assert side["forager"]["score_weights"]["log_range"] == 0.375
 
 
 @pytest.mark.parametrize("old,path,native", [
     ("forager_volume_ema_span_1m", ("volume_ema_span_minutes",), "forager_volume_ema_span_minutes"),
-    ("forager_volatility_ema_span_1m", ("volatility_ema_span_minutes",), "forager_log_range_ema_span_minutes"),
-    ("forager_score_weights_volatility", ("score_weights", "volatility"), "forager_score_weights_log_range"),
+    ("forager_volatility_ema_span_1m", ("log_range_ema_span_minutes",), "forager_log_range_ema_span_minutes"),
+    ("forager_score_weights_volatility", ("score_weights", "log_range"), "forager_score_weights_log_range"),
 ])
 def test_released_flat_forager_bounds_preserve_values_and_report_final_paths(old, path, native):
     source = released_v8_policy()

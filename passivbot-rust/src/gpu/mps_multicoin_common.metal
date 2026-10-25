@@ -516,7 +516,7 @@ inline bool passes_multicoin_age(
 
 inline bool passes_multicoin_min_effective_cost(
     bool enabled, float balance, float wel,
-    float initial_qty_pct, float price,
+    float initial_qty_fraction, float price,
     constant float* coin_settings ORGANILLO_ARGS, int coin_offset
 ) {
     if (!enabled) return true;
@@ -526,7 +526,7 @@ inline bool passes_multicoin_min_effective_cost(
         price, coin_settings[coin_offset + 0], coin_settings[coin_offset + 2],
         coin_settings[coin_offset + 3], c_mult
     ) * price * c_mult;
-    const float projected_cost = balance * wel * initial_qty_pct;
+    const float projected_cost = balance * wel * initial_qty_fraction;
     return isfinite(projected_cost) && projected_cost > 0.0f
         && projected_cost >= minimum_cost;
 }

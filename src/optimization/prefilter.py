@@ -22,6 +22,23 @@ from optimization.evaluation_payload import build_evaluation_payload
 from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 
 
+# Authored quantities have one spelling; the native probe protocol stays unchanged.
+PREFILTER_PROBE_NATIVE_FIELDS = {
+    "exposure_probe_fractions": "exposure_ratios",
+    "log_range_ema_1m": "log_range_ema_1m",
+    "log_range_ema_1h": "log_range_ema_1h",
+    "adverse_directionality_score": "adverse_directionality",
+    "grid_max_entries": "grid_max_entries",
+}
+PREFILTER_METRIC_NATIVE_FIELDS = {
+    "entry_close_span_fraction": "entry_close_span",
+    "entry_retracement_fraction": "entry_retracement",
+    "close_retracement_fraction": "close_retracement",
+    "entry_cooldown_minutes": "entry_cooldown_minutes",
+    "grid_span_fraction": "grid_span",
+}
+
+
 def prefilter_config_for_exchange(config, markets, exchange):
     """Resolve venue aliases outside the pure scalar API using prepared metadata."""
     from backtest import _get_backtest_coin_override
@@ -153,17 +170,11 @@ def _probe_inputs(config, params, checks):
                 "cooldown_exposure_weight": weights["exposure_ratio"],
                 "cooldown_adverse_weight": weights["adverse_directionality"],
                 **{
-                    key: params[key]
-                    for key in (
-                        "exposure_ratios",
-                        "volatility_ema_1m",
-                        "volatility_ema_1h",
-                        "adverse_directionality",
-                        "grid_max_entries",
-                    )
+                    native: params[public]
+                    for public, native in PREFILTER_PROBE_NATIVE_FIELDS.items()
                 },
                 "calculate_grid": any(
-                    check["metric"] == "grid_span" and side in check["sides"]
+                    check["metric"] == "grid_span_fraction" and side in check["sides"]
                     for check in checks
                 ),
             }
@@ -185,13 +196,14 @@ def inspect_config_prefilter(config, prefilter_params):
         for index, check in enumerate(checks):
             if side not in check["sides"]:
                 continue
+            native_metric = PREFILTER_METRIC_NATIVE_FIELDS[check["metric"]]
             rows = (
                 [{"grid_span": measurements["grid_span"]}]
-                if check["metric"] == "grid_span"
+                if check["metric"] == "grid_span_fraction"
                 else measurements["observations"]
             )
             for row in rows:
-                value = float(row[check["metric"]])
+                value = float(row[native_metric])
                 if not math.isfinite(value):
                     raise ValueError("non-finite config prefilter measurement")
                 violation = (
@@ -203,7 +215,7 @@ def inspect_config_prefilter(config, prefilter_params):
                     / check["scale"]
                 )
                 incomplete = (
-                    check["metric"] == "grid_span" and not measurements["grid_complete"]
+                    check["metric"] == "grid_span_fraction" and not measurements["grid_complete"]
                 )
                 if incomplete:
                     # A truncated or unreachable ladder cannot establish a valid

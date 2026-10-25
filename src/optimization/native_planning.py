@@ -55,8 +55,8 @@ def _request_owned_paths(config):
             "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
             "unilateralness_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
-            "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
-            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
+            "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
+            "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "unilateralness")),
         )
@@ -101,8 +101,8 @@ def _static_contract(config):
             "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
             "unilateralness_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
-            "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
-            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
+            "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
+            "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "unilateralness")),
         )
@@ -128,7 +128,7 @@ def _static_contract(config):
             for side in ("long", "short"):
                 for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                     _remove_path(patch, ("bot", side, "unstuck", name))
-                    _remove_path(patch, ("bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
+                    _remove_path(patch, ("bot", side, f"unstuck_{name}"))
     return result
 
 
@@ -293,7 +293,7 @@ class _ExecutionProjection:
                 for side in ("long", "short"):
                     for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                         numeric_paths.add(("coin_overrides", coin, "bot", side, "unstuck", name))
-                        numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
+                        numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name}"))
         self.guard = _compile_projection_guard(config, numeric_paths)
         self.specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
         self.sides = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))

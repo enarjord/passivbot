@@ -71,9 +71,9 @@ for the distinction between schema, package version and tags.
   - `false`: fixed denominator, same as live: `wallet_exposure_limit_ratio = total_wallet_exposure_limit_ratio / max_positions`.
 - **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
-- **equity_floor_ratio**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_ratio`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_ratio = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_ratio < 1.0`.
-- **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
-- **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
+- **equity_floor_fraction**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_fraction`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_fraction = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_fraction < 1.0`.
+- **maker_fee_override_fraction**: Optional signed maker fee override (scale one; negative values are rebates; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override-fraction`.
+- **taker_fee_override_fraction**: Optional signed taker fee override (scale one; negative values are rebates; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override-fraction`.
 - **limit_order_fill_buffer_fraction**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
 - **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.portfolio.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
@@ -82,8 +82,8 @@ for the distinction between schema, package version and tags.
   `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
   includes account balance/equity in USD and BTC plus collateral-agnostic `strategy_equity`.
-- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
-- **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
+- **btc_collateral_target_ratio**: Target BTC collateral value divided by account equity. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
+- **max_usd_debt_to_equity_ratio**: Optional USD-debt/equity ceiling enforced when topping up BTC; the denominator is equity. `null` (default) or a nonpositive value leaves top-up debt uncapped. A positive value such as `0.6` limits additional BTC purchases using `USD debt ÷ equity`; the initial collateral allocation still follows the target ratio.
 ### Suite Scenarios
 
 Suite configuration uses a flattened structure directly under `backtest`:
@@ -272,6 +272,17 @@ behavior.
   - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 
+### EMA-Anchor Exposure Coefficients
+
+`strategy.ema_anchor.entry_qty_exposure_coefficient` scales additional entry quantity by
+`max(1, 1 + same_side_exposure_ratio * coefficient)`. The ratio uses signed position exposure
+at the order-book midpoint divided by the effective per-position exposure limit. This sizing
+adjustment uses `max(0, signed_ratio)` for long and `max(0, -signed_ratio)` for short.
+
+`strategy.ema_anchor.inventory_offset_exposure_coefficient` multiplies that signed exposure
+ratio without the same-side clamp. The resulting price fraction is subtracted from both bid
+and ask EMA anchor factors. Exchange rounding, sizing floors, and exposure caps still apply.
+
 ### Trailing Martingale Entries
 
 The retained strategy kinds are `trailing_martingale` and `ema_anchor`.
@@ -280,30 +291,30 @@ acts as recursive DCA spacing; with retracement enabled it is the required excur
 confirmation. The v7 strategy and its dedicated migration command have been removed.
 Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 
-- **strategy.trailing_martingale.entry.double_down_factor**:
-  - Quantity of the next re-entry is position size times the double down factor.
-  - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
+- **strategy.trailing_martingale.entry.reentry_qty_multiplier**:
+  - Additional re-entry quantity starts from absolute current position size times this multiplier, before minimum/initial sizing floors, exchange rounding, and exposure caps.
+  - Example: Absolute position size `1.4` and multiplier `0.9` give `1.4 * 0.9 = 1.26` before those safeguards; multiplier `1.0` adds the current position quantity.
 - **strategy.trailing_martingale.entry.threshold_base_fraction**:
   - Re-entry threshold from the current position price.
   - If entry retracement is disabled:
     - `next_reentry_price_long = pos_price * (1 - effective_threshold)`
     - `next_reentry_price_short = pos_price * (1 + effective_threshold)`
   - If entry retracement is enabled, price must first move at least this far in the favorable direction before the retracement condition may place an order.
-- **strategy.trailing_martingale.entry.threshold_we_weight**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient**, **threshold_log_range_1h_coefficient**, **threshold_log_range_1m_coefficient**:
   - Entry threshold is widened multiplicatively:
-    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
+    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_exposure_ratio_coefficient + log_range_1h * threshold_log_range_1h_coefficient + log_range_1m * threshold_log_range_1m_coefficient)`
   - `we_ratio = wallet_exposure / effective_wallet_exposure_limit_ratio`.
-  - Positive weights make entries less eager as exposure or volatility rises.
+  - Positive coefficients make entries less eager as exposure or log range rises.
 - **strategy.trailing_martingale.entry.retracement_base_fraction**:
   - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
-- **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.retracement_exposure_ratio_coefficient**, **retracement_log_range_1h_coefficient**, **retracement_log_range_1m_coefficient**:
   - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
-- **strategy.trailing_martingale.volatility_ema_span_1h_candles**, **volatility_ema_span_minutes**:
+- **strategy.trailing_martingale.log_range_ema_span_1h_candles**, **log_range_ema_span_minutes**:
   - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
   - The hourly horizon is a floating count of calendar-hour candle samples. The minute horizon
     is converted to base-candle periods when backtests aggregate their input candles.
-  - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
+  - A log-range coefficient of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
@@ -334,18 +345,18 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
     - `close_price_long = pos_price * (1 + effective_threshold)`
     - `close_price_short = pos_price * (1 - effective_threshold)`
   - With retracement enabled, this is the first trailing condition: market price must first reach the threshold before retracement can trigger the close.
-- **strategy.trailing_martingale.close.threshold_we_weight**:
+- **strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient**:
   - Close threshold is adjusted additively by exposure:
-    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
+    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_exposure_ratio_coefficient + log_range_1h * threshold_log_range_1h_coefficient + log_range_1m * threshold_log_range_1m_coefficient`
   - Negative values make closes more eager as position exposure grows, including break-even or negative-markup closes.
   - Positive values make closes less eager as exposure grows.
-- **strategy.trailing_martingale.close.threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+- **strategy.trailing_martingale.close.threshold_log_range_1h_coefficient**, **threshold_log_range_1m_coefficient**:
   - Positive values shift close thresholds farther from position price during volatile periods.
 - **strategy.trailing_martingale.close.retracement_base_fraction**:
   - If `<= 0.0`, close trailing is disabled and closes are resting limit orders.
   - If `> 0.0`, the bot waits for price to reach the close threshold and then retrace by the effective retracement.
-- **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
-  - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
+- **strategy.trailing_martingale.close.retracement_log_range_1h_coefficient**, **retracement_log_range_1m_coefficient**:
+  - Close retracement is widened multiplicatively by log range only. There is intentionally no close retracement wallet-exposure weight.
 
 The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_fraction`. The v7 compatibility strategy is removed.
 
@@ -392,14 +403,14 @@ Final reducer quantities compete largest-first across the shared batch loss allo
 
 ### Filter Parameters
 
-Forager ranks eligible candidates using volume, EMA readiness, volatility and unilateralness.
+Forager ranks eligible candidates using volume, EMA readiness, log range and unilateralness.
 The old volume-drop filter is removed; volume continues to contribute through its configured weight.
 
-- **forager.volatility_ema_span_minutes / forager.volume_ema_span_minutes**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
-  - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - These spans control the raw inputs to forager ranking; they are separate from strategy volatility spans such as `volatility_ema_span_1h_candles` and `offset_volatility_ema_span_1h_candles`.
-- **forager_score_weights**: Final weighted forager ranking weights.
-  - Required keys: `volume`, `ema_readiness`, `volatility`, `unilateralness`.
+- **forager.log_range_ema_span_minutes / forager.volume_ema_span_minutes**: Floating-point spans in minutes for the log-range and quote-volume EMAs used by forager mode.
+  - The log-range component is the EMA of `ln(high / low)` from completed candles.
+  - These spans control the raw inputs to forager ranking; they are separate from strategy log-range spans such as `log_range_ema_span_1h_candles` and `offset_log_range_ema_span_1h_candles`.
+- **forager.score_weights**: Final weighted forager ranking weights.
+  - Required keys: `volume`, `ema_readiness`, `log_range`, `unilateralness`.
   - The unilateralness weight defaults to zero; see the canonical template for other weights.
   - Positive weights are relative and normalized to unit sum before use.
   - If all weights are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
@@ -417,16 +428,16 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        entry.ema_span_0_minutes, entry.ema_span_1_minutes, volatility_ema_span_1h_candles, volatility_ema_span_minutes,
-        entry.double_down_factor, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
-        entry.threshold_base_fraction, entry.threshold_we_weight,
-        entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
-        entry.retracement_base_fraction, entry.retracement_we_weight,
-        entry.retracement_volatility_1h_weight, entry.retracement_volatility_1m_weight,
-        close.qty_fraction, close.threshold_base_fraction, close.threshold_we_weight,
-        close.threshold_volatility_1h_weight, close.threshold_volatility_1m_weight,
+        entry.ema_span_0_minutes, entry.ema_span_1_minutes, log_range_ema_span_1h_candles, log_range_ema_span_minutes,
+        entry.reentry_qty_multiplier, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
+        entry.threshold_base_fraction, entry.threshold_exposure_ratio_coefficient,
+        entry.threshold_log_range_1h_coefficient, entry.threshold_log_range_1m_coefficient,
+        entry.retracement_base_fraction, entry.retracement_exposure_ratio_coefficient,
+        entry.retracement_log_range_1h_coefficient, entry.retracement_log_range_1m_coefficient,
+        close.qty_fraction, close.threshold_base_fraction, close.threshold_exposure_ratio_coefficient,
+        close.threshold_log_range_1h_coefficient, close.threshold_log_range_1m_coefficient,
         close.retracement_base_fraction,
-        close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
+        close.retracement_log_range_1h_coefficient, close.retracement_log_range_1m_coefficient
       ]
       ```
     - `config.bot.long/short` shared fields:
@@ -596,7 +607,7 @@ shared source.
 
 - **bot.portfolio.warmup.max_minutes**: Cap on span-based historical warm-up for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Both modes round up only at the whole-minute acquisition boundary: `0.5` allows one minute and `5.5` allows six. Every positive cap, including an integer cap, is a maximum rather than a minimum request: a `3.25`-minute requirement acquires four candles under either a `5.5` or `60` cap. Uncapped background candidate refresh retains its default minimum window. The authored cap and EMA spans remain floats; live ranking readers use those fractional spans directly. Native hourly reads retain whole-hour alignment, and independently required RMS history is unchanged.
 
-- **bot.portfolio.warmup.span_multiplier**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + span_multiplier`; backtest warmup and trade activation use the span times `span_multiplier`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.portfolio.warmup.max_minutes` and other history requirements.
+- **bot.portfolio.warmup.activation_span_fraction**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + activation_span_fraction`; backtest warmup and trade activation use the span times `activation_span_fraction`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.portfolio.warmup.max_minutes` and other history requirements.
 
 ## Live Trading Settings
 
@@ -708,7 +719,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.startup.warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
 - **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `"auto"` (default) retains the context/exchange policy; a positive integer sets an explicit cap. Zero, null and booleans are rejected.
 - **live.api.max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
-- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.portfolio.warmup.span_multiplier`, indicator spans, and `bot.portfolio.warmup.max_minutes`.
+- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.portfolio.warmup.activation_span_fraction`, indicator spans, and `bot.portfolio.warmup.max_minutes`.
 - **live.execution.time_in_force**: Default is Good-Till-Cancelled.
 - **live.account.user**: Fetch API key/secret from `api-keys.json`.
 
@@ -800,7 +811,7 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
             },
             "forager": {"score_weights": {
                 "volume": [0.0, 1.0, 0.01],
-                "volatility": [0.0, 1.0, 0.01],
+                "log_range": [0.0, 1.0, 0.01],
                 "ema_readiness": [0.0, 1.0, 0.01]
             }},
             "strategy": {
@@ -902,7 +913,7 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
-Any metric listed above can be used when defining limits. Currency-specific metrics use `_usd` and `_btc` suffixes where both denominations are available; BTC-denominated metrics are available even when `backtest.btc_collateral_cap = 0`. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
+Any metric listed above can be used when defining limits. Currency-specific metrics use `_usd` and `_btc` suffixes where both denominations are available; BTC-denominated metrics are available even when `backtest.btc_collateral_target_ratio = 0`. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
 - `penalize_if`: one of `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.

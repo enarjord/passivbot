@@ -69,39 +69,39 @@ async def test_get_latest_ema_close_no_candles_returns_nan(tmp_path, monkeypatch
 
 def _rust_bot_params(**overrides):
     params = {
-        "close_grid_qty_pct": 1.0,
-        "close_trailing_retracement_pct": 0.0,
-        "close_trailing_qty_pct": 0.0,
-        "close_trailing_threshold_pct": 0.0,
-        "entry_grid_double_down_factor": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_1h": 0.0,
-        "entry_volatility_ema_span_1m": 60.0,
-        "entry_initial_ema_dist": 0.0,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 0.0,
-        "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_threshold_pct": 0.0,
+        "close_grid_qty_fraction": 1.0,
+        "close_trailing_retracement_base_fraction": 0.0,
+        "close_trailing_qty_fraction": 0.0,
+        "close_trailing_threshold_base_fraction": 0.0,
+        "entry_grid_reentry_qty_multiplier": 1.0,
+        "entry_log_range_1h_coefficient": 0.0,
+        "entry_log_range_1m_coefficient": 0.0,
+        "entry_exposure_ratio_coefficient": 0.0,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_log_range_ema_span_1h_candles": 0.0,
+        "entry_log_range_ema_span_minutes": 60.0,
+        "entry_initial_ema_distance_fraction": 0.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_trailing_reentry_qty_multiplier": 0.0,
+        "entry_trailing_retracement_base_fraction": 0.0,
+        "entry_trailing_threshold_base_fraction": 0.0,
         "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
         "forager_volume_ema_span_minutes": 10.0,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "wallet_exposure_limit_ratio": 1.0,
         "risk_wel_enforcer_threshold_ratio": 0.0,
         "risk_twel_enforcer_threshold_ratio": 0.0,
         "risk_we_excess_allowance_fraction": 0.0,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     params.update(overrides)
     return params
@@ -109,37 +109,37 @@ def _rust_bot_params(**overrides):
 
 def _rust_strategy_params(**overrides):
     params = {
-        "volatility_ema_span_1h": 0.0,
-        "volatility_ema_span_1m": 60.0,
+        "log_range_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 60.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "double_down_factor": 1.0,
-            "initial_ema_dist": 0.0,
-            "initial_qty_pct": 0.1,
-            "threshold_base_pct": 0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_we_weight": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
+            "reentry_qty_multiplier": 1.0,
+            "initial_ema_distance_fraction": 0.0,
+            "initial_qty_fraction": 0.1,
+            "threshold_base_fraction": 0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_exposure_ratio_coefficient": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
         "close": {
-            "qty_pct": 1.0,
-            "threshold_base_pct": 0.01,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "qty_fraction": 1.0,
+            "threshold_base_fraction": 0.01,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
     }
     legacy_map = {
-        "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
-        "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
+        "entry_log_range_ema_span_1h_candles": ("log_range_ema_span_1h_candles",),
+        "entry_log_range_1h_coefficient": ("entry", "threshold_log_range_1h_coefficient"),
     }
     for key, value in overrides.items():
         path = legacy_map.get(key)
@@ -172,7 +172,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "sort_global": True,
             "global_bot_params": {
                 "long": _rust_bot_params(),
@@ -495,28 +495,28 @@ class _BundleReproBot:
     def bp(self, pside, key, symbol=None):
         if key == "entry_cooldown_weights_minutes":
             return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-        if key == "ema_span_0":
+        if key == "ema_span_0_minutes":
             return 10.0
-        if key == "ema_span_1":
+        if key == "ema_span_1_minutes":
             return 20.0
-        if key in {"entry_volatility_ema_span_1h", "volatility_ema_span_1h"}:
+        if key in {"entry_log_range_ema_span_1h_candles", "log_range_ema_span_1h_candles"}:
             return self.entry_h1_span_hours
         return 0.0
 
     def _strategy_params_to_rust_dict(self, pside, symbol=None):
         params = _rust_strategy_params(
-            entry_volatility_ema_span_1h=self.entry_h1_span_hours,
-            entry_weight_volatility_1h=1.0 if self.entry_h1_span_hours > 0.0 else 0.0,
+            entry_log_range_ema_span_1h_candles=self.entry_h1_span_hours,
+            entry_log_range_1h_coefficient=1.0 if self.entry_h1_span_hours > 0.0 else 0.0,
         )
-        params["entry"]["threshold_volatility_1m_weight"] = self.entry_m1_weight
+        params["entry"]["threshold_log_range_1m_coefficient"] = self.entry_m1_weight
         return params
 
     def _strategy_value(self, pside, key, symbol=None):
         params = self._strategy_params_to_rust_dict(pside, symbol)
-        if key == "volatility_ema_span_1h":
+        if key == "log_range_ema_span_1h_candles":
             return params[key]
-        if key == "entry_volatility_ema_span_1h":
-            return params["volatility_ema_span_1h"]
+        if key == "entry_log_range_ema_span_1h_candles":
+            return params["log_range_ema_span_1h_candles"]
         return params[key]
 
     def is_pside_enabled(self, pside):
@@ -1855,8 +1855,8 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     )
 
     def colliding_strategy_params(_pside, _symbol=None):
-        params = _rust_strategy_params(volatility_ema_span_1m=10.0)
-        params["entry"]["threshold_volatility_1m_weight"] = 1.0
+        params = _rust_strategy_params(log_range_ema_span_minutes=10.0)
+        params["entry"]["threshold_log_range_1m_coefficient"] = 1.0
         return params
 
     bot._strategy_params_to_rust_dict = colliding_strategy_params
@@ -2799,8 +2799,8 @@ async def test_trailing_martingale_threshold_volatility_requires_h1_log_range():
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
-        params["volatility_ema_span_1h"] = 4.0
-        params["entry"]["threshold_volatility_1h_weight"] = 1.0
+        params["log_range_ema_span_1h_candles"] = 4.0
+        params["entry"]["threshold_log_range_1h_coefficient"] = 1.0
         return params
 
     bot._strategy_params_to_rust_dict = trailing_martingale_params
@@ -2840,8 +2840,8 @@ async def test_trailing_martingale_threshold_h1_missing_is_scoped_in_rust():
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
-        params["volatility_ema_span_1h"] = 4.0
-        params["entry"]["threshold_volatility_1h_weight"] = 1.0
+        params["log_range_ema_span_1h_candles"] = 4.0
+        params["entry"]["threshold_log_range_1h_coefficient"] = 1.0
         return params
 
     bot._strategy_params_to_rust_dict = trailing_martingale_params
@@ -2878,15 +2878,15 @@ async def test_trailing_martingale_present_none_threshold_weight_fails_loudly():
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
-        params["volatility_ema_span_1h"] = 4.0
-        params["entry"]["threshold_volatility_1h_weight"] = None
+        params["log_range_ema_span_1h_candles"] = 4.0
+        params["entry"]["threshold_log_range_1h_coefficient"] = None
         return params
 
     bot._strategy_params_to_rust_dict = trailing_martingale_params
 
     with pytest.raises(
         ValueError,
-        match=r"entry\.threshold_volatility_1h_weight.*None",
+        match=r"entry\.threshold_log_range_1h_coefficient.*None",
     ):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
@@ -2907,21 +2907,21 @@ async def test_trailing_martingale_weight_group_uses_later_nonzero_path():
 
     def trailing_martingale_params(_pside, _symbol=None):
         return {
-            "volatility_ema_span_1m": 6.0,
-            "volatility_ema_span_1h": 0.0,
+            "log_range_ema_span_minutes": 6.0,
+            "log_range_ema_span_1h_candles": 0.0,
             "entry": {
-                "ema_span_0": 10.0,
-                "ema_span_1": 20.0,
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_volatility_1m_weight": 1.0,
-                "threshold_volatility_1h_weight": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
+                "ema_span_0_minutes": 10.0,
+                "ema_span_1_minutes": 20.0,
+                "threshold_log_range_1m_coefficient": 0.0,
+                "retracement_log_range_1m_coefficient": 1.0,
+                "threshold_log_range_1h_coefficient": 0.0,
+                "retracement_log_range_1h_coefficient": 0.0,
             },
             "close": {
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_volatility_1m_weight": 0.0,
-                "threshold_volatility_1h_weight": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
+                "threshold_log_range_1m_coefficient": 0.0,
+                "retracement_log_range_1m_coefficient": 0.0,
+                "threshold_log_range_1h_coefficient": 0.0,
+                "retracement_log_range_1h_coefficient": 0.0,
             },
         }
 
@@ -2963,20 +2963,20 @@ async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
 
     def ema_anchor_params(_pside, _symbol=None):
         return {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "base_qty_pct": 0.01,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
+            "base_qty_fraction": 0.01,
             "inventory_skew_factor": 0.0,
-            "entry_double_down_factor": 1.0,
-            "entry_initial_ema_dist": 0.0,
-            "entry_initial_qty_pct": 0.01,
+            "entry_qty_exposure_coefficient": 1.0,
+            "entry_initial_ema_distance_fraction": 0.0,
+            "entry_initial_qty_fraction": 0.01,
             "entry_spacing_pct": 0.01,
             "offset_base_pct": 0.01,
             "offset_wallet_exposure_weight": 0.0,
-            "offset_volatility_ema_span_1m": 0.0,
-            "offset_volatility_ema_span_1h": 4.0,
-            "offset_volatility_1m_weight": 0.0,
-            "offset_volatility_1h_weight": 1.0,
+            "offset_log_range_ema_span_minutes": 0.0,
+            "offset_log_range_ema_span_1h_candles": 4.0,
+            "offset_log_range_1m_coefficient": 0.0,
+            "offset_log_range_1h_coefficient": 1.0,
         }
 
     bot._strategy_params_to_rust_dict = ema_anchor_params
@@ -3059,7 +3059,7 @@ class _PacingProbeBot:
     def bp(self, pside, key, symbol=None):
         if key == "entry_cooldown_weights_minutes":
             return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-        if key == "ema_span_0":
+        if key == "ema_span_0_minutes":
             return 10.0
         return 0.0
 
@@ -3192,11 +3192,11 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
         return {
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": True,
-            "unstuck_ema_span_0": 1000.0,
-            "unstuck_ema_span_1": 2000.0,
-            "unstuck_loss_allowance_pct": 0.1,
-            "unstuck_close_pct": 0.1,
-            "unstuck_threshold": 0.2,
+            "unstuck_ema_span_0_minutes": 1000.0,
+            "unstuck_ema_span_1_minutes": 2000.0,
+            "unstuck_loss_allowance_fraction": 0.1,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.2,
             "total_wallet_exposure_limit_ratio": 1.0,
         }.get(key, original_bp(side, key, symbol))
 
@@ -3249,8 +3249,8 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     sym_input["long"]["position"] = {"size": 10.0 if held else 0.0, "price": 30.0 if held else 0.0}
     sym_input["long"]["bot_params"].update(
         unstuck_enabled=True, unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0, unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1, unstuck_threshold=0.2, unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0, unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1, unstuck_exposure_trigger_ratio=0.2, unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["unstuck_allowance_long"] = 100.0
     import passivbot_rust as pbr
@@ -3272,9 +3272,9 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     [
         "manual",
         "panic",
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit_ratio",
     ],
 )
@@ -3295,11 +3295,11 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
     values = {
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_ema_span_0": 1000.0,
-        "unstuck_ema_span_1": 2000.0,
-        "unstuck_loss_allowance_pct": 0.1,
-        "unstuck_close_pct": 0.1,
-        "unstuck_threshold": 0.2,
+        "unstuck_ema_span_0_minutes": 1000.0,
+        "unstuck_ema_span_1_minutes": 2000.0,
+        "unstuck_loss_allowance_fraction": 0.1,
+        "unstuck_close_fraction": 0.1,
+        "unstuck_exposure_trigger_ratio": 0.2,
         "total_wallet_exposure_limit_ratio": 1.0,
     }
     if skip_reason in values:
@@ -3341,11 +3341,11 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
         total_wallet_exposure_limit_ratio=0.0,
         unstuck_enabled=True,
         unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0,
-        unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1,
-        unstuck_threshold=0.2,
-        unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0,
+        unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1,
+        unstuck_exposure_trigger_ratio=0.2,
+        unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["global_bot_params"][pside].update(
         n_positions=1, total_wallet_exposure_limit_ratio=1.0

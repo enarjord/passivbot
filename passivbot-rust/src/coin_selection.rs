@@ -53,7 +53,7 @@ pub struct ForagerCandidate {
     pub ask: f64,
     pub ema_lower: f64,
     pub ema_upper: f64,
-    pub entry_initial_ema_dist: f64,
+    pub entry_initial_ema_distance_fraction: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -186,9 +186,9 @@ fn compute_ema_entry_price_gap_fraction(
     candidate: &ForagerCandidate,
     cfg: &ForagerSelectionConfig,
 ) -> Result<f64, ForagerSelectionError> {
-    let entry_initial_ema_dist = validate_required_finite_value(
-        candidate.entry_initial_ema_dist,
-        "entry_initial_ema_dist",
+    let entry_initial_ema_distance_fraction = validate_required_finite_value(
+        candidate.entry_initial_ema_distance_fraction,
+        "entry_initial_ema_distance_fraction",
         candidate.index,
     )?;
     match cfg.position_side {
@@ -197,7 +197,7 @@ fn compute_ema_entry_price_gap_fraction(
                 validate_required_finite_value(candidate.bid, "forager_market_bid", candidate.index)?;
             let ema_lower =
                 validate_required_finite_value(candidate.ema_lower, "forager_ema_lower", candidate.index)?;
-            let entry_threshold = ema_lower * (1.0 - entry_initial_ema_dist);
+            let entry_threshold = ema_lower * (1.0 - entry_initial_ema_distance_fraction);
             if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
                 return Err(ForagerSelectionError::NonFiniteInput {
                     field: "forager_ema_readiness",
@@ -211,7 +211,7 @@ fn compute_ema_entry_price_gap_fraction(
                 validate_required_finite_value(candidate.ask, "forager_market_ask", candidate.index)?;
             let ema_upper =
                 validate_required_finite_value(candidate.ema_upper, "forager_ema_upper", candidate.index)?;
-            let entry_threshold = ema_upper * (1.0 + entry_initial_ema_dist);
+            let entry_threshold = ema_upper * (1.0 + entry_initial_ema_distance_fraction);
             if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
                 return Err(ForagerSelectionError::NonFiniteInput {
                     field: "forager_ema_readiness",
@@ -685,7 +685,7 @@ impl<'source> FromPyObject<'source> for ForagerCandidate {
             ask: ob.get_item("ask")?.extract::<f64>()?,
             ema_lower: ob.get_item("ema_lower")?.extract::<f64>()?,
             ema_upper: ob.get_item("ema_upper")?.extract::<f64>()?,
-            entry_initial_ema_dist: ob.get_item("entry_initial_ema_dist")?.extract::<f64>()?,
+            entry_initial_ema_distance_fraction: ob.get_item("entry_initial_ema_distance_fraction")?.extract::<f64>()?,
         })
     }
 }
@@ -787,7 +787,7 @@ mod tests {
             ask,
             ema_lower: 100.0,
             ema_upper: 100.0,
-            entry_initial_ema_dist: 0.1,
+            entry_initial_ema_distance_fraction: 0.1,
         }
     }
 
@@ -893,7 +893,7 @@ mod tests {
         let mut enabled = make_candidate(0, f64::NAN, f64::NAN, f64::NAN, f64::NAN);
         enabled.ema_lower = f64::NAN;
         enabled.ema_upper = f64::NAN;
-        enabled.entry_initial_ema_dist = f64::NAN;
+        enabled.entry_initial_ema_distance_fraction = f64::NAN;
         let mut disabled = make_candidate(1, f64::NAN, f64::NAN, f64::NAN, f64::NAN);
         disabled.enabled = false;
         let cfg = ForagerSelectionConfig {

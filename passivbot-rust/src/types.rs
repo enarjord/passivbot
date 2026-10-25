@@ -385,7 +385,7 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: MinimumCostFilter,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
-    pub max_realized_loss_pct: f64,
+    pub loss_gate_max_drawdown_fraction: f64,
     pub unstuck_memory_ema_span_minutes: f64,
     pub loss_gate_memory_ema_span_minutes: f64,
     pub liquidation_threshold: f64,
@@ -443,8 +443,8 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -557,41 +557,41 @@ impl ForagerScoreWeights {
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
     #[serde(default)]
-    pub close_grid_qty_pct: f64,
+    pub close_grid_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_retracement_pct: f64,
+    pub close_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub close_trailing_qty_pct: f64,
+    pub close_trailing_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_threshold_pct: f64,
+    pub close_trailing_threshold_base_fraction: f64,
     #[serde(default)]
-    pub close_weight_volatility_1h: f64,
+    pub close_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub close_weight_volatility_1m: f64,
+    pub close_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_grid_double_down_factor: f64,
+    pub entry_grid_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_grid_spacing_pct: f64,
+    pub entry_grid_threshold_base_fraction: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1h: f64,
+    pub entry_log_range_ema_span_1h_candles: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1m: f64,
+    pub entry_log_range_ema_span_minutes: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1h: f64,
+    pub entry_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1m: f64,
+    pub entry_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_we_weight: f64,
+    pub entry_exposure_ratio_coefficient: f64,
     #[serde(default)]
-    pub entry_initial_ema_dist: f64,
+    pub entry_initial_ema_distance_fraction: f64,
     #[serde(default)]
-    pub entry_initial_qty_pct: f64,
+    pub entry_initial_qty_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_double_down_factor: f64,
+    pub entry_trailing_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_trailing_retracement_pct: f64,
+    pub entry_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_threshold_pct: f64,
+    pub entry_trailing_threshold_base_fraction: f64,
     pub forager_log_range_ema_span_minutes: f64,
     pub forager_volume_ema_span_minutes: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
@@ -608,9 +608,9 @@ pub struct BotParams {
     #[serde(default = "default_true")]
     pub entry_eligible: bool,
     #[serde(default)]
-    pub ema_span_0: f64,
+    pub ema_span_0_minutes: f64,
     #[serde(default)]
-    pub ema_span_1: f64,
+    pub ema_span_1_minutes: f64,
     #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
     #[serde(default = "default_hsl_panic_close_order_type")]
@@ -641,43 +641,43 @@ pub struct BotParams {
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
     pub unstuck_ema_gating_enabled: bool,
-    pub unstuck_close_pct: f64,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_ema_span_0: f64,
-    pub unstuck_ema_span_1: f64,
-    pub unstuck_loss_allowance_pct: f64,
-    pub unstuck_threshold: f64,
+    pub unstuck_close_fraction: f64,
+    pub unstuck_ema_distance_fraction: f64,
+    pub unstuck_ema_span_0_minutes: f64,
+    pub unstuck_ema_span_1_minutes: f64,
+    pub unstuck_loss_allowance_fraction: f64,
+    pub unstuck_exposure_trigger_ratio: f64,
 }
 
 impl Default for BotParams {
     fn default() -> Self {
         Self {
-            close_grid_qty_pct: 0.0,
-            close_trailing_retracement_pct: 0.0,
-            close_trailing_qty_pct: 0.0,
-            close_trailing_threshold_pct: 0.0,
-            close_weight_volatility_1h: 0.0,
-            close_weight_volatility_1m: 0.0,
-            entry_grid_double_down_factor: 0.0,
-            entry_grid_spacing_pct: 0.0,
-            entry_volatility_ema_span_1h: 0.0,
-            entry_volatility_ema_span_1m: 0.0,
-            entry_weight_volatility_1h: 0.0,
-            entry_weight_volatility_1m: 0.0,
-            entry_we_weight: 0.0,
-            entry_initial_ema_dist: 0.0,
-            entry_initial_qty_pct: 0.0,
-            entry_trailing_double_down_factor: 0.0,
-            entry_trailing_retracement_pct: 0.0,
-            entry_trailing_threshold_pct: 0.0,
+            close_grid_qty_fraction: 0.0,
+            close_trailing_retracement_base_fraction: 0.0,
+            close_trailing_qty_fraction: 0.0,
+            close_trailing_threshold_base_fraction: 0.0,
+            close_log_range_1h_coefficient: 0.0,
+            close_log_range_1m_coefficient: 0.0,
+            entry_grid_reentry_qty_multiplier: 0.0,
+            entry_grid_threshold_base_fraction: 0.0,
+            entry_log_range_ema_span_1h_candles: 0.0,
+            entry_log_range_ema_span_minutes: 0.0,
+            entry_log_range_1h_coefficient: 0.0,
+            entry_log_range_1m_coefficient: 0.0,
+            entry_exposure_ratio_coefficient: 0.0,
+            entry_initial_ema_distance_fraction: 0.0,
+            entry_initial_qty_fraction: 0.0,
+            entry_trailing_reentry_qty_multiplier: 0.0,
+            entry_trailing_retracement_base_fraction: 0.0,
+            entry_trailing_threshold_base_fraction: 0.0,
             forager_log_range_ema_span_minutes: 0.0,
             forager_volume_ema_span_minutes: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
             entry_eligible: true,
-            ema_span_0: 0.0,
-            ema_span_1: 0.0,
+            ema_span_0_minutes: 0.0,
+            ema_span_1_minutes: 0.0,
             hsl_enabled: default_hsl_enabled(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
             risk_entry_cooldown_minutes: 0.0,
@@ -696,12 +696,12 @@ impl Default for BotParams {
             risk_we_excess_allowance_fraction: 0.0,
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
-            unstuck_close_pct: 0.0,
-            unstuck_ema_dist: 0.0,
-            unstuck_ema_span_0: 60.0,
-            unstuck_ema_span_1: 60.0,
-            unstuck_loss_allowance_pct: 0.0,
-            unstuck_threshold: 0.0,
+            unstuck_close_fraction: 0.0,
+            unstuck_ema_distance_fraction: 0.0,
+            unstuck_ema_span_0_minutes: 60.0,
+            unstuck_ema_span_1_minutes: 60.0,
+            unstuck_loss_allowance_fraction: 0.0,
+            unstuck_exposure_trigger_ratio: 0.0,
         }
     }
 }

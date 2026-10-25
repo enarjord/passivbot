@@ -21,11 +21,11 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy):
     keys = getattr(model, f"{prefix}_MULTICOIN_PARAM_KEYS")
     values = dict.fromkeys(keys, 0.0)
     values.update(
-        ema_span_0=2., ema_span_1=3., n_positions=3.,
+        ema_span_0_minutes=2., ema_span_1_minutes=3., n_positions=3.,
         hsl_enabled=1., hsl_drawdown_threshold_fraction=.13, hsl_drawdown_fraction_ema_span_minutes=7.,
         hsl_cooldown_ms_lo=1., hsl_cooldown_ms_hi=1.,
         hsl_memory_ema_span_minutes=1234.5, hsl_signal_mode=2.,
-        unstuck_ema_span_0=11., unstuck_ema_span_1=19.,
+        unstuck_ema_span_0_minutes=11., unstuck_ema_span_1_minutes=19.,
         entry_cooldown_min_duration_minutes=2., entry_cooldown_max_duration_minutes=55.,
         entry_cooldown_exposure_weight=13., entry_cooldown_adverse_weight=17.,
         unilateralness_ema_span_minutes=3.25, forager_score_weights_unilateralness=.5,

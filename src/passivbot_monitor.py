@@ -556,12 +556,12 @@ def _build_health_summary_payload(
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
-    mem_pct = _get_process_memory_percent()
-    if mem_pct is not None and math.isfinite(mem_pct):
-        payload["memory_percent"] = float(mem_pct)
-    cpu_pct = _get_process_cpu_percent()
-    if cpu_pct is not None and math.isfinite(cpu_pct):
-        payload["cpu_percent"] = max(0.0, float(cpu_pct))
+    memory_percent = _get_process_memory_percent()
+    if memory_percent is not None and math.isfinite(memory_percent):
+        payload["memory_percent"] = float(memory_percent)
+    cpu_percent = _get_process_cpu_percent()
+    if cpu_percent is not None and math.isfinite(cpu_percent):
+        payload["cpu_percent"] = max(0.0, float(cpu_percent))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)
@@ -982,20 +982,20 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             ema_readiness_raw = None
             entry_trigger_price = None
             try:
-                entry_initial_ema_dist = float(
-                    candidate.get("entry_initial_ema_dist", 0.0) or 0.0
+                entry_initial_ema_distance_fraction = float(
+                    candidate.get("entry_initial_ema_distance_fraction", 0.0) or 0.0
                 )
                 if pside == "long":
                     ema_lower = float(candidate.get("ema_lower", 0.0) or 0.0)
                     bid = float(candidate.get("bid", 0.0) or 0.0)
                     if ema_lower > 0.0 and bid > 0.0:
-                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_dist)
+                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_distance_fraction)
                         ema_readiness_raw = bid / entry_trigger_price - 1.0
                 else:
                     ema_upper = float(candidate.get("ema_upper", 0.0) or 0.0)
                     ask = float(candidate.get("ask", 0.0) or 0.0)
                     if ema_upper > 0.0 and ask > 0.0:
-                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_dist)
+                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_distance_fraction)
                         ema_readiness_raw = 1.0 - ask / entry_trigger_price
             except Exception:
                 ema_readiness_raw = None
@@ -1162,27 +1162,27 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
                 if allowance_raw is not None
                 else (0.0 if unstuck_uses_realized_pnl else None)
             ),
-            "configured_loss_allowance_pct": float(
-                self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
+            "configured_loss_allowance_fraction": float(
+                self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0
             ),
-            "configured_close_pct": float(
-                self.bot_value(pside, "unstuck_close_pct") or 0.0
+            "configured_close_fraction": float(
+                self.bot_value(pside, "unstuck_close_fraction") or 0.0
             ),
-            "configured_threshold": float(
-                self.bot_value(pside, "unstuck_threshold") or 0.0
+            "configured_exposure_trigger_ratio": float(
+                self.bot_value(pside, "unstuck_exposure_trigger_ratio") or 0.0
             ),
         }
-        for key in ("allowance", "peak", "pct_from_peak"):
+        for key in ("allowance", "peak", "change_from_peak_percent"):
             if key in info:
                 side_payload[key] = float(info[key])
-        if "loss_allowance_pct" in info:
-            side_payload["configured_loss_allowance_pct"] = float(
-                info["loss_allowance_pct"]
+        if "loss_allowance_fraction" in info:
+            side_payload["configured_loss_allowance_fraction"] = float(
+                info["loss_allowance_fraction"]
             )
-        override_pcts = info.get("override_loss_allowance_pcts")
-        if isinstance(override_pcts, dict) and override_pcts:
-            side_payload["override_loss_allowance_pcts"] = {
-                str(symbol): float(pct) for symbol, pct in override_pcts.items()
+        override_fractions = info.get("override_loss_allowance_fractions")
+        if isinstance(override_fractions, dict) and override_fractions:
+            side_payload["override_loss_allowance_fractions"] = {
+                str(symbol): float(fraction) for symbol, fraction in override_fractions.items()
             }
         override_allowances = info.get("override_allowances")
         if isinstance(override_allowances, dict) and override_allowances:
@@ -1229,11 +1229,16 @@ def _build_monitor_runtime_market_hints(
                             and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
                         ):
                             continue
-                        prefix, distance_key = "unstuck_", "unstuck_ema_dist"
+                        distance_key = "unstuck_ema_distance_fraction"
                     else:
-                        prefix, distance_key = "", "entry_initial_ema_dist"
-                    span0 = float(self.bp(pside, f"{prefix}ema_span_0", symbol))
-                    span1 = float(self.bp(pside, f"{prefix}ema_span_1", symbol))
+                        distance_key = "entry_initial_ema_distance_fraction"
+                    span_keys = (
+                        ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
+                        if family == "unstuck"
+                        else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+                    )
+                    span0 = float(self.bp(pside, span_keys[0], symbol))
+                    span1 = float(self.bp(pside, span_keys[1], symbol))
                     distance = float(self.bp(pside, distance_key, symbol))
                     if (
                         not all(math.isfinite(v) for v in (span0, span1, distance))
@@ -1435,24 +1440,24 @@ def _monitor_strategy_value(
     self, pside: str, key: str, symbol: str, *, strategy_cache=None
 ) -> float:
     legacy_map = {
-        "entry_grid_double_down_factor": "entry.double_down_factor",
-        "entry_trailing_double_down_factor": "entry.double_down_factor",
-        "entry_grid_spacing_pct": "entry.threshold_base_pct",
-        "entry_trailing_threshold_pct": "entry.threshold_base_pct",
-        "entry_trailing_retracement_pct": "entry.retracement_base_pct",
-        "entry_initial_ema_dist": "entry.initial_ema_dist",
-        "entry_initial_qty_pct": "entry.initial_qty_pct",
-        "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
-        "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
-        "entry_we_weight": "entry.threshold_we_weight",
-        "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
-        "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
-        "close_grid_qty_pct": "close.qty_pct",
-        "close_trailing_qty_pct": "close.qty_pct",
-        "close_trailing_threshold_pct": "close.threshold_base_pct",
-        "close_trailing_retracement_pct": "close.retracement_base_pct",
-        "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
-        "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
+        "entry_grid_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_trailing_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_retracement_base_fraction": "entry.retracement_base_fraction",
+        "entry_initial_ema_distance_fraction": "entry.initial_ema_distance_fraction",
+        "entry_initial_qty_fraction": "entry.initial_qty_fraction",
+        "entry_log_range_1h_coefficient": "entry.threshold_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient": "entry.threshold_log_range_1m_coefficient",
+        "entry_exposure_ratio_coefficient": "entry.threshold_exposure_ratio_coefficient",
+        "entry_log_range_ema_span_1h_candles": "log_range_ema_span_1h_candles",
+        "entry_log_range_ema_span_minutes": "log_range_ema_span_minutes",
+        "close_grid_qty_fraction": "close.qty_fraction",
+        "close_trailing_qty_fraction": "close.qty_fraction",
+        "close_trailing_threshold_base_fraction": "close.threshold_base_fraction",
+        "close_trailing_retracement_base_fraction": "close.retracement_base_fraction",
+        "close_log_range_1h_coefficient": "close.threshold_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient": "close.threshold_log_range_1m_coefficient",
     }
     strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
     if callable(strategy_getter):
@@ -1480,7 +1485,7 @@ def _monitor_entry_trailing_limit_cap(
     if allowed_limit <= 0.0:
         return None, None
     retracement = _monitor_strategy_value(
-        self, pside, "entry.retracement_base_pct", symbol
+        self, pside, "entry.retracement_base_fraction", symbol
     )
     if retracement > 0.0:
         return allowed_limit, "trailing_only"
@@ -1520,7 +1525,7 @@ def _monitor_h1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "offset_volatility_ema_span_1h",
+            "offset_log_range_ema_span_1h_candles",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1529,7 +1534,7 @@ def _monitor_h1_entry_logrange(
             span = _monitor_strategy_value(
                 self,
                 pside,
-                "entry_volatility_ema_span_1h",
+                "entry_log_range_ema_span_1h_candles",
                 symbol,
                 strategy_cache=strategy_cache,
             )
@@ -1545,7 +1550,7 @@ def _monitor_m1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "entry_volatility_ema_span_1m",
+            "entry_log_range_ema_span_minutes",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1624,16 +1629,16 @@ def _build_monitor_trailing_entry_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "entry_grid_double_down_factor",
-        "entry_grid_spacing_pct",
-        "entry_initial_ema_dist",
-        "entry_initial_qty_pct",
-        "entry_trailing_double_down_factor",
-        "entry_trailing_retracement_pct",
-        "entry_trailing_threshold_pct",
-        "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m",
-        "entry_we_weight",
+        "entry_grid_reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction",
+        "entry_initial_ema_distance_fraction",
+        "entry_initial_qty_fraction",
+        "entry_trailing_reentry_qty_multiplier",
+        "entry_trailing_retracement_base_fraction",
+        "entry_trailing_threshold_base_fraction",
+        "entry_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient",
+        "entry_exposure_ratio_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache
@@ -1675,8 +1680,8 @@ def _build_monitor_trailing_close_payload(
     )
     if strategy_kind == "trailing_martingale":
         strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
-        volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
-        volatility_ema_span_1h = float(strategy_params["volatility_ema_span_1h"])
+        log_range_ema_span_minutes = float(strategy_params["log_range_ema_span_minutes"])
+        log_range_ema_span_1h_candles = float(strategy_params["log_range_ema_span_1h_candles"])
         inputs = {
             "symbol": symbol,
             "pside": pside,
@@ -1689,11 +1694,11 @@ def _build_monitor_trailing_close_payload(
                     "ask": float(current_price),
                 },
                 "ema_bands": {"upper": 0.0, "lower": 0.0},
-                "volatility_ema_1m": float(
-                    _monitor_m1_logrange_for_span(self, symbol, volatility_ema_span_1m)
+                "log_range_ema_1m": float(
+                    _monitor_m1_logrange_for_span(self, symbol, log_range_ema_span_minutes)
                 ),
-                "volatility_ema_1h": float(
-                    _monitor_h1_logrange_for_span(self, symbol, volatility_ema_span_1h)
+                "log_range_ema_1h": float(
+                    _monitor_h1_logrange_for_span(self, symbol, log_range_ema_span_1h_candles)
                 ),
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
@@ -1741,12 +1746,12 @@ def _build_monitor_trailing_close_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "close_grid_qty_pct",
-        "close_trailing_qty_pct",
-        "close_trailing_retracement_pct",
-        "close_trailing_threshold_pct",
-        "close_weight_volatility_1h",
-        "close_weight_volatility_1m",
+        "close_grid_qty_fraction",
+        "close_trailing_qty_fraction",
+        "close_trailing_retracement_base_fraction",
+        "close_trailing_threshold_base_fraction",
+        "close_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache

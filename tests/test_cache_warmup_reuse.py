@@ -71,11 +71,11 @@ def _base_config(**overrides):
                 "n_positions": 1,
                 "total_wallet_exposure_limit_ratio": 1.0,
                 "wallet_exposure_limit_ratio": 1.0,
-                "ema_span_0": 1000.0,
-                "ema_span_1": 1500.0,
+                "ema_span_0_minutes": 1000.0,
+                "ema_span_1_minutes": 1500.0,
                 "forager_volume_ema_span_minutes": 2000.0,
                 "forager_log_range_ema_span_minutes": 100.0,
-                "entry_volatility_ema_span_1h": 1.0,
+                "entry_log_range_ema_span_1h_candles": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
             "short": {
@@ -83,14 +83,14 @@ def _base_config(**overrides):
                 "n_positions": 0,
                 "total_wallet_exposure_limit_ratio": 0.0,
                 "wallet_exposure_limit_ratio": 0.0,
-                "ema_span_0": 100.0,
-                "ema_span_1": 100.0,
+                "ema_span_0_minutes": 100.0,
+                "ema_span_1_minutes": 100.0,
                 "forager_volume_ema_span_minutes": 360.0,
                 "forager_log_range_ema_span_minutes": 10.0,
-                "entry_volatility_ema_span_1h": 1.0,
+                "entry_log_range_ema_span_1h_candles": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.3, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.3, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {"bounds": {}},
@@ -174,18 +174,18 @@ class TestCacheHashIndependence:
         """Two configs differing only in EMA spans produce the same cache hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b["bot"]["long"]["entry_volatility_ema_span_1h"] = 500.0
+        cfg_b["bot"]["long"]["entry_log_range_ema_span_1h_candles"] = 500.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")
 
         assert hash_a == hash_b
 
-    def test_different_warmup_ratio_same_hash(self):
-        """Changing warmup_ratio does not change the hash."""
+    def test_different_activation_span_fraction_same_hash(self):
+        """Changing activation_span_fraction does not change the hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b['bot']["portfolio"]['warmup']['span_multiplier'] = 10.0
+        cfg_b['bot']["portfolio"]['warmup']['activation_span_fraction'] = 10.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")

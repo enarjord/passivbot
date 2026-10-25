@@ -13,7 +13,6 @@ from optimization.gpu import model
 from optimization.gpu.hsl import pack_params, project_bot
 from optimizer_overrides import unstuck_ema_spans_coupled
 from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
-from config.strategy_paths import native_strategy_path_to_public
 
 
 _MISSING = object()
@@ -73,7 +72,7 @@ def build_coin_override_parameters(
                 effective_strategy, payload.bot_params_list[row][side],
             )
         for index, (key, path) in enumerate(strategy_paths):
-            if _lookup(strategy_patch, native_strategy_path_to_public(strategy_kind, path)) is not _MISSING:
+            if _lookup(strategy_patch, path) is not _MISSING:
                 value = float(effective_strategy[key])
                 matrix[row, index] = value
         if (strategy_kind == "trailing_martingale"
@@ -115,21 +114,22 @@ def build_coin_override_parameters(
         unstuck_keys = (
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-            ("close_fraction", "unstuck_close_pct"),
-            ("ema_distance_fraction", "unstuck_ema_dist"),
-            ("loss_allowance_fraction", "unstuck_loss_allowance_pct"),
-            ("exposure_trigger_ratio", "unstuck_threshold"),
+            ("close_fraction", "unstuck_close_fraction"),
+            ("ema_distance_fraction", "unstuck_ema_distance_fraction"),
+            ("loss_allowance_fraction", "unstuck_loss_allowance_fraction"),
+            ("exposure_trigger_ratio", "unstuck_exposure_trigger_ratio"),
         )
         for offset, (key, runtime_key) in enumerate(unstuck_keys):
             if key in unstuck_patch:
                 matrix[row, column("UNSTUCK_START_COLUMN") + offset] = float(effective_bot[runtime_key])
         for offset, key in enumerate(model.UNSTUCK_EMA_PARAM_KEYS):
-            strategy_key = key.removeprefix("unstuck_")
             if coupled:
-                path = ("entry", strategy_key) if strategy_kind == "trailing_martingale" else (strategy_key,)
+                strategy_key = model.COUPLED_UNSTUCK_EMA_SOURCE_KEYS[strategy_kind][key]
                 # Only genuine strategy pins override a candidate's coupled spans.
+                strategy_column = next(index for index, (name, _) in enumerate(strategy_paths)
+                                       if name == strategy_key)
                 matrix[row, column("UNSTUCK_EMA_START_COLUMN") + offset] = matrix[
-                    row, strategy_paths.index((strategy_key, path)),
+                    row, strategy_column,
                 ]
             elif _lookup(side_patch, FLAT_BOT_KEY_TO_GROUP_PATH[key]) is not _MISSING:
                 matrix[row, column("UNSTUCK_EMA_START_COLUMN") + offset] = float(effective_bot[key])

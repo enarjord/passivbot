@@ -182,19 +182,19 @@ struct EmaMulticoinSideState {
 struct EmaMulticoinSideConfig {
     float unstuck_span0;
     float unstuck_span1;
-    float base_qty_pct;
-    float span_a;
-    float span_b;
+    float base_qty_fraction;
+    float ema_span_0_candles;
+    float ema_span_1_candles;
     float alpha0;
     float alpha1;
     float alpha2;
-    float ddf;
-    float offset;
-    float psize_weight;
-    float weight_1h;
-    float weight_1m;
-    float span_1h;
-    float span_1m;
+    float entry_qty_exposure_coefficient;
+    float offset_fraction;
+    float inventory_offset_exposure_coefficient;
+    float offset_log_range_1h_coefficient;
+    float offset_log_range_1m_coefficient;
+    float offset_log_range_ema_span_1h_candles;
+    float offset_log_range_ema_span_candles;
     float alpha_1h;
     float alpha_1m;
     AdaptiveTiming adaptive;
@@ -214,10 +214,10 @@ struct EmaMulticoinSideConfig {
     bool twel_enforcer_reduce_portfolio;
     bool unstuck_enabled;
     bool unstuck_ema_gating_enabled;
-    float unstuck_close_pct;
-    float unstuck_ema_dist;
-    float unstuck_loss_allowance_pct;
-    float unstuck_threshold;
+    float unstuck_close_fraction;
+    float unstuck_ema_distance_fraction;
+    float unstuck_loss_allowance_fraction;
+    float unstuck_exposure_trigger_ratio;
     float alpha_forager_volume;
     float alpha_forager_log_range;
     HslState hsl_template;
@@ -420,27 +420,27 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     EmaMulticoinSideConfig config;
     config.unstuck_span0 = params[po + 37];
     config.unstuck_span1 = params[po + 38];
-    config.base_qty_pct = params[po + 0];
-    config.span_a = params[po + 1];
-    config.span_b = params[po + 2];
-    float span_c = sqrt(fmax(config.span_a * config.span_b, 1.0f));
-    float span_lo = fmin(config.span_a, fmin(config.span_b, span_c));
-    float span_hi = fmax(config.span_a, fmax(config.span_b, span_c));
-    float span_mid = config.span_a + config.span_b + span_c - span_lo - span_hi;
+    config.base_qty_fraction = params[po + 0];
+    config.ema_span_0_candles = params[po + 1];
+    config.ema_span_1_candles = params[po + 2];
+    float span_c = sqrt(fmax(config.ema_span_0_candles * config.ema_span_1_candles, 1.0f));
+    float span_lo = fmin(config.ema_span_0_candles, fmin(config.ema_span_1_candles, span_c));
+    float span_hi = fmax(config.ema_span_0_candles, fmax(config.ema_span_1_candles, span_c));
+    float span_mid = config.ema_span_0_candles + config.ema_span_1_candles + span_c - span_lo - span_hi;
     config.alpha0 = clamp(2.0f / (span_lo + 1.0f), 0.0f, 1.0f);
     config.alpha1 = clamp(2.0f / (span_mid + 1.0f), 0.0f, 1.0f);
     config.alpha2 = clamp(2.0f / (span_hi + 1.0f), 0.0f, 1.0f);
-    config.ddf = params[po + 3];
-    config.offset = params[po + 4];
-    config.psize_weight = params[po + 5];
-    config.weight_1h = params[po + 6];
-    config.weight_1m = params[po + 7];
-    config.span_1h = params[po + 8];
-    config.span_1m = params[po + 9];
-    config.alpha_1h = config.span_1h > 0.0f
-        ? 2.0f / (fmax(config.span_1h, 1.0f) + 1.0f) : 0.0f;
-    config.alpha_1m = config.span_1m > 0.0f
-        ? clamp(2.0f / (config.span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
+    config.entry_qty_exposure_coefficient = params[po + 3];
+    config.offset_fraction = params[po + 4];
+    config.inventory_offset_exposure_coefficient = params[po + 5];
+    config.offset_log_range_1h_coefficient = params[po + 6];
+    config.offset_log_range_1m_coefficient = params[po + 7];
+    config.offset_log_range_ema_span_1h_candles = params[po + 8];
+    config.offset_log_range_ema_span_candles = params[po + 9];
+    config.alpha_1h = config.offset_log_range_ema_span_1h_candles > 0.0f
+        ? 2.0f / (fmax(config.offset_log_range_ema_span_1h_candles, 1.0f) + 1.0f) : 0.0f;
+    config.alpha_1m = config.offset_log_range_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.offset_log_range_ema_span_candles + 1.0f), 0.0f, 1.0f) : 0.0f;
     config.cooldown_min = params[po + 10];
     config.adaptive = load_adaptive_timing(params, po + 39);
     config.twel = params[po + 11];
@@ -469,10 +469,10 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     config.twel_enforcer_reduce_portfolio = params[po + 23] > 0.5f;
     config.unstuck_enabled = params[po + 24] > 0.5f;
     config.unstuck_ema_gating_enabled = params[po + 25] > 0.5f;
-    config.unstuck_close_pct = params[po + 26];
-    config.unstuck_ema_dist = params[po + 27];
-    config.unstuck_loss_allowance_pct = params[po + 28];
-    config.unstuck_threshold = params[po + 29];
+    config.unstuck_close_fraction = params[po + 26];
+    config.unstuck_ema_distance_fraction = params[po + 27];
+    config.unstuck_loss_allowance_fraction = params[po + 28];
+    config.unstuck_exposure_trigger_ratio = params[po + 29];
     config.alpha_forager_volume = config.forager_volume_ema_span_candles > 0.0f
         ? clamp(2.0f / (config.forager_volume_ema_span_candles + 1.0f), 0.0f, 1.0f)
         : 0.0f;
@@ -582,10 +582,10 @@ inline void init_ema_multicoin_side_state(
         side.entry_candidate[c] = false;
         if (c < coin_count) {
             float coin_span_a = coin_override_or(
-                coin_overrides, c, 1, config.span_a
+                coin_overrides, c, 1, config.ema_span_0_candles
             );
             float coin_span_b = coin_override_or(
-                coin_overrides, c, 2, config.span_b
+                coin_overrides, c, 2, config.ema_span_1_candles
             );
             float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
             float coin_span_lo = fmin(coin_span_a, fmin(coin_span_b, coin_span_c));
@@ -602,10 +602,10 @@ inline void init_ema_multicoin_side_state(
                 2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f
             );
             float coin_span_1h = coin_override_or(
-                coin_overrides, c, 8, config.span_1h
+                coin_overrides, c, 8, config.offset_log_range_ema_span_1h_candles
             );
             float coin_span_1m = coin_override_or(
-                coin_overrides, c, 9, config.span_1m
+                coin_overrides, c, 9, config.offset_log_range_ema_span_candles
             );
             side.alpha_1h_coin[c] = coin_span_1h > 0.0f
                 ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
@@ -723,13 +723,13 @@ inline void update_ema_multicoin_side_indicators(
             bool observed;
             side.volatility_1h[c] = bootstrap_market_ema(
                 bars, hour_log_ranges, k, first_valid, c, coin_count,
-                coin_override_or(coin_overrides, c, 8, config.span_1h), bootstrap_counts[c * 10 + 7], 3, observed);
+                coin_override_or(coin_overrides, c, 8, config.offset_log_range_ema_span_1h_candles), bootstrap_counts[c * 10 + 7], 3, observed);
             side.hourly_ema_bootstrapped[c] = observed;
         }
         if (can_bootstrap && !side.market_ema_bootstrapped[c]) {
             bool observed;
-            const float a = coin_override_or(coin_overrides, c, 1, config.span_a);
-            const float b = coin_override_or(coin_overrides, c, 2, config.span_b);
+            const float a = coin_override_or(coin_overrides, c, 1, config.ema_span_0_candles);
+            const float b = coin_override_or(coin_overrides, c, 2, config.ema_span_1_candles);
             const float derived = sqrt(fmax(a * b, 1.0f));
             const float lo = fmin(a, fmin(b, derived));
             const float hi = fmax(a, fmax(b, derived));
@@ -739,7 +739,7 @@ inline void update_ema_multicoin_side_indicators(
             side.ema2[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, hi, bootstrap_counts[c * 10 + 2], 0, observed);
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    coin_override_or(coin_overrides, c, 9, config.span_1m), bootstrap_counts[c * 10 + 6], 1, observed);
+                    coin_override_or(coin_overrides, c, 9, config.offset_log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
             if (config.alpha_forager_log_range > 0.0f)
                 side.forager_log_range_ema[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     config.forager_log_range_ema_span_candles, bootstrap_counts[c * 10 + 9], 1, observed);
@@ -1069,12 +1069,12 @@ inline void update_ema_multicoin_side_selection(
         );
         float allowed_wel = allowed_wallet_exposure_limit_ratio(
             base_limit, config.twel, allowance_fraction);
-        float initial_qty_pct = coin_override_or(
-            coin_overrides, c, 0, config.base_qty_pct
+        float initial_qty_fraction = coin_override_or(
+            coin_overrides, c, 0, config.base_qty_fraction
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
             filter_by_min_effective_cost, balance,
-            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
+            allowed_wel, initial_qty_fraction, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
         );
         bool base_eligible =
 #ifdef PASSIVBOT_ORGANILLO
@@ -1144,7 +1144,7 @@ inline void update_ema_multicoin_side_selection(
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
         float coin_offset_pct = coin_override_or(
-            coin_overrides, c, 4, config.offset
+            coin_overrides, c, 4, config.offset_fraction
         );
         float threshold = short_side
             ? upper * (1.0f + coin_offset_pct)
@@ -1173,7 +1173,7 @@ inline void update_ema_multicoin_side_selection(
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
         float coin_offset_pct = coin_override_or(
-            coin_overrides, c, 4, config.offset
+            coin_overrides, c, 4, config.offset_fraction
         );
         float threshold = short_side
             ? upper * (1.0f + coin_offset_pct)
@@ -1298,16 +1298,16 @@ inline int select_ema_multicoin_unstuck_coin(
             config.unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         const float coin_close_pct = coin_override_or(
-            coin_overrides, c, 15, config.unstuck_close_pct
+            coin_overrides, c, 15, config.unstuck_close_fraction
         );
         const float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 16, config.unstuck_ema_dist
+            coin_overrides, c, 16, config.unstuck_ema_distance_fraction
         );
         const float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 17, config.unstuck_loss_allowance_pct
+            coin_overrides, c, 17, config.unstuck_loss_allowance_fraction
         );
         const float coin_threshold = coin_override_or(
-            coin_overrides, c, 18, config.unstuck_threshold
+            coin_overrides, c, 18, config.unstuck_exposure_trigger_ratio
         );
         const float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 11, -1.0f
@@ -1395,12 +1395,12 @@ inline void generate_ema_multicoin_side_orders(
     ulong one_way_initial_blocked_mask
 ) {
     const int C = coin_count;
-    const float base_qty_pct = config.base_qty_pct;
-    const float ddf = config.ddf;
-    const float offset = config.offset;
-    const float psize_weight = config.psize_weight;
-    const float weight_1h = config.weight_1h;
-    const float weight_1m = config.weight_1m;
+    const float base_qty_fraction = config.base_qty_fraction;
+    const float entry_qty_exposure_coefficient = config.entry_qty_exposure_coefficient;
+    const float offset_fraction = config.offset_fraction;
+    const float inventory_offset_exposure_coefficient = config.inventory_offset_exposure_coefficient;
+    const float offset_log_range_1h_coefficient = config.offset_log_range_1h_coefficient;
+    const float offset_log_range_1m_coefficient = config.offset_log_range_1m_coefficient;
     const float cooldown_min = config.cooldown_min;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
@@ -1413,11 +1413,11 @@ inline void generate_ema_multicoin_side_orders(
     const bool unstuck_enabled = config.unstuck_enabled;
     const bool unstuck_ema_gating_enabled =
         config.unstuck_ema_gating_enabled;
-    const float unstuck_close_pct = config.unstuck_close_pct;
-    const float unstuck_ema_dist = config.unstuck_ema_dist;
-    const float unstuck_loss_allowance_pct =
-        config.unstuck_loss_allowance_pct;
-    const float unstuck_threshold = config.unstuck_threshold;
+    const float unstuck_close_fraction = config.unstuck_close_fraction;
+    const float unstuck_ema_distance_fraction = config.unstuck_ema_distance_fraction;
+    const float unstuck_loss_allowance_fraction =
+        config.unstuck_loss_allowance_fraction;
+    const float unstuck_exposure_trigger_ratio = config.unstuck_exposure_trigger_ratio;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
     thread float* ema0 = side.ema0;
@@ -1625,16 +1625,16 @@ inline void generate_ema_multicoin_side_orders(
             unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         float coin_close_pct = coin_override_or(
-            coin_overrides, c, 15, unstuck_close_pct
+            coin_overrides, c, 15, unstuck_close_fraction
         );
         float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 16, unstuck_ema_dist
+            coin_overrides, c, 16, unstuck_ema_distance_fraction
         );
         float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 17, unstuck_loss_allowance_pct
+            coin_overrides, c, 17, unstuck_loss_allowance_fraction
         );
         float coin_threshold = coin_override_or(
-            coin_overrides, c, 18, unstuck_threshold
+            coin_overrides, c, 18, unstuck_exposure_trigger_ratio
         );
         float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 11, -1.0f
@@ -1769,10 +1769,10 @@ inline void generate_ema_multicoin_side_orders(
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
         float coin_weight_1h = coin_override_or(
-            coin_overrides, c, 6, weight_1h
+            coin_overrides, c, 6, offset_log_range_1h_coefficient
         );
         float coin_weight_1m = coin_override_or(
-            coin_overrides, c, 7, weight_1m
+            coin_overrides, c, 7, offset_log_range_1m_coefficient
         );
         float multiplier = fmax(
             1.0f + volatility_1h[c] * coin_weight_1h
@@ -1784,10 +1784,10 @@ inline void generate_ema_multicoin_side_orders(
                 / fmax(coin_wel, 1.0e-12f) : 0.0f;
         float signed_wallet_ratio = short_side ? -wallet_ratio : wallet_ratio;
         float coin_psize_weight = coin_override_or(
-            coin_overrides, c, 5, psize_weight
+            coin_overrides, c, 5, inventory_offset_exposure_coefficient
         );
         float coin_offset_pct = coin_override_or(
-            coin_overrides, c, 4, offset
+            coin_overrides, c, 4, offset_fraction
         );
         float inventory_shift = signed_wallet_ratio * coin_psize_weight;
         int bid_tick = min(
@@ -1834,18 +1834,18 @@ inline void generate_ema_multicoin_side_orders(
         side.effective_cooldown[c] = coin_cooldown_min;
         bool cooldown = !isfinite(coin_cooldown_min) || coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
-        float coin_base_qty_pct = coin_override_or(
-            coin_overrides, c, 0, base_qty_pct
+        float coin_base_qty_fraction = coin_override_or(
+            coin_overrides, c, 0, base_qty_fraction
         );
-        float coin_ddf = coin_override_or(coin_overrides, c, 3, ddf);
+        float coin_ddf = coin_override_or(coin_overrides, c, 3, entry_qty_exposure_coefficient);
         bool initial_entry_allowed = psize[c] > 0.0f
             || (passes_multicoin_age(coin_settings, coin_offset, k, short_side)
                 && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul);
         if (entries_enabled && selected[c] && initial_entry_allowed
             && !cooldown && entry_price > 0.0f && balance > 0.0f
-            && coin_base_qty_pct > 0.0f) {
+            && coin_base_qty_fraction > 0.0f) {
             float base_qty = fmax(minimum, round_step(
-                balance * allowed_coin_wel * coin_base_qty_pct
+                balance * allowed_coin_wel * coin_base_qty_fraction
                     / fmax(entry_price * c_mult, 1.0e-12f),
                 qty_step
             ));
@@ -1873,7 +1873,7 @@ inline void generate_ema_multicoin_side_orders(
                 close_price, qty_step, min_qty, min_cost, c_mult, &minimum_close_steps
             );
             float clip = fmin(psize[c], fmax(minimum_close, round_step(
-                balance * allowed_coin_wel * coin_base_qty_pct
+                balance * allowed_coin_wel * coin_base_qty_fraction
                     / fmax(close_price * c_mult, 1.0e-12f),
                 qty_step
             )));
@@ -2324,7 +2324,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
     float market_order_slippage_pct,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool loss_gate_enabled
 ) {
     EmaMulticoinReducerCandidate preferred[MAX_COINS];
@@ -2344,7 +2344,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     }
     float remaining_loss_budget = INFINITY;
     if (loss_gate_enabled && !joint_realized_loss_allowance(
-            account, max_realized_loss_pct, remaining_loss_budget)) return;
+            account, loss_gate_max_drawdown_fraction, remaining_loss_budget)) return;
     for (int attempt = 0; attempt < MAX_COINS * 2; ++attempt) {
         int best = -1;
         EmaMulticoinReducerCandidate best_candidate =
@@ -2413,7 +2413,7 @@ inline void finalize_ema_multicoin_reducers_fused(
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
     float market_order_slippage_pct,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool loss_gate_enabled
 ) {
     EmaMulticoinReducerCandidate long_preferred[MAX_COINS];
@@ -2448,7 +2448,7 @@ inline void finalize_ema_multicoin_reducers_fused(
     }
     float remaining_loss_budget = INFINITY;
     if (loss_gate_enabled && !joint_realized_loss_allowance(
-            account, max_realized_loss_pct, remaining_loss_budget)) return;
+            account, loss_gate_max_drawdown_fraction, remaining_loss_budget)) return;
     for (int attempt = 0; attempt < MAX_COINS * 4; ++attempt) {
         int best_coin = -1;
         bool best_short = false;
@@ -3155,7 +3155,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
     const int po = int(b) * PARAM_COLS;
     const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po);
-    const float base_qty_pct = config.base_qty_pct;
+    const float base_qty_fraction = config.base_qty_fraction;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_fraction = config.allowance_fraction;
@@ -3171,7 +3171,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
-    const float max_realized_loss_pct = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
     const bool loss_gate_enabled = run_settings[14] > 0.5f;
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
@@ -3577,7 +3577,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 market_execution_ticks,
                 side, account, bars, coin_settings ORGANILLO_PASS, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, max_realized_loss_pct, loss_gate_enabled
+                market_order_slippage_pct, loss_gate_max_drawdown_fraction, loss_gate_enabled
             );
             if (!account.realized_decay_valid) {
                 scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
@@ -3954,14 +3954,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
     float entry_base_limit = entry_effective_n_positions > 0
         ? twel / float(entry_effective_n_positions) : 0.0f;
-    float entry_initial_qty_pct = coin_override_or(
-        coin_overrides, 0, 0, base_qty_pct
+    float entry_initial_qty_fraction = coin_override_or(
+        coin_overrides, 0, 0, base_qty_fraction
     );
     float entry_allowance_fraction = coin_override_or(
         coin_overrides, 0, 12, allowance_fraction
     );
     scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio(
-        entry_base_limit, twel, entry_allowance_fraction) * entry_initial_qty_pct;
+        entry_base_limit, twel, entry_allowance_fraction) * entry_initial_qty_fraction;
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
     scalars[scalar_offset + 24] = fill_count;
@@ -4066,14 +4066,14 @@ inline float ema_multicoin_entry_initial_balance_pct(
 ) {
     float base_limit = effective_n_positions > 0
         ? config.twel / float(effective_n_positions) : 0.0f;
-    float initial_qty_pct = coin_override_or(
-        coin_overrides, 0, 0, config.base_qty_pct
+    float initial_qty_fraction = coin_override_or(
+        coin_overrides, 0, 0, config.base_qty_fraction
     );
     float allowance_fraction = coin_override_or(
         coin_overrides, 0, 12, config.allowance_fraction
     );
     return allowed_wallet_exposure_limit_ratio(
-        base_limit, config.twel, allowance_fraction) * initial_qty_pct;
+        base_limit, config.twel, allowance_fraction) * initial_qty_fraction;
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
@@ -4160,7 +4160,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
                 filter_by_min_effective_cost_long, balance,
                 long_allowed_wel,
                 coin_override_or(
-                    long_coin_overrides, c, 0, long_config.base_qty_pct
+                    long_coin_overrides, c, 0, long_config.base_qty_fraction
                 ),
                 bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
@@ -4169,7 +4169,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
                 filter_by_min_effective_cost_short, balance,
                 short_allowed_wel,
                 coin_override_or(
-                    short_coin_overrides, c, 0, short_config.base_qty_pct
+                    short_coin_overrides, c, 0, short_config.base_qty_fraction
                 ),
                 bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
@@ -4214,10 +4214,10 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             short_side.ema0[c], fmax(short_side.ema1[c], short_side.ema2[c])
         );
         const float long_offset = coin_override_or(
-            long_coin_overrides, c, 4, long_config.offset
+            long_coin_overrides, c, 4, long_config.offset_fraction
         );
         const float short_offset = coin_override_or(
-            short_coin_overrides, c, 4, short_config.offset
+            short_coin_overrides, c, 4, short_config.offset_fraction
         );
         const float dist_long = long_lower * (1.0f - long_offset)
             / close - 1.0f;
@@ -4353,7 +4353,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float interval_ms = run_settings[2];
     const float long_score_hysteresis = fmax(run_settings[4], 0.0f);
     const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
-    const float max_realized_loss_pct = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
     const bool loss_gate_enabled = run_settings[16] > 0.5f;
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
@@ -4876,7 +4876,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, coin_settings ORGANILLO_PASS, k, C,
                 long_can_generate, short_can_generate,
                 market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, max_realized_loss_pct, loss_gate_enabled
+                market_order_slippage_pct, loss_gate_max_drawdown_fraction, loss_gate_enabled
             );
             if (!account.realized_decay_valid) {
                 scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;

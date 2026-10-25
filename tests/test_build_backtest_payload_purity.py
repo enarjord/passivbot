@@ -34,9 +34,9 @@ def _base_config(candle_interval_minutes: int = 1) -> dict:
     cfg["backtest"]["filter_by_min_effective_cost"] = False
     cfg["backtest"]["start_date"] = "2021-01-01"
     cfg["backtest"]["end_date"] = "2021-01-02"
-    cfg["backtest"]["maker_fee_override"] = None
-    cfg["backtest"]["taker_fee_override"] = None
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg["backtest"]["maker_fee_override_fraction"] = None
+    cfg["backtest"]["taker_fee_override_fraction"] = None
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = None
     cfg['bot']["portfolio"]['hedge_mode'] = False
     return cfg

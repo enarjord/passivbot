@@ -770,7 +770,7 @@ def compute_live_warmup_windows(
     strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
-    warmup_ratio: float = 0.0,
+    activation_span_fraction: float = 0.0,
     max_warmup_minutes: Optional[float] = None,
     span_buffer: Optional[float] = None,
     large_span_threshold: int = 2 * 24 * 60,
@@ -794,7 +794,7 @@ def compute_live_warmup_windows(
 
     if span_buffer is None:
         try:
-            ratio = float(warmup_ratio)
+            ratio = float(activation_span_fraction)
         except Exception:
             ratio = 0.0
         span_buffer = 1.0 + max(0.0, ratio)
@@ -830,7 +830,7 @@ def compute_live_warmup_windows(
     def _get_strategy(pside: str, key: str, sym: str) -> float:
         if strategy_lookup is not None:
             return _to_float(strategy_lookup(pside, key, sym))
-        if key == "entry_volatility_ema_span_1h":
+        if key == "entry_log_range_ema_span_1h_candles":
             legacy_hours = _get_bp(pside, "entry_volatility_ema_span_hours", sym)
             if legacy_hours > 0.0:
                 return legacy_hours
@@ -869,7 +869,7 @@ def compute_live_warmup_windows(
             if unstuck_eligible_lookup is not None and unstuck_eligible_lookup(
                 pside, sym
             ):
-                for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+                for key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
                     max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
             for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
                 max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
@@ -1379,8 +1379,8 @@ class Passivbot:
         self.balance = 1e-12
         self.balance_raw = 1e-12
         self.previous_hysteresis_balance = None
-        self.balance_hysteresis_snap_pct = float(
-            get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
+        self.balance_hysteresis_snap_fraction = float(
+            get_optional_live_value(self.config, "balance_hysteresis_snap_fraction", 0.02)
         )
         # hedge_mode controls whether simultaneous long/short on same coin is allowed.
         # This is the config-level setting; exchange-specific bots may override
@@ -1857,7 +1857,7 @@ class Passivbot:
                     type(exc).__name__,
                 )
 
-    def _live_max_realized_loss_pct(self) -> float:
+    def _loss_gate_max_drawdown_fraction(self) -> float:
         return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
@@ -1873,18 +1873,18 @@ class Passivbot:
                 if (
                     bool(self.bp(pside, "unstuck_enabled", symbol))
                     and float(
-                        self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0
+                        self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0
                     )
                     > 0.0
-                    and float(self.bp(pside, "unstuck_close_pct", symbol) or 0.0) > 0.0
-                    and float(self.bp(pside, "unstuck_threshold", symbol) or 0.0) > 0.0
+                    and float(self.bp(pside, "unstuck_close_fraction", symbol) or 0.0) > 0.0
+                    and float(self.bp(pside, "unstuck_exposure_trigger_ratio", symbol) or 0.0) > 0.0
                 ):
                     return True
         return False
 
     def _orchestrator_uses_realized_pnl(self) -> bool:
         return (
-            self._live_max_realized_loss_pct() < 1.0
+            self._loss_gate_max_drawdown_fraction() < 1.0
             or self._unstuck_uses_realized_pnl()
         )
 
@@ -2605,23 +2605,23 @@ class Passivbot:
             logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
 
-    def _unstuck_loss_allowance_pct_overrides_for_logging(
+    def _unstuck_loss_allowance_fraction_overrides_for_logging(
         self, pside: str
     ) -> dict[str, float]:
-        base_pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        base_fraction = float(self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0)
         out: dict[str, float] = {}
         for symbol in sorted((getattr(self, "coin_overrides", {}) or {}).keys()):
-            pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
-            if abs(pct - base_pct) > 1e-15:
-                out[symbol] = pct
+            fraction = float(self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0)
+            if abs(fraction - base_fraction) > 1e-15:
+                out[symbol] = fraction
         return out
 
     @staticmethod
-    def _format_unstuck_override_pcts_for_logging(overrides: dict[str, float]) -> str:
+    def _format_unstuck_override_fractions_for_logging(overrides: dict[str, float]) -> str:
         if not overrides:
             return ""
         items = list(overrides.items())
-        shown = ", ".join(f"{symbol}={pct:.4f}" for symbol, pct in items[:4])
+        shown = ", ".join(f"{symbol}={fraction:.4f}" for symbol, fraction in items[:4])
         if len(items) > 4:
             shown = f"{shown}, +{len(items) - 4} more"
         return shown
@@ -2632,10 +2632,10 @@ class Passivbot:
         if twel <= 0.0:
             return {"status": "disabled"}
 
-        pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        override_pcts = self._unstuck_loss_allowance_pct_overrides_for_logging(pside)
-        if pct <= 0.0 and not any(
-            override_pct > 0.0 for override_pct in override_pcts.values()
+        fraction = float(self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0)
+        override_fractions = self._unstuck_loss_allowance_fraction_overrides_for_logging(pside)
+        if fraction <= 0.0 and not any(
+            override_fraction > 0.0 for override_fraction in override_fractions.values()
         ):
             return {"status": "unstuck_disabled"}
 
@@ -2648,22 +2648,22 @@ class Passivbot:
         drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
         balance_peak = balance_raw + drawdown
-        pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
-        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
+        change_from_peak_percent = (balance_raw / balance_peak - 1.0) * 100.0
+        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, fraction, twel, drawdown))
         override_allowances = {
-            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
-            for symbol, override_pct in override_pcts.items()
+            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_fraction, twel, drawdown))
+            for symbol, override_fraction in override_fractions.items()
         }
 
         return {
             "status": "ok",
             "allowance": allowance,
             # Signed deficit is observability only; execution uses Rust output.
-            "raw_allowance": pct * twel * balance_peak - drawdown,
+            "raw_allowance": fraction * twel * balance_peak - drawdown,
             "peak": balance_peak,
-            "pct_from_peak": pct_from_peak,
-            "loss_allowance_pct": pct,
-            "override_loss_allowance_pcts": override_pcts,
+            "change_from_peak_percent": change_from_peak_percent,
+            "loss_allowance_fraction": fraction,
+            "override_loss_allowance_fractions": override_fractions,
             "override_allowances": override_allowances,
         }
 
@@ -2702,31 +2702,31 @@ class Passivbot:
                 signature_parts.append((pside, "no_history"))
             else:
                 allowance = info["allowance"]
-                overrides_str = self._format_unstuck_override_pcts_for_logging(
-                    info.get("override_loss_allowance_pcts", {})
+                overrides_str = self._format_unstuck_override_fractions_for_logging(
+                    info.get("override_loss_allowance_fractions", {})
                 )
                 overrides_suffix = (
                     f" | overrides={overrides_str}" if overrides_str else ""
                 )
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
@@ -2736,7 +2736,7 @@ class Passivbot:
                         "over_budget" if allowance < 0 else "ok",
                         round(float(allowance), 2),
                         tuple(
-                            sorted(info.get("override_loss_allowance_pcts", {}).items())
+                            sorted(info.get("override_loss_allowance_fractions", {}).items())
                         ),
                         str(info.get("next_symbol") or ""),
                         round(
@@ -2795,7 +2795,7 @@ class Passivbot:
             str(info.get("status") or "unknown"),
             Passivbot._status_materiality_number(info.get("allowance")) is not None
             and Passivbot._status_materiality_number(info.get("allowance")) < 0.0,
-            tuple(sorted((info.get("override_loss_allowance_pcts") or {}).items())),
+            tuple(sorted((info.get("override_loss_allowance_fractions") or {}).items())),
             str(info.get("next_symbol") or ""),
             info.get("next_target_price"),
             info.get("next_target_distance_ratio"),
@@ -2890,10 +2890,10 @@ class Passivbot:
         ):
             return
         if entry_price > 0 and current_price > 0:
-            price_diff_pct = (current_price / entry_price - 1.0) * 100
-            sign = "+" if price_diff_pct >= 0 else ""
+            price_change_percent = (current_price / entry_price - 1.0) * 100
+            sign = "+" if price_change_percent >= 0 else ""
         else:
-            price_diff_pct = 0.0
+            price_change_percent = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
         if not Passivbot._live_event_console_available(self):
@@ -2904,7 +2904,7 @@ class Passivbot:
                 entry_price,
                 current_price,
                 sign,
-                price_diff_pct,
+                price_change_percent,
                 allowance,
             )
         self._emit_unstuck_selection_event(
@@ -3018,8 +3018,8 @@ class Passivbot:
         values = {
             name: self._status_materiality_number(payload.get(name))
             for name in (
-                "threshold_pct",
-                "retracement_pct",
+                "threshold_fraction",
+                "retracement_fraction",
                 "threshold_price",
                 "retracement_price",
             )
@@ -3028,7 +3028,7 @@ class Passivbot:
         baseline = baselines.get(key)
         material_changed = baseline is None or qualitative != baseline["qualitative"]
         if not material_changed:
-            for name in ("threshold_pct", "retracement_pct"):
+            for name in ("threshold_fraction", "retracement_fraction"):
                 if self._trailing_status_number_materially_changed(
                     baseline["values"][name], values[name], relative=False
                 ):
@@ -3874,9 +3874,9 @@ class Passivbot:
 
                 # No initial entry - check if EMA gating is the reason
                 try:
-                    span0 = float(self.bp(pside, "ema_span_0", symbol))
-                    span1 = float(self.bp(pside, "ema_span_1", symbol))
-                    ema_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+                    span0 = float(self.bp(pside, "entry_ema_span_0_minutes", symbol))
+                    span1 = float(self.bp(pside, "entry_ema_span_1_minutes", symbol))
+                    ema_dist = float(self.bp(pside, "entry_initial_ema_distance_fraction", symbol))
 
                     if span0 <= 0 or span1 <= 0:
                         continue
@@ -4094,7 +4094,7 @@ class Passivbot:
                 try:
                     emit_memory_snapshot(
                         rss_bytes=rss,
-                        rss_delta_pct=pct_change,
+                        rss_delta_percent=pct_change,
                         cache_bytes=cache_bytes,
                         cache_candles=cache_candles,
                         cache_symbols=cache_symbols,
@@ -4116,7 +4116,7 @@ class Passivbot:
                     format_memory_snapshot_console(
                         {
                             "rss_bytes": rss,
-                            "rss_delta_pct": pct_change,
+                            "rss_delta_percent": pct_change,
                             "cache": {
                                 "bytes": cache_bytes,
                                 "candles": cache_candles,
@@ -4518,7 +4518,7 @@ class Passivbot:
         strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
         if not callable(strategy_getter):
             try:
-                if key == "entry_volatility_ema_span_1h":
+                if key == "entry_log_range_ema_span_1h_candles":
                     raw = self.bp(pside, "entry_volatility_ema_span_hours", symbol)
                 else:
                     raw = self.bp(pside, key, symbol)
@@ -4578,13 +4578,13 @@ class Passivbot:
                 error_label="live warmup",
                 optional=False,
                 paths=(
-                    ("entry", "threshold_volatility_1h_weight"),
-                    ("entry", "retracement_volatility_1h_weight"),
+                    ("entry", "threshold_log_range_1h_coefficient"),
+                    ("entry", "retracement_log_range_1h_coefficient"),
                     ("entry", "grid_spacing_volatility_weight"),
                     ("entry", "trailing_threshold_volatility_weight"),
                     ("entry", "trailing_retracement_volatility_weight"),
-                    ("entry_weight_volatility_1h",),
-                    ("offset_volatility_1h_weight",),
+                    ("entry_log_range_1h_coefficient",),
+                    ("offset_log_range_1h_coefficient",),
                 ),
             ),
             strategy_abs_max_weight(
@@ -4595,10 +4595,10 @@ class Passivbot:
                 error_label="live warmup",
                 optional=False,
                 paths=(
-                    ("close", "threshold_volatility_1h_weight"),
-                    ("close", "retracement_volatility_1h_weight"),
-                    ("close_weight_volatility_1h",),
-                    ("offset_volatility_1h_weight",),
+                    ("close", "threshold_log_range_1h_coefficient"),
+                    ("close", "retracement_log_range_1h_coefficient"),
+                    ("close_log_range_1h_coefficient",),
+                    ("offset_log_range_1h_coefficient",),
                 ),
             ),
         )
@@ -4622,30 +4622,30 @@ class Passivbot:
                     symbol=symbol,
                 )
 
-            h1_span = legacy_value("entry_volatility_ema_span_1h")
+            h1_span = legacy_value("entry_log_range_ema_span_1h_candles")
             if h1_span <= 0.0:
                 h1_span = legacy_value("entry_volatility_ema_span_hours")
             if h1_span <= 0.0:
-                h1_span = legacy_value("volatility_ema_span_1h")
+                h1_span = legacy_value("log_range_ema_span_1h_candles")
             strategy_params = {
-                "ema_span_0": legacy_value("ema_span_0"),
-                "ema_span_1": legacy_value("ema_span_1"),
-                "volatility_ema_span_1m": legacy_value("entry_volatility_ema_span_1m"),
-                "volatility_ema_span_1h": h1_span,
+                "ema_span_0_minutes": legacy_value("ema_span_0_minutes"),
+                "ema_span_1_minutes": legacy_value("ema_span_1_minutes"),
+                "log_range_ema_span_minutes": legacy_value("entry_log_range_ema_span_minutes"),
+                "log_range_ema_span_1h_candles": h1_span,
                 "entry": {
-                    "threshold_volatility_1m_weight": legacy_value(
-                        "entry_weight_volatility_1m"
+                    "threshold_log_range_1m_coefficient": legacy_value(
+                        "entry_log_range_1m_coefficient"
                     ),
-                    "threshold_volatility_1h_weight": legacy_value(
-                        "entry_weight_volatility_1h"
+                    "threshold_log_range_1h_coefficient": legacy_value(
+                        "entry_log_range_1h_coefficient"
                     ),
                 },
                 "close": {
-                    "threshold_volatility_1m_weight": legacy_value(
-                        "close_weight_volatility_1m"
+                    "threshold_log_range_1m_coefficient": legacy_value(
+                        "close_log_range_1m_coefficient"
                     ),
-                    "threshold_volatility_1h_weight": legacy_value(
-                        "close_weight_volatility_1h"
+                    "threshold_log_range_1h_coefficient": legacy_value(
+                        "close_log_range_1h_coefficient"
                     ),
                 },
             }
@@ -4817,14 +4817,14 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         # Determine window per symbol based on actual EMA needs (lazy & frugal).
-        # Fetch max-span * (1 + warmup_ratio) to give EMAs enough runway without overfetching.
+        # Fetch max-span * (1 + activation_span_fraction) to give EMAs enough runway without overfetching.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         large_span_threshold = (
             2 * 24 * 60
@@ -4846,7 +4846,7 @@ class Passivbot:
                     self, pside, key, sym
                 ),
                 window_candles=window_candles,
-                warmup_ratio=warmup_ratio,
+                activation_span_fraction=activation_span_fraction,
                 max_warmup_minutes=max_warmup_minutes,
                 large_span_threshold=large_span_threshold,
             )
@@ -4883,13 +4883,13 @@ class Passivbot:
                 f"[warmup] {context}: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             try:
-                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
+                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + activation_span_fraction))))
             except Exception:
                 longest_span = wmax
             logging.debug(
-                "[warmup] target | longest_span=%dm span_multiplier=%.3g max_minutes=%s",
+                "[warmup] target | longest_span=%dm activation_span_fraction=%.3g max_minutes=%s",
                 int(longest_span),
-                float(warmup_ratio),
+                float(activation_span_fraction),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
             )
             try:
@@ -5475,11 +5475,11 @@ class Passivbot:
         }
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5496,7 +5496,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
 
@@ -5633,11 +5633,11 @@ class Passivbot:
             return {}
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5654,7 +5654,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         windows: Dict[str, Dict[str, int]] = {}
@@ -7415,9 +7415,9 @@ class Passivbot:
             po, pn = delta.get("price_old"), delta.get("price_new")
             qo, qn = delta.get("qty_old"), delta.get("qty_new")
             if po is not None and pn is not None:
-                parts.append(f"price {po} -> {pn} ({delta.get('price_pct_diff','?')}%)")
+                parts.append(f"price {po} -> {pn} ({delta.get('price_difference_percent','?')}%)")
             if qo is not None and qn is not None:
-                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
+                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_difference_percent','?')}%)")
             if parts:
                 extra_parts.append("delta=" + "; ".join(parts))
         msg = (
@@ -7530,8 +7530,8 @@ class Passivbot:
                 if execution_type == "market":
                     extras.append("exec=market")
                 delta = order.get("_delta") or {}
-                price_diff = delta.get("price_pct_diff")
-                qty_diff = delta.get("qty_pct_diff")
+                price_diff = delta.get("price_difference_percent")
+                qty_diff = delta.get("qty_difference_percent")
                 delta_parts = []
                 if isinstance(price_diff, (int, float)) and price_diff:
                     delta_parts.append(f"Δp={price_diff:.3g}%")
@@ -8114,10 +8114,10 @@ class Passivbot:
         )
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         return (
-            float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0)
+            float(strategy_cfg.get("entry", {}).get("retracement_base_fraction", 0.0) or 0.0)
             > 0.0
             or float(
-                strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0
+                strategy_cfg.get("close", {}).get("retracement_base_fraction", 0.0) or 0.0
             )
             > 0.0
         )
@@ -10156,13 +10156,13 @@ class Passivbot:
             context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         max_span = max(span_volume, span_volatility)
         window_candles = (
             max(1, int(math.ceil(max_span * span_buffer))) if max_span > 0 else 1
@@ -10407,21 +10407,21 @@ class Passivbot:
         """Return the active strategy's initial sizing fraction."""
         config = getattr(self, "config", None)
         if not isinstance(config, dict):
-            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+            return float(self.bp(pside, "entry_initial_qty_fraction", symbol))
         bot_cfg = config.get("bot")
         if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
-            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+            return float(self.bp(pside, "entry_initial_qty_fraction", symbol))
         strategy_kind = normalize_strategy_kind(config["bot"]["portfolio"]["strategy_kind"])
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
-            return float(strategy_cfg["base_qty_pct"])
+            return float(strategy_cfg["base_qty_fraction"])
         if strategy_kind == "trailing_martingale":
             entry_cfg = strategy_cfg.get("entry")
-            if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
+            if not isinstance(entry_cfg, dict) or "initial_qty_fraction" not in entry_cfg:
                 raise KeyError(
-                    f"missing required strategy key {pside}.entry.initial_qty_pct"
+                    f"missing required strategy key {pside}.entry.initial_qty_fraction"
                 )
-            return float(entry_cfg["initial_qty_pct"])
+            return float(entry_cfg["initial_qty_fraction"])
         raise ValueError(f"unsupported strategy kind {strategy_kind!r}")
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
@@ -13070,7 +13070,7 @@ class Passivbot:
                 ),
             },
             "loss_gate": {
-                "enabled": self._live_max_realized_loss_pct() < 1.0,
+                "enabled": self._loss_gate_max_drawdown_fraction() < 1.0,
                 "memory_ema_span_minutes": require_config_value(
                     self.config, "bot.portfolio.loss_gate.memory_ema_span_minutes"
                 ),
@@ -13398,11 +13398,11 @@ class Passivbot:
             projected_pnl = float(block.get("projected_pnl", 0.0) or 0.0)
             projected_balance = float(block.get("projected_balance_after", 0.0) or 0.0)
             balance_floor = float(block.get("balance_floor", 0.0) or 0.0)
-            max_loss_pct = float(block.get("max_realized_loss_pct", 1.0) or 1.0)
+            max_drawdown_fraction = float(block.get("loss_gate_max_drawdown_fraction", 1.0) or 1.0)
             if not structured_console_available:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
-                    "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
+                    "projected_pnl=%.6f projected_balance=%.6f floor=%.6f loss_gate_max_drawdown_fraction=%.6f | "
                     "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
@@ -13412,7 +13412,7 @@ class Passivbot:
                     projected_pnl,
                     projected_balance,
                     balance_floor,
-                    max_loss_pct,
+                    max_drawdown_fraction,
                 )
             if callable(emit_blocked_event):
                 emit_blocked_event(
@@ -13424,7 +13424,7 @@ class Passivbot:
                     projected_pnl=projected_pnl,
                     projected_balance=projected_balance,
                     balance_floor=balance_floor,
-                    max_realized_loss_pct=max_loss_pct,
+                    loss_gate_max_drawdown_fraction=max_drawdown_fraction,
                 )
 
     def _log_min_effective_cost_blocks(
@@ -13519,8 +13519,8 @@ class Passivbot:
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
             effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
-            entry_initial_qty_pct = float(
-                block.get("entry_initial_qty_pct", 0.0) or 0.0
+            entry_initial_qty_fraction = float(
+                block.get("entry_initial_qty_fraction", 0.0) or 0.0
             )
             projected_initial_cost = float(
                 block.get("projected_initial_cost", 0.0) or 0.0
@@ -13535,14 +13535,14 @@ class Passivbot:
                     effective_min_cost,
                 )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.%s.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_fraction=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.%s.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
                 effective_min_cost,
                 balance,
                 effective_limit,
-                entry_initial_qty_pct,
+                entry_initial_qty_fraction,
                 pside,
                 pside,
             )
@@ -13554,7 +13554,7 @@ class Passivbot:
                     effective_min_cost=effective_min_cost,
                     balance=balance,
                     effective_limit=effective_limit,
-                    entry_initial_qty_pct=entry_initial_qty_pct,
+                    entry_initial_qty_fraction=entry_initial_qty_fraction,
                 )
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
@@ -14320,8 +14320,8 @@ class Passivbot:
             self._balance_override_logged = False
         if not hasattr(self, "previous_hysteresis_balance"):
             self.previous_hysteresis_balance = None
-        if not hasattr(self, "balance_hysteresis_snap_pct"):
-            self.balance_hysteresis_snap_pct = 0.02
+        if not hasattr(self, "balance_hysteresis_snap_fraction"):
+            self.balance_hysteresis_snap_fraction = 0.02
         if not hasattr(self, "balance_raw"):
             self.balance_raw = self.get_raw_balance()
         if not hasattr(self, "_exchange_reported_balance_raw"):
@@ -14382,7 +14382,7 @@ class Passivbot:
             balance_snapped = pbr.hysteresis(
                 balance_raw,
                 previous_hysteresis_balance,
-                self.balance_hysteresis_snap_pct,
+                self.balance_hysteresis_snap_fraction,
             )
             return {
                 "balance_raw": balance_raw,
@@ -14965,47 +14965,47 @@ class Passivbot:
             "risk_twel_enforcer_policy",
         }
         strategy_keys = {
-            "close_grid_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_qty_pct",
-            "close_trailing_threshold_pct",
-            "close_weight_volatility_1h",
-            "close_weight_volatility_1m",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_pct",
-            "entry_volatility_ema_span_1h",
-            "entry_volatility_ema_span_1m",
-            "entry_weight_volatility_1h",
-            "entry_weight_volatility_1m",
-            "entry_we_weight",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_threshold_pct",
-            "ema_span_0",
-            "ema_span_1",
+            "close_grid_qty_fraction",
+            "close_trailing_retracement_base_fraction",
+            "close_trailing_qty_fraction",
+            "close_trailing_threshold_base_fraction",
+            "close_log_range_1h_coefficient",
+            "close_log_range_1m_coefficient",
+            "entry_grid_reentry_qty_multiplier",
+            "entry_grid_threshold_base_fraction",
+            "entry_log_range_ema_span_1h_candles",
+            "entry_log_range_ema_span_minutes",
+            "entry_log_range_1h_coefficient",
+            "entry_log_range_1m_coefficient",
+            "entry_exposure_ratio_coefficient",
+            "entry_initial_ema_distance_fraction",
+            "entry_initial_qty_fraction",
+            "entry_trailing_reentry_qty_multiplier",
+            "entry_trailing_retracement_base_fraction",
+            "entry_trailing_threshold_base_fraction",
+            "ema_span_0_minutes",
+            "ema_span_1_minutes",
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
-            "close_grid_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_qty_pct",
-            "close_trailing_threshold_pct",
-            "close_weight_volatility_1h",
-            "close_weight_volatility_1m",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_pct",
-            "entry_volatility_ema_span_1h",
-            "entry_volatility_ema_span_1m",
-            "entry_weight_volatility_1h",
-            "entry_weight_volatility_1m",
-            "entry_we_weight",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_threshold_pct",
+            "close_grid_qty_fraction",
+            "close_trailing_retracement_base_fraction",
+            "close_trailing_qty_fraction",
+            "close_trailing_threshold_base_fraction",
+            "close_log_range_1h_coefficient",
+            "close_log_range_1m_coefficient",
+            "entry_grid_reentry_qty_multiplier",
+            "entry_grid_threshold_base_fraction",
+            "entry_log_range_ema_span_1h_candles",
+            "entry_log_range_ema_span_minutes",
+            "entry_log_range_1h_coefficient",
+            "entry_log_range_1m_coefficient",
+            "entry_exposure_ratio_coefficient",
+            "entry_initial_ema_distance_fraction",
+            "entry_initial_qty_fraction",
+            "entry_trailing_reentry_qty_multiplier",
+            "entry_trailing_retracement_base_fraction",
+            "entry_trailing_threshold_base_fraction",
             "forager_log_range_ema_span_minutes",
             "forager_volume_ema_span_minutes",
             "forager_score_weights",
@@ -15024,13 +15024,13 @@ class Passivbot:
             "risk_twel_enforcer_threshold_ratio",
             "risk_we_excess_allowance_fraction",
             "unstuck_enabled",
-            "unstuck_close_pct",
+            "unstuck_close_fraction",
             "unstuck_ema_gating_enabled",
-            "unstuck_ema_dist",
-            "unstuck_ema_span_0",
-            "unstuck_ema_span_1",
-            "unstuck_loss_allowance_pct",
-            "unstuck_threshold",
+            "unstuck_ema_distance_fraction",
+            "unstuck_ema_span_0_minutes",
+            "unstuck_ema_span_1_minutes",
+            "unstuck_loss_allowance_fraction",
+            "unstuck_exposure_trigger_ratio",
         ]
         out: dict[str, object] = {}
         strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
@@ -15108,9 +15108,9 @@ class Passivbot:
             and all(
                 self.bp(pside, key, symbol) > 0.0
                 for key in (
-                    "unstuck_loss_allowance_pct",
-                    "unstuck_close_pct",
-                    "unstuck_threshold",
+                    "unstuck_loss_allowance_fraction",
+                    "unstuck_close_fraction",
+                    "unstuck_exposure_trigger_ratio",
                     "total_wallet_exposure_limit_ratio",
                 )
             )
@@ -15389,14 +15389,14 @@ class Passivbot:
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_memory: dict
     ) -> float:
-        pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+        loss_fraction = float(self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0)
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
-        if pct <= 0.0 or twel <= 0.0:
+        if loss_fraction <= 0.0 or twel <= 0.0:
             return 0.0
         return float(
             pbr.calc_auto_unstuck_allowance_v9(
                 self.get_raw_balance(),
-                pct,
+                loss_fraction,
                 twel,
                 float(realized_memory["unstuck"]["drawdown"]),
             )
@@ -15522,52 +15522,52 @@ class Passivbot:
                         else strategy_params
                     )
                     span0 = Passivbot._positive_finite_warmup_value(
-                        price_ema_params["ema_span_0"],
-                        context=f"strategy {pside}.ema_span_0",
+                        price_ema_params["ema_span_0_minutes"],
+                        context=f"strategy {pside}.ema_span_0_minutes",
                         symbol=symbol,
                     )
                     span1 = Passivbot._positive_finite_warmup_value(
-                        price_ema_params["ema_span_1"],
-                        context=f"strategy {pside}.ema_span_1",
+                        price_ema_params["ema_span_1_minutes"],
+                        context=f"strategy {pside}.ema_span_1_minutes",
                         symbol=symbol,
                     )
                 else:
-                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0", symbol)
-                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1", symbol)
+                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0_minutes", symbol)
+                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1_minutes", symbol)
                     m1_span = _legacy_bp_warmup_value(
-                        pside, "entry_volatility_ema_span_1m", symbol
+                        pside, "entry_log_range_ema_span_minutes", symbol
                     )
                     h1_span_legacy = _legacy_bp_warmup_value(
-                        pside, "entry_volatility_ema_span_1h", symbol
+                        pside, "entry_log_range_ema_span_1h_candles", symbol
                     )
                     if h1_span_legacy <= 0.0:
                         h1_span_legacy = _legacy_bp_warmup_value(
                             pside, "entry_volatility_ema_span_hours", symbol
                         )
                     m1_weight = _legacy_bp_warmup_value(
-                        pside, "entry_weight_volatility_1m", symbol
+                        pside, "entry_log_range_1m_coefficient", symbol
                     )
                     h1_weight = _legacy_bp_warmup_value(
-                        pside, "entry_weight_volatility_1h", symbol
+                        pside, "entry_log_range_1h_coefficient", symbol
                     )
                     close_m1_weight = _legacy_bp_warmup_value(
-                        pside, "close_weight_volatility_1m", symbol
+                        pside, "close_log_range_1m_coefficient", symbol
                     )
                     close_h1_weight = _legacy_bp_warmup_value(
-                        pside, "close_weight_volatility_1h", symbol
+                        pside, "close_log_range_1h_coefficient", symbol
                     )
                     strategy_params = {
-                        "ema_span_0": span0,
-                        "ema_span_1": span1,
-                        "volatility_ema_span_1m": m1_span,
-                        "volatility_ema_span_1h": h1_span_legacy,
+                        "ema_span_0_minutes": span0,
+                        "ema_span_1_minutes": span1,
+                        "log_range_ema_span_minutes": m1_span,
+                        "log_range_ema_span_1h_candles": h1_span_legacy,
                         "entry": {
-                            "threshold_volatility_1m_weight": m1_weight,
-                            "threshold_volatility_1h_weight": h1_weight,
+                            "threshold_log_range_1m_coefficient": m1_weight,
+                            "threshold_log_range_1h_coefficient": h1_weight,
                         },
                         "close": {
-                            "threshold_volatility_1m_weight": close_m1_weight,
-                            "threshold_volatility_1h_weight": close_h1_weight,
+                            "threshold_log_range_1m_coefficient": close_m1_weight,
+                            "threshold_log_range_1h_coefficient": close_h1_weight,
                         },
                     }
                 span2 = (
@@ -15582,7 +15582,7 @@ class Passivbot:
                     self, pside, symbol, modes.get(pside, {}).get(symbol)
                 ):
                     unstuck_spans = [
-                        float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
+                        float(self.bp(pside, f"unstuck_ema_span_{i}_minutes", symbol))
                         for i in (0, 1)
                     ]
                     if any(
@@ -15612,10 +15612,10 @@ class Passivbot:
                             error_label="live warmup",
                             optional=False,
                             paths=(
-                                ("entry", "threshold_volatility_1m_weight"),
-                                ("entry", "retracement_volatility_1m_weight"),
-                                ("entry_weight_volatility_1m",),
-                                ("offset_volatility_1m_weight",),
+                                ("entry", "threshold_log_range_1m_coefficient"),
+                                ("entry", "retracement_log_range_1m_coefficient"),
+                                ("entry_log_range_1m_coefficient",),
+                                ("offset_log_range_1m_coefficient",),
                             ),
                         ),
                         strategy_abs_max_weight(
@@ -15626,10 +15626,10 @@ class Passivbot:
                             error_label="live warmup",
                             optional=False,
                             paths=(
-                                ("close", "threshold_volatility_1m_weight"),
-                                ("close", "retracement_volatility_1m_weight"),
-                                ("close_weight_volatility_1m",),
-                                ("offset_volatility_1m_weight",),
+                                ("close", "threshold_log_range_1m_coefficient"),
+                                ("close", "retracement_log_range_1m_coefficient"),
+                                ("close_log_range_1m_coefficient",),
+                                ("offset_log_range_1m_coefficient",),
                             ),
                         ),
                     )
@@ -17926,7 +17926,7 @@ class Passivbot:
         last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
             fill_increase_timestamps, delta_increase_timestamps
         )
-        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
+        loss_gate_max_drawdown_fraction = float(Passivbot._loss_gate_max_drawdown_fraction(self))
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -17958,7 +17958,7 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "max_realized_loss_pct": max_realized_loss_pct,
+                "loss_gate_max_drawdown_fraction": loss_gate_max_drawdown_fraction,
                 "unstuck_realized_pnl_drawdown": (
                     float(realized_memory["unstuck"]["drawdown"])
                     if realized_memory["unstuck"] is not None else 0.0
@@ -19030,11 +19030,11 @@ class Passivbot:
             return
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0) or 0.0
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0) or 0.0
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
@@ -19050,7 +19050,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         try:
@@ -19831,13 +19831,13 @@ class Passivbot:
             context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
         if max_warmup_minutes > 0:
             window_candles = min(int(window_candles), int(max_warmup_minutes))

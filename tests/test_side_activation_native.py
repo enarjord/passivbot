@@ -12,18 +12,18 @@ from test_orchestrator_json_api import (
 def activation_snapshot(kind, side, *, held=False, mode="normal"):
     policy = {
         "n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
-        "wallet_exposure_limit_ratio": 1.0, "entry_initial_qty_pct": 0.1,
-        "entry_grid_double_down_factor": 1.2, "entry_grid_spacing_pct": 0.01,
-        "close_grid_qty_pct": 0.5, "close_trailing_threshold_pct": 0.01,
+        "wallet_exposure_limit_ratio": 1.0, "entry_initial_qty_fraction": 0.1,
+        "entry_grid_reentry_qty_multiplier": 1.2, "entry_grid_threshold_base_fraction": 0.01,
+        "close_grid_qty_fraction": 0.5, "close_trailing_threshold_base_fraction": 0.01,
     }
     strategy = (
         adaptive_strategy_params(
-            entry={"initial_qty_pct": 0.1, "double_down_factor": 1.2,
-                   "threshold_base_pct": 0.01},
-            close={"qty_pct": 0.5, "threshold_base_pct": 0.01},
+            entry={"initial_qty_fraction": 0.1, "reentry_qty_multiplier": 1.2,
+                   "threshold_base_fraction": 0.01},
+            close={"qty_fraction": 0.5, "threshold_base_fraction": 0.01},
         ) if kind == "trailing_martingale" else
-        {"base_qty_pct": 0.1, "ema_span_0": 10.0, "ema_span_1": 20.0,
-         "offset": 0.002, "offset_psize_weight": 0.0}
+        {"base_qty_fraction": 0.1, "ema_span_0_minutes": 10.0, "ema_span_1_minutes": 20.0,
+         "offset_fraction": 0.002, "inventory_offset_exposure_coefficient": 0.0}
     )
     position = ({f"{side}_pos_size": 1.0 if side == "long" else -1.0,
                  f"{side}_pos_price": 100.0} if held else {})

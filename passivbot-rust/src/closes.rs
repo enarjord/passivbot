@@ -16,8 +16,8 @@ use serde::Serialize;
 pub struct TrailingMartingaleCloseThresholdTerms {
     pub base: f64,
     pub wallet_exposure: f64,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,16 +30,16 @@ pub struct TrailingMartingaleCloseDiagnostic {
     pub price: f64,
     pub triggered: bool,
     pub status: &'static str,
-    pub threshold_pct: f64,
+    pub threshold_fraction: f64,
     pub threshold_met: bool,
     pub threshold_terms: TrailingMartingaleCloseThresholdTerms,
-    pub retracement_pct: f64,
+    pub retracement_fraction: f64,
     pub retracement_met: bool,
     pub wallet_exposure: f64,
     pub effective_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_ratio: f64,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
     pub extrema: TrailingPriceBundle,
 }
 
@@ -64,7 +64,7 @@ pub fn calc_close_qty(
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
     position: &Position,
-    close_qty_pct: f64,
+    close_qty_fraction: f64,
     balance: f64,
     close_price: f64,
 ) -> f64 {
@@ -81,7 +81,7 @@ pub fn calc_close_qty(
         f64::max(
             min_entry_qty,
             round_up(
-                full_psize * close_qty_pct + leftover,
+                full_psize * close_qty_fraction + leftover,
                 exchange_params.qty_step,
             ),
         ),
@@ -271,17 +271,17 @@ pub(crate) fn calc_close_retracement_multiplier(
     close_params: &TrailingMartingaleCloseParams,
 ) -> f64 {
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
-        volatility_ema_1m: state_params.volatility_ema_1m,
-        volatility_ema_1h: state_params.volatility_ema_1h,
-        weight_volatility_1m: close_params.retracement_volatility_1m_weight,
-        weight_volatility_1h: close_params.retracement_volatility_1h_weight,
+        log_range_ema_1m: state_params.log_range_ema_1m,
+        log_range_ema_1h: state_params.log_range_ema_1h,
+        log_range_1m_coefficient: close_params.retracement_log_range_1m_coefficient,
+        log_range_1h_coefficient: close_params.retracement_log_range_1h_coefficient,
         wallet_exposure_ratio: None,
         weight_wallet_exposure: 0.0,
         min_multiplier: 1.0,
     })
 }
 
-pub(crate) fn calc_close_threshold_pct(
+pub(crate) fn calc_close_threshold_fraction(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
@@ -300,10 +300,10 @@ pub(crate) fn calc_close_threshold_pct(
     } else {
         0.0
     };
-    close_params.threshold_base_pct
-        + wallet_exposure_ratio * close_params.threshold_we_weight
-        + state_params.volatility_ema_1m * close_params.threshold_volatility_1m_weight
-        + state_params.volatility_ema_1h * close_params.threshold_volatility_1h_weight
+    close_params.threshold_base_fraction
+        + wallet_exposure_ratio * close_params.threshold_exposure_ratio_coefficient
+        + state_params.log_range_ema_1m * close_params.threshold_log_range_1m_coefficient
+        + state_params.log_range_ema_1h * close_params.threshold_log_range_1h_coefficient
 }
 
 pub fn calc_grid_close_long(
@@ -317,7 +317,7 @@ pub fn calc_grid_close_long(
     if position.size <= 0.0 {
         return Order::default();
     }
-    let threshold_pct = calc_close_threshold_pct(
+    let threshold_fraction = calc_close_threshold_fraction(
         exchange_params,
         state_params,
         bot_params,
@@ -329,22 +329,22 @@ pub fn calc_grid_close_long(
         state_params.order_book.ask,
         round_price_distance(
             position.price,
-            threshold_pct,
+            threshold_fraction,
             exchange_params.price_step,
             RoundingMode::Ceil,
         ),
     );
-    let qty_pct = if close_params.threshold_we_weight == 0.0 {
+    let qty_fraction = if close_params.threshold_exposure_ratio_coefficient == 0.0 {
         1.0
     } else {
-        close_params.qty_pct
+        close_params.qty_fraction
     };
     let close_qty = -calc_close_qty(
         &exchange_params,
         &bot_params,
         runtime_context,
         &position,
-        qty_pct,
+        qty_fraction,
         state_params.balance,
         close_price,
     );
@@ -367,7 +367,7 @@ pub fn calc_trailing_close_long(
     if position.size == 0.0 {
         return Order::default();
     }
-    let close_trailing_threshold_pct = calc_close_threshold_pct(
+    let close_trailing_threshold_fraction = calc_close_threshold_fraction(
         exchange_params,
         state_params,
         bot_params,
@@ -375,13 +375,13 @@ pub fn calc_trailing_close_long(
         close_params,
         position,
     );
-    let close_trailing_retracement_pct = close_params.retracement_base_pct.max(0.0)
+    let close_trailing_retracement_fraction = close_params.retracement_base_fraction.max(0.0)
         * calc_close_retracement_multiplier(state_params, close_params);
-    if close_trailing_threshold_pct <= 0.0 {
+    if close_trailing_threshold_fraction <= 0.0 {
         // means trailing close immediately from pos open
-        if close_trailing_retracement_pct > 0.0
+        if close_trailing_retracement_fraction > 0.0
             && trailing_price_bundle.min_since_max
-                < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_pct)
+                < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_fraction)
         {
             Order {
                 qty: -calc_close_qty(
@@ -389,7 +389,7 @@ pub fn calc_trailing_close_long(
                     &bot_params,
                     runtime_context,
                     &position,
-                    close_params.qty_pct,
+                    close_params.qty_fraction,
                     state_params.balance,
                     state_params.order_book.ask,
                 ),
@@ -405,13 +405,13 @@ pub fn calc_trailing_close_long(
         }
     } else {
         // means trailing close will activate only after a threshold
-        if close_trailing_retracement_pct <= 0.0 {
+        if close_trailing_retracement_fraction <= 0.0 {
             // close at threshold
             let close_price = f64::max(
                 state_params.order_book.ask,
                 round_price_distance(
                     position.price,
-                    close_trailing_threshold_pct,
+                    close_trailing_threshold_fraction,
                     exchange_params.price_step,
                     RoundingMode::Ceil,
                 ),
@@ -422,7 +422,7 @@ pub fn calc_trailing_close_long(
                     &bot_params,
                     runtime_context,
                     &position,
-                    close_params.qty_pct,
+                    close_params.qty_fraction,
                     state_params.balance,
                     close_price,
                 ),
@@ -432,16 +432,16 @@ pub fn calc_trailing_close_long(
         } else {
             // close if both conditions are met
             if trailing_price_bundle.max_since_open
-                > position.price * (1.0 + close_trailing_threshold_pct)
+                > position.price * (1.0 + close_trailing_threshold_fraction)
                 && trailing_price_bundle.min_since_max
-                    < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_pct)
+                    < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_fraction)
             {
                 let close_price = f64::max(
                     state_params.order_book.ask,
                     round_compound_price_distance(
                         position.price,
-                        close_trailing_threshold_pct,
-                        -close_trailing_retracement_pct,
+                        close_trailing_threshold_fraction,
+                        -close_trailing_retracement_fraction,
                         exchange_params.price_step,
                         RoundingMode::Ceil,
                     ),
@@ -452,7 +452,7 @@ pub fn calc_trailing_close_long(
                         &bot_params,
                         runtime_context,
                         &position,
-                        close_params.qty_pct,
+                        close_params.qty_fraction,
                         state_params.balance,
                         close_price,
                     ),
@@ -511,7 +511,7 @@ pub fn calc_next_close_long(
     ) {
         return quantize_close_price(order, exchange_params);
     }
-    let order = if close_params.retracement_base_pct > 0.0 {
+    let order = if close_params.retracement_base_fraction > 0.0 {
         calc_trailing_close_long(
             exchange_params,
             state_params,
@@ -546,7 +546,7 @@ pub fn calc_grid_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    let threshold_pct = calc_close_threshold_pct(
+    let threshold_fraction = calc_close_threshold_fraction(
         exchange_params,
         state_params,
         bot_params,
@@ -558,22 +558,22 @@ pub fn calc_grid_close_short(
         state_params.order_book.bid,
         round_price_distance(
             position.price,
-            -threshold_pct,
+            -threshold_fraction,
             exchange_params.price_step,
             RoundingMode::Floor,
         ),
     );
-    let qty_pct = if close_params.threshold_we_weight == 0.0 {
+    let qty_fraction = if close_params.threshold_exposure_ratio_coefficient == 0.0 {
         1.0
     } else {
-        close_params.qty_pct
+        close_params.qty_fraction
     };
     let close_qty = calc_close_qty(
         &exchange_params,
         &bot_params,
         runtime_context,
         &position,
-        qty_pct,
+        qty_fraction,
         state_params.balance,
         close_price,
     );
@@ -597,7 +597,7 @@ pub fn calc_trailing_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    let close_trailing_threshold_pct = calc_close_threshold_pct(
+    let close_trailing_threshold_fraction = calc_close_threshold_fraction(
         exchange_params,
         state_params,
         bot_params,
@@ -605,13 +605,13 @@ pub fn calc_trailing_close_short(
         close_params,
         position,
     );
-    let close_trailing_retracement_pct = close_params.retracement_base_pct.max(0.0)
+    let close_trailing_retracement_fraction = close_params.retracement_base_fraction.max(0.0)
         * calc_close_retracement_multiplier(state_params, close_params);
-    if close_trailing_threshold_pct <= 0.0 {
+    if close_trailing_threshold_fraction <= 0.0 {
         // means trailing stop immediately from pos open
-        if close_trailing_retracement_pct > 0.0
+        if close_trailing_retracement_fraction > 0.0
             && trailing_price_bundle.max_since_min
-                > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_pct)
+                > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_fraction)
         {
             Order {
                 qty: calc_close_qty(
@@ -619,7 +619,7 @@ pub fn calc_trailing_close_short(
                     &bot_params,
                     runtime_context,
                     &position,
-                    close_params.qty_pct,
+                    close_params.qty_fraction,
                     state_params.balance,
                     state_params.order_book.bid,
                 ),
@@ -635,13 +635,13 @@ pub fn calc_trailing_close_short(
         }
     } else {
         // means trailing stop will activate only after a threshold
-        if close_trailing_retracement_pct <= 0.0 {
+        if close_trailing_retracement_fraction <= 0.0 {
             // close at threshold
             let close_price = f64::min(
                 state_params.order_book.bid,
                 round_price_distance(
                     position.price,
-                    -close_trailing_threshold_pct,
+                    -close_trailing_threshold_fraction,
                     exchange_params.price_step,
                     RoundingMode::Floor,
                 ),
@@ -652,7 +652,7 @@ pub fn calc_trailing_close_short(
                     &bot_params,
                     runtime_context,
                     &position,
-                    close_params.qty_pct,
+                    close_params.qty_fraction,
                     state_params.balance,
                     close_price,
                 ),
@@ -661,16 +661,16 @@ pub fn calc_trailing_close_short(
             }
         } else {
             if trailing_price_bundle.min_since_open
-                < position.price * (1.0 - close_trailing_threshold_pct)
+                < position.price * (1.0 - close_trailing_threshold_fraction)
                 && trailing_price_bundle.max_since_min
-                    > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_pct)
+                    > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_fraction)
             {
                 let close_price = f64::min(
                     state_params.order_book.bid,
                     round_compound_price_distance(
                         position.price,
-                        -close_trailing_threshold_pct,
-                        close_trailing_retracement_pct,
+                        -close_trailing_threshold_fraction,
+                        close_trailing_retracement_fraction,
                         exchange_params.price_step,
                         RoundingMode::Floor,
                     ),
@@ -681,7 +681,7 @@ pub fn calc_trailing_close_short(
                         &bot_params,
                         runtime_context,
                         &position,
-                        close_params.qty_pct,
+                        close_params.qty_fraction,
                         state_params.balance,
                         close_price,
                     ),
@@ -729,7 +729,7 @@ pub fn calc_next_close_short(
     ) {
         return quantize_close_price(order, exchange_params);
     }
-    let order = if close_params.retracement_base_pct > 0.0 {
+    let order = if close_params.retracement_base_fraction > 0.0 {
         calc_trailing_close_short(
             exchange_params,
             state_params,
@@ -775,7 +775,7 @@ pub fn calc_trailing_martingale_close_diagnostic(
     } else {
         0.0
     };
-    let threshold_pct = calc_close_threshold_pct(
+    let threshold_fraction = calc_close_threshold_fraction(
         exchange_params,
         state_params,
         bot_params,
@@ -783,17 +783,17 @@ pub fn calc_trailing_martingale_close_diagnostic(
         close_params,
         position,
     );
-    let retracement_pct = close_params.retracement_base_pct.max(0.0)
+    let retracement_fraction = close_params.retracement_base_fraction.max(0.0)
         * calc_close_retracement_multiplier(state_params, close_params);
 
     let (pside, threshold_met, retracement_met, order) = match side {
         StrategySide::Long => (
             "long",
-            threshold_pct <= 0.0
-                || trailing_price_bundle.max_since_open > position.price * (1.0 + threshold_pct),
-            retracement_pct <= 0.0
+            threshold_fraction <= 0.0
+                || trailing_price_bundle.max_since_open > position.price * (1.0 + threshold_fraction),
+            retracement_fraction <= 0.0
                 || trailing_price_bundle.min_since_max
-                    < trailing_price_bundle.max_since_open * (1.0 - retracement_pct),
+                    < trailing_price_bundle.max_since_open * (1.0 - retracement_fraction),
             calc_next_close_long(
                 exchange_params,
                 state_params,
@@ -806,11 +806,11 @@ pub fn calc_trailing_martingale_close_diagnostic(
         ),
         StrategySide::Short => (
             "short",
-            threshold_pct <= 0.0
-                || trailing_price_bundle.min_since_open < position.price * (1.0 - threshold_pct),
-            retracement_pct <= 0.0
+            threshold_fraction <= 0.0
+                || trailing_price_bundle.min_since_open < position.price * (1.0 - threshold_fraction),
+            retracement_fraction <= 0.0
                 || trailing_price_bundle.max_since_min
-                    > trailing_price_bundle.min_since_open * (1.0 + retracement_pct),
+                    > trailing_price_bundle.min_since_open * (1.0 + retracement_fraction),
             calc_next_close_short(
                 exchange_params,
                 state_params,
@@ -855,23 +855,23 @@ pub fn calc_trailing_martingale_close_diagnostic(
         price: order.price,
         triggered,
         status,
-        threshold_pct,
+        threshold_fraction,
         threshold_met,
         threshold_terms: TrailingMartingaleCloseThresholdTerms {
-            base: close_params.threshold_base_pct,
-            wallet_exposure: wallet_exposure_ratio * close_params.threshold_we_weight,
-            volatility_ema_1m: state_params.volatility_ema_1m
-                * close_params.threshold_volatility_1m_weight,
-            volatility_ema_1h: state_params.volatility_ema_1h
-                * close_params.threshold_volatility_1h_weight,
+            base: close_params.threshold_base_fraction,
+            wallet_exposure: wallet_exposure_ratio * close_params.threshold_exposure_ratio_coefficient,
+            log_range_ema_1m: state_params.log_range_ema_1m
+                * close_params.threshold_log_range_1m_coefficient,
+            log_range_ema_1h: state_params.log_range_ema_1h
+                * close_params.threshold_log_range_1h_coefficient,
         },
-        retracement_pct,
+        retracement_fraction,
         retracement_met,
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         wallet_exposure_ratio,
-        volatility_ema_1m: state_params.volatility_ema_1m,
-        volatility_ema_1h: state_params.volatility_ema_1h,
+        log_range_ema_1m: state_params.log_range_ema_1m,
+        log_range_ema_1h: state_params.log_range_ema_1h,
         extrema: trailing_price_bundle.clone(),
     }
 }
@@ -899,14 +899,14 @@ mod tests {
 
     fn make_close_params() -> TrailingMartingaleCloseParams {
         TrailingMartingaleCloseParams {
-            qty_pct: 1.0,
-            threshold_base_pct: 0.01,
-            threshold_we_weight: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
-            retracement_base_pct: 0.0,
-            retracement_volatility_1h_weight: 0.0,
-            retracement_volatility_1m_weight: 0.0,
+            qty_fraction: 1.0,
+            threshold_base_fraction: 0.01,
+            threshold_exposure_ratio_coefficient: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
+            retracement_base_fraction: 0.0,
+            retracement_log_range_1h_coefficient: 0.0,
+            retracement_log_range_1m_coefficient: 0.0,
         }
     }
 
@@ -1140,11 +1140,11 @@ mod tests {
         };
         let runtime = make_runtime_context();
         let close = TrailingMartingaleCloseParams {
-            threshold_base_pct: 0.0,
-            threshold_we_weight: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
-            retracement_base_pct: 0.0,
+            threshold_base_fraction: 0.0,
+            threshold_exposure_ratio_coefficient: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
+            retracement_base_fraction: 0.0,
             ..make_close_params()
         };
         for ulps in 1..=8 {
@@ -1196,11 +1196,11 @@ mod tests {
         };
         let runtime = make_runtime_context();
         let mut close = TrailingMartingaleCloseParams {
-            threshold_base_pct: 0.0,
-            threshold_we_weight: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
-            retracement_base_pct: 0.0,
+            threshold_base_fraction: 0.0,
+            threshold_exposure_ratio_coefficient: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
+            retracement_base_fraction: 0.0,
             ..make_close_params()
         };
         let grid_long = |price, params: &TrailingMartingaleCloseParams| {
@@ -1231,7 +1231,7 @@ mod tests {
         assert_eq!(grid_long(130.08 + 1e-8, &close), 130.09);
         assert_eq!(grid_short(131.04 - 1e-8, &close), 131.03);
         // Decimal reference: 100 * 1.0011 = 100.11.
-        close.threshold_base_pct = 0.0011;
+        close.threshold_base_fraction = 0.0011;
         assert_eq!(grid_long(100.0, &close), 100.11);
         assert_eq!(
             calc_trailing_close_long(
@@ -1250,7 +1250,7 @@ mod tests {
             100.11
         );
         // Decimal reference: 131.25 * (1 - 0.0016) = 131.04.
-        close.threshold_base_pct = 0.0016;
+        close.threshold_base_fraction = 0.0016;
         assert_eq!(grid_short(131.25, &close), 131.04);
         assert_eq!(
             calc_trailing_close_short(
@@ -1269,10 +1269,10 @@ mod tests {
             131.04
         );
         // The threshold/retracement branch uses the same directional contract.
-        close.threshold_base_pct = 0.0013;
-        close.retracement_base_pct = 0.0002;
-        close.retracement_volatility_1h_weight = 0.0;
-        close.retracement_volatility_1m_weight = 0.0;
+        close.threshold_base_fraction = 0.0013;
+        close.retracement_base_fraction = 0.0002;
+        close.retracement_log_range_1h_coefficient = 0.0;
+        close.retracement_log_range_1m_coefficient = 0.0;
         let trail = TrailingPriceBundle {
             max_since_open: 101.0,
             min_since_max: 100.5,
@@ -1295,7 +1295,7 @@ mod tests {
             .price,
             100.11
         );
-        close.threshold_base_pct = 0.0018;
+        close.threshold_base_fraction = 0.0018;
         assert_eq!(
             calc_trailing_close_short(
                 &exchange,
@@ -1324,8 +1324,8 @@ mod tests {
                 bid: 100.0,
                 ..Default::default()
             },
-            volatility_ema_1h: 0.004,
-            volatility_ema_1m: 0.002,
+            log_range_ema_1h: 0.004,
+            log_range_ema_1m: 0.002,
             ..Default::default()
         };
         let bot = BotParams {
@@ -1334,11 +1334,11 @@ mod tests {
             ..Default::default()
         };
         let close = TrailingMartingaleCloseParams {
-            threshold_base_pct: 0.008,
-            threshold_we_weight: -0.002,
-            threshold_volatility_1h_weight: 0.25,
-            threshold_volatility_1m_weight: 0.15,
-            qty_pct: 0.1,
+            threshold_base_fraction: 0.008,
+            threshold_exposure_ratio_coefficient: -0.002,
+            threshold_log_range_1h_coefficient: 0.25,
+            threshold_log_range_1m_coefficient: 0.15,
+            qty_fraction: 0.1,
             ..make_close_params()
         };
         let pos = Position {
@@ -1388,9 +1388,9 @@ mod tests {
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
         let close = TrailingMartingaleCloseParams {
-            qty_pct: 0.1,
-            threshold_base_pct: 0.02,
-            threshold_we_weight: -0.01,
+            qty_fraction: 0.1,
+            threshold_base_fraction: 0.02,
+            threshold_exposure_ratio_coefficient: -0.01,
             ..make_close_params()
         };
         let pos = Position {
@@ -1431,9 +1431,9 @@ mod tests {
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
         let close = TrailingMartingaleCloseParams {
-            qty_pct: 0.1,
-            threshold_base_pct: 0.01,
-            threshold_we_weight: 0.01,
+            qty_fraction: 0.1,
+            threshold_base_fraction: 0.01,
+            threshold_exposure_ratio_coefficient: 0.01,
             ..make_close_params()
         };
         let pos = Position {
@@ -1476,9 +1476,9 @@ mod tests {
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
         let close = TrailingMartingaleCloseParams {
-            qty_pct: 0.1,
-            threshold_base_pct: 0.01,
-            threshold_we_weight: 0.0,
+            qty_fraction: 0.1,
+            threshold_base_fraction: 0.01,
+            threshold_exposure_ratio_coefficient: 0.0,
             ..make_close_params()
         };
         let pos = Position {
@@ -1508,10 +1508,10 @@ mod tests {
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
         let close = TrailingMartingaleCloseParams {
-            qty_pct: 0.1,
-            threshold_base_pct: 0.01,
-            threshold_we_weight: -0.005,
-            retracement_base_pct: 0.002,
+            qty_fraction: 0.1,
+            threshold_base_fraction: 0.01,
+            threshold_exposure_ratio_coefficient: -0.005,
+            retracement_base_fraction: 0.002,
             ..make_close_params()
         };
         let pos = Position {

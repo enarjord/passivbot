@@ -28,9 +28,9 @@ def loss_gate_proxy(
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["max_realized_loss_pct"] = 0.003 if unstuck else 0.0003
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
-        config["live"]["max_realized_loss_pct"] = max_loss_pct
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     if not unstuck:
         # Each flat-price close loses only its fee. Entry fees initially exhaust
         # the gate; continuous decay later admits ordinary closes without unstuck.
@@ -79,7 +79,7 @@ def test_shared_gate_production_consumers_and_transport(
         original, inputs = make_proxy(sides, span, strategy=strategy)
         del original
         candles, markets, config, exchange, btc, timestamps = inputs
-        config["live"]["max_realized_loss_pct"] = fraction
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = fraction
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,
@@ -166,7 +166,7 @@ def test_ema_shared_decay_gate_close_boundary_matches_rust():
 @pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_ema_loss_gate_memory_reuse_specialization_and_scratch(side, mode):
     proxy, _ = loss_gate_proxy((side,), hsl_mode=mode)
-    candidates = [{}, {f"{side}_base_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{side}_base_qty_fraction": 0.3}, {}]
     runner, expected = raw(proxy, candidates)
     assert expected["balance"][0].item() != expected["balance"][1].item()
     assert runner.dispatch_hsl_disabled
@@ -193,7 +193,7 @@ def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides
     from tools.gpu_parity import _native_dataset
 
     proxy, inputs = loss_gate_proxy(sides, coins)
-    candidates = [{}, {f"{sides[0]}_base_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{sides[0]}_base_qty_fraction": 0.3}, {}]
     expected = proxy.evaluate_results(candidates)
 
     def forbidden(*args, **kwargs):

@@ -925,7 +925,7 @@ def _counted_staged_account_refresh_bot(
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = balance
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = balance
     bot.balance = balance
     bot._exchange_reported_balance_raw = balance
@@ -3614,7 +3614,7 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
                     "pside": "long",
                     "balance": 1000.0,
                     "effective_limit": 0.1,
-                    "entry_initial_qty_pct": 0.01,
+                    "entry_initial_qty_fraction": 0.01,
                     "projected_initial_cost": 1.0,
                     "effective_min_cost": 10.0,
                 }
@@ -4450,7 +4450,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         },
         "short": {"status": "disabled"},
     }
@@ -4466,7 +4466,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.03,
             "peak": 16550.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         bot._monitor_runtime_unstuck_hints["long"] = {
             "next_symbol": "ETH/USDT:USDT",
@@ -4480,7 +4480,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.20,
             "peak": 16580.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
@@ -4530,7 +4530,7 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         }
         if pside == "long"
         else {"status": "disabled"}
@@ -4582,14 +4582,14 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.5 if pside == "long" else 0.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.02 if pside == "long" else 0.0
         return 0.0
 
     def bp(pside, key, symbol=None):
         if (
             pside == "long"
-            and key == "unstuck_loss_allowance_pct"
+            and key == "unstuck_loss_allowance_fraction"
             and symbol == "HYPE/USDT:USDT"
         ):
             return 0.005
@@ -4602,7 +4602,7 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     parts, signature = bot._get_unstuck_status_parts_and_signature()
 
     assert info["allowance"] == pytest.approx(60.0)
-    assert info["override_loss_allowance_pcts"] == {
+    assert info["override_loss_allowance_fractions"] == {
         "HYPE/USDT:USDT": pytest.approx(0.005)
     }
     assert info["override_allowances"]["HYPE/USDT:USDT"] == pytest.approx(15.0)
@@ -4712,8 +4712,8 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
             "status": "waiting_threshold",
             "threshold_met": False,
             "retracement_met": False,
-            "threshold_pct": 0.01,
-            "retracement_pct": 0.004,
+            "threshold_fraction": 0.01,
+            "retracement_fraction": 0.004,
             "threshold_price": 99_000.0,
             "retracement_price": 99_396.0,
         },
@@ -4786,20 +4786,20 @@ def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypa
             "symbol": "BTC/USDT:USDT",
             "pside": "long",
             "kind": "entry",
-            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+            "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
         },
         {
             "symbol": "ETH/USDT:USDT",
             "pside": "long",
             "kind": "entry",
-            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+            "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
         },
     ]
     bot._build_trailing_status_items = lambda: deepcopy(items)
 
     bot._maybe_log_trailing_status()
     now[0] += 5 * 60 * 1000
-    items[0]["payload"]["threshold_pct"] = 0.0105
+    items[0]["payload"]["threshold_fraction"] = 0.0105
     bot._maybe_log_trailing_status()
 
     assert [event["operator_visible"] for event in captured_events] == [
@@ -4826,7 +4826,7 @@ def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
         "symbol": "BTC/USDT:USDT",
         "pside": "long",
         "kind": "entry",
-        "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+        "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
     }
     items = [deepcopy(item)]
     bot._build_trailing_status_items = lambda: deepcopy(items)
@@ -6627,7 +6627,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6827,7 +6827,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6974,7 +6974,7 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -7336,7 +7336,7 @@ async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raise
     bot.balance_raw = 50.0
     bot.balance_override = None
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._exchange_reported_balance_raw = 50.0
     bot._apply_open_orders_snapshot = AsyncMock()
     bot._apply_positions_snapshot = MagicMock()
@@ -7378,7 +7378,7 @@ async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_i
     bot.balance = 50.0
     bot.balance_raw = 50.0
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_override = "invalid"
     bot._balance_override_logged = False
     bot._exchange_reported_balance_raw = 50.0
@@ -7636,7 +7636,7 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     ok = await bot.update_balance()
     assert ok is True
@@ -7655,7 +7655,7 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     with caplog.at_level(logging.INFO):
         ok = bot._apply_balance_snapshot(123.45)
@@ -7759,7 +7759,7 @@ def test_unstuck_allowance_uses_raw_not_snapped_balance():
 def test_effective_min_cost_filter_uses_snapped_balance():
     bot = _unit_bot()
     bot.config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
-    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_fraction": 0.5}
     bot.balance = 100.0
     bot.balance_raw = 10.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
@@ -7769,7 +7769,7 @@ def test_effective_min_cost_filter_uses_snapped_balance():
         1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot.bp = lambda pside, key, symbol=None: (
-        0.5 if key == "entry_initial_qty_pct" else 0.0
+        0.5 if key == "entry_initial_qty_fraction" else 0.0
     )
 
     # Passes only when snapped balance is used:
@@ -7798,7 +7798,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
     bot.bot_value = lambda pside, key: (
         1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
-    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_fraction": 0.5}
     monkeypatch.setattr(
         passivbot_module, "normalize_strategy_kind", lambda value: "ema_anchor"
     )
@@ -7908,7 +7908,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": True,
                 "market_order_near_touch_threshold": 0.0,
-                "max_realized_loss_pct": 1.0,
+                "loss_gate_max_drawdown_fraction": 1.0,
             }
             return values.get(key, False)
 
@@ -8021,12 +8021,12 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
-    assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
+    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(1.0)
     bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.0
-    assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
+    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(0.0)
     del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"]
     with pytest.raises(KeyError, match="max_drawdown_fraction"):
-        bot._live_max_realized_loss_pct()
+        bot._loss_gate_max_drawdown_fraction()
 
 
 def test_orchestrator_exchange_params_require_live_fee_metadata():
@@ -8051,7 +8051,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.1
         return 0.0
 
@@ -8086,7 +8086,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.01
         return 0.0
 
@@ -8098,7 +8098,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
 
     assert info["status"] == "ok"
     assert info["peak"] == 1005.0
-    assert info["pct_from_peak"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
+    assert info["change_from_peak_percent"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
     assert info["allowance"] == allowance(1000.0, mul(f32(0.01), f32(1.0)), 5.0)
 
 
@@ -10234,7 +10234,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
         return {symbol: 100.0 for symbol in symbols}
 
     bot._get_live_last_prices = fake_get_live_last_prices
-    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_fraction" else 0.0
 
     secret = "open-order-secret https://example.invalid/open-order"
     unsafe_order_id = "token=order-id-secret https://example.invalid/order-id"
@@ -11593,7 +11593,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -11869,7 +11869,7 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 100.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._balance_composition = composition
 
     assert bot._apply_balance_snapshot(100.0) is True

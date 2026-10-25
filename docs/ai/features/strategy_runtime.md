@@ -1,10 +1,16 @@
 # Strategy Runtime Contracts
 
 Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
-values. Strategy metadata is copied before public path projection, while Rust parameter names,
-optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime builders lower the
-merged public strategy exactly once at the native boundary. Normal loading accepts one public
-spelling; explicit released-v8 conversion reports path changes across all authored layers.
+values. Native and authored strategy trees use one canonical spelling, without runtime path
+translation. Strategy metadata and runtime trees are independent copies; duplicate metadata
+paths are rejected. Optimizer IDs flatten the canonical field owner, including TM
+`entry_ema_span_0_minutes` and EMA-anchor `ema_span_0_minutes`. Explicit released-v8 conversion
+owns its frozen source vocabulary independently of current Rust names and reports path changes
+across all authored layers. Normal loading accepts one public spelling.
+
+Candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`, not a return
+standard deviation. Strategy sensitivities use `_coefficient`; forager
+`score_weights.log_range` remains a relative ranking weight.
 
 Fraction denominators are declared in the generated configuration reference. In particular,
 Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
@@ -173,14 +179,14 @@ Seed evaluation contract:
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
   device handles or borrowed-memory names. Resume does not require original seed files.
 
-Public price, unstuck and base-stream volatility/volume EMA horizons use `_minutes`, including
+Public price, unstuck and base-stream log-range/volume EMA horizons use `_minutes`, including
 `ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
 these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
 candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
-also uses minutes and requires completed one-minute candles. Hourly volatility indicators use
-`volatility_ema_span_1h_candles` or `offset_volatility_ema_span_1h_candles`: these are floating
+also uses minutes and requires completed one-minute candles. Hourly log-range indicators use
+`log_range_ema_span_1h_candles` or `offset_log_range_ema_span_1h_candles`: these are floating
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
-not rescale values, round derived spans or change native parameter IDs.
+not rescale values or round derived spans; native strategy IDs use the same explicit units.
 
 ## Side Age Admission
 
@@ -252,7 +258,7 @@ panic, and independent risk reducers continue when their own inputs are complete
 Rust ideal set remains authoritative: reconciliation cancels resting orders absent from that set
 and never preserves them merely because trailing reconstruction is pending.
 
-Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
+Entry thresholds and retracements are multiplicative distances. Positive log-range or wallet
 exposure weights widen them.
 
 `bot.<side>.strategy.trailing_martingale.entry.ema_gate_mode` controls which entry orders are
@@ -272,7 +278,7 @@ band distance even when `ema_gate_mode = "disabled"`. Candles and EMA bands are 
 for that tie-break, and missing EMA inputs must fail loudly.
 
 Close thresholds are additive so they can intentionally cross through break-even or negative markup
-as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
+as wallet exposure rises. Close retracement is scaled by log-range coefficients and intentionally has no
 wallet-exposure modifier.
 
 TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
@@ -312,6 +318,15 @@ Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
+
+Native unstuck fields use `unstuck_close_fraction`, `unstuck_ema_distance_fraction`,
+`unstuck_ema_span_0_minutes`, `unstuck_ema_span_1_minutes`,
+`unstuck_loss_allowance_fraction` and `unstuck_exposure_trigger_ratio`. The native account
+loss-gate policy is `loss_gate_max_drawdown_fraction`; its public field remains
+`bot.portfolio.loss_gate.max_drawdown_fraction`. These names preserve scaling, signed
+quantities, fractional spans and off sentinels. Explicit released-v8 conversion retains the
+released spellings independently of current native identifiers.
+
 
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
 `bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
@@ -394,7 +409,7 @@ Close orders are computed recursively when the close threshold depends on wallet
 4. Recompute wallet-exposure ratio.
 5. Repeat until the position is exhausted or the ladder is complete.
 
-If `close.retracement_base_fraction <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+If `close.retracement_base_fraction <= 0.0` and `close.threshold_exposure_ratio_coefficient == 0.0`, recursive closes all
 have the same price. Rust intentionally emits one full-position close in that case; `close.qty_fraction`
 is effectively moot because multiple same-price slices would be redundant.
 

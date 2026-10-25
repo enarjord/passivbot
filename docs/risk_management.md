@@ -164,7 +164,7 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 * **Motivation:** In a multi-coin setup, this lets the bot boost performance on active positions by utilizing the unused capacity of inactive positions.
 
 > **Comprehensive Calculation Example:**
-> Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `max_positions=4`, `unstuck_threshold=0.48`:
+> Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `max_positions=4`, `unstuck_exposure_trigger_ratio=0.48`:
 >
 > 1.  **Base WEL:**
 >     `base_wel = twel / max_positions`
@@ -190,7 +190,7 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 > With `max_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`; raw excess does not increase it.
 >
 > **Auto-Unstuck Trigger:**
-> The exposure eligibility boundary is `effective_we_limit * unstuck_threshold`:
+> The exposure eligibility boundary is `effective_we_limit * unstuck_exposure_trigger_ratio`:
 > `0.375 * 0.48 == 0.18`. Wallet exposure must be strictly above this boundary,
 > and the other unstuck gates must pass. This is not a target remaining exposure.
 

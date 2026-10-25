@@ -4275,9 +4275,9 @@ def test_unstuck_status_event_emits_structured_summary():
                 "status": "ok",
                 "allowance": -12.3,
                 "peak": 1000.0,
-                "pct_from_peak": -1.2,
-                "loss_allowance_pct": 0.01,
-                "override_loss_allowance_pcts": {
+                "change_from_peak_percent": -1.2,
+                "loss_allowance_fraction": 0.01,
+                "override_loss_allowance_fractions": {
                     "ETH/USDT:USDT": 0.004,
                     "BTC/USDT:USDT": 0.005,
                 },
@@ -4310,8 +4310,8 @@ def test_unstuck_status_event_emits_structured_summary():
     long = event.data["sides"]["long"]
     assert long["allowance"] == pytest.approx(-12.3)
     assert long["over_budget"] is True
-    assert long["override_loss_allowance_pct_count"] == 2
-    assert long["override_loss_allowance_pcts"] == {
+    assert long["override_loss_allowance_fraction_count"] == 2
+    assert long["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005),
         "ETH/USDT:USDT": pytest.approx(0.004),
     }
@@ -4363,9 +4363,9 @@ def test_trailing_status_event_emits_structured_summary():
             "triggered": False,
             "threshold_met": True,
             "retracement_met": False,
-            "threshold_pct": 0.01,
+            "threshold_fraction": 0.01,
             "threshold_price": 101_000.0,
-            "retracement_pct": 0.004,
+            "retracement_fraction": 0.004,
             "retracement_price": 100_596.0,
             "current_price": 100_700.0,
             "position_price": 100_000.0,
@@ -4390,9 +4390,9 @@ def test_trailing_status_event_emits_structured_summary():
     assert event.data["selected_mode"] == "trailing"
     assert event.data["threshold_met"] is True
     assert event.data["retracement_met"] is False
-    assert event.data["threshold_pct"] == pytest.approx(0.01)
+    assert event.data["threshold_fraction"] == pytest.approx(0.01)
     assert event.data["threshold_price"] == pytest.approx(101_000.0)
-    assert event.data["retracement_pct"] == pytest.approx(0.004)
+    assert event.data["retracement_fraction"] == pytest.approx(0.004)
     assert event.data["retracement_price"] == pytest.approx(100_596.0)
     assert event.data["threshold_projection_retracement_price"] == pytest.approx(
         100_596.0
@@ -4443,7 +4443,7 @@ def test_unstuck_selection_event_emits_structured_summary():
     assert event.data["changed"] is True
     assert event.data["entry_price"] == pytest.approx(1.0)
     assert event.data["current_price"] == pytest.approx(1.1)
-    assert event.data["price_diff_pct"] == pytest.approx(10.0)
+    assert event.data["price_change_percent"] == pytest.approx(10.0)
     assert event.data["allowance"] == pytest.approx(-12.3)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -5254,7 +5254,7 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
         "reduce_only": False,
         "custom_id": "raw-client-order-id-123",
         "id": "raw-exchange-order-id-456",
-        "_delta": {"price_pct_diff": 0.001, "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": 0.001, "qty_difference_percent": 0.002},
     }
     result = {
         "id": "raw-result-order-id-789",
@@ -5565,7 +5565,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
         "raw_payload": "RAW_CONNECTOR_SECRET",
         "_context": "/private/operator/path",
         "_reason": "RAW_CONNECTOR_REASON_SECRET",
-        "_delta": {"price_pct_diff": float("inf"), "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": float("inf"), "qty_difference_percent": 0.002},
     }
     bot._execution_connector_call_context = {
         "action": "create",
@@ -5594,7 +5594,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     assert event.data["connector_route"] == "base"
     assert len(event.data["order_type"]) == 64
     assert len(event.data["pb_order_type"]) == 64
-    assert event.data["delta"] == {"qty_pct_diff": 0.002}
+    assert event.data["delta"] == {"qty_difference_percent": 0.002}
     rendered = json.dumps(event.to_dict(), sort_keys=True)
     assert "RAW_CONNECTOR_SECRET" not in rendered
     assert "RAW_CONNECTOR_REASON_SECRET" not in rendered
@@ -6409,9 +6409,9 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
         side_effect=AssertionError("must not read nonauthoritative PnL")
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6437,9 +6437,9 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
         ]
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6656,59 +6656,59 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "risk_we_excess_allowance_mode"): "bounded",
                 ("long", "total_wallet_exposure_limit_ratio"): 0.24,
                 ("short", "total_wallet_exposure_limit_ratio"): 0.0,
-                ("long", "ema_span_0"): 10.0,
-                ("long", "ema_span_1"): 20.0,
-                ("short", "ema_span_0"): 10.0,
-                ("short", "ema_span_1"): 20.0,
-                ("long", "entry_initial_ema_dist"): 0.01,
-                ("short", "entry_initial_ema_dist"): 0.01,
-                ("long", "entry_volatility_ema_span_1h"): 24.0,
-                ("short", "entry_volatility_ema_span_1h"): 24.0,
+                ("long", "entry_ema_span_0_minutes"): 10.0,
+                ("long", "entry_ema_span_1_minutes"): 20.0,
+                ("short", "entry_ema_span_0_minutes"): 10.0,
+                ("short", "entry_ema_span_1_minutes"): 20.0,
+                ("long", "entry_initial_ema_distance_fraction"): 0.01,
+                ("short", "entry_initial_ema_distance_fraction"): 0.01,
+                ("long", "entry_log_range_ema_span_1h_candles"): 24.0,
+                ("short", "entry_log_range_ema_span_1h_candles"): 24.0,
                 ("long", "unstuck_enabled"): True,
                 ("short", "unstuck_enabled"): False,
                 ("long", "unstuck_ema_gating_enabled"): True,
-                ("long", "unstuck_ema_span_0"): 10.0,
-                ("long", "unstuck_ema_span_1"): 20.0,
-                ("long", "unstuck_ema_dist"): 0.02,
-                ("short", "unstuck_ema_dist"): 0.02,
-                ("long", "unstuck_loss_allowance_pct"): 0.02,
-                ("short", "unstuck_loss_allowance_pct"): 0.0,
-                ("long", "unstuck_close_pct"): 0.5,
-                ("short", "unstuck_close_pct"): 0.5,
-                ("long", "unstuck_threshold"): 0.8,
-                ("short", "unstuck_threshold"): 0.8,
-                ("long", "entry_grid_double_down_factor"): 1.0,
-                ("short", "entry_grid_double_down_factor"): 1.0,
-                ("long", "entry_grid_spacing_pct"): 0.01,
-                ("short", "entry_grid_spacing_pct"): 0.01,
-                ("long", "entry_volatility_ema_span_1m"): 60.0,
-                ("short", "entry_volatility_ema_span_1m"): 60.0,
-                ("long", "entry_weight_volatility_1h"): 0.0,
-                ("short", "entry_weight_volatility_1h"): 0.0,
-                ("long", "entry_weight_volatility_1m"): 0.0,
-                ("short", "entry_weight_volatility_1m"): 0.0,
-                ("long", "entry_we_weight"): 0.0,
-                ("short", "entry_we_weight"): 0.0,
-                ("long", "entry_initial_qty_pct"): 0.1,
-                ("short", "entry_initial_qty_pct"): 0.1,
-                ("long", "entry_trailing_double_down_factor"): 1.0,
-                ("short", "entry_trailing_double_down_factor"): 1.0,
-                ("long", "entry_trailing_retracement_pct"): 0.01,
-                ("short", "entry_trailing_retracement_pct"): 0.01,
-                ("long", "entry_trailing_threshold_pct"): 0.01,
-                ("short", "entry_trailing_threshold_pct"): 0.01,
-                ("long", "close_grid_qty_pct"): 1.0,
-                ("short", "close_grid_qty_pct"): 1.0,
-                ("long", "close_trailing_qty_pct"): 1.0,
-                ("short", "close_trailing_qty_pct"): 1.0,
-                ("long", "close_trailing_retracement_pct"): 0.01,
-                ("short", "close_trailing_retracement_pct"): 0.01,
-                ("long", "close_trailing_threshold_pct"): 0.01,
-                ("short", "close_trailing_threshold_pct"): 0.01,
-                ("long", "close_weight_volatility_1h"): 0.0,
-                ("short", "close_weight_volatility_1h"): 0.0,
-                ("long", "close_weight_volatility_1m"): 0.0,
-                ("short", "close_weight_volatility_1m"): 0.0,
+                ("long", "unstuck_ema_span_0_minutes"): 10.0,
+                ("long", "unstuck_ema_span_1_minutes"): 20.0,
+                ("long", "unstuck_ema_distance_fraction"): 0.02,
+                ("short", "unstuck_ema_distance_fraction"): 0.02,
+                ("long", "unstuck_loss_allowance_fraction"): 0.02,
+                ("short", "unstuck_loss_allowance_fraction"): 0.0,
+                ("long", "unstuck_close_fraction"): 0.5,
+                ("short", "unstuck_close_fraction"): 0.5,
+                ("long", "unstuck_exposure_trigger_ratio"): 0.8,
+                ("short", "unstuck_exposure_trigger_ratio"): 0.8,
+                ("long", "entry_grid_reentry_qty_multiplier"): 1.0,
+                ("short", "entry_grid_reentry_qty_multiplier"): 1.0,
+                ("long", "entry_grid_threshold_base_fraction"): 0.01,
+                ("short", "entry_grid_threshold_base_fraction"): 0.01,
+                ("long", "entry_log_range_ema_span_minutes"): 60.0,
+                ("short", "entry_log_range_ema_span_minutes"): 60.0,
+                ("long", "entry_log_range_1h_coefficient"): 0.0,
+                ("short", "entry_log_range_1h_coefficient"): 0.0,
+                ("long", "entry_log_range_1m_coefficient"): 0.0,
+                ("short", "entry_log_range_1m_coefficient"): 0.0,
+                ("long", "entry_exposure_ratio_coefficient"): 0.0,
+                ("short", "entry_exposure_ratio_coefficient"): 0.0,
+                ("long", "entry_initial_qty_fraction"): 0.1,
+                ("short", "entry_initial_qty_fraction"): 0.1,
+                ("long", "entry_trailing_reentry_qty_multiplier"): 1.0,
+                ("short", "entry_trailing_reentry_qty_multiplier"): 1.0,
+                ("long", "entry_trailing_retracement_base_fraction"): 0.01,
+                ("short", "entry_trailing_retracement_base_fraction"): 0.01,
+                ("long", "entry_trailing_threshold_base_fraction"): 0.01,
+                ("short", "entry_trailing_threshold_base_fraction"): 0.01,
+                ("long", "close_grid_qty_fraction"): 1.0,
+                ("short", "close_grid_qty_fraction"): 1.0,
+                ("long", "close_trailing_qty_fraction"): 1.0,
+                ("short", "close_trailing_qty_fraction"): 1.0,
+                ("long", "close_trailing_retracement_base_fraction"): 0.01,
+                ("short", "close_trailing_retracement_base_fraction"): 0.01,
+                ("long", "close_trailing_threshold_base_fraction"): 0.01,
+                ("short", "close_trailing_threshold_base_fraction"): 0.01,
+                ("long", "close_log_range_1h_coefficient"): 0.0,
+                ("short", "close_log_range_1h_coefficient"): 0.0,
+                ("long", "close_log_range_1m_coefficient"): 0.0,
+                ("short", "close_log_range_1m_coefficient"): 0.0,
                 ("long", "risk_wel_enforcer_threshold_ratio"): 0.0,
                 ("short", "risk_wel_enforcer_threshold_ratio"): 0.0,
             }
@@ -6819,9 +6819,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "status": "ok",
                     "allowance": -20.0,
                     "peak": 1100.0,
-                    "pct_from_peak": -9.1,
-                    "loss_allowance_pct": 0.02,
-                    "override_loss_allowance_pcts": {"BTC/USDT:USDT": 0.005},
+                    "change_from_peak_percent": -9.1,
+                    "loss_allowance_fraction": 0.02,
+                    "override_loss_allowance_fractions": {"BTC/USDT:USDT": 0.005},
                     "override_allowances": {"BTC/USDT:USDT": -44.75},
                 }
             return {"status": "disabled"}
@@ -6850,7 +6850,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                             "ask": 100500.0,
                             "ema_lower": 100200.0,
                             "ema_upper": 100600.0,
-                            "entry_initial_ema_dist": 0.01,
+                            "entry_initial_ema_distance_fraction": 0.01,
                         }
                     )
                 else:
@@ -6863,7 +6863,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                             "ask": 2500.0,
                             "ema_lower": 2550.0,
                             "ema_upper": 2600.0,
-                            "entry_initial_ema_dist": 0.01,
+                            "entry_initial_ema_distance_fraction": 0.01,
                         }
                     )
             return payloads
@@ -6991,7 +6991,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
     assert snapshot["unstuck"]["sides"]["long"]["allowance_live"] == pytest.approx(0.0)
     assert snapshot["unstuck"]["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
-    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_pcts"] == {
+    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005)
     }
     assert snapshot["unstuck"]["sides"]["long"]["override_allowances"] == {
@@ -7507,17 +7507,17 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
             assert pside == "long"
             assert requested_symbol == symbol
             return {
-                "volatility_ema_span_1m": 1323.0,
-                "volatility_ema_span_1h": 668.0,
+                "log_range_ema_span_minutes": 1323.0,
+                "log_range_ema_span_1h_candles": 668.0,
                 "close": {
-                    "qty_pct": 0.23,
-                    "threshold_base_pct": -0.0143,
-                    "threshold_we_weight": -0.0278,
-                    "threshold_volatility_1h_weight": 0.19,
-                    "threshold_volatility_1m_weight": 7.93,
-                    "retracement_base_pct": 0.0001,
-                    "retracement_volatility_1h_weight": 12.11,
-                    "retracement_volatility_1m_weight": 4.49,
+                    "qty_fraction": 0.23,
+                    "threshold_base_fraction": -0.0143,
+                    "threshold_exposure_ratio_coefficient": -0.0278,
+                    "threshold_log_range_1h_coefficient": 0.19,
+                    "threshold_log_range_1m_coefficient": 7.93,
+                    "retracement_base_fraction": 0.0001,
+                    "retracement_log_range_1h_coefficient": 12.11,
+                    "retracement_log_range_1m_coefficient": 4.49,
                 },
             }
 
@@ -7569,10 +7569,10 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
     )
 
     assert payload is not None
-    assert payload["volatility_ema_1m"] == pytest.approx(0.0014553489538740175)
-    assert payload["volatility_ema_1h"] == pytest.approx(0.013108943219306139)
-    assert payload["volatility_ema_1m"] != pytest.approx(0.99)
-    assert payload["volatility_ema_1h"] != pytest.approx(0.99)
+    assert payload["log_range_ema_1m"] == pytest.approx(0.0014553489538740175)
+    assert payload["log_range_ema_1h"] == pytest.approx(0.013108943219306139)
+    assert payload["log_range_ema_1m"] != pytest.approx(0.99)
+    assert payload["log_range_ema_1h"] != pytest.approx(0.99)
     assert payload["qty"] == pytest.approx(0.0)
 
 
@@ -7654,14 +7654,14 @@ def test_monitor_ema_families_are_independent(missing_family):
     from passivbot_monitor import _build_monitor_runtime_market_hints
 
     values = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 40.0,
-        "unstuck_ema_span_0": 100.0,
-        "unstuck_ema_span_1": 400.0,
+        "entry_ema_span_0_minutes": 10.0,
+        "entry_ema_span_1_minutes": 40.0,
+        "unstuck_ema_span_0_minutes": 100.0,
+        "unstuck_ema_span_1_minutes": 400.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "entry_initial_ema_dist": 0.01,
-        "unstuck_ema_dist": 0.02,
+        "entry_initial_ema_distance_fraction": 0.01,
+        "unstuck_ema_distance_fraction": 0.02,
     }
     bot = SimpleNamespace(bp=lambda side, key, symbol: values[key])
     emas = {
@@ -7764,7 +7764,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
                 "ask": 100.0,
                 "ema_lower": 100.0,
                 "ema_upper": 100.0,
-                "entry_initial_ema_dist": 0.0,
+                "entry_initial_ema_distance_fraction": 0.0,
             }
             for v in [900.0, 100.0, 600.0]
         ]
