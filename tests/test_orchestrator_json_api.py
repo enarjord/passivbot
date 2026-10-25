@@ -203,8 +203,8 @@ def exchange_params(**overrides):
         "min_qty": 0.0,
         "min_cost": 0.0,
         "c_mult": 1.0,
-        "maker_fee": 0.0002,
-        "taker_fee": 0.00055,
+        "maker_fee_fraction": 0.0002,
+        "taker_fee_fraction": 0.00055,
     }
     base.update(overrides)
     return base
@@ -1309,8 +1309,8 @@ def test_live_authorized_missing_ema_blocks_both_one_way_initial_sides():
         "min_qty",
         "min_cost",
         "c_mult",
-        "maker_fee",
-        "taker_fee",
+        "maker_fee_fraction",
+        "taker_fee_fraction",
     ],
 )
 def test_json_rejects_missing_exchange_param(field):
@@ -4717,7 +4717,7 @@ def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
         long_bp=long_bp,
     )
     sym["exchange"].update(
-        {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee": 0.0}
+        {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee_fraction": 0.0}
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.105
@@ -4762,8 +4762,8 @@ def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
         long_pos_price=100.0,
         long_bp=long_bp,
     )
-    sym0["exchange"]["maker_fee"] = 0.0
-    sym1["exchange"]["maker_fee"] = 0.0
+    sym0["exchange"]["maker_fee_fraction"] = 0.0
+    sym1["exchange"]["maker_fee_fraction"] = 0.0
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.07
 

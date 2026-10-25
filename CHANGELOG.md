@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name native maker and taker rates explicitly as fee fractions across CPU and GPU execution.
+  Preserve signed rebates, zero fees, exchange fallback and external market-cache formats;
+  reject retired native fee fields without changing monetary fee outputs.
+
 - Align native execution inputs with explicit equity-floor, near-touch, slippage and fill-buffer
   fractions. Preserve execution math, native buffer layouts and omitted optional defaults;
   reject retired raw backtest packet keys instead of silently using different defaults.

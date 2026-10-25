@@ -826,7 +826,7 @@ mod tests {
             1
         );
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
-        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee_fraction : maker_fee_fraction"));
         assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));
         assert!(source.contains("const bool market_orders_allowed = run_settings[11] > 0.5f"));
         assert!(source.contains("should_use_ordinary_market_execution("));
@@ -1101,7 +1101,7 @@ mod tests {
             1
         );
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
-        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee_fraction : maker_fee_fraction"));
         assert!(source.contains("bool entry_market[MAX_COINS]"));
         assert!(source.contains("bool close_market[MAX_COINS]"));
         assert!(source.contains("bool secondary_close_market[MAX_COINS]"));

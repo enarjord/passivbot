@@ -79,8 +79,8 @@ def test_native_transport_keeps_leverage_signed_fees_and_debt_sentinels(debt_cap
     _, _, exchange_params, native = prep_backtest_args(config, markets, "binance")
     assert native["btc_collateral_cap"] == 2.375
     assert native["btc_collateral_ltv_cap"] == debt_cap
-    assert native["maker_fee"] == exchange_params[0]["maker_fee"] == -0.000125
-    assert native["taker_fee"] == exchange_params[0]["taker_fee"] == 0.000375
+    assert native["maker_fee_fraction"] == exchange_params[0]["maker_fee_fraction"] == -0.000125
+    assert native["taker_fee_fraction"] == exchange_params[0]["taker_fee_fraction"] == 0.000375
     assert native["equity_floor_fraction"] == 0.07125
     assert not {"btc_collateral_target_ratio", "max_usd_debt_to_equity_ratio",
                 "maker_fee_override_fraction", "taker_fee_override_fraction"}.intersection(native)
@@ -135,7 +135,7 @@ def test_native_topup_limit_divides_usd_debt_by_equity():
     assert close[5] == pytest.approx(equity_before_conversion - topup * 0.001)
 
 
-def test_native_negative_maker_fee_remains_a_rebate():
+def test_native_negative_maker_fee_fraction_remains_a_rebate():
     config, markets = _inputs()
     config["backtest"]["maker_fee_override_fraction"] = -0.0002
     fills, _, *_ = _run(config, markets, [[[120.0, 80.0, 100.0, 1.0]]] * 10,
@@ -148,8 +148,8 @@ def test_null_fee_overrides_retain_exchange_rebates():
     config, markets = _inputs()
     config["backtest"].update(maker_fee_override_fraction=None, taker_fee_override_fraction=None)
     _, _, exchange_params, native = prep_backtest_args(config, markets, "binance")
-    assert native["maker_fee"] == exchange_params[0]["maker_fee"] == -0.0001
-    assert native["taker_fee"] == exchange_params[0]["taker_fee"] == 0.0005
+    assert native["maker_fee_fraction"] == exchange_params[0]["maker_fee_fraction"] == -0.0001
+    assert native["taker_fee_fraction"] == exchange_params[0]["taker_fee_fraction"] == 0.0005
 
 
 def test_live_acquisition_and_backtest_activation_keep_their_distinct_baselines():

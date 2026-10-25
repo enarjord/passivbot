@@ -5383,8 +5383,8 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
                 0.001,
                 0.0,
                 1.0,
-                maker_fee=0.0,
-                taker_fee=0.01,
+                maker_fee_fraction=0.0,
+                taker_fee_fraction=0.01,
             )
             for _ in range(2)
         ]
@@ -5625,8 +5625,8 @@ def test_mps_multicoin_coin_hsl_override_selects_market_panic(strategy_kind, sid
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -5732,8 +5732,8 @@ def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -6379,8 +6379,8 @@ def test_mps_ema_multicoin_market_entry_uses_stored_next_close_intent(side):
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -6438,8 +6438,8 @@ def test_mps_tm_multicoin_trailing_market_entry_uses_stored_next_close_intent(si
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -6995,8 +6995,8 @@ def test_mps_tm_multicoin_trailing_market_close_uses_stored_next_close_intent(si
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7058,8 +7058,8 @@ def test_mps_tm_multicoin_recursive_next_close_promotes_without_suffix(side):
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7122,8 +7122,8 @@ def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side, mar
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7511,8 +7511,8 @@ def test_mps_ema_multicoin_market_close_uses_stored_next_close_intent(side):
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7573,8 +7573,8 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7655,8 +7655,8 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -7826,8 +7826,8 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
             0.001,
             0.0,
             1.0,
-            maker_fee=0.0,
-            taker_fee=0.01,
+            maker_fee_fraction=0.0,
+            taker_fee_fraction=0.01,
         )
         for _ in range(2)
     ]
@@ -9677,8 +9677,8 @@ def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
 def _tm_multicoin_off_tick_reducer_case(
     side,
     *,
-    maker_fee,
-    taker_fee=0.0,
+    maker_fee_fraction,
+    taker_fee_fraction=0.0,
     price_step=1.0,
     close_qty_pct=1.0,
     close_threshold_base=0.0,
@@ -9713,7 +9713,7 @@ def _tm_multicoin_off_tick_reducer_case(
     hlcvs[:, 1, 1] = 119.0
     hlcvs[:, 1, 2] = 120.0
     hlcvs[:, 1, 3] = 100.0
-    market = ProxyMarket(0.001, price_step, 0.001, min_cost, 1.0, maker_fee, taker_fee)
+    market = ProxyMarket(0.001, price_step, 0.001, min_cost, 1.0, maker_fee_fraction, taker_fee_fraction)
     run = ProxyRun(
         1_000.0,
         1,
@@ -10027,7 +10027,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
+def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee_fraction(
     side,
 ):
     count = 6
@@ -10043,10 +10043,10 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
         highs = closes.copy()
         lows = closes - 0.01
 
-    def run_case(*, slippage, taker_fee, loss_gate_max_drawdown_fraction=1.0):
+    def run_case(*, slippage, taker_fee_fraction, loss_gate_max_drawdown_fraction=1.0):
         markets = [
-            ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee),
-            ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee),
+            ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee_fraction),
+            ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee_fraction),
         ]
         overrides = np.full(
             (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
@@ -10095,10 +10095,10 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
         synchronize()
         return output
 
-    no_cost = run_case(slippage=0.0, taker_fee=0.0)
-    slipped = run_case(slippage=0.01, taker_fee=0.0)
-    charged = run_case(slippage=0.01, taker_fee=0.002)
-    strict = run_case(slippage=0.01, taker_fee=0.002, loss_gate_max_drawdown_fraction=0.0)
+    no_cost = run_case(slippage=0.0, taker_fee_fraction=0.0)
+    slipped = run_case(slippage=0.01, taker_fee_fraction=0.0)
+    charged = run_case(slippage=0.01, taker_fee_fraction=0.002)
+    strict = run_case(slippage=0.01, taker_fee_fraction=0.002, loss_gate_max_drawdown_fraction=0.0)
     position_key = "psize" if side == "long" else "short_psize"
 
     assert no_cost["fill_count"].item() > 2.0
@@ -10296,7 +10296,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_off_tick_grid_precedes_reducer_for_volume(side):
     runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
-        side, maker_fee=0.001
+        side, maker_fee_fraction=0.001
     )
     output = runner.run(np.asarray([candidate], dtype=np.float64))
     synchronize()
@@ -10308,17 +10308,17 @@ def test_mps_tm_multicoin_off_tick_grid_precedes_reducer_for_volume(side):
     grid_qty = 5.045 if side == "long" else 4.945
     reducer_price = 101.0 if side == "long" else 100.0
     reducer_qty = entry_qty - grid_qty
-    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee_fraction
     expected_volume = entry_qty * entry_price / balance
     grid_pnl = grid_qty * (
         grid_price - entry_price if side == "long" else entry_price - grid_price
     )
-    balance += grid_pnl - grid_qty * grid_price * market.maker_fee
+    balance += grid_pnl - grid_qty * grid_price * market.maker_fee_fraction
     expected_volume += grid_qty * grid_price / balance
     reducer_pnl = reducer_qty * (
         reducer_price - entry_price if side == "long" else entry_price - reducer_price
     )
-    balance += reducer_pnl - reducer_qty * reducer_price * market.maker_fee
+    balance += reducer_pnl - reducer_qty * reducer_price * market.maker_fee_fraction
     expected_volume += reducer_qty * reducer_price / balance
 
     assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
@@ -10338,8 +10338,8 @@ def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
 ):
     runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
         side,
-        maker_fee=0.001,
-        taker_fee=0.002,
+        maker_fee_fraction=0.001,
+        taker_fee_fraction=0.002,
         market_orders_allowed=True,
         market_order_near_touch_fraction=0.006,
         market_order_slippage_fraction=0.01,
@@ -10352,21 +10352,21 @@ def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
     grid_qty = 5.045 if side == "long" else 4.945
     reducer_qty = entry_qty - grid_qty
     market_fill_price = 99.0 if side == "long" else 101.0
-    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee_fraction
     expected_volume = entry_qty * entry_price / balance
     grid_pnl = grid_qty * (
         market_fill_price - entry_price
         if side == "long"
         else entry_price - market_fill_price
     )
-    balance += grid_pnl - grid_qty * market_fill_price * market.taker_fee
+    balance += grid_pnl - grid_qty * market_fill_price * market.taker_fee_fraction
     expected_volume += grid_qty * market_fill_price / balance
     reducer_pnl = reducer_qty * (
         market_fill_price - entry_price
         if side == "long"
         else entry_price - market_fill_price
     )
-    balance += reducer_pnl - reducer_qty * market_fill_price * market.taker_fee
+    balance += reducer_pnl - reducer_qty * market_fill_price * market.taker_fee_fraction
     expected_volume += reducer_qty * market_fill_price / balance
 
     assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
@@ -10380,7 +10380,7 @@ def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
 def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
     runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
         side,
-        maker_fee=0.0,
+        maker_fee_fraction=0.0,
         price_step=1.0,
         close_qty_pct=0.1,
         close_threshold_base=0.01,
@@ -10412,10 +10412,10 @@ def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee(side):
+def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee_fraction(side):
     common = {
         "side": side,
-        "maker_fee": 0.0,
+        "maker_fee_fraction": 0.0,
         "price_step": 0.1,
         "close_threshold_base": 0.02,
         "next_high": 102.5,
@@ -10424,10 +10424,10 @@ def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee(side):
         "market_order_near_touch_fraction": 0.005,
     }
     free_runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
-        taker_fee=0.0, **common
+        taker_fee_fraction=0.0, **common
     )
     charged_runner, _, _ = _tm_multicoin_off_tick_reducer_case(
-        taker_fee=0.002, **common
+        taker_fee_fraction=0.002, **common
     )
 
     free = free_runner.run(np.asarray([candidate], dtype=np.float64))
@@ -10438,7 +10438,7 @@ def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee(side):
     assert charged[size_key].item() == pytest.approx(free[size_key].item(), abs=2.0e-4)
     # Only the near-touch WEL reducer is promoted; the farther recursive
     # groups stay passive.  The reducer sorts before the first group, so a
-    # lower balance here specifically proves that early path used taker_fee.
+    # lower balance here specifically proves that early path used taker_fee_fraction.
     assert charged["balance"].item() < free["balance"].item() - 0.01
 
 
@@ -10447,7 +10447,7 @@ def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee(side):
 def test_mps_tm_multicoin_reducer_consumes_one_recursive_close_slot(side):
     runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
         side,
-        maker_fee=0.0,
+        maker_fee_fraction=0.0,
         close_qty_pct=0.0001,
         close_threshold_we=1.0e-6,
     )
@@ -10484,13 +10484,13 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("repair_kind", ["position", "total"])
-def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
+def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee_fraction(
     side, repair_kind
 ):
     market_no_fee = [
         ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0, 0.0) for _ in range(2)
     ]
-    market_with_taker_fee = [
+    market_with_taker_fee_fraction = [
         ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0, 0.002) for _ in range(2)
     ]
     passive_runner, row = _multicoin_exposure_fixture(
@@ -10512,7 +10512,7 @@ def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
         "trailing_martingale",
         side,
         count=10,
-        markets=market_with_taker_fee,
+        markets=market_with_taker_fee_fraction,
         market_orders_allowed=True,
         market_order_near_touch_fraction=0.002,
         market_order_slippage_fraction=0.01,
@@ -11617,7 +11617,7 @@ def test_mps_tm_multicoin_post_repair_grid_volume_uses_per_fill_balance(side):
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_same_tick_twel_and_grid_use_separate_denominators(side):
     runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
-        side, maker_fee=0.001
+        side, maker_fee_fraction=0.001
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -11637,20 +11637,20 @@ def test_mps_tm_multicoin_same_tick_twel_and_grid_use_separate_denominators(side
     grid_qty = 5.045 if side == "long" else 4.945
     reducer_qty = entry_qty - grid_qty
     close_price = 100.0 if side == "long" else 101.0
-    balance_after_entry = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    balance_after_entry = 1_000.0 - entry_qty * entry_price * market.maker_fee_fraction
     expected_volume = entry_qty * entry_price / balance_after_entry
     grid_pnl = grid_qty * (
         close_price - entry_price if side == "long" else entry_price - close_price
     )
     balance_after_grid = (
-        balance_after_entry + grid_pnl - grid_qty * close_price * market.maker_fee
+        balance_after_entry + grid_pnl - grid_qty * close_price * market.maker_fee_fraction
     )
     expected_volume += grid_qty * close_price / balance_after_grid
     reducer_pnl = reducer_qty * (
         close_price - entry_price if side == "long" else entry_price - close_price
     )
     balance_after_close = (
-        balance_after_grid + reducer_pnl - reducer_qty * close_price * market.maker_fee
+        balance_after_grid + reducer_pnl - reducer_qty * close_price * market.maker_fee_fraction
     )
     expected_volume += reducer_qty * close_price / balance_after_close
     assert output["balance"].item() == pytest.approx(balance_after_close, abs=3.0e-4)

@@ -353,6 +353,12 @@ pins. This is optimizer configuration finalization, not a live/backtest coupling
 Limit buys require `low < price * (1 - buffer)` and limit sells require
 `high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
+Native exchange, backtest and coin-metadata fee rates use `maker_fee_fraction` and
+`taker_fee_fraction`: signed scale-one fractions of the existing fill-notional basis. Negative
+values remain rebates and zero remains an explicit zero fee. Exchange/cache source keys retain
+their existing spellings and precedence at the Python adapters; monetary fill fees retain their
+existing fields and sign convention. Retired native fee keys are rejected, including beside the
+current keys; required native fee inputs remain required.
 The actual fill and next-candle ladder-expansion hint share the same Rust predicate; raw candles
 used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
 forward this setting. CPU and GPU optimization treat it as fixed evaluation policy. GPU screening

@@ -1901,7 +1901,7 @@ inline bool force_close_tm_multicoin_delisted_position(
     if (!finite_positive(close)) return false;
     const float price_step = coin_settings[coin_offset + 1];
     const float c_mult = coin_settings[coin_offset + 4];
-    const float taker_fee = coin_settings[coin_offset + 11];
+    const float taker_fee_fraction = coin_settings[coin_offset + 11];
     const float close_price = ordinary_market_fill_price(
                     market_execution_tick_at(market_execution_ticks, k, coin, coin_count, short_side), price_step
                 );
@@ -1913,13 +1913,13 @@ inline bool force_close_tm_multicoin_delisted_position(
             : close_price - position_price
     );
     const float net_pnl = pnl
-        - close_qty * close_price * c_mult * taker_fee;
+        - close_qty * close_price * c_mult * taker_fee_fraction;
     const bool coin_hsl_mode =
         side.hsl.signal_mode == HSL_SIGNAL_COIN;
     record_tm_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee_fraction,
         0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position, true
@@ -2134,8 +2134,8 @@ inline bool process_tm_multicoin_side_fills(
         const float min_qty = coin_settings[coin_offset + 2];
         const float min_cost = coin_settings[coin_offset + 3];
         const float c_mult = coin_settings[coin_offset + 4];
-        const float maker_fee = coin_settings[coin_offset + 5];
-        const float taker_fee = coin_settings[coin_offset + 11];
+        const float maker_fee_fraction = coin_settings[coin_offset + 5];
+        const float taker_fee_fraction = coin_settings[coin_offset + 11];
 
         bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
         bool coin_hsl_panic_market = coin_hsl_mode
@@ -2427,17 +2427,17 @@ inline bool process_tm_multicoin_side_fills(
                         : close_tick[c] < group.ticks);
                 if (reducer_before_group) {
                     float qty = fmin(reducer_qty, psize[c]);
-                    float reducer_fee_rate = primary_market
-                        ? taker_fee : maker_fee;
+                    float reducer_fee_fraction = primary_market
+                        ? taker_fee_fraction : maker_fee_fraction;
                     float pnl = qty * c_mult * (short_side
                         ? pprice[c] - fill_price
                         : fill_price - pprice[c]);
                     float net_pnl = pnl
-                        - qty * fill_price * c_mult * reducer_fee_rate;
+                        - qty * fill_price * c_mult * reducer_fee_fraction;
                     record_tm_multicoin_close_fill(
                         side, account, fills, coin_fill_counts,
                         int(b), C, c, k, pnl, net_pnl, qty,
-                        fill_price, qty * fill_price * c_mult * reducer_fee_rate,
+                        fill_price, qty * fill_price * c_mult * reducer_fee_fraction,
                         fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                         pprice[c], close, c_mult, short_side,
                         false, collect_coin_fill_counts,
@@ -2464,17 +2464,17 @@ inline bool process_tm_multicoin_side_fills(
                     market_execution_tick_at(market_execution_ticks, k, c, C, short_side), price_step
                 )
                     : group.price;
-                float group_fee_rate = group.market ? taker_fee : maker_fee;
+                float group_fee_fraction = group.market ? taker_fee_fraction : maker_fee_fraction;
                 float grid_pnl = grid_qty * c_mult * (short_side
                     ? pprice[c] - group_fill_price
                     : group_fill_price - pprice[c]);
 
                 float grid_net_pnl = grid_pnl
-                    - grid_qty * group_fill_price * c_mult * group_fee_rate;
+                    - grid_qty * group_fill_price * c_mult * group_fee_fraction;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, grid_pnl, grid_net_pnl,
-                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_rate,
+                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_fraction,
                     fmax(round_step(psize[c] - grid_qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     false, collect_coin_fill_counts,
@@ -2520,13 +2520,13 @@ inline bool process_tm_multicoin_side_fills(
                     && close_is_hsl_panic[c];
                 bool market_execution = use_secondary
                     ? secondary_close_market[c] : primary_market;
-                float fee_rate = market_execution ? taker_fee : maker_fee;
+                float fee_fraction = market_execution ? taker_fee_fraction : maker_fee_fraction;
 
-                float net_pnl = pnl - qty * price * c_mult * fee_rate;
+                float net_pnl = pnl - qty * price * c_mult * fee_fraction;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, pnl, net_pnl, qty,
-                    price, qty * price * c_mult * fee_rate,
+                    price, qty * price * c_mult * fee_fraction,
                     fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     is_hsl_panic, collect_coin_fill_counts,
@@ -2625,7 +2625,7 @@ inline bool process_tm_multicoin_side_fills(
                         candidate.executable_qty, qty_step
                     );
                     float fee = adjusted * fill_price * c_mult
-                        * (candidate.market ? taker_fee : maker_fee);
+                        * (candidate.market ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
                     if (candidate.order_type == 0
                         || candidate.order_type == 11) {
@@ -2720,7 +2720,7 @@ inline bool process_tm_multicoin_side_fills(
                     candidate.executable_qty, qty_step
                 );
                 float fee = adjusted * fill_price * c_mult
-                    * (candidate.market ? taker_fee : maker_fee);
+                    * (candidate.market ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
                 if (candidate.order_type == 0
                     || candidate.order_type == 11) {
@@ -2774,7 +2774,7 @@ inline bool process_tm_multicoin_side_fills(
                 : float(entry_tick[c]) * price_step;
             float adjusted = round_step(entry_qty[c], qty_step);
             float fee = adjusted * fill_price * c_mult
-                * (entry_market[c] ? taker_fee : maker_fee);
+                * (entry_market[c] ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             if (side.entry_order_type[c] == 0
                 || side.entry_order_type[c] == 11) {

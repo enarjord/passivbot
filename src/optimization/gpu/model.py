@@ -477,8 +477,8 @@ class ProxyMarket:
     min_qty: float
     min_cost: float
     c_mult: float
-    maker_fee: float
-    taker_fee: float = 0.0
+    maker_fee_fraction: float
+    taker_fee_fraction: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1118,13 +1118,13 @@ def build_mps_multicoin_data(
             market.min_qty,
             market.min_cost,
             market.c_mult,
-            market.maker_fee,
+            market.maker_fee_fraction,
             run.first_valid_idx,
             run.last_valid_idx,
             run.trade_start_idx,
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
-            market.taker_fee,
+            market.taker_fee_fraction,
             max_effective_min_cost,
             *run.age_eligible_indices,
         )

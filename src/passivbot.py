@@ -2228,7 +2228,7 @@ class Passivbot:
             f"oldest_event={metadata_oldest} history_scope={history_scope}"
         )
 
-    _get_exchange_fee_rates = exchange_params._get_exchange_fee_rates
+    _get_exchange_fee_fractions = exchange_params._get_exchange_fee_fractions
     _orchestrator_exchange_params = exchange_params._orchestrator_exchange_params
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:

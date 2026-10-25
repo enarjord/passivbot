@@ -7897,7 +7897,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
         min_costs = {symbol: 5.0}
         c_mults = {symbol: 1.0}
         effective_min_cost = {symbol: 5.0}
-        _get_exchange_fee_rates = pb_mod.Passivbot._get_exchange_fee_rates
+        _get_exchange_fee_fractions = pb_mod.Passivbot._get_exchange_fee_fractions
 
         def config_get(self, keys):
             return None
@@ -8039,7 +8039,7 @@ def test_orchestrator_exchange_params_require_live_fee_metadata():
     bot.min_costs = {symbol: 5.0}
     bot.c_mults = {symbol: 1.0}
 
-    with pytest.raises(ValueError, match="missing taker_fee"):
+    with pytest.raises(ValueError, match="missing taker_fee_fraction"):
         Passivbot._orchestrator_exchange_params(bot, symbol)
 
 

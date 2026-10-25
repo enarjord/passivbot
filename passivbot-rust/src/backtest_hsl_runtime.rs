@@ -602,8 +602,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.001,
-            taker_fee: 0.002,
+            maker_fee_fraction: 0.001,
+            taker_fee_fraction: 0.002,
             coins: (0..coins).map(|i| format!("COIN{i}")).collect(),
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -665,7 +665,7 @@ mod tests {
         OrderFillExecution {
             at_bar_close: false,
             price,
-            fee_rate: 0.001,
+            fee_fraction: 0.001,
             liquidity: "maker",
         }
     }
@@ -1062,7 +1062,7 @@ mod tests {
         // A signed entry rebate reduces the same D, without resetting a flat
         // account or a newly opened position to zero.
         let mut rebate = execution(100.0);
-        rebate.fee_rate = -0.001;
+        rebate.fee_fraction = -0.001;
         bt.process_entry_fill_long(1, 0, &order(1.0, OrderType::EntryInitialNormalLong), rebate)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
@@ -1094,11 +1094,11 @@ mod tests {
             &p,
         );
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
@@ -1151,11 +1151,11 @@ mod tests {
                 &p,
             );
             let mut entry = execution(100.0);
-            entry.fee_rate = 0.0;
+            entry.fee_fraction = 0.0;
             bt.process_entry_fill_long(0, 0, &order(1.0, OrderType::EntryInitialNormalLong), entry)
                 .unwrap();
             let mut exit = execution(36.0);
-            exit.fee_rate = 0.0;
+            exit.fee_fraction = 0.0;
             bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
                 .unwrap();
             assert_eq!(bt.loss_gate_memory.drawdown(), 64.0);
@@ -1234,11 +1234,11 @@ mod tests {
         );
         assert!(bt.unstuck_memory_enabled && bt.loss_gate_memory_enabled);
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         // The ordinary ledger has one loss, while each filter remembers all of it.
@@ -1254,7 +1254,7 @@ mod tests {
         assert_eq!(input.global.loss_gate_realized_pnl_drawdown, 37.5);
         // A later actual profit repays each existing memory independently.
         let mut profit = execution(110.0);
-        profit.fee_rate = 0.0;
+        profit.fee_fraction = 0.0;
         bt.process_close_fill_long(1, 0, &order(-1.0, OrderType::CloseGridLong), profit)
             .unwrap();
         assert_eq!(bt.unstuck_memory.drawdown(), 15.0);

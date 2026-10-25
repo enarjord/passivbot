@@ -538,12 +538,12 @@ def _build_coin_metadata_entries(
         base_from_symbol, quote_from_symbol = _split_symbol_parts(symbol)
         coin_shorthand = entry.get("coin") or entry.get("base") or base_from_symbol
         entry_exchange = entry.get("exchange") or exchange
-        maker_fee = entry.get("maker_fee")
-        if maker_fee is None:
-            maker_fee = entry.get("maker")
-        taker_fee = entry.get("taker_fee")
-        if taker_fee is None:
-            taker_fee = entry.get("taker")
+        maker_fee_fraction = entry.get("maker_fee")
+        if maker_fee_fraction is None:
+            maker_fee_fraction = entry.get("maker")
+        taker_fee_fraction = entry.get("taker_fee")
+        if taker_fee_fraction is None:
+            taker_fee_fraction = entry.get("taker")
         entries.append(
             {
                 "index": (
@@ -561,8 +561,8 @@ def _build_coin_metadata_entries(
                 "min_qty": _float_or(entry.get("min_qty")),
                 "min_cost": _float_or(entry.get("min_cost")),
                 "c_mult": _float_or(entry.get("c_mult"), 1.0),
-                "maker_fee": _float_or(maker_fee),
-                "taker_fee": _float_or(taker_fee),
+                "maker_fee_fraction": _float_or(maker_fee_fraction),
+                "taker_fee_fraction": _float_or(taker_fee_fraction),
                 "first_valid_index": _int_or(first_valid_indices[idx]),
                 "last_valid_index": _int_or(last_valid_indices[idx]),
                 "warmup_minutes": _int_or(warmup_minutes[idx]),
@@ -572,7 +572,8 @@ def _build_coin_metadata_entries(
     return entries
 
 
-def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
+def _market_fee_fraction_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
+    """Adapt existing exchange/cache fee keys without changing their precedence."""
     entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
     if fee_kind == "maker":
         raw_fee = entry.get("maker_fee", entry.get("maker"))
@@ -590,7 +591,7 @@ def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
     return fee
 
 
-def _resolve_backtest_fees(
+def _resolve_backtest_fee_fractions(
     *,
     coins: Sequence[str],
     mss: dict,
@@ -604,7 +605,7 @@ def _resolve_backtest_fees(
                 f"backtest.{fee_kind}_fee_override_fraction must be finite, got {override_value}"
             )
         return fee, {coin: fee for coin in coins}
-    fees = {coin: _market_fee_for_backtest(mss, coin, fee_kind) for coin in coins}
+    fees = {coin: _market_fee_fraction_for_backtest(mss, coin, fee_kind) for coin in coins}
     if not fees:
         raise ValueError(f"cannot resolve {fee_kind} fee without backtest coins")
     return max(fees.values()), fees
@@ -2843,13 +2844,13 @@ def prep_backtest_args(
     taker_fee_override_fraction = get_optional_config_value(
         config, "backtest.taker_fee_override_fraction", None
     )
-    maker_fee, maker_fees_by_coin = _resolve_backtest_fees(
+    maker_fee_fraction, maker_fee_fractions_by_coin = _resolve_backtest_fee_fractions(
         coins=coins,
         mss=mss,
         fee_kind="maker",
         override_value=maker_fee_override_fraction,
     )
-    taker_fee, taker_fees_by_coin = _resolve_backtest_fees(
+    taker_fee_fraction, taker_fee_fractions_by_coin = _resolve_backtest_fee_fractions(
         coins=coins,
         mss=mss,
         fee_kind="taker",
@@ -2883,8 +2884,8 @@ def prep_backtest_args(
                     market_settings=effective_mss[coin],
                     warned=missing_c_mult_warnings,
                 ),
-                "maker_fee": float(maker_fees_by_coin[coin]),
-                "taker_fee": float(taker_fees_by_coin[coin]),
+                "maker_fee_fraction": float(maker_fee_fractions_by_coin[coin]),
+                "taker_fee_fraction": float(taker_fee_fractions_by_coin[coin]),
             }
             for coin in coins
         ]
@@ -2929,8 +2930,8 @@ def prep_backtest_args(
                 config, "backtest.starting_balance"
             ),
             "strategy_kind": strategy_kind,
-            "maker_fee": maker_fee,
-            "taker_fee": taker_fee,
+            "maker_fee_fraction": maker_fee_fraction,
+            "taker_fee_fraction": taker_fee_fraction,
             "coins": coins,
             "btc_collateral_cap": btc_collateral_target_ratio,
             "btc_collateral_ltv_cap": max_usd_debt_to_equity_ratio,
