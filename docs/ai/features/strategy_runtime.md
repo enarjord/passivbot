@@ -382,6 +382,19 @@ positions are unchanged. The raw backtest boundary rejects retired execution key
 policy must not silently disappear into an optional default. Omitted current optional fields
 retain their existing defaults. Released-v8 config conversion remains a separate explicit step.
 
+## BTC Collateral Ratios
+
+Native and configured backtest inputs share `btc_collateral_target_ratio` and
+`max_usd_debt_to_wallet_value_ratio`. Their common denominator is current total wallet value in USD:
+BTC holdings marked at the current BTC price plus USD cash, excluding unrealized trading PnL.
+The target numerator is BTC market value; the debt numerator is `max(-USD cash, 0)`.
+Targets above one remain leveraged allocations. Initial allocation uses the target directly;
+the separate debt ceiling limits subsequent top-ups. Null, zero and negative debt ceilings remain
+uncapped. Omitting the native debt ceiling retains null, while the native target remains required.
+The raw boundary rejects retired collateral keys, including the unpublished equity-denominator
+spelling, even if the current key is also supplied. These rejections do not add migration aliases.
+GPU backtests continue to require a zero collateral target; nonzero collateral uses the CPU.
+
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:

@@ -1430,7 +1430,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
-                loss_gate_max_drawdown_fraction: self.backtest_params.loss_gate_max_drawdown_fraction,
+                loss_gate_max_drawdown_fraction: self
+                    .backtest_params
+                    .loss_gate_max_drawdown_fraction,
                 unstuck_realized_pnl_drawdown: self.unstuck_memory.drawdown(),
                 loss_gate_realized_pnl_drawdown: self.loss_gate_memory.drawdown(),
                 sort_global: false,
@@ -1462,7 +1464,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
 
         input.global.unstuck_allowance_long = self.unstuck_allowance_diagnostic(LONG);
         input.global.unstuck_allowance_short = self.unstuck_allowance_diagnostic(SHORT);
-        input.global.loss_gate_max_drawdown_fraction = self.backtest_params.loss_gate_max_drawdown_fraction;
+        input.global.loss_gate_max_drawdown_fraction =
+            self.backtest_params.loss_gate_max_drawdown_fraction;
         input.global.unstuck_realized_pnl_drawdown = self.unstuck_memory.drawdown();
         input.global.loss_gate_realized_pnl_drawdown = self.loss_gate_memory.drawdown();
 
@@ -1489,7 +1492,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     (0.0, 0.0)
                 };
                 Some(orchestrator::NextCandle {
-                    limit_order_fill_buffer_fraction: self.backtest_params.limit_order_fill_buffer_fraction,
+                    limit_order_fill_buffer_fraction: self
+                        .backtest_params
+                        .limit_order_fill_buffer_fraction,
                     low,
                     high,
                     tradable: tradable_next,
@@ -1674,9 +1679,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             "inception timestamps must match the active coin count"
         );
         let mut balance = Balance::default();
-        balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
-        balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
-        balance.use_btc_collateral = balance.btc_collateral_cap > 0.0;
+        balance.btc_collateral_target_ratio = backtest_params.btc_collateral_target_ratio.max(0.0);
+        balance.max_usd_debt_to_wallet_value_ratio =
+            backtest_params.max_usd_debt_to_wallet_value_ratio;
+        balance.use_btc_collateral = balance.btc_collateral_target_ratio > 0.0;
 
         let starting_balance = backtest_params.starting_balance;
         let initial_btc_price = btc_usd_prices[0].max(f64::EPSILON);
@@ -2509,10 +2515,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
 
         let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
-        let total_balance = self.balance.usd_total_balance;
-        let btc_value = self.balance.btc_collateral_cap * total_balance;
-        self.balance.btc_cash_wallet = btc_value / btc_price;
-        self.balance.usd_cash_wallet = total_balance - btc_value;
+        let total_wallet_value_usd = self.balance.usd_total_balance;
+        let btc_collateral_value_usd =
+            self.balance.btc_collateral_target_ratio * total_wallet_value_usd;
+        self.balance.btc_cash_wallet = btc_collateral_value_usd / btc_price;
+        self.balance.usd_cash_wallet = total_wallet_value_usd - btc_collateral_value_usd;
         self.balance.usd_total_balance =
             (self.balance.btc_cash_wallet * btc_price) + self.balance.usd_cash_wallet;
         self.balance.btc_total_balance = self.balance.usd_total_balance / btc_price;
@@ -2642,34 +2649,48 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.balance.usd_cash_wallet += pnl;
 
         if self.balance.use_btc_collateral {
-            let btc_value = self.balance.btc_cash_wallet * btc_price;
-            let equity = btc_value + self.balance.usd_cash_wallet;
+            let btc_collateral_value_usd = self.balance.btc_cash_wallet * btc_price;
+            let total_wallet_value_usd = btc_collateral_value_usd + self.balance.usd_cash_wallet;
 
-            if equity > 0.0 {
-                let current_ratio = btc_value / equity;
-                let target_cap = self.balance.btc_collateral_cap.max(0.0);
-                let debt = if self.balance.usd_cash_wallet < 0.0 {
+            if total_wallet_value_usd > 0.0 {
+                let btc_collateral_ratio = btc_collateral_value_usd / total_wallet_value_usd;
+                let btc_collateral_target_ratio = self.balance.btc_collateral_target_ratio.max(0.0);
+                let usd_debt = if self.balance.usd_cash_wallet < 0.0 {
                     -self.balance.usd_cash_wallet
                 } else {
                     0.0
                 };
-                let ltv = debt / equity;
+                let usd_debt_to_wallet_value_ratio = usd_debt / total_wallet_value_usd;
 
-                if target_cap > 0.0 && current_ratio + 1e-12 < target_cap {
-                    let ltv_allows = match self.balance.btc_collateral_ltv_cap {
-                        Some(cap) if cap.is_finite() && cap > 0.0 => ltv + 1e-12 < cap,
+                if btc_collateral_target_ratio > 0.0
+                    && btc_collateral_ratio + 1e-12 < btc_collateral_target_ratio
+                {
+                    let debt_ratio_allows = match self.balance.max_usd_debt_to_wallet_value_ratio {
+                        Some(max_usd_debt_to_wallet_value_ratio)
+                            if max_usd_debt_to_wallet_value_ratio.is_finite()
+                                && max_usd_debt_to_wallet_value_ratio > 0.0 =>
+                        {
+                            usd_debt_to_wallet_value_ratio + 1e-12
+                                < max_usd_debt_to_wallet_value_ratio
+                        }
                         _ => true,
                     };
 
-                    if ltv_allows {
-                        let mut usd_to_spend = (target_cap - current_ratio) * equity;
+                    if debt_ratio_allows {
+                        let mut usd_to_spend = (btc_collateral_target_ratio - btc_collateral_ratio)
+                            * total_wallet_value_usd;
 
-                        if let Some(cap) = self.balance.btc_collateral_ltv_cap {
-                            if cap.is_finite() && cap > 0.0 {
-                                let max_debt = cap * equity;
-                                let allowable_extra_debt = (max_debt - debt).max(0.0);
-                                if usd_to_spend > allowable_extra_debt {
-                                    usd_to_spend = allowable_extra_debt;
+                        if let Some(max_usd_debt_to_wallet_value_ratio) =
+                            self.balance.max_usd_debt_to_wallet_value_ratio
+                        {
+                            if max_usd_debt_to_wallet_value_ratio.is_finite()
+                                && max_usd_debt_to_wallet_value_ratio > 0.0
+                            {
+                                let max_usd_debt =
+                                    max_usd_debt_to_wallet_value_ratio * total_wallet_value_usd;
+                                let allowable_extra_usd_debt = (max_usd_debt - usd_debt).max(0.0);
+                                if usd_to_spend > allowable_extra_usd_debt {
+                                    usd_to_spend = allowable_extra_usd_debt;
                                 }
                             }
                         }
@@ -4918,8 +4939,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 1,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5459,8 +5480,8 @@ mod tests {
             warmup_minutes: vec![1],
             trade_start_indices: vec![1],
             global_warmup_bars: 1,
-            btc_collateral_cap: 0.9,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.9,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5540,8 +5561,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5609,8 +5630,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5715,8 +5736,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5802,8 +5823,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5890,8 +5911,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -5987,8 +6008,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6072,8 +6093,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6169,8 +6190,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6460,8 +6481,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6617,8 +6638,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6682,8 +6703,8 @@ mod tests {
                 warmup_minutes: vec![0],
                 trade_start_indices: vec![0],
                 global_warmup_bars: 0,
-                btc_collateral_cap: 0.0,
-                btc_collateral_ltv_cap: None,
+                btc_collateral_target_ratio: 0.0,
+                max_usd_debt_to_wallet_value_ratio: None,
                 metrics_only: true,
                 ew_half_life_days: None,
                 hsl_detailed_report: false,
@@ -6755,8 +6776,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6832,8 +6853,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![2],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6915,8 +6936,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -6993,8 +7014,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7079,8 +7100,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7181,8 +7202,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7303,8 +7324,8 @@ mod tests {
             warmup_minutes: vec![0, 0, 0, 0],
             trade_start_indices: vec![0, 0, 0, 0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7459,8 +7480,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7568,8 +7589,8 @@ mod tests {
             warmup_minutes: vec![0, 0, 1],
             trade_start_indices: vec![0, 0, 1],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7690,8 +7711,8 @@ mod tests {
             warmup_minutes: vec![0, 0, 0, 0],
             trade_start_indices: vec![0, 0, 0, 0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7770,8 +7791,8 @@ mod tests {
             warmup_minutes: vec![0, 0],
             trade_start_indices: vec![0, 0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
@@ -7853,8 +7874,8 @@ mod tests {
             warmup_minutes: vec![0],
             trade_start_indices: vec![0],
             global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,

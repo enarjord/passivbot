@@ -43,7 +43,7 @@ def test_released_setup_quantities_preserve_values_and_final_report_paths(kind):
     target = result.config
     expected = {
         "btc_collateral_target_ratio": 2.375,
-        "max_usd_debt_to_equity_ratio": 0.625,
+        "max_usd_debt_to_wallet_value_ratio": 0.625,
         "maker_fee_override_fraction": -0.000125,
         "taker_fee_override_fraction": None,
         "equity_floor_fraction": 0.07125,
@@ -54,14 +54,14 @@ def test_released_setup_quantities_preserve_values_and_final_report_paths(kind):
     }
     assert target["backtest"]["scenarios"][0]["overrides"] == {
         "backtest.btc_collateral_target_ratio": 1.625,
-        "backtest.max_usd_debt_to_equity_ratio": None,
+        "backtest.max_usd_debt_to_wallet_value_ratio": None,
         "backtest.maker_fee_override_fraction": -0.000375,
         "backtest.equity_floor_fraction": 0.03125,
         "bot.portfolio.warmup.activation_span_fraction": 0.625,
     }
     assert target["optimize"]["fixed_runtime_overrides"] == {
         "backtest.taker_fee_override_fraction": 0.000275,
-        "backtest.max_usd_debt_to_equity_ratio": -0.125,
+        "backtest.max_usd_debt_to_wallet_value_ratio": -0.125,
         "bot.portfolio.warmup.activation_span_fraction": 0.375,
     }
     report_targets = {

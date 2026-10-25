@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native BTC collateral inputs with `btc_collateral_target_ratio` and
+  `max_usd_debt_to_wallet_value_ratio`. Preserve leveraged targets, initial allocation, top-up limits,
+  uncapped debt sentinels and CPU replay values; reject retired native packet keys explicitly.
+  Both ratios use total marked wallet value (USD cash plus BTC market value), excluding unrealized
+  trading PnL. Released-v8 conversion emits the wallet-value name directly.
+
 - Align native execution inputs with explicit equity-floor, near-touch, slippage and fill-buffer
   fractions. Preserve execution math, native buffer layouts and omitted optional defaults;
   reject retired raw backtest packet keys instead of silently using different defaults.
@@ -25,7 +31,7 @@ since the latest release tag; these features may already be available when insta
   remain unchanged. Released-v8 migration reports the final names; unpublished v9 spellings
   are rejected instead of silently aliased.
 
-- Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/wallet-value ratios,
   signed fee override fractions, and the starting-balance equity floor fraction. Warmup
   now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
   backtest/activation still uses `span * r`, with fractional-minute caps preserved.

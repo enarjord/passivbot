@@ -116,11 +116,11 @@ def _operational_fraction_metadata(path):
 def _backtest_quantity_metadata(path):
     name = path[-1]
     if name == "btc_collateral_target_ratio":
-        return dict(unit="ratio", denominator="account equity",
-                    description="Target BTC collateral value / equity; values above one retain leveraged BTC collateral and negative USD balances.")
-    if name == "max_usd_debt_to_equity_ratio":
-        return dict(unit="ratio", denominator="account equity",
-                    description="Optional USD debt / equity ceiling when topping up BTC collateral; Null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.")
+        return dict(unit="ratio", denominator="current BTC market value plus USD cash, excluding unrealized trading PnL",
+                    description="Target BTC collateral value / total wallet value; values above one retain leveraged BTC collateral and negative USD balances.")
+    if name == "max_usd_debt_to_wallet_value_ratio":
+        return dict(unit="ratio", denominator="current BTC market value plus USD cash, excluding unrealized trading PnL",
+                    description="Optional USD debt / total wallet value ceiling when topping up BTC collateral; null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.")
     if name in {"maker_fee_override_fraction", "taker_fee_override_fraction"}:
         return dict(unit="fraction", denominator="absolute fill quote notional",
                     domain=FieldDomain(finite=True),

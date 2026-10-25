@@ -1740,13 +1740,15 @@ CLI_HELP_OVERRIDES = {
         "higher values thin balance_and_equity.csv.gz and related plots."
     ),
     "backtest.btc_collateral_target_ratio": (
-        "Target BTC collateral value divided by account equity. 0 keeps "
+        "Target BTC collateral value divided by total wallet value (USD cash "
+        "plus current BTC market value, excluding unrealized trading PnL). 0 keeps "
         "USD-only; 1 targets fully BTC collateral; values >1 allow leveraged "
         "BTC collateral."
     ),
-    "backtest.max_usd_debt_to_equity_ratio": (
-        "Optional USD-debt/equity cap while topping up BTC collateral. Leave "
-        "null or nonpositive for no debt/equity cap."
+    "backtest.max_usd_debt_to_wallet_value_ratio": (
+        "Optional USD debt divided by total wallet value while topping up BTC "
+        "collateral (excluding unrealized trading PnL). Leave null or nonpositive "
+        "for no top-up debt cap."
     ),
     "backtest.compress_cache": (
         "Compress generated backtest cache artifacts to save disk. Set n/false "
@@ -1929,7 +1931,7 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
         "backtest.btc_collateral_target_ratio",
-        "backtest.max_usd_debt_to_equity_ratio",
+        "backtest.max_usd_debt_to_wallet_value_ratio",
         "backtest.candle_interval_minutes",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
@@ -1982,7 +1984,7 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
         "backtest.btc_collateral_target_ratio",
-        "backtest.max_usd_debt_to_equity_ratio",
+        "backtest.max_usd_debt_to_wallet_value_ratio",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
@@ -2352,7 +2354,7 @@ def add_arguments_recursively(
             elif nullable_float_override:
                 type_ = optional_float
             elif value is None:
-                if full_name == "backtest.max_usd_debt_to_equity_ratio":
+                if full_name == "backtest.max_usd_debt_to_wallet_value_ratio":
                     type_ = optional_float
                 else:
                     type_ = str

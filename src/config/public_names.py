@@ -11,7 +11,7 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 PUBLIC_PATH_RENAMES = {
     ("backtest", "btc_collateral_cap"): ("backtest", "btc_collateral_target_ratio"),
-    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_equity_ratio"),
+    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_wallet_value_ratio"),
     ("backtest", "maker_fee_override"): ("backtest", "maker_fee_override_fraction"),
     ("backtest", "taker_fee_override"): ("backtest", "taker_fee_override_fraction"),
     ("backtest", "equity_floor_ratio"): ("backtest", "equity_floor_fraction"),

@@ -1060,7 +1060,9 @@ pub fn calc_unstucking_close_py(
             };
         let unstuck_exposure_trigger_ratio = dict
             .get_item("unstuck_exposure_trigger_ratio")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_exposure_trigger_ratio'"))?
+            .ok_or_else(|| {
+                PyValueError::new_err("position missing 'unstuck_exposure_trigger_ratio'")
+            })?
             .extract::<f64>()?;
         let unstuck_close_fraction = dict
             .get_item("unstuck_close_fraction")?
@@ -1074,7 +1076,9 @@ pub fn calc_unstucking_close_py(
             };
         let unstuck_ema_distance_fraction = dict
             .get_item("unstuck_ema_distance_fraction")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_distance_fraction'"))?
+            .ok_or_else(|| {
+                PyValueError::new_err("position missing 'unstuck_ema_distance_fraction'")
+            })?
             .extract::<f64>()?;
         let ema_band_upper = dict
             .get_item("ema_band_upper")?
@@ -1626,7 +1630,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     let metrics_only = backtest_params.metrics_only;
     let skip_btc_analysis = metrics_only
         && backtest_params.skip_btc_analysis
-        && backtest_params.btc_collateral_cap <= 0.0;
+        && backtest_params.btc_collateral_target_ratio <= 0.0;
     let init_start = profile_start(profile_enabled);
     let mut backtest = BacktestEngine::<ORGANILLO>::new_with_strategy_params(
         hlcvs_rust,
@@ -2336,6 +2340,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         "market_order_slippage_pct",
         "limit_order_fill_buffer_pct",
         "max_realized_loss_pct",
+        "btc_collateral_cap",
+        "btc_collateral_ltv_cap",
+        "max_usd_debt_to_equity_ratio",
     ] {
         if dict.get_item(retired)?.is_some() {
             return Err(PyValueError::new_err(format!(
@@ -2396,8 +2403,10 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         warmup_minutes: extract_value(dict, "warmup_minutes")?,
         trade_start_indices: extract_value(dict, "trade_start_indices")?,
         global_warmup_bars: extract_value(dict, "global_warmup_bars")?,
-        btc_collateral_cap: extract_value(dict, "btc_collateral_cap")?,
-        btc_collateral_ltv_cap: match dict.get_item("btc_collateral_ltv_cap")? {
+        btc_collateral_target_ratio: extract_value(dict, "btc_collateral_target_ratio")?,
+        max_usd_debt_to_wallet_value_ratio: match dict
+            .get_item("max_usd_debt_to_wallet_value_ratio")?
+        {
             Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
             _ => None,
         },
@@ -3066,8 +3075,14 @@ fn validate_hsl_risk_unstuck_bot_params(
         true,
     )?;
     for (key, span) in [
-        ("unstuck_ema_span_0_minutes", params.unstuck_ema_span_0_minutes),
-        ("unstuck_ema_span_1_minutes", params.unstuck_ema_span_1_minutes),
+        (
+            "unstuck_ema_span_0_minutes",
+            params.unstuck_ema_span_0_minutes,
+        ),
+        (
+            "unstuck_ema_span_1_minutes",
+            params.unstuck_ema_span_1_minutes,
+        ),
     ] {
         if !span.is_finite() || span <= 0.0 {
             return Err(PyValueError::new_err(format!(

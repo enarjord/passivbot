@@ -304,7 +304,7 @@ def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
     from backtest import process_forager_fills
 
     args = list(payload("portfolio"))
-    args[-1]["btc_collateral_cap"] = 0.5
+    args[-1]["btc_collateral_target_ratio"] = 0.5
     args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
     result = run(args)
     assert result[1].shape[1] == 4
@@ -328,7 +328,7 @@ def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
 
 def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
     args = list(payload("portfolio"))
-    args[-1]["btc_collateral_cap"] = 0.5
+    args[-1]["btc_collateral_target_ratio"] = 0.5
     args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
     args[0][:] = [100.0, 100.0, 100.0, 1000.0]
     result = run(args)
@@ -440,7 +440,7 @@ def test_dataset_subset_preserves_only_selected_coin_policies():
 @pytest.mark.parametrize("btc_cap", [0.0, 0.5])
 def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
     args = list(payload())
-    args[-1]["btc_collateral_cap"] = btc_cap
+    args[-1]["btc_collateral_target_ratio"] = btc_cap
     args[1] = np.full(len(args[0]), 50000.0)
     args[1][70:] = 25000.0
     # Gap through the floor rather than landing exactly on it.

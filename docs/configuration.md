@@ -82,8 +82,8 @@ for the distinction between schema, package version and tags.
   `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
   includes account balance/equity in USD and BTC plus collateral-agnostic `strategy_equity`.
-- **btc_collateral_target_ratio**: Target BTC collateral value divided by account equity. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
-- **max_usd_debt_to_equity_ratio**: Optional USD-debt/equity ceiling enforced when topping up BTC; the denominator is equity. `null` (default) or a nonpositive value leaves top-up debt uncapped. A positive value such as `0.6` limits additional BTC purchases using `USD debt ÷ equity`; the initial collateral allocation still follows the target ratio.
+- **btc_collateral_target_ratio**: Target BTC collateral value divided by total wallet value in USD: current BTC market value plus USD cash, excluding unrealized trading PnL. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
+- **max_usd_debt_to_wallet_value_ratio**: Optional USD debt divided by the same total wallet value, enforced when topping up BTC. `null` (default) or a nonpositive value leaves top-up debt uncapped. A positive value such as `0.6` limits additional BTC purchases using `max(-USD cash, 0) ÷ total wallet value`; the initial collateral allocation still follows the target ratio.
 ### Suite Scenarios
 
 Suite configuration uses a flattened structure directly under `backtest`:
