@@ -490,8 +490,8 @@ pub struct StrategyEquityMetrics {
     pub drawdown_worst_ema_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
-    pub strategy_eq_underwater_pct_mean: f64,
-    pub strategy_eq_underwater_pct_median: f64,
+    pub pain_index_strategy_eq: f64,
+    pub ulcer_index_strategy_eq: f64,
     pub strategy_eq_recovery_days_mean: f64,
     pub strategy_eq_recovery_days_median: f64,
     pub strategy_eq_recovery_days_p95: f64,
@@ -4450,7 +4450,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 &values[values.len() - sample_count..]
             })
             .unwrap_or(timestamps);
-        let drawdowns = calc_strategy_equity_drawdowns(series);
+        let (drawdowns, pain_index_strategy_eq, ulcer_index_strategy_eq) =
+            calc_strategy_equity_drawdowns(series);
         let drawdown_emas = drawdown_ema_samples.map(|samples| {
             let ema_sample_count = sample_count.min(samples.len());
             &samples[samples.len() - ema_sample_count..]
@@ -4468,8 +4469,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             let daily_worst_drawdowns =
                 daily_worst_positive_drawdowns(drawdowns, daily_metric_timestamps_ms, series.len());
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
-            let strategy_eq_underwater_pct_mean = mean_abs(&daily_worst_drawdowns);
-            let strategy_eq_underwater_pct_median = median_abs(&daily_worst_drawdowns);
             let drawdown_worst_ema_strategy_eq = drawdown_emas
                 .map(|values| {
                     values
@@ -4497,8 +4496,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 drawdown_worst_ema_strategy_eq,
                 drawdown_worst_mean_1pct_strategy_eq: drawdown_worst_mean_1pct,
                 drawdown_worst_mean_1pct_ema_strategy_eq,
-                strategy_eq_underwater_pct_mean,
-                strategy_eq_underwater_pct_median,
                 ..StrategyEquityMetrics::default()
             }
         };
@@ -4523,6 +4520,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             strategy_eq_recovery_days_max: recovery.max,
             peak_recovery_hours_strategy_eq,
             peak_recovery_days_strategy_eq,
+            pain_index_strategy_eq,
+            ulcer_index_strategy_eq,
             ..full
         }
     }
@@ -4587,37 +4586,6 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         sorted.sort_by(by_magnitude);
     }
     sorted[split..].iter().map(|x| x.abs()).sum::<f64>() / worst_n as f64
-}
-
-fn mean_abs(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.iter().map(|x| x.abs()).sum::<f64>() / values.len() as f64
-}
-
-fn median_abs(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = values.iter().map(|x| x.abs()).collect::<Vec<_>>();
-    sorted.sort_by(|a, b| {
-        a.partial_cmp(b).unwrap_or_else(|| {
-            if a.is_nan() && b.is_nan() {
-                Ordering::Equal
-            } else if a.is_nan() {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            }
-        })
-    });
-    let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
-    } else {
-        sorted[mid]
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -4714,15 +4682,23 @@ fn mean_worst_pct_sorted_u64(sorted: &[u64], pct: f64) -> f64 {
         / worst_n as f64
 }
 
-fn calc_strategy_equity_drawdowns(values: &[f64]) -> Vec<f64> {
+/// Full-resolution drawdowns and their first/second moments. Reuse the existing
+/// traversal and allocation; zeros at equity highs count in both denominators.
+fn calc_strategy_equity_drawdowns(values: &[f64]) -> (Vec<f64>, f64, f64) {
     let mut drawdowns = Vec::with_capacity(values.len());
     let mut running = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    let mut squared_sum = 0.0;
     for &v in values {
         running = running.max(v);
         let denom = running.abs().max(1e-12);
-        drawdowns.push((running - v) / denom);
+        let drawdown = (running - v) / denom;
+        drawdowns.push(drawdown);
+        sum += drawdown;
+        squared_sum += drawdown * drawdown;
     }
-    drawdowns
+    let count = values.len().max(1) as f64;
+    (drawdowns, sum / count, (squared_sum / count).sqrt())
 }
 
 fn daily_worst_positive_drawdowns(
@@ -6359,7 +6335,7 @@ mod tests {
         series.push(1.0);
         series.push(50.0);
 
-        let drawdowns = calc_strategy_equity_drawdowns(&series);
+        let (drawdowns, _, _) = calc_strategy_equity_drawdowns(&series);
 
         assert!(drawdowns.iter().all(|x| *x >= 0.0));
         assert!((drawdowns[198] - 0.99).abs() < 1e-12);
@@ -6371,7 +6347,7 @@ mod tests {
     fn daily_worst_positive_drawdowns_preserve_intraday_strategy_eq_stress() {
         let series = vec![100.0, 50.0, 110.0, 109.0];
         let timestamps = vec![0, 3_600_000, 86_400_000, 90_000_000];
-        let drawdowns = calc_strategy_equity_drawdowns(&series);
+        let (drawdowns, _, _) = calc_strategy_equity_drawdowns(&series);
         let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
 
         assert_eq!(daily_worst.len(), 2);
@@ -6381,23 +6357,42 @@ mod tests {
     }
 
     #[test]
-    fn strategy_eq_underwater_pct_uses_daily_worst_drawdowns() {
-        let day = 86_400_000;
-        let series = vec![100.0, 50.0, 110.0, 109.0, 110.0, 99.0];
-        let timestamps = vec![
-            0,
-            3_600_000,
-            day,
-            day + 3_600_000,
-            2 * day,
-            2 * day + 3_600_000,
-        ];
-        let drawdowns = calc_strategy_equity_drawdowns(&series);
-        let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
+    fn pain_and_ulcer_indices_use_all_samples_including_equity_highs() {
+        // Same day: drawdowns are 0, 50%, 0, 25%, 0, 10%.
+        let series = [100.0, 50.0, 120.0, 90.0, 120.0, 108.0];
+        let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&series);
+        assert!((pain - 0.85 / 6.0).abs() < 1e-12);
+        assert!((ulcer - (0.3225_f64 / 6.0).sqrt()).abs() < 1e-12);
+        assert!(ulcer >= pain);
+    }
 
-        assert_eq!(daily_worst.len(), 3);
-        assert!((mean_abs(&daily_worst) - ((0.5 + (1.0 / 110.0) + 0.1) / 3.0)).abs() < 1e-12);
-        assert!((median_abs(&daily_worst) - 0.1).abs() < 1e-12);
+    #[test]
+    fn pain_and_ulcer_indices_reward_faster_intraday_recovery() {
+        let (_, short_pain, short_ulcer) =
+            calc_strategy_equity_drawdowns(&[100.0, 90.0, 100.0, 100.0]);
+        let (_, long_pain, long_ulcer) =
+            calc_strategy_equity_drawdowns(&[100.0, 90.0, 90.0, 100.0]);
+        assert!((short_pain - 0.025).abs() < 1e-12);
+        assert!((short_ulcer - 0.05).abs() < 1e-12);
+        assert!(long_pain > short_pain);
+        assert!(long_ulcer > short_ulcer);
+    }
+
+    #[test]
+    fn pain_and_ulcer_indices_handle_empty_flat_rising_and_negative_equity() {
+        for series in [
+            vec![],
+            vec![100.0],
+            vec![100.0; 3],
+            vec![100.0, 110.0, 120.0],
+        ] {
+            let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&series);
+            assert_eq!(pain, 0.0);
+            assert_eq!(ulcer, 0.0);
+        }
+        let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&[100.0, -100.0]);
+        assert_eq!(pain, 1.0);
+        assert!((ulcer - 2.0_f64.sqrt()).abs() < 1e-12);
     }
 
     #[test]

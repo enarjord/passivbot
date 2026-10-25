@@ -21,7 +21,8 @@ EXPONENTIAL_BTC_EQUITY_METRICS = frozenset(
 RAW_STRATEGY_RISK_METRICS = frozenset({
     "drawdown_worst_strategy_eq",
     "drawdown_worst_mean_1pct_strategy_eq",
-    "strategy_eq_underwater_pct_mean",
+    "pain_index_strategy_eq",
+    "ulcer_index_strategy_eq",
 })
 
 RAW_STRATEGY_EQUITY_METRICS = frozenset({
@@ -127,7 +128,6 @@ GPU_EXACT_ONLY_METRICS = frozenset(
         "peak_recovery_hours_strategy_eq",
         "sharpe_ratio_pnl",
         "sortino_ratio_pnl",
-        "strategy_eq_underwater_pct_median",
         *{
             f"high_exposure_{unit}_{stat}_{side}"
             for unit in ("hours", "days")

@@ -1157,7 +1157,7 @@ def test_strategy_equity_summary_metric_surface_is_supported():
         "expected_shortfall_1pct_strategy_eq",
         "calmar_ratio_strategy_eq",
         "sterling_ratio_strategy_eq",
-        "strategy_eq_underwater_pct_median",
+        "ulcer_index_strategy_eq",
     }
     _assert_proxy_surface_partition(strategy_metrics)
     usd_metrics = {
@@ -1574,7 +1574,11 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     day_dd = torch.tensor([[0.0, 0.05, 0.3, 0.2]], dtype=torch.float64)
     out = {'day_end_eq': day_end, 'day_min_eq': day_min, 'day_max_dd': day_dd, 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.zeros_like(day_end, dtype=torch.bool), 'max_dd': torch.tensor([0.3], dtype=torch.float64), 'held_max_ms': torch.zeros(1, dtype=torch.float64), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1, dtype=torch.float64), 'first_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'recovery_max_ms': torch.zeros(1, dtype=torch.float64), 'last_high_ts': torch.tensor([180000.0], dtype=torch.float64), 'first_eq_ts': torch.tensor([0.0], dtype=torch.float64), 'last_eq_ts': torch.tensor([180000.0], dtype=torch.float64), 'liq_step': torch.tensor([-1.0], dtype=torch.float64), 'candidate_total_wallet_exposure_limit_long': torch.tensor([1.25], dtype=torch.float64), 'candidate_total_wallet_exposure_limit_short': torch.tensor([0.5], dtype=torch.float64)}
     run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60000)
-    requested = {'adg_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_strategy_eq', 'gain_strategy_eq', 'mdg_strategy_eq', 'omega_ratio_strategy_eq', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq', 'expected_shortfall_1pct_strategy_eq', 'calmar_ratio_strategy_eq', 'sterling_ratio_strategy_eq', 'strategy_eq_underwater_pct_median'}
+    out.update(raw_strategy_day_dd_sum=day_dd,
+               raw_strategy_day_dd_squared_sum=day_dd.square(),
+               raw_strategy_day_sample_count=torch.ones_like(day_dd))
+    requested = {'adg_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_strategy_eq', 'gain_strategy_eq', 'mdg_strategy_eq', 'omega_ratio_strategy_eq', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq', 'expected_shortfall_1pct_strategy_eq', 'calmar_ratio_strategy_eq', 'sterling_ratio_strategy_eq', 'ulcer_index_strategy_eq'}
+    requested.add('pain_index_strategy_eq')
     alias_sources = {'adg_usd': 'adg_strategy_eq', 'calmar_ratio_usd': 'calmar_ratio_strategy_eq', 'drawdown_worst_mean_1pct_usd': 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_usd': 'drawdown_worst_strategy_eq', 'expected_shortfall_1pct_usd': 'expected_shortfall_1pct_strategy_eq', 'gain_usd': 'gain_strategy_eq', 'mdg_usd': 'mdg_strategy_eq', 'omega_ratio_usd': 'omega_ratio_strategy_eq', 'sharpe_ratio_usd': 'sharpe_ratio_strategy_eq', 'sortino_ratio_usd': 'sortino_ratio_strategy_eq', 'sterling_ratio_usd': 'sterling_ratio_strategy_eq'}
     requested.update(alias_sources)
     requested.update(alias_sources.values())
@@ -1583,11 +1587,12 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     _assert_proxy_surface_partition(per_exposure_sources)
     metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed=requested)
     gain, adg = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
+    assert metrics['pain_index_strategy_eq'].item() == pytest.approx(0.55 / 4)
     assert set(metrics) == requested
     assert metrics['gain_strategy_eq'].item() == pytest.approx(gain.item())
     assert metrics['calmar_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
     assert metrics['sterling_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
-    assert metrics['strategy_eq_underwater_pct_median'].item() == pytest.approx(0.125)
+    assert metrics['ulcer_index_strategy_eq'].item() == pytest.approx(math.sqrt(0.1325 / 4))
     assert metrics['expected_shortfall_1pct_strategy_eq'].item() == pytest.approx(abs((80.0 - 105.0) / 105.0))
     expected_omega = ((110.0 - 100.0) / 100.0 + (120.0 - 90.0) / 90.0) / abs((90.0 - 110.0) / 110.0)
     assert metrics['omega_ratio_strategy_eq'].item() == pytest.approx(expected_omega)
@@ -2000,3 +2005,31 @@ def test_fill_gap_time_weighted_mean_uses_streamed_moment(gap_hours, interval_ms
         gap_hours
     )
     assert metrics["fills_gap_p95_hours"].item() >= gap_hours
+
+
+def test_strategy_drawdown_moments_weight_minutes_and_exclude_padding():
+    from optimization.gpu.metrics import _strategy_drawdown_indices
+    active = torch.tensor([[True, True, False]])
+    out = {
+        'raw_strategy_day_dd_sum': torch.tensor([[.75, .5, float('inf')]]),
+        'raw_strategy_day_dd_squared_sum': torch.tensor([[.3125, .25, float('nan')]]),
+        'raw_strategy_day_sample_count': torch.tensor([[3., 1., 10000.]]),
+    }
+    result = _strategy_drawdown_indices(out, active,
+                                       {'pain_index_strategy_eq', 'ulcer_index_strategy_eq'})
+    assert result['pain_index_strategy_eq'].item() == pytest.approx(.3125)
+    assert result['ulcer_index_strategy_eq'].item() == pytest.approx(.375)
+    with pytest.raises(RuntimeError, match='moments are missing'):
+        _strategy_drawdown_indices({}, active, {'pain_index_strategy_eq'})
+
+
+@pytest.mark.parametrize('count', [0., .5, float('nan')])
+def test_strategy_drawdown_moments_reject_invalid_observation_counts(count):
+    from optimization.gpu.metrics import _strategy_drawdown_indices
+    out = {
+        'raw_strategy_day_dd_sum': torch.tensor([[.1]]),
+        'raw_strategy_day_dd_squared_sum': torch.tensor([[.01]]),
+        'raw_strategy_day_sample_count': torch.tensor([[count]]),
+    }
+    with pytest.raises(RuntimeError, match='sample counts|finite and nonnegative'):
+        _strategy_drawdown_indices(out, torch.tensor([[True]]), {'ulcer_index_strategy_eq'})

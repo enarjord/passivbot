@@ -63,7 +63,7 @@ def main():
         config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
         exchange="binance", batch_size=args.candidates, factual_hsl=True,
         needed_metrics={"adg_strategy_eq", "adg_strategy_eq_ew",
-                        "drawdown_worst_strategy_eq", "strategy_eq_underwater_pct_mean",
+                        "drawdown_worst_strategy_eq", "pain_index_strategy_eq",
                         "fills_gap_time_weighted_mean_hours",
                         "position_held_time_weighted_mean_hours", "backtest_completion_ratio"},
     )
