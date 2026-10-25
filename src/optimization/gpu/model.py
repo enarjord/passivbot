@@ -1003,6 +1003,7 @@ def build_mps_multicoin_data(
     relation_dtype = np.int8 if gpu_device(torch) == "cuda" else np.int32
     from optimization.gpu.residency import (
         check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
+        current_gpu_residency, MetalSuiteResidency,
     )
     invariant_bytes = multicoin_invariant_bytes(
         candle_count, coin_count, device=gpu_device(torch),
@@ -1010,7 +1011,13 @@ def build_mps_multicoin_data(
     )
     # Admission must precede the history-sized packing work, including spill mode.
     if gpu_device(torch) == "mps":
-        check_mps_invariant_memory(torch, invariant_bytes)
+        residency = current_gpu_residency()
+        if spill_dir is not None and isinstance(residency, MetalSuiteResidency):
+            residency.check_preparation_memory(torch, invariant_bytes)
+        else:
+            # A direct spill has no residency owner yet. Check the nominal
+            # budget now; activation owns release and live availability checks.
+            check_mps_invariant_memory(torch, invariant_bytes, require_free=spill_dir is None)
     elif spill_dir is None:
         check_cuda_invariant_memory(torch, invariant_bytes)
     first_hour_observed = np.full(coin_count, candle_count, dtype=np.int64)
