@@ -25,17 +25,17 @@ def _sample_config() -> dict:
             "long": {
                 "hsl": {
                     "enabled": True,
-                    "drawdown_ratio_threshold": 0.1,
+                    "drawdown_threshold_fraction": 0.1,
                     "cooldown_after_red_minutes": 45,
                     "memory_ema_span_minutes": 43200.0,
-                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "drawdown_fraction_ema_span_minutes": 120.0,
                     "panic_close_order_type": "limit",
                 },
             },
             "short": {
                 "hsl": {
                     "enabled": False,
-                    "drawdown_ratio_threshold": 0.12,
+                    "drawdown_threshold_fraction": 0.12,
                     "cooldown_after_red_minutes": 30,
                 },
             },
@@ -135,10 +135,10 @@ def test_hsl_startup_preview_reports_current_scopes_and_marks_expired_observatio
                         "pside": "long",
                         "tier": "red",
                         "action": "panic",
-                        "raw": 0.12,
-                        "ema": 0.11,
-                        "score": 0.11,
-                        "threshold": 0.1,
+                        "signal_raw_fraction": 0.12,
+                        "signal_ema_fraction": 0.11,
+                        "trigger_signal_fraction": 0.11,
+                        "drawdown_threshold_fraction": 0.1,
                         "secret": "nested-must-not-render",
                     }
                 ],
@@ -158,7 +158,7 @@ def test_hsl_startup_preview_reports_current_scopes_and_marks_expired_observatio
     assert report["hsl_status"]["counts_by_status"] == {expected: 1}
     latest = report["hsl_status"]["latest_by_target"][0]
     assert latest["last_observed_tier"] == "red"
-    assert latest["latest_data"]["scopes"][0]["score"] == 0.11
+    assert latest["latest_data"]["scopes"][0]["trigger_signal_fraction"] == 0.11
     assert latest["current_drawdown"]["available"] is False
     assert latest["cooldown"]["available"] is False
     assert report["startup_panic_orders"]["available"] is False
@@ -186,11 +186,11 @@ def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config["bot"]["portfolio"]["hsl"] = {
         "scope": "portfolio",
         "enabled": True,
-        "drawdown_ratio_threshold": 0.25,
+        "drawdown_threshold_fraction": 0.25,
         "secret": "do-not-render",
     }
     report = hsl_startup_preview._config_report(config)
-    assert report["hsl"]["portfolio"]["drawdown_ratio_threshold"] == 0.25
+    assert report["hsl"]["portfolio"]["drawdown_threshold_fraction"] == 0.25
     assert "do-not-render" not in json.dumps(report)
 
 
@@ -198,9 +198,9 @@ def test_hsl_startup_preview_rejects_flat_hsl_aliases(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
         "hsl_enabled": True,
-        "hsl_red_threshold": 0.10,
+        "hsl_drawdown_threshold_fraction": 0.10,
         "hsl_cooldown_minutes_after_red": 45,
-        "hsl_ema_span_minutes": 120,
+        "hsl_drawdown_fraction_ema_span_minutes": 120,
         "hsl_panic_close_order_type": "limit",
     }
     config_path = tmp_path / "live.json"

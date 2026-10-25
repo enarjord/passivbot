@@ -48,8 +48,8 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
         "--unstuck",
     ]))
-    config["live"].update(max_realized_loss_pct=0.1, lookback_ema_span_minutes=8.0)
-    key = "long_base_qty_pct" if strategy == "ema_anchor" else "long_entry_initial_qty_pct"
+    config["live"].update(loss_gate_max_drawdown_fraction=0.1, lookback_ema_span_minutes=8.0)
+    key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(
         config=config, mss=markets, hlcvs=candles, btc=btc, timestamps=timestamps,
@@ -182,7 +182,7 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "long", "--coins", "25",
         "--bars", "11520", "--seed", "7", "--hsl", "portfolio",
-        "--hsl-red-threshold", ".99", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".99", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "1440",
     ]))
     config, candles, _markets, _btc, _timestamps = inputs
@@ -191,19 +191,19 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     for side in ("long", "short"):
         bot = config["bot"][side]["strategy"][strategy]
         if strategy == "ema_anchor":
-            bot.update(ema_span_0=10., ema_span_1=20., offset=.02,
-                       offset_psize_weight=0., offset_volatility_1m_weight=0.,
-                       offset_volatility_1h_weight=0., base_qty_pct=.02,
-                       entry_double_down_factor=1.)
+            bot.update(ema_span_0_minutes=10., ema_span_1_minutes=20., offset_fraction=.02,
+                       inventory_offset_exposure_coefficient=0., offset_log_range_1m_coefficient=0.,
+                       offset_log_range_1h_coefficient=0., base_qty_fraction=.02,
+                       entry_qty_exposure_coefficient=1.)
         else:
-            bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_dist=.01,
-                                initial_qty_pct=.02, double_down_factor=1.,
-                                threshold_base_pct=.9, threshold_we_weight=0.,
-                                threshold_volatility_1m_weight=0.,
-                                threshold_volatility_1h_weight=0.)
-            bot["close"].update(qty_pct=1., threshold_base_pct=.5,
-                                threshold_we_weight=0., threshold_volatility_1m_weight=0.,
-                                threshold_volatility_1h_weight=0.)
+            bot["entry"].update(ema_span_0_minutes=10., ema_span_1_minutes=20., initial_ema_distance_fraction=.01,
+                                initial_qty_fraction=.02, reentry_qty_multiplier=1.,
+                                threshold_base_fraction=.9, threshold_exposure_ratio_coefficient=0.,
+                                threshold_log_range_1m_coefficient=0.,
+                                threshold_log_range_1h_coefficient=0.)
+            bot["close"].update(qty_fraction=1., threshold_base_fraction=.5,
+                                threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
+                                threshold_log_range_1h_coefficient=0.)
     metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
                "position_held_max_hours", "hsl_red_time_fraction")
     snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]

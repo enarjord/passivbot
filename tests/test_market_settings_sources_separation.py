@@ -228,14 +228,14 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
         "bot": {
             "long": {
-                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC/USDT:USDT"]},
             },
             "short": {
-                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }
@@ -317,14 +317,14 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120, "volume_normalization": False},
         "bot": {
             "long": {
-                "risk": {"max_positions": 2, "total_wallet_exposure_limit": 1.0},
+                "risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": 1.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC", "ETH"]},
             },
             "short": {
-                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }
@@ -404,15 +404,15 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         "bot": {
             "long": {
                 "n_positions": 3,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0 / 3.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 1.0 / 3.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": coins},
             },
             "short": {
-                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
     }

@@ -170,7 +170,7 @@ def test_nested_scenario_overrides_remain_supported(validator):
 @pytest.mark.parametrize("patch", [
     {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
-    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_ratio": 0.5},
+    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_fraction": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
 ])
 def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, patch):
@@ -231,7 +231,7 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
 
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
     payload = source(coin_overrides={"BTC": {"override_config_path": "policy.json", "bot": {"long": {
-        "wallet_exposure_limit": 0.5, "hsl": {"enabled": False},
+        "wallet_exposure_limit_ratio": 0.5, "hsl": {"enabled": False},
         "unstuck": {"ema_span_0_minutes": 15.5},
     }}}})
     validator.validate(payload)
@@ -247,7 +247,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
 def test_shared_metadata_matches_adapters_without_changing_special_validation_membership():
     registry = get_field_registry()
     assert get_special_optimizer_bindings() == OPTIMIZABLE_BOT_KEY_PATHS
-    assert "long_unstuck_ema_span_0" not in OPTIMIZABLE_BOT_KEY_PATHS
+    assert "long_unstuck_ema_span_0_minutes" not in OPTIMIZABLE_BOT_KEY_PATHS
     for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         for key, path in get_shared_optimizer_bindings().items():
@@ -257,13 +257,13 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
             field = registry.find(path)
             assert field.optimize_key == key
             assert field.optimizable
-    field = registry.find(("bot", "long", "hsl", "drawdown_ratio_threshold"))
+    field = registry.find(("bot", "long", "hsl", "drawdown_threshold_fraction"))
     assert field.recommended_bounds == (0.15, 0.15, 0.001)
     assert field.domain.minimum == 0 and field.domain.maximum == 1
     assert field.domain.exclusive_minimum
     assert field.coin_override is CoinOverridePolicy.COIN_HSL_ONLY
     assert field.denominator == "scope equity plus remembered drawdown"
-    assert registry.find(("bot", "long", "risk", "total_wallet_exposure_limit")).coin_override is CoinOverridePolicy.FORBIDDEN
+    assert registry.find(("bot", "long", "risk", "total_wallet_exposure_limit_ratio")).coin_override is CoinOverridePolicy.FORBIDDEN
 
 
 def test_metadata_report_is_separate_and_optional_authority_has_no_default(capsys):
@@ -293,7 +293,7 @@ def test_schema_cli_is_offline_and_registered():
     "bot.portfolio.strategy_kind", "bot.portfolio.hedge_mode",
     "bot.long.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
     "bot.portfolio.execution.market_orders_allowed", "bot.portfolio.execution.market_order_near_touch_fraction",
-    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.span_multiplier", "bot.portfolio.warmup.max_minutes",
+    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.activation_span_fraction", "bot.portfolio.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])
@@ -328,7 +328,7 @@ def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions()
     for field, path in LIVE_OPERATIONAL_PATHS.items():
         metadata = describe_field(path)
         assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
-    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+    for field in ('fallback_fee_fraction', 'max_abs_fee_fraction'):
         metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
         assert metadata['consumers'] == ['live', 'backtest', 'optimize']
     sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))

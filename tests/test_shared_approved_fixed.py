@@ -234,7 +234,7 @@ async def test_source_staging_preserves_original_omission_and_sparse_authority(
 
     original_prepare = optimize.prepare_config
     bounds = (
-        {"long": {"risk": {"total_wallet_exposure_limit": [0, 2]}}}
+        {"long": {"risk": {"total_wallet_exposure_limit_ratio": [0, 2]}}}
         if activatable
         else {}
     )

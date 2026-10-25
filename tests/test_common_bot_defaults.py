@@ -42,17 +42,17 @@ def test_common_shared_profile_retains_former_long_values_and_separate_permissio
     assert inherited == common
     assert "enabled" not in common
     assert common["universe"]["approved_coins"] == []
-    assert common["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert common["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert common["risk"]["max_positions"] == 7
     assert common["forager"]["score_hysteresis_margin"] == 0.02
-    common["risk"]["total_wallet_exposure_limit"] = 0.0
-    assert get_common_bot_defaults()["risk"]["total_wallet_exposure_limit"] == 1.5
+    common["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
+    assert get_common_bot_defaults()["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
 
 
 def test_frozen_v8_defaults_keep_their_original_asymmetric_policy_and_ranges():
     v8 = get_released_v8_defaults(strategy_kind="trailing_martingale")
-    assert v8["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 790.0
-    assert v8["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 60.0
+    assert v8["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 790.0
+    assert v8["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 60.0
     assert v8["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
     assert v8["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.5
     assert v8["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"] != (

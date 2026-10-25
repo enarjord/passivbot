@@ -39,12 +39,12 @@ def _compare_replay(monkeypatch, mode, sides, *, enabled, factual_hsl):
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     runner.max_dispatch_candidate_bars = 3 * 3 * len(sides) * 17
     candidates = [
-        {f"{side}_hsl_red_threshold": 1e-6 for side in sides},
+        {f"{side}_hsl_drawdown_threshold_fraction": 1e-6 for side in sides},
         {f"{side}_{key}": value for side in sides for key, value in {
-            "hsl_red_threshold": 0.03, "entry_cooldown_min_duration_minutes": 3.,
+            "hsl_drawdown_threshold_fraction": 0.03, "entry_cooldown_min_duration_minutes": 3.,
             "entry_cooldown_max_duration_minutes": 60.,
             "entry_cooldown_exposure_weight": 20., "entry_cooldown_adverse_weight": 30.,
-            "unilateralness_ema_span_1m": 15., "forager_score_weights_unilateralness": .5,
+            "unilateralness_ema_span_minutes": 15., "forager_score_weights_unilateralness": .5,
         }.items()},
         {},
     ]

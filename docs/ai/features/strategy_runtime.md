@@ -1,16 +1,40 @@
 # Strategy Runtime Contracts
 
 Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
-values. Strategy metadata is copied before public path projection, while Rust parameter names,
-optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime builders lower the
-merged public strategy exactly once at the native boundary. Normal loading accepts one public
-spelling; explicit released-v8 conversion reports path changes across all authored layers.
+values. Native and authored strategy trees use one canonical spelling, without runtime path
+translation. Strategy metadata and runtime trees are independent copies; duplicate metadata
+paths are rejected. Optimizer IDs flatten the canonical field owner, including TM
+`entry_ema_span_0_minutes` and EMA-anchor `ema_span_0_minutes`. Explicit released-v8 conversion
+owns its frozen source vocabulary independently of current Rust names and reports path changes
+across all authored layers. Normal loading accepts one public spelling.
+
+Candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`, not a return
+standard deviation. Strategy sensitivities use `_coefficient`; forager
+`score_weights.log_range` remains a relative ranking weight.
 
 Fraction denominators are declared in the generated configuration reference. In particular,
 Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
 position entry price, plus any over-budget remainder, rounded and capped by the actual position.
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
+
+## Native Forager Quantities
+
+Raw selector inputs are `volume_ema`, `log_range_ema` (the EMA of `ln(high / low)`), and
+`ema_entry_price_gap_fraction`. The price gap is long `bid / threshold - 1` or short
+`1 - ask / threshold`; positive means the initial-entry threshold has not been reached.
+Cross-candidate normalization produces the existing score components. `weights.log_range`
+is a relative ranking weight, while `score_hysteresis_margin` is an absolute gap in normalized
+score units. Neither raw EMAs nor the margin acquire a `[0, 1]` bound through naming changes;
+the unilateralness score retains its existing unit-interval validation.
+
+Native forager volume and log-range durations use `_ema_span_minutes`. GPU parameter packing
+divides these floating durations by the replay interval exactly once. Decoded shader fields use
+`_ema_span_candles` for the resulting floating candle counts; column positions and EMA arithmetic
+remain unchanged. Native `unilateralness_ema_span_minutes` retains the floating one-minute
+exponential RMS span and its existing 20-span observation window; enabled consumers still require
+completed one-minute candles. Released-v8 conversion owns the old span and weight vocabulary
+independently of current native bindings.
 
 ## Inherited Directional Defaults
 
@@ -155,14 +179,14 @@ Seed evaluation contract:
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
   device handles or borrowed-memory names. Resume does not require original seed files.
 
-Public price, unstuck and base-stream volatility/volume EMA horizons use `_minutes`, including
+Public price, unstuck and base-stream log-range/volume EMA horizons use `_minutes`, including
 `ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
 these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
 candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
-also uses minutes and requires completed one-minute candles. Hourly volatility indicators use
-`volatility_ema_span_1h_candles` or `offset_volatility_ema_span_1h_candles`: these are floating
+also uses minutes and requires completed one-minute candles. Hourly log-range indicators use
+`log_range_ema_span_1h_candles` or `offset_log_range_ema_span_1h_candles`: these are floating
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
-not rescale values, round derived spans or change native parameter IDs.
+not rescale values or round derived spans; native strategy IDs use the same explicit units.
 
 ## Side Age Admission
 
@@ -238,7 +262,7 @@ panic, and independent risk reducers continue when their own inputs are complete
 Rust ideal set remains authoritative: reconciliation cancels resting orders absent from that set
 and never preserves them merely because trailing reconstruction is pending.
 
-Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
+Entry thresholds and retracements are multiplicative distances. Positive log-range or wallet
 exposure weights widen them.
 
 `bot.<side>.strategy.trailing_martingale.entry.ema_gate_mode` controls which entry orders are
@@ -258,7 +282,7 @@ band distance even when `ema_gate_mode = "disabled"`. Candles and EMA bands are 
 for that tie-break, and missing EMA inputs must fail loudly.
 
 Close thresholds are additive so they can intentionally cross through break-even or negative markup
-as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
+as wallet exposure rises. Close retracement is scaled by log-range coefficients and intentionally has no
 wallet-exposure modifier.
 
 TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
@@ -299,6 +323,15 @@ Auto-unstuck has its own EMA trigger toggle:
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
 
+Native unstuck fields use `unstuck_close_fraction`, `unstuck_ema_distance_fraction`,
+`unstuck_ema_span_0_minutes`, `unstuck_ema_span_1_minutes`,
+`unstuck_loss_allowance_fraction` and `unstuck_exposure_trigger_ratio`. The native account
+loss-gate policy is `loss_gate_max_drawdown_fraction`; its public field remains
+`bot.portfolio.loss_gate.max_drawdown_fraction`. These names preserve scaling, signed
+quantities, fractional spans and off sentinels. Explicit released-v8 conversion retains the
+released spellings independently of current native identifiers.
+
+
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
 `bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
 ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
@@ -307,7 +340,7 @@ Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
 exposure thresholds and close sizing retain their existing policies. The global
 `bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
-`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_ratio`,
+`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_fraction`,
 without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
 configs still produce gate memory. Each enabled filter consumes each fill once and the
 economic ledger records it once.
@@ -348,6 +381,12 @@ pins. This is optimizer configuration finalization, not a live/backtest coupling
 Limit buys require `low < price * (1 - buffer)` and limit sells require
 `high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
+Native exchange, backtest and coin-metadata fee rates use `maker_fee_fraction` and
+`taker_fee_fraction`: signed scale-one fractions of the existing fill-notional basis. Negative
+values remain rebates and zero remains an explicit zero fee. Exchange/cache source keys retain
+their existing spellings and precedence at the Python adapters; monetary fill fees retain their
+existing fields and sign convention. Retired native fee keys are rejected, including beside the
+current keys; required native fee inputs remain required.
 The actual fill and next-candle ladder-expansion hint share the same Rust predicate; raw candles
 used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
 forward this setting. CPU and GPU optimization treat it as fixed evaluation policy. GPU screening
@@ -370,6 +409,26 @@ on Rust's `0.0` serde default for live loss projections. Live market-order execu
 current bid/ask snapshot plus exchange-side behavior, controlled by `bot.portfolio.execution.market_orders_allowed`
 and `bot.portfolio.execution.market_order_near_touch_fraction`.
 
+Native execution inputs use `equity_floor_fraction`, `market_order_near_touch_fraction`,
+`market_order_slippage_fraction` and `limit_order_fill_buffer_fraction`. Values and buffer
+positions are unchanged. The raw backtest boundary rejects retired execution keys and
+`max_realized_loss_pct`, even when the corresponding current key is also supplied; an old
+policy must not silently disappear into an optional default. Omitted current optional fields
+retain their existing defaults. Released-v8 config conversion remains a separate explicit step.
+
+## BTC Collateral Ratios
+
+Native and configured backtest inputs share `btc_collateral_target_ratio` and
+`max_usd_debt_to_wallet_value_ratio`. Their common denominator is current total wallet value in USD:
+BTC holdings marked at the current BTC price plus USD cash, excluding unrealized trading PnL.
+The target numerator is BTC market value; the debt numerator is `max(-USD cash, 0)`.
+Targets above one remain leveraged allocations. Initial allocation uses the target directly;
+the separate debt ceiling limits subsequent top-ups. Null, zero and negative debt ceilings remain
+uncapped. Omitting the native debt ceiling retains null, while the native target remains required.
+The raw boundary rejects retired collateral keys, including the unpublished equity-denominator
+spelling, even if the current key is also supplied. These rejections do not add migration aliases.
+GPU backtests continue to require a zero collateral target; nonzero collateral uses the CPU.
+
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:
@@ -380,7 +439,7 @@ Close orders are computed recursively when the close threshold depends on wallet
 4. Recompute wallet-exposure ratio.
 5. Repeat until the position is exhausted or the ladder is complete.
 
-If `close.retracement_base_fraction <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+If `close.retracement_base_fraction <= 0.0` and `close.threshold_exposure_ratio_coefficient == 0.0`, recursive closes all
 have the same price. Rust intentionally emits one full-position close in that case; `close.qty_fraction`
 is effectively moot because multiple same-price slices would be redundant.
 

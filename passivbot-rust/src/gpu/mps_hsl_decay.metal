@@ -9,7 +9,7 @@ struct HslDecayPolicy {
     float slow_beta;
     float fast_alpha;
     float fast_beta;
-    float threshold;
+    float drawdown_threshold_fraction;
     long cooldown_ms;
 };
 
@@ -34,7 +34,7 @@ inline bool hsl_decay_policy(
 ) {
     if (!isfinite(threshold) || !(threshold >= 0.0f && threshold <= 1.0f)
         || cooldown_ms < 0) return false;
-    policy.threshold = threshold;
+    policy.drawdown_threshold_fraction = threshold;
     policy.cooldown_ms = cooldown_ms;
     return hsl_decay_rate(slow_span, policy.slow_alpha, policy.slow_beta)
         && hsl_decay_rate(fast_span, policy.fast_alpha, policy.fast_beta);
@@ -63,7 +63,7 @@ inline bool hsl_decay_sample(
     sample.ema = fma(policy.fast_beta, ema_before_minute,
                      policy.fast_alpha * sample.ratio);
     if (!isfinite(sample.ratio) || !isfinite(sample.ema)) return false;
-    sample.red = nonpositive || fmin(sample.ratio, sample.ema) > policy.threshold;
+    sample.red = nonpositive || fmin(sample.ratio, sample.ema) > policy.drawdown_threshold_fraction;
     return true;
 }
 
@@ -115,12 +115,12 @@ inline bool hsl_decay_realized_allowance(
 }
 
 inline bool hsl_decay_auto_allowance(
-    float balance, float drawdown, float loss_allowance_pct, float total_exposure,
+    float balance, float drawdown, float loss_allowance_fraction, float total_exposure,
     thread float& allowance
 ) {
-    if (!isfinite(loss_allowance_pct) || loss_allowance_pct < 0.0f
+    if (!isfinite(loss_allowance_fraction) || loss_allowance_fraction < 0.0f
         || !isfinite(total_exposure) || total_exposure < 0.0f) return false;
-    const float effective_pct = loss_allowance_pct * total_exposure;
+    const float effective_pct = loss_allowance_fraction * total_exposure;
     if (!isfinite(effective_pct)) return false;
     return hsl_decay_realized_allowance(balance, effective_pct, drawdown, allowance);
 }
@@ -243,7 +243,7 @@ inline bool hsl_decay_seed_unknown(
     next.ema = next.ema_before_minute = next.ratio;
     const float equity = budget + upnl;
     next.red = equity <= 0.0f || equity + next.drawdown <= 0.0f
-        || next.ratio > policy.threshold;
+        || next.ratio > policy.drawdown_threshold_fraction;
     scope = next;
     return true;
 }

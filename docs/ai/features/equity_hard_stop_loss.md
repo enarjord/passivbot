@@ -13,7 +13,7 @@ the [user guide](../../equity_hard_stop_loss.md) covers configuration.
   cashflows, including fees and signed rebates. Balance/slot changes are budget facts,
   never scoped trading PnL. The independent fast EMA smooths the contemporaneous ratio,
   rather than currency drawdown normalized against a later budget.
-- Current RED is strict `min(raw_ratio, ratio_ema) > drawdown_ratio_threshold`. Finite nonpositive
+- Current RED is strict `min(raw_ratio, ratio_ema) > drawdown_threshold_fraction`. Finite nonpositive
   equity or denominator is immediate RED with diagnostic ratio 1. Nonfinite or
   overflowing required inputs are errors. GREEN retires unfinished panic intent.
 - Completed minute marks, genuine fill boundaries, observed budget changes and factual
@@ -47,6 +47,20 @@ without retained causal fill evidence it cannot invent a historical cooldown.
 
 ## Budgets, history and admission
 
+Current HSL observations expose `signal_raw_fraction = D / (E + D)` and its fast
+`signal_ema_fraction`; `trigger_signal_fraction` is their minimum. `D` is the USD drawdown
+memory and `E` is the applicable scope budget plus unrealized PnL. The explicit insolvency
+diagnostic remains `1.0`. The native risk observation names its currency amount
+`drawdown_memory_usd`; the private realized-loss memory is a separate accounting surface.
+`drawdown_threshold_fraction` is the existing configured threshold.
+Detailed report summaries use `signal_raw_max_fraction`, `signal_ema_max_fraction` and
+`panic_fill_loss_sum_usd`, the loss-only sum of net panic-fill PnL.
+Current smoke reports expose `red_threshold_gap_fraction = threshold - trigger_signal`:
+positive is below RED and negative is beyond the threshold. `red_threshold_proximity_percent`
+is `100 * trigger_signal / threshold`; `ema_red_threshold_gap_percent` is
+`100 * (threshold - signal_ema) / threshold`. These are scale-100 observations with unchanged
+rounding, not scale-one fractions. Historical top-level event-tape keys remain isolated readers.
+
 Coin budgets divide raw balance by configured applicable slots. Flat zero-slot scopes
 are inactive; an enabled coin scope holding inventory with zero slots fails explicitly.
 Aggregate budgets use raw balance. Coin-only excess-allowance scaling uses
@@ -55,7 +69,7 @@ exposure never sets that multiplier. Reject aggregate scaling; coin policies may
 missing historical budgets require an explicit estimate diagnostic.
 
 Each effective HSL policy uses its own `memory_ema_span_minutes` and independent
-`drawdown_ratio_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.startup.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
+`drawdown_fraction_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.startup.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
 the full finite HSL cooldown horizon. Live policies whose cooldown exceeds the supported
 cap fail explicitly. Acquisition coverage is distinct from exponential memory.
 Historical candle gaps/coarse projections follow the numerical contract and disclose

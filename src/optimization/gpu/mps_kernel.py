@@ -42,14 +42,14 @@ from optimization.gpu.runtime import (
 
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
-    validate_market_order_slippage_pct,
+    validate_market_order_slippage_fraction,
     ADAPTIVE_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
@@ -63,7 +63,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
@@ -267,7 +267,7 @@ def _with_tm_loss_gate_disabled(source: str, disabled: bool) -> str:
     return _TM_LOSS_GATE_DISABLED_DEFINE + source
 
 
-def _encode_max_realized_loss_pct(value: float) -> float:
+def _encode_loss_gate_max_drawdown_fraction(value: float) -> float:
     """Match the shared risk graph's nearest binary32 fraction cast.
 
     Original float64 enablement is transported separately: a fraction just below
@@ -328,8 +328,8 @@ def _scale_directional_minute_parameters(
     before calculating their alphas. It separately compounds HSL's one-minute
     EMA decay over the elapsed minutes, so HSL spans are converted to the
     equivalent per-candle alpha. Entry and HSL cooldowns remain expressed in
-    elapsed minutes and are converted to candle counts. Hour-denominated
-    volatility spans remain unchanged.
+    elapsed minutes and are converted to candle counts. Hour-candle
+    log-range spans remain unchanged.
     """
 
     interval_minutes = float(interval_minutes)
@@ -337,28 +337,31 @@ def _scale_directional_minute_parameters(
         raise ValueError("MPS candle interval must be finite and at least one minute")
     scaled = np.array(params, dtype=np.float64, copy=True)
     minute_keys = {
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
-        "ema_span_0",
-        "ema_span_1",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "entry_cooldown_minutes",
     }
+    minute_keys.update(
+        ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+        if "entry_ema_span_0_minutes" in keys
+        else ("ema_span_0_minutes", "ema_span_1_minutes")
+    )
     minute_keys.update(ADAPTIVE_PARAM_KEYS[:4])
-    if "offset_volatility_ema_span_1m" in keys:
-        minute_keys.add("offset_volatility_ema_span_1m")
-    if "volatility_ema_span_1m" in keys:
-        minute_keys.add("volatility_ema_span_1m")
-    if "forager_volume_ema_span_1m" in keys:
-        minute_keys.add("forager_volume_ema_span_1m")
-    if "forager_volatility_ema_span_1m" in keys:
-        minute_keys.add("forager_volatility_ema_span_1m")
+    if "offset_log_range_ema_span_minutes" in keys:
+        minute_keys.add("offset_log_range_ema_span_minutes")
+    if "log_range_ema_span_minutes" in keys:
+        minute_keys.add("log_range_ema_span_minutes")
+    if "forager_volume_ema_span_minutes" in keys:
+        minute_keys.add("forager_volume_ema_span_minutes")
+    if "forager_log_range_ema_span_minutes" in keys:
+        minute_keys.add("forager_log_range_ema_span_minutes")
     side_width = len(keys)
     if side_activation is not None and (len(side_activation) != sides
             or any(type(flag) is not bool for flag in side_activation)):
         raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
-        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        span_col = offset + keys.index("unilateralness_ema_span_minutes")
         adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
         score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
         ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]
@@ -413,7 +416,7 @@ def _scale_directional_minute_parameters(
         rms = adverse_demand | ranking
         if side_activation is not None:
             rms &= side_activation[side_index]
-        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
+        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit_ratio")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
         spans = scaled[:, span_col]
@@ -429,10 +432,10 @@ def _scale_directional_minute_parameters(
                 scaled[finite_ceiling, column] /= interval_minutes
             else:
                 scaled[:, column] /= interval_minutes
-        for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+        for key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
-            hsl_span_column = offset + keys.index("hsl_drawdown_ratio_ema_span_minutes")
+            hsl_span_column = offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")
             hsl_spans = scaled[:, hsl_span_column]
             if np.any(~np.isfinite(hsl_spans)) or np.any(hsl_spans < 1.0):
                 raise ValueError(
@@ -517,10 +520,10 @@ def _scale_ema_multicoin_coin_overrides(
         minute_columns={
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0_minutes"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1_minutes"),
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
-                "offset_volatility_ema_span_1m"
+                "offset_log_range_ema_span_minutes"
             ),
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
@@ -542,9 +545,9 @@ def _scale_tm_multicoin_coin_overrides(
         minute_columns={
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            override_keys.index("ema_span_0"),
-            override_keys.index("ema_span_1"),
-            override_keys.index("volatility_ema_span_1m"),
+            override_keys.index("entry_ema_span_0_minutes"),
+            override_keys.index("entry_ema_span_1_minutes"),
+            override_keys.index("log_range_ema_span_minutes"),
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
         hsl_start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -1414,8 +1417,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             key: params[:, side * width + keys.index(key)]
             for key in (
                 "hsl_enabled",
-                "hsl_red_threshold",
-                "hsl_drawdown_ratio_ema_span_minutes",
+                "hsl_drawdown_threshold_fraction",
+                "hsl_drawdown_fraction_ema_span_minutes",
                 "hsl_cooldown_ms_lo",
                 "hsl_memory_ema_span_minutes",
                 "hsl_signal_mode",
@@ -1426,7 +1429,7 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
         if not np.isfinite(cols["hsl_enabled"]).all():
             raise ValueError("GPU HSL enablement must be finite")
         # HSL clocks belong to the selected scope, independently of realized memory.
-        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes"):
+        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes"):
             spans = cols[key].astype(np.float32)
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 alpha = np.float32(2) / (spans + np.float32(1))
@@ -1447,9 +1450,9 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             return cols[key][enabled]
 
         if (
-            np.any(selected("hsl_red_threshold") <= 0)
-            or np.any(selected("hsl_red_threshold") > 1)
-            or np.any(selected("hsl_drawdown_ratio_ema_span_minutes") < 1)
+            np.any(selected("hsl_drawdown_threshold_fraction") <= 0)
+            or np.any(selected("hsl_drawdown_threshold_fraction") > 1)
+            or np.any(selected("hsl_drawdown_fraction_ema_span_minutes") < 1)
             or np.any(selected("hsl_memory_ema_span_minutes") < 1)
             or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
             or any(np.any(selected(key) < 0) or np.any(selected(key) >= 2**24)
@@ -1465,8 +1468,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
     unified = params[:, mode] == 0
     for key in (
         "hsl_enabled",
-        "hsl_red_threshold",
-        "hsl_drawdown_ratio_ema_span_minutes",
+        "hsl_drawdown_threshold_fraction",
+        "hsl_drawdown_fraction_ema_span_minutes",
         "hsl_cooldown_ms_lo",
         "hsl_cooldown_ms_hi",
         "hsl_memory_ema_span_minutes",
@@ -1478,14 +1481,14 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
 
 
 
-def _validate_market_execution_data(data, market_order_slippage_pct):
+def _validate_market_execution_data(data, market_order_slippage_fraction):
     """Reject stale preparation before any runner allocation or dispatch."""
-    slippage = validate_market_order_slippage_pct(market_order_slippage_pct)
-    required = {"market_execution_ticks", "market_execution_ticks_abi", "market_order_slippage_pct"}
+    slippage = validate_market_order_slippage_fraction(market_order_slippage_fraction)
+    required = {"market_execution_ticks", "market_execution_ticks_abi", "market_order_slippage_fraction"}
     if not required <= data.keys():
         raise ValueError("Prepared GPU data lacks native market execution ticks")
     if (data["market_execution_ticks_abi"] != MARKET_EXECUTION_TICKS_ABI
-            or data["market_order_slippage_pct"] != slippage):
+            or data["market_order_slippage_fraction"] != slippage):
         raise ValueError("Prepared GPU market execution ABI/slippage disagrees with runner")
     ticks = data["market_execution_ticks"]
     if (not isinstance(ticks, torch.Tensor)
@@ -1542,13 +1545,13 @@ class _MulticoinReplayRunner:
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -1569,7 +1572,7 @@ class _MulticoinReplayRunner:
         interrupt_check=None,
         selection=None,
     ):
-        self.market_execution_ticks = _validate_market_execution_data(data, market_order_slippage_pct)
+        self.market_execution_ticks = _validate_market_execution_data(data, market_order_slippage_fraction)
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
             raise ValueError("max_dispatch_candidate_bars must be positive")
         self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
@@ -1787,30 +1790,30 @@ class _MulticoinReplayRunner:
         self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
         self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         self.forager_score_hysteresis = validate_forager_score_hysteresis(forager_score_hysteresis)
-        max_realized_loss_pct = float(max_realized_loss_pct)
-        if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
-            raise ValueError("max_realized_loss_pct must be finite and non-negative")
-        self.loss_gate_enabled = max_realized_loss_pct < 1.0
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            max_realized_loss_pct
+        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
+        if not np.isfinite(loss_gate_max_drawdown_fraction) or loss_gate_max_drawdown_fraction < 0.0:
+            raise ValueError("loss_gate_max_drawdown_fraction must be finite and non-negative")
+        self.loss_gate_enabled = loss_gate_max_drawdown_fraction < 1.0
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            loss_gate_max_drawdown_fraction
         )
-        market_order_slippage_pct = float(market_order_slippage_pct)
+        market_order_slippage_fraction = float(market_order_slippage_fraction)
         if (
-            not np.isfinite(market_order_slippage_pct)
-            or market_order_slippage_pct < 0.0
+            not np.isfinite(market_order_slippage_fraction)
+            or market_order_slippage_fraction < 0.0
         ):
             raise ValueError(
-                "market_order_slippage_pct must be finite and non-negative"
+                "market_order_slippage_fraction must be finite and non-negative"
             )
-        market_order_near_touch_threshold = float(market_order_near_touch_threshold)
+        market_order_near_touch_fraction = float(market_order_near_touch_fraction)
         if (
-            not np.isfinite(market_order_near_touch_threshold)
-            or market_order_near_touch_threshold < 0.0
+            not np.isfinite(market_order_near_touch_fraction)
+            or market_order_near_touch_fraction < 0.0
         ):
             raise ValueError(
-                "market_order_near_touch_threshold must be finite and non-negative"
+                "market_order_near_touch_fraction must be finite and non-negative"
             )
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -1819,12 +1822,12 @@ class _MulticoinReplayRunner:
                 run.interval_ms,
                 float(side == "short"),
                 self.forager_score_hysteresis[side],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                market_order_slippage_pct,
+                market_order_slippage_fraction,
                 float(bool(hsl_panic_market)),
                 float(bool(market_orders_allowed)),
-                market_order_near_touch_threshold,
+                market_order_near_touch_fraction,
                 float(minimum_cost_filters[side]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
@@ -2643,7 +2646,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
-    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -2798,13 +2801,13 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -2833,13 +2836,13 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -2883,25 +2886,25 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
-        max_realized_loss_pct = float(max_realized_loss_pct)
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            max_realized_loss_pct
+        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            loss_gate_max_drawdown_fraction
         )
-        market_order_slippage_pct = float(market_order_slippage_pct)
-        market_order_near_touch_threshold = float(market_order_near_touch_threshold)
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        market_order_slippage_fraction = float(market_order_slippage_fraction)
+        market_order_near_touch_fraction = float(market_order_near_touch_fraction)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -2910,14 +2913,14 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 run.interval_ms,
                 0.0,
                 self.forager_score_hysteresis["long"],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                market_order_slippage_pct,
+                market_order_slippage_fraction,
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
-                market_order_near_touch_threshold,
+                market_order_near_touch_fraction,
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
@@ -3034,7 +3037,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
     decimal_coin_overrides = True
-    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -3047,7 +3050,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
         metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
         flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
-        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+        for key in ("entry_retracement_base_fraction", "close_retracement_base_fraction"):
             column = keys.index(key)
             underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
             scaled[underflow, column] = np.finfo(np.float32).tiny
@@ -3061,13 +3064,13 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -3088,7 +3091,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         interrupt_check=None,
         selection=None,
     ):
-        self.loss_gate_enabled = float(max_realized_loss_pct) < 1.0
+        self.loss_gate_enabled = float(loss_gate_max_drawdown_fraction) < 1.0
         self.loss_gate_specialization = True
         super().__init__(
             run,
@@ -3096,13 +3099,13 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             side=side,
             coin_overrides=coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -3256,13 +3259,13 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -3291,13 +3294,13 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -3337,12 +3340,12 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)))
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
@@ -3351,10 +3354,10 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             self.coin_overrides_absent and not bool(np.isfinite(short_coin_overrides).any())
         )
         self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            float(max_realized_loss_pct)
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            float(loss_gate_max_drawdown_fraction)
         )
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -3363,14 +3366,14 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 run.interval_ms,
                 0.0,
                 self.forager_score_hysteresis["long"],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                float(market_order_slippage_pct),
+                float(market_order_slippage_fraction),
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
-                float(market_order_near_touch_threshold),
+                float(market_order_near_touch_fraction),
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.

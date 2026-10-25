@@ -123,7 +123,7 @@ async def formatted(tmp_path, monkeypatch, ignored, exchanges=("binance",)):
 async def test_alias_filter_survives_numeric_reprepare_and_partial_ignore_edit(tmp_path, monkeypatch, alias):
     config = await formatted(tmp_path, monkeypatch, [alias, "ETHUSDT"])
     assert get_side_universe_sources(config, "approved_coins") == {side: [] for side in ("long", "short")}
-    result = patched(config, "bot.global.risk.total_wallet_exposure_limit", 2.0)
+    result = patched(config, "bot.global.risk.total_wallet_exposure_limit_ratio", 2.0)
     assert get_side_universe_sources(result, "approved_coins") == {side: [] for side in ("long", "short")}
     result = patched(result, "bot.global.universe.ignored_coins", ["ETHUSDT"])
     assert get_side_universe_sources(result, "approved_coins") == {side: ["BTC"] for side in ("long", "short")}
@@ -280,7 +280,7 @@ async def test_snapshot_alias_column_ceiling_never_restores_an_unprepared_venue(
 async def test_generic_column_does_not_widen_a_qualified_survivor(tmp_path, monkeypatch):
     config = await formatted(tmp_path, monkeypatch, ["bybit::BTCUSDT", "ETH"], ("binance", "bybit"))
     target = materialize_universe_snapshot(config, runtime_universe_snapshot(config, available_coins=["BTC"]))
-    result = patched(target, "bot.global.risk.total_wallet_exposure_limit", 2.0)
+    result = patched(target, "bot.global.risk.total_wallet_exposure_limit_ratio", 2.0)
     assert get_side_universe_sources(result, "approved_coins") == {
         side: ["binance::BTCUSDT"] for side in ("long", "short")}
 
@@ -333,7 +333,7 @@ async def test_scenario_and_prepared_handoff_use_frozen_qualified_aliases(tmp_pa
 
     config = await formatted(tmp_path, monkeypatch, ["bybit::BTCUSDT", "ETH"], ("binance", "bybit"))
     scenario = SuiteScenario("base", None, None, coins=None, ignored_coins=None,
-                             overrides={"bot.global.risk.total_wallet_exposure_limit": 2.0})
+                             overrides={"bot.global.risk.total_wallet_exposure_limit_ratio": 2.0})
     kwargs = dict(master_coins=["BTC", "ETH"], master_ignored=[], available_exchanges=["binance", "bybit"],
                   available_coins={"BTC", "ETH"}, base_coins=["BTC", "ETH"], base_ignored=[])
     contexts = _prepare_scenario_universes(config, [scenario], master_coins=kwargs["master_coins"],

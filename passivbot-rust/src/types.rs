@@ -105,9 +105,9 @@ pub struct CoinMeta {
     /// Contract multiplier (lot size) used for sized calculations.
     pub c_mult: f64,
     /// Maker fee rate associated with this market (fractional, not percentage).
-    pub maker_fee: f64,
+    pub maker_fee_fraction: f64,
     /// Taker fee rate associated with this market (fractional, not percentage).
-    pub taker_fee: f64,
+    pub taker_fee_fraction: f64,
     /// First index (inclusive) in the HLCV tensor that contains valid data for this coin.
     pub first_valid_index: usize,
     /// Last index (inclusive) in the HLCV tensor that contains valid data for this coin.
@@ -293,8 +293,8 @@ pub struct ExchangeParams {
     pub min_qty: f64,
     pub min_cost: f64,
     pub c_mult: f64,
-    pub maker_fee: f64,
-    pub taker_fee: f64,
+    pub maker_fee_fraction: f64,
+    pub taker_fee_fraction: f64,
 }
 
 impl Default for ExchangeParams {
@@ -305,8 +305,8 @@ impl Default for ExchangeParams {
             min_qty: 0.00001,
             min_cost: 1.0,
             c_mult: 1.0,
-            maker_fee: 0.0002,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0002,
+            taker_fee_fraction: 0.00055,
         }
     }
 }
@@ -340,8 +340,8 @@ impl ExchangeParams {
         finite_non_negative(self.min_qty, "min_qty")?;
         finite_non_negative(self.min_cost, "min_cost")?;
         finite_positive(self.c_mult, "c_mult")?;
-        finite(self.maker_fee, "maker_fee")?;
-        finite(self.taker_fee, "taker_fee")?;
+        finite(self.maker_fee_fraction, "maker_fee_fraction")?;
+        finite(self.taker_fee_fraction, "taker_fee_fraction")?;
         Ok(())
     }
 }
@@ -365,8 +365,8 @@ pub struct BacktestParams {
     pub minimum_coin_age_days: [f64; 2],
     pub inception_timestamps_ms: Vec<Option<u64>>,
     pub starting_balance: f64,
-    pub maker_fee: f64,
-    pub taker_fee: f64,
+    pub maker_fee_fraction: f64,
+    pub taker_fee_fraction: f64,
     pub coins: Vec<String>,
     pub active_coin_indices: Option<Vec<usize>>,
     pub first_timestamp_ms: u64,
@@ -376,8 +376,8 @@ pub struct BacktestParams {
     pub warmup_minutes: Vec<usize>,
     pub trade_start_indices: Vec<usize>,
     pub global_warmup_bars: usize,
-    pub btc_collateral_cap: f64,
-    pub btc_collateral_ltv_cap: Option<f64>,
+    pub btc_collateral_target_ratio: f64,
+    pub max_usd_debt_to_wallet_value_ratio: Option<f64>,
     pub metrics_only: bool,
     pub ew_half_life_days: Option<f64>,
     pub hsl_detailed_report: bool,
@@ -385,15 +385,15 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: MinimumCostFilter,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
-    pub max_realized_loss_pct: f64,
+    pub loss_gate_max_drawdown_fraction: f64,
     pub unstuck_memory_ema_span_minutes: f64,
     pub loss_gate_memory_ema_span_minutes: f64,
-    pub liquidation_threshold: f64,
+    pub equity_floor_fraction: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
     pub market_orders_allowed: bool,
-    pub market_order_near_touch_threshold: f64,
-    pub market_order_slippage_pct: f64,
-    pub limit_order_fill_buffer_pct: f64,
+    pub market_order_near_touch_fraction: f64,
+    pub market_order_slippage_fraction: f64,
+    pub limit_order_fill_buffer_fraction: f64,
     pub forager_score_hysteresis: ForagerScoreHysteresis,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
@@ -443,8 +443,8 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -457,8 +457,8 @@ pub struct BotParamsPair {
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBudgetState {
-    pub configured_wallet_exposure_limit: f64,
-    pub effective_wallet_exposure_limit: f64,
+    pub configured_wallet_exposure_limit_ratio: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
     pub configured_n_positions: usize,
     pub effective_n_positions: usize,
 }
@@ -505,7 +505,7 @@ pub enum TwelEnforcerPolicy {
 pub struct ForagerScoreWeights {
     pub volume: f64,
     pub ema_readiness: f64,
-    pub volatility: f64,
+    pub log_range: f64,
     #[serde(default)]
     pub unilateralness: f64,
 }
@@ -515,7 +515,7 @@ impl Default for ForagerScoreWeights {
         Self {
             volume: 0.0,
             ema_readiness: 0.0,
-            volatility: 1.0,
+            log_range: 1.0,
             unilateralness: 0.0,
         }
     }
@@ -526,7 +526,7 @@ impl ForagerScoreWeights {
         let values = [
             self.volume,
             self.ema_readiness,
-            self.volatility,
+            self.log_range,
             self.unilateralness,
         ];
         if values
@@ -535,19 +535,19 @@ impl ForagerScoreWeights {
         {
             return Err("forager_score_weights must be finite and non-negative".to_string());
         }
-        let total = self.volume + self.ema_readiness + self.volatility + self.unilateralness;
+        let total = self.volume + self.ema_readiness + self.log_range + self.unilateralness;
         if total <= 0.0 {
             return Ok(Self {
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
                 unilateralness: 0.0,
             });
         }
         Ok(Self {
             volume: self.volume / total,
             ema_readiness: self.ema_readiness / total,
-            volatility: self.volatility / total,
+            log_range: self.log_range / total,
             unilateralness: self.unilateralness / total,
         })
     }
@@ -557,43 +557,43 @@ impl ForagerScoreWeights {
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
     #[serde(default)]
-    pub close_grid_qty_pct: f64,
+    pub close_grid_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_retracement_pct: f64,
+    pub close_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub close_trailing_qty_pct: f64,
+    pub close_trailing_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_threshold_pct: f64,
+    pub close_trailing_threshold_base_fraction: f64,
     #[serde(default)]
-    pub close_weight_volatility_1h: f64,
+    pub close_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub close_weight_volatility_1m: f64,
+    pub close_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_grid_double_down_factor: f64,
+    pub entry_grid_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_grid_spacing_pct: f64,
+    pub entry_grid_threshold_base_fraction: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1h: f64,
+    pub entry_log_range_ema_span_1h_candles: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1m: f64,
+    pub entry_log_range_ema_span_minutes: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1h: f64,
+    pub entry_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1m: f64,
+    pub entry_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_we_weight: f64,
+    pub entry_exposure_ratio_coefficient: f64,
     #[serde(default)]
-    pub entry_initial_ema_dist: f64,
+    pub entry_initial_ema_distance_fraction: f64,
     #[serde(default)]
-    pub entry_initial_qty_pct: f64,
+    pub entry_initial_qty_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_double_down_factor: f64,
+    pub entry_trailing_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_trailing_retracement_pct: f64,
+    pub entry_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_threshold_pct: f64,
-    pub filter_volatility_ema_span_1m: f64,
-    pub filter_volume_ema_span_1m: f64,
+    pub entry_trailing_threshold_base_fraction: f64,
+    pub forager_log_range_ema_span_minutes: f64,
+    pub forager_volume_ema_span_minutes: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
     pub _legacy_filter_volatility_drop_pct: f64,
     #[serde(default)]
@@ -608,9 +608,9 @@ pub struct BotParams {
     #[serde(default = "default_true")]
     pub entry_eligible: bool,
     #[serde(default)]
-    pub ema_span_0: f64,
+    pub ema_span_0_minutes: f64,
     #[serde(default)]
-    pub ema_span_1: f64,
+    pub ema_span_1_minutes: f64,
     #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
     #[serde(default = "default_hsl_panic_close_order_type")]
@@ -624,91 +624,91 @@ pub struct BotParams {
     #[serde(default)]
     pub entry_cooldown_weights_minutes: crate::entry_cooldown::CooldownWeights,
     #[serde(default = "default_unilateralness_span")]
-    pub unilateralness_ema_span_1m: f64,
+    pub unilateralness_ema_span_minutes: f64,
     pub n_positions: usize,
-    pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    pub total_wallet_exposure_limit_ratio: f64,
+    pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
     #[serde(default = "default_true")]
     pub risk_wel_enforcer_enabled: bool,
-    pub risk_wel_enforcer_threshold: f64,
+    pub risk_wel_enforcer_threshold_ratio: f64,
     #[serde(default = "default_true")]
     pub risk_twel_enforcer_enabled: bool,
     #[serde(default)]
     pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
-    pub risk_twel_enforcer_threshold: f64,
-    pub risk_we_excess_allowance_pct: f64,
+    pub risk_twel_enforcer_threshold_ratio: f64,
+    pub risk_we_excess_allowance_fraction: f64,
     #[serde(default = "default_true")]
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
     pub unstuck_ema_gating_enabled: bool,
-    pub unstuck_close_pct: f64,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_ema_span_0: f64,
-    pub unstuck_ema_span_1: f64,
-    pub unstuck_loss_allowance_pct: f64,
-    pub unstuck_threshold: f64,
+    pub unstuck_close_fraction: f64,
+    pub unstuck_ema_distance_fraction: f64,
+    pub unstuck_ema_span_0_minutes: f64,
+    pub unstuck_ema_span_1_minutes: f64,
+    pub unstuck_loss_allowance_fraction: f64,
+    pub unstuck_exposure_trigger_ratio: f64,
 }
 
 impl Default for BotParams {
     fn default() -> Self {
         Self {
-            close_grid_qty_pct: 0.0,
-            close_trailing_retracement_pct: 0.0,
-            close_trailing_qty_pct: 0.0,
-            close_trailing_threshold_pct: 0.0,
-            close_weight_volatility_1h: 0.0,
-            close_weight_volatility_1m: 0.0,
-            entry_grid_double_down_factor: 0.0,
-            entry_grid_spacing_pct: 0.0,
-            entry_volatility_ema_span_1h: 0.0,
-            entry_volatility_ema_span_1m: 0.0,
-            entry_weight_volatility_1h: 0.0,
-            entry_weight_volatility_1m: 0.0,
-            entry_we_weight: 0.0,
-            entry_initial_ema_dist: 0.0,
-            entry_initial_qty_pct: 0.0,
-            entry_trailing_double_down_factor: 0.0,
-            entry_trailing_retracement_pct: 0.0,
-            entry_trailing_threshold_pct: 0.0,
-            filter_volatility_ema_span_1m: 0.0,
-            filter_volume_ema_span_1m: 0.0,
+            close_grid_qty_fraction: 0.0,
+            close_trailing_retracement_base_fraction: 0.0,
+            close_trailing_qty_fraction: 0.0,
+            close_trailing_threshold_base_fraction: 0.0,
+            close_log_range_1h_coefficient: 0.0,
+            close_log_range_1m_coefficient: 0.0,
+            entry_grid_reentry_qty_multiplier: 0.0,
+            entry_grid_threshold_base_fraction: 0.0,
+            entry_log_range_ema_span_1h_candles: 0.0,
+            entry_log_range_ema_span_minutes: 0.0,
+            entry_log_range_1h_coefficient: 0.0,
+            entry_log_range_1m_coefficient: 0.0,
+            entry_exposure_ratio_coefficient: 0.0,
+            entry_initial_ema_distance_fraction: 0.0,
+            entry_initial_qty_fraction: 0.0,
+            entry_trailing_reentry_qty_multiplier: 0.0,
+            entry_trailing_retracement_base_fraction: 0.0,
+            entry_trailing_threshold_base_fraction: 0.0,
+            forager_log_range_ema_span_minutes: 0.0,
+            forager_volume_ema_span_minutes: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
             entry_eligible: true,
-            ema_span_0: 0.0,
-            ema_span_1: 0.0,
+            ema_span_0_minutes: 0.0,
+            ema_span_1_minutes: 0.0,
             hsl_enabled: default_hsl_enabled(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
             risk_entry_cooldown_minutes: 0.0,
             entry_cooldown_min_duration_minutes: 0.0,
             entry_cooldown_max_duration_minutes: None,
             entry_cooldown_weights_minutes: Default::default(),
-            unilateralness_ema_span_1m: 60.0,
+            unilateralness_ema_span_minutes: 60.0,
             n_positions: 0,
-            total_wallet_exposure_limit: 0.0,
-            wallet_exposure_limit: 0.0,
+            total_wallet_exposure_limit_ratio: 0.0,
+            wallet_exposure_limit_ratio: 0.0,
             risk_wel_enforcer_enabled: true,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             risk_twel_enforcer_enabled: true,
             risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
-            risk_twel_enforcer_threshold: 0.0,
-            risk_we_excess_allowance_pct: 0.0,
+            risk_twel_enforcer_threshold_ratio: 0.0,
+            risk_we_excess_allowance_fraction: 0.0,
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
-            unstuck_close_pct: 0.0,
-            unstuck_ema_dist: 0.0,
-            unstuck_ema_span_0: 60.0,
-            unstuck_ema_span_1: 60.0,
-            unstuck_loss_allowance_pct: 0.0,
-            unstuck_threshold: 0.0,
+            unstuck_close_fraction: 0.0,
+            unstuck_ema_distance_fraction: 0.0,
+            unstuck_ema_span_0_minutes: 60.0,
+            unstuck_ema_span_1_minutes: 60.0,
+            unstuck_loss_allowance_fraction: 0.0,
+            unstuck_exposure_trigger_ratio: 0.0,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeOrderContext {
-    pub effective_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -870,14 +870,16 @@ impl OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd_cash_wallet: f64,                // raw usd wallet balance
-    pub usd_total_balance: f64,              // usd cash + btc converted to usd
-    pub usd_total_balance_rounded: f64,      // rounded usd total for hysteresis logic
-    pub btc_cash_wallet: f64,                // raw btc wallet balance
-    pub btc_total_balance: f64,              // btc cash + usd converted to btc
-    pub use_btc_collateral: bool,            // whether to use btc as collateral
-    pub btc_collateral_cap: f64,             // target/cap ratio of collateral held in btc
-    pub btc_collateral_ltv_cap: Option<f64>, // optional LTV ceiling when topping up btc
+    pub usd_cash_wallet: f64,           // raw usd wallet balance
+    pub usd_total_balance: f64,         // usd cash + btc converted to usd
+    pub usd_total_balance_rounded: f64, // rounded usd total for hysteresis logic
+    pub btc_cash_wallet: f64,           // raw btc wallet balance
+    pub btc_total_balance: f64,         // btc cash + usd converted to btc
+    pub use_btc_collateral: bool,       // whether to use btc as collateral
+    // BTC market value / total wallet value; values above one use USD debt.
+    pub btc_collateral_target_ratio: f64,
+    // max(-USD cash, 0) / the same total wallet value when topping up BTC.
+    pub max_usd_debt_to_wallet_value_ratio: Option<f64>,
 }
 
 #[derive(Default, Clone)]

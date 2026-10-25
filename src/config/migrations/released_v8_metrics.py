@@ -278,6 +278,28 @@ RELEASED_V8_EW_REPLACEMENTS = MappingProxyType({
     'sortino_ratio_w_usd': 'sortino_ratio_usd_ew',
 })
 
+# These released families have no current EW estimator. Best-effort conversion
+# may retain their ordinary quantity and statistic while explicitly giving up
+# the retired mean of full-history and progressively shorter suffix estimators.
+RELEASED_V8_ORDINARY_FALLBACKS = MappingProxyType({
+    'volume_pct_per_day_avg_w': (
+        'active_day_turnover_proxy_mean_ratio',
+        'mean of daily sums of abs(qty) * price / signed fill USD balance on fill-active UTC days, without c_mult',
+    ),
+    'mdg_strategy_eq_w': (
+        'mdg_fraction_strategy_equity',
+        'median daily strategy-equity return fraction',
+    ),
+    'adg_pnl_w': (
+        'daily_realized_pnl_mean_fraction',
+        'arithmetic mean of daily (realized fill PnL + signed fees) / max(abs(last fill USD balance), 1e-12), using fill-active UTC days',
+    ),
+    'mdg_pnl_w': (
+        'daily_realized_pnl_median_fraction',
+        'median of daily (realized fill PnL + signed fees) / max(abs(last fill USD balance), 1e-12), using fill-active UTC days',
+    ),
+})
+
 _RELEASED_V8_RETIRED_NAMES = frozenset({
     'adg_pnl_w',
     'adg_strategy_eq_w',
@@ -379,6 +401,22 @@ def released_v8_ew_replacement(name: str) -> str | None:
         suffix = f"_{stat}"
         if raw.endswith(suffix) and raw[:-len(suffix)] in RELEASED_V8_EW_REPLACEMENTS:
             return RELEASED_V8_EW_REPLACEMENTS[raw[:-len(suffix)]] + suffix
+    return None
+
+
+def released_v8_ordinary_fallback(name: str) -> tuple[str, str] | None:
+    """Choose only a frozen released family, preserving one outer aggregation."""
+    raw = str(name).strip()
+    choice = RELEASED_V8_ORDINARY_FALLBACKS.get(raw)
+    if choice is not None:
+        return choice
+    for stat in RELEASED_V8_STAT_SUFFIXES:
+        suffix = f"_{stat}"
+        if raw.endswith(suffix):
+            choice = RELEASED_V8_ORDINARY_FALLBACKS.get(raw[:-len(suffix)])
+            if choice is not None:
+                metric, basis = choice
+                return metric + suffix, basis + f'; retain outer {stat} aggregation'
     return None
 
 

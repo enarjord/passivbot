@@ -69,7 +69,7 @@ class FakeEvaluator:
         self.config = {
             **_checkpoint_config(),
             "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            "bot": {"long": {"risk": {"total_wallet_exposure_limit": 0.0},
+            "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 0.0},
                              "unstuck": {"close_fraction": 0.0}}},
             "optimize": {"scoring": list(scoring_keys), "backend": "pymoo"},
         }
@@ -101,7 +101,7 @@ class TinyManyObjectiveProblem(ElementwiseProblem):
 
 def _build_config(vector, overrides_fn, overrides_list, template):
     config = copy.deepcopy(template)
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = float(vector[0])
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = float(vector[0])
     config["bot"]["long"]["unstuck"]["close_fraction"] = float(vector[1])
     return config
 
@@ -154,10 +154,10 @@ def _nsga3_config(*, population_size: int = 16, n_obj: int = 4):
             "pymoo": {
                 "algorithm": "nsga3",
                 "shared": {
-                    "crossover_eta": 20.0,
-                    "crossover_prob_var": 0.5,
-                    "mutation_eta": 20.0,
-                    "mutation_prob": "auto",
+                    "crossover_distribution_index": 20.0,
+                    "crossover_probability_per_variable": 0.5,
+                    "mutation_distribution_index": 20.0,
+                    "mutation_probability": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -222,10 +222,10 @@ def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
             "pymoo": {
                 "algorithm": "nsga3",
                 "shared": {
-                    "crossover_eta": 20.0,
-                    "crossover_prob_var": 0.5,
-                    "mutation_eta": 20.0,
-                    "mutation_prob": "auto",
+                    "crossover_distribution_index": 20.0,
+                    "crossover_probability_per_variable": 0.5,
+                    "mutation_distribution_index": 20.0,
+                    "mutation_probability": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -395,10 +395,10 @@ def test_build_algorithm_uses_auto_nsga3_population_budget_when_null():
             "pymoo": {
                 "algorithm": "nsga3",
                 "shared": {
-                    "crossover_eta": 20.0,
-                    "crossover_prob_var": 0.5,
-                    "mutation_eta": 20.0,
-                    "mutation_prob": "auto",
+                    "crossover_distribution_index": 20.0,
+                    "crossover_probability_per_variable": 0.5,
+                    "mutation_distribution_index": 20.0,
+                    "mutation_probability": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -466,10 +466,10 @@ def test_run_backend_records_entries(monkeypatch):
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -513,10 +513,10 @@ def test_run_backend_supports_single_objective(monkeypatch):
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -573,10 +573,10 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
                 "pymoo": {
                     "algorithm": "nsga2",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -640,10 +640,10 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -753,10 +753,10 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -812,10 +812,10 @@ def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypat
                 "pymoo": {
                     "algorithm": "nsga2",
                     "shared": {
-                        "crossover_prob_var": 0.5,
-                        "crossover_eta": 20.0,
-                        "mutation_eta": 20.0,
-                        "mutation_prob": 0.5,
+                        "crossover_probability_per_variable": 0.5,
+                        "crossover_distribution_index": 20.0,
+                        "mutation_distribution_index": 20.0,
+                        "mutation_probability": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },

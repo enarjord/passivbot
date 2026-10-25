@@ -106,6 +106,13 @@ passivbot tool optimizer-bounds input.json search.json --preset recommended
 passivbot tool compare-backtests path/to/v8/result path/to/v9/result
 ```
 
+`compare-backtests --json` reports scale-one fractions: `0.05` means 5%, while the text summary
+formats percentages. Metric `relative_delta_fraction` and final equity changes use the absolute
+base value as denominator; `equity_rmse_initial_equity_fraction` uses absolute initial base
+strategy equity. `max_abs_relative_equity_delta_fraction` uses each common sample's absolute
+base equity, excluding zero denominators. Fill multiset match fractions divide matched row
+multiplicity by the larger input row count (two empty inputs report zero).
+
 ## High-Signal Gotcha
 
 If Rust changes seem ignored, follow `rust_extension.md` to verify the loaded artifact and source

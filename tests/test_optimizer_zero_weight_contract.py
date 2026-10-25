@@ -18,7 +18,7 @@ from optimizer_overrides import optimizer_overrides
 from tools.gpu_parity import build_parser, fixture_inputs
 
 
-ZERO_WEIGHTS = dict(volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0)
+ZERO_WEIGHTS = dict(volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0)
 FALLBACK_WEIGHTS = {**ZERO_WEIGHTS, "ema_readiness": 1.0}
 
 
@@ -31,7 +31,9 @@ def _assert_native_inputs_equal(left, right):
         assert left.keys() == right.keys()
         for key in left:
             if key == "forager_score_weights":
-                assert normalize_forager_score_weights(left[key], path=key) == normalize_forager_score_weights(right[key], path=key)
+                public_left = {("log_range" if name == "volatility" else name): value for name, value in left[key].items()}
+                public_right = {("log_range" if name == "volatility" else name): value for name, value in right[key].items()}
+                assert normalize_forager_score_weights(public_left, path=key) == normalize_forager_score_weights(public_right, path=key)
             else:
                 _assert_native_inputs_equal(left[key], right[key])
     elif isinstance(left, (list, tuple)):
@@ -63,10 +65,10 @@ def _candidate(strategy, policy, mirrored):
     else:
         for side in ("long", "short"):
             if policy == "anchor" or mirrored or side == target:
-                source["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+                source["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
                 source["bot"][side]["forager"]["score_weights"] = deepcopy(ZERO_WEIGHTS)
         source["optimize"]["bounds"] = {target: {"risk": {
-            "max_positions": [1], "total_wallet_exposure_limit": [0.0, 1.0],
+            "max_positions": [1], "total_wallet_exposure_limit_ratio": [0.0, 1.0],
         }}}
         if policy == "anchor":
             source["optimize"]["bounds"][target]["forager"] = {"score_weights": {
@@ -79,7 +81,7 @@ def _candidate(strategy, policy, mirrored):
         from optimize import install_anchored_fine_tune_plan
 
         install_anchored_fine_tune_plan(
-            config, [f"{target}.risk.total_wallet_exposure_limit"], "synthetic",
+            config, [f"{target}.risk.total_wallet_exposure_limit_ratio"], "synthetic",
             starting_configs_override=[source],
         )
     shape = build_optimization_shape(config)
@@ -106,7 +108,7 @@ def test_fixed_zero_genes_keep_native_behavior_through_actual_writer_and_reload(
     monkeypatch.setattr(socket, "getaddrinfo", denied)
     config, candidate, vector, target, coins, candles, markets, btc, timestamps = _candidate(strategy, policy, mirrored)
     before = deepcopy(candidate)
-    assert candidate["bot"][target]["risk"]["total_wallet_exposure_limit"] == 1.0
+    assert candidate["bot"][target]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
     assert candidate["bot"][target]["forager"]["score_weights"] == ZERO_WEIGHTS
     entry = build_pymoo_record_entry(
         vector=vector, metrics={}, template=config, build_config_fn=None,

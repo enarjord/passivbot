@@ -54,22 +54,22 @@ def extract(*, inputs=None, fills=None, equities=None, **updates):
 def test_full_account_clock_fees_hedges_and_multipliers_are_independent_of_risk_curves():
     result = extract()
     assert result["initial_equity"] == 1000
-    assert result["net_return"] == pytest.approx(.029)
+    assert result["net_return_fraction"] == pytest.approx(.029)
     assert result["net_realized_pnl"] == pytest.approx(29)
     assert result["fees_paid"] == pytest.approx(3.2)
     assert result["rebates_received"] == .2
     assert result["net_fees"] == pytest.approx(3)
     assert result["traded_notional"] == 1432
-    assert result["gross_exposure_ratio_max"] == .6  # Long+short gross, never net.
-    assert result["gross_exposure_ratio_mean"] == pytest.approx((.6 + .512 + .27) / 4)
-    assert result["exposed_fraction"] == .75
-    assert result["gross_exposure_ratio_terminal"] == 0
+    assert result["gross_exposure_max_ratio"] == .6  # Long+short gross, never net.
+    assert result["gross_exposure_mean_ratio"] == pytest.approx((.6 + .512 + .27) / 4)
+    assert result["exposed_time_fraction"] == .75
+    assert result["gross_exposure_terminal_ratio"] == 0
     assert result["exposure_denominator"] == "initial_capital"
     assert result["start_ms"] == 0 and result["observed_end_ms"] == 240000
     assert result["duration_days"] == pytest.approx(4 / 1440)
     assert result["completed"] and not result["liquidated"]
     assert result["fill_count"] == 7 and result["close_fill_count"] == 4
-    assert result["account_max_drawdown"] == pytest.approx((1017.7 - 999.6) / 1017.7)
+    assert result["account_drawdown_max_fraction"] == pytest.approx((1017.7 - 999.6) / 1017.7)
 
 
 def test_next_open_position_is_never_backfilled_to_preceding_same_clock_close():
@@ -79,9 +79,9 @@ def test_next_open_position_is_never_backfilled_to_preceding_same_clock_close():
     result = extract(inputs=inputs, fills=fills, equities=equities)
     # At time60000 the close[0] observation is still flat, despite the next
     # opening fill sharing its timestamp. Its first close mark is close[1].
-    assert result["gross_exposure_ratio_mean"] == pytest.approx((.22 + .18) / 4)
-    assert result["exposed_fraction"] == .5
-    assert result["gross_exposure_ratio_terminal"] == .24
+    assert result["gross_exposure_mean_ratio"] == pytest.approx((.22 + .18) / 4)
+    assert result["exposed_time_fraction"] == .5
+    assert result["gross_exposure_terminal_ratio"] == .24
 
 
 def test_liquidated_zero_balance_does_not_hide_or_invent_exposure():
@@ -91,10 +91,10 @@ def test_liquidated_zero_balance_does_not_hide_or_invent_exposure():
         native_equities=np.array([[0, 0]]), liquidated=True, execution_completed=True,
         initial_positions={}, valuation_input_sha256=account_valuation_input_identity(**inputs), **inputs)
     assert not result["completed"] and result["liquidated"]
-    assert result["completion_ratio"] == .25
-    assert result["gross_exposure_ratio_max"] == result["gross_exposure_ratio_terminal"] == .2
-    assert result["gross_exposure_ratio_mean"] == 0  # No fabricated pre-close exposure.
-    assert result["net_return"] == -1 and result["log_growth_per_day"] is None
+    assert result["completion_fraction"] == .25
+    assert result["gross_exposure_max_ratio"] == result["gross_exposure_terminal_ratio"] == .2
+    assert result["gross_exposure_mean_ratio"] == 0  # No fabricated pre-close exposure.
+    assert result["net_return_fraction"] == -1 and result["log_return_per_day"] is None
 
 
 def test_failed_execution_uses_only_observed_prefix_and_keeps_completion_false():
@@ -103,7 +103,7 @@ def test_failed_execution_uses_only_observed_prefix_and_keeps_completion_false()
     result = metrics_from_native_replay(native_fills=fills[:4], native_equities=equities[:2],
         liquidated=False, execution_completed=False, initial_positions={},
         valuation_input_sha256=account_valuation_input_identity(**inputs), **inputs)
-    assert not result["completed"] and result["completion_ratio"] == .5
+    assert not result["completed"] and result["completion_fraction"] == .5
     assert result["observed_end_ms"] == 120000
 
 
@@ -112,7 +112,7 @@ def test_explicit_bootstrap_row_and_warmup_gap_do_not_invent_evaluated_coverage(
     inputs.update(first_bar_index=2, bootstrap_bar_indices=[0])
     equities = np.array([[0, 1000], [120000, 1000], [180000, 1000]])
     result = extract(inputs=inputs, fills=[], equities=equities)
-    assert result["completed"] and result["completion_ratio"] == 1
+    assert result["completed"] and result["completion_fraction"] == 1
     assert result["start_ms"] == 120000 and result["observed_end_ms"] == 240000
     assert result["duration_days"] == pytest.approx(2 / 1440)
     assert result["sample_count"] == 3
@@ -215,7 +215,7 @@ def test_cpu_confirmation_binds_own_runtime_config_and_samples_clock_after_extra
     assert calls == ["after account extraction"]
     assert row["engine"] == "cpu" and row["completed_elapsed_seconds"] == 42.5
     assert row["input_sha256"] == "a" * 64 and row["runtime_sha256"] == "b" * 64
-    assert row["metrics"]["net_return"] == pytest.approx(.029)
+    assert row["metrics"]["net_return_fraction"] == pytest.approx(.029)
     assert "adg_fraction_strategy_equity" not in row["metrics"]
     unknown = deepcopy(result)
     del unknown[2]["liquidated"]

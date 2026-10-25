@@ -8,23 +8,23 @@ from tools import trailing_inspect
 def _params():
     return {
         "entry": {
-            "threshold_base_pct": 0.02,
-            "threshold_we_weight": 0.5,
-            "threshold_volatility_1h_weight": 2.0,
-            "threshold_volatility_1m_weight": 10.0,
-            "retracement_base_pct": 0.005,
-            "retracement_we_weight": 0.1,
-            "retracement_volatility_1h_weight": 1.0,
-            "retracement_volatility_1m_weight": 3.0,
+            "threshold_base_fraction": 0.02,
+            "threshold_exposure_ratio_coefficient": 0.5,
+            "threshold_log_range_1h_coefficient": 2.0,
+            "threshold_log_range_1m_coefficient": 10.0,
+            "retracement_base_fraction": 0.005,
+            "retracement_exposure_ratio_coefficient": 0.1,
+            "retracement_log_range_1h_coefficient": 1.0,
+            "retracement_log_range_1m_coefficient": 3.0,
         },
         "close": {
-            "threshold_base_pct": 0.01,
-            "threshold_we_weight": -0.02,
-            "threshold_volatility_1h_weight": 1.0,
-            "threshold_volatility_1m_weight": 2.0,
-            "retracement_base_pct": 0.004,
-            "retracement_volatility_1h_weight": 4.0,
-            "retracement_volatility_1m_weight": 5.0,
+            "threshold_base_fraction": 0.01,
+            "threshold_exposure_ratio_coefficient": -0.02,
+            "threshold_log_range_1h_coefficient": 1.0,
+            "threshold_log_range_1m_coefficient": 2.0,
+            "retracement_base_fraction": 0.004,
+            "retracement_log_range_1h_coefficient": 4.0,
+            "retracement_log_range_1m_coefficient": 5.0,
         },
     }
 
@@ -36,9 +36,9 @@ def _inspect(pside="long"):
         position_size=150.0,
         position_price=20.0,
         wallet_exposure=0.6,
-        effective_wallet_exposure_limit=0.9,
-        volatility_ema_1m=0.007,
-        volatility_ema_1h=0.0033,
+        effective_wallet_exposure_limit_ratio=0.9,
+        log_range_ema_1m=0.007,
+        log_range_ema_1h=0.0033,
         params=_params(),
         parameter_source="test",
     )
@@ -65,7 +65,7 @@ def _context(
 ):
     return {
         "active": active,
-        "total_wallet_exposure_limit": 1.0 if active else 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0 if active else 0.0,
         "max_positions": 1,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled,
@@ -90,10 +90,10 @@ def _context(
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_distance_fraction": 0.01,
         "entry_initial_qty_fraction": 0.02,
-        "entry_double_down_factor": 1.5,
+        "entry_reentry_qty_multiplier": 1.5,
         "close_qty_fraction": 0.25,
-        "volatility_ema_span_minutes": 100.0,
-        "volatility_ema_span_1h_candles": 200.0,
+        "log_range_ema_span_minutes": 100.0,
+        "log_range_ema_span_1h_candles": 200.0,
     }
 
 
@@ -110,14 +110,14 @@ def test_inspect_trailing_matches_current_entry_and_close_formulas():
     assert result["entry"]["threshold_multiplier"]["effective"] == pytest.approx(
         entry_threshold_multiplier
     )
-    assert result["entry"]["threshold_pct"] == pytest.approx(
+    assert result["entry"]["threshold_fraction"] == pytest.approx(
         0.02 * entry_threshold_multiplier
     )
-    assert result["entry"]["retracement_pct"] == pytest.approx(
+    assert result["entry"]["retracement_fraction"] == pytest.approx(
         0.005 * entry_retracement_multiplier
     )
-    assert result["close"]["threshold_pct"] == pytest.approx(close_threshold)
-    assert result["close"]["retracement_pct"] == pytest.approx(
+    assert result["close"]["threshold_fraction"] == pytest.approx(close_threshold)
+    assert result["close"]["retracement_fraction"] == pytest.approx(
         0.004 * close_retracement_multiplier
     )
 
@@ -125,8 +125,8 @@ def test_inspect_trailing_matches_current_entry_and_close_formulas():
 def test_long_geometry_distinguishes_confirmation_from_order_reference():
     result = _inspect()
     entry = result["entry"]
-    threshold = entry["threshold_pct"]
-    retracement = entry["retracement_pct"]
+    threshold = entry["threshold_fraction"]
+    retracement = entry["retracement_fraction"]
     threshold_price = 20.0 * (1.0 - threshold)
 
     assert entry["geometry"]["threshold_direction"] == "below"
@@ -154,8 +154,8 @@ def test_short_reverses_entry_and_close_directions():
 
 def test_non_positive_retracement_reports_passive_mode():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["close"]["retracement_base_pct"] = -0.01
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["close"]["retracement_base_fraction"] = -0.01
 
     result = trailing_inspect.inspect_trailing(
         symbol="COIN",
@@ -163,17 +163,17 @@ def test_non_positive_retracement_reports_passive_mode():
         position_size=None,
         position_price=20.0,
         wallet_exposure=0.6,
-        effective_wallet_exposure_limit=0.9,
-        volatility_ema_1m=0.007,
-        volatility_ema_1h=0.0033,
+        effective_wallet_exposure_limit_ratio=0.9,
+        log_range_ema_1m=0.007,
+        log_range_ema_1h=0.0033,
         params=params,
         parameter_source="test",
     )
 
     assert result["entry"]["trailing_enabled"] is False
-    assert result["entry"]["retracement_pct"] == 0.0
+    assert result["entry"]["retracement_fraction"] == 0.0
     assert result["close"]["trailing_enabled"] is False
-    assert result["close"]["retracement_pct"] == 0.0
+    assert result["close"]["retracement_fraction"] == 0.0
     report = trailing_inspect.render_report(result)
     assert report.count("trailing disabled") == 2
     assert report.count("Passive analytical reference") == 2
@@ -208,7 +208,7 @@ def test_main_json_applies_parameter_override(monkeypatch, capsys):
                 "20",
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0.9",
                 "--entry-threshold-base-fraction",
                 "0.03",
@@ -219,8 +219,8 @@ def test_main_json_applies_parameter_override(monkeypatch, capsys):
     )
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["entry"]["threshold_base_pct"] == pytest.approx(0.03)
-    assert payload["overridden_parameters"] == ["entry.threshold_base_pct"]
+    assert payload["entry"]["threshold_base_fraction"] == pytest.approx(0.03)
+    assert payload["overridden_parameters"] == ["entry.threshold_base_fraction"]
 
 
 def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
@@ -237,7 +237,7 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
                 "20",
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0",
             ]
         )
@@ -250,14 +250,14 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
     "state_args",
     (
         ("--wallet-exposure", "0.6"),
-        ("--effective-wallet-exposure-limit", "0.9"),
-        ("--volatility-ema-1m", "0.01"),
+        ("--effective-wallet-exposure-limit-ratio", "0.9"),
+        ("--log-range-ema-1m", "0.01"),
     ),
 )
 def test_detailed_mode_requires_both_exposure_inputs(state_args, capsys):
     assert trailing_inspect.main([*state_args, "--json"]) == 2
     assert (
-        "requires both --wallet-exposure and --effective-wallet-exposure-limit"
+        "requires both --wallet-exposure and --effective-wallet-exposure-limit-ratio"
         in capsys.readouterr().err
     )
 
@@ -268,7 +268,7 @@ def test_detailed_mode_requires_explicit_position_price(capsys):
             [
                 "--wallet-exposure",
                 "0.6",
-                "--effective-wallet-exposure-limit",
+                "--effective-wallet-exposure-limit-ratio",
                 "0.9",
                 "--json",
             ]
@@ -293,15 +293,15 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     normal_half = next(
         row
         for row in result["sides"]["long"]["scenarios"]
-        if row["volatility_label"] == "normal" and row["exposure_ratio"] == 0.5
+        if row["log_range_label"] == "normal" and row["exposure_ratio"] == 0.5
     )
     expected_entry_threshold = 0.02 * (1.0 + 0.0025 * 2.0 + 0.005 * 10.0 + 0.5 * 0.5)
     expected_close_threshold = 0.01 + 0.5 * -0.02 + 0.0025 * 1.0 + 0.005 * 2.0
-    assert normal_half["entry"]["threshold_pct"] == pytest.approx(expected_entry_threshold)
+    assert normal_half["entry"]["threshold_fraction"] == pytest.approx(expected_entry_threshold)
     assert normal_half["entry"]["geometry"]["threshold_price"] == pytest.approx(
         100.0 * (1.0 - expected_entry_threshold)
     )
-    assert normal_half["close"]["threshold_pct"] == pytest.approx(expected_close_threshold)
+    assert normal_half["close"]["threshold_fraction"] == pytest.approx(expected_close_threshold)
 
     short_row = result["sides"]["short"]["scenarios"][0]
     assert short_row["entry"]["geometry"]["threshold_price"] > 100.0
@@ -318,7 +318,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 0.05,
+                    "max_drawdown_fraction": 0.05,
                 }},
             "long": {
                 "entry_cooldown": {
@@ -331,7 +331,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                     "position_exposure_enforcer": {
                         "enabled": True,
@@ -352,8 +352,8 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -381,7 +381,7 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.125
     config["bot"]["long"]["risk"]["max_positions"] = 3.0
     config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
 
@@ -402,7 +402,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "hsl": {
@@ -418,14 +418,14 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -472,7 +472,7 @@ def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
         sources={"long": {"params": _params(), "context": context}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.5,),
     )
 
@@ -502,7 +502,7 @@ def test_hsl_runtime_precedes_static_forced_mode_labels(forced_mode):
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.5,),
     )
 
@@ -523,18 +523,18 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -582,7 +582,7 @@ def test_overview_marks_position_enforcer_before_close_geometry():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.5, 0.8, 0.9),
     )
 
@@ -616,7 +616,7 @@ def test_overview_marks_entries_portfolio_dependent_under_unconditional_cap():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.5, 1.0),
     )
 
@@ -641,7 +641,7 @@ def test_overview_marks_closes_account_dependent_when_total_enforcer_enabled():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.5,),
     )
 
@@ -669,7 +669,7 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.8,),
     )
 
@@ -695,7 +695,7 @@ def test_unstuck_requires_positive_threshold():
         sources={"long": {"params": _params(), "context": context}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.5,),
     )
 
@@ -720,7 +720,7 @@ def test_unstuck_runtime_label_requires_exposure_strictly_above_threshold():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.5, 0.7, 0.7001),
     )
 
@@ -764,7 +764,7 @@ def test_overview_without_config_marks_runtime_context_unknown():
         sources={"long": {"params": _params(), "context": None}},
         parameter_source="Rust-owned defaults",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.5,),
     )
 
@@ -797,7 +797,7 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
         sources={"long": {"params": _params(), "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.999, 1.0),
     )
     trailing_rows = trailing["sides"]["long"]["scenarios"]
@@ -806,12 +806,12 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
     assert "exposure-capped" in trailing_inspect.render_overview(trailing)
 
     passive_params = _params()
-    passive_params["entry"]["retracement_base_pct"] = 0.0
+    passive_params["entry"]["retracement_base_fraction"] = 0.0
     passive = trailing_inspect.build_overview(
         sources={"long": {"params": passive_params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        log_range_scenarios=(("normal", 0.005, 0.0025),),
         exposure_ratios=(0.999,),
     )
     assert passive["sides"]["long"]["scenarios"][0]["entry"]["inactive_reason"] == "exposure_cap"
@@ -819,12 +819,12 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
 
 def test_overview_marks_long_threshold_at_100_percent_unreachable():
     params = _params()
-    params["entry"]["threshold_base_pct"] = 1.0
+    params["entry"]["threshold_base_fraction"] = 1.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
@@ -838,15 +838,15 @@ def test_overview_marks_long_threshold_at_100_percent_unreachable():
 
 def test_overview_marks_short_close_threshold_at_100_percent_unreachable():
     params = _params()
-    params["close"]["threshold_base_pct"] = 1.0
-    params["close"]["threshold_we_weight"] = 0.0
-    params["close"]["threshold_volatility_1m_weight"] = 0.0
-    params["close"]["threshold_volatility_1h_weight"] = 0.0
+    params["close"]["threshold_base_fraction"] = 1.0
+    params["close"]["threshold_exposure_ratio_coefficient"] = 0.0
+    params["close"]["threshold_log_range_1m_coefficient"] = 0.0
+    params["close"]["threshold_log_range_1h_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"short": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
@@ -862,10 +862,10 @@ def test_wel_reducer_precedes_unreachable_short_strategy_close():
     params = _params()
     params["close"].update(
         {
-            "threshold_base_pct": 1.0,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
+            "threshold_base_fraction": 1.0,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
         }
     )
     result = trailing_inspect.build_overview(
@@ -877,7 +877,7 @@ def test_wel_reducer_precedes_unreachable_short_strategy_close():
         },
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.9,),
     )
 
@@ -902,16 +902,16 @@ def test_overview_marks_100_percent_retracement_unreachable(
     pside, kind, inactive_reason
 ):
     params = _params()
-    params[kind]["retracement_base_pct"] = 1.0
-    params[kind]["retracement_volatility_1m_weight"] = 0.0
-    params[kind]["retracement_volatility_1h_weight"] = 0.0
+    params[kind]["retracement_base_fraction"] = 1.0
+    params[kind]["retracement_log_range_1m_coefficient"] = 0.0
+    params[kind]["retracement_log_range_1h_coefficient"] = 0.0
     if kind == "entry":
-        params[kind]["retracement_we_weight"] = 0.0
+        params[kind]["retracement_exposure_ratio_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={pside: {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("normal", 0.0, 0.0),),
+        log_range_scenarios=(("normal", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
@@ -924,8 +924,8 @@ def test_overview_marks_100_percent_retracement_unreachable(
 
 def test_overview_qualifies_full_position_passive_close_sizing():
     params = _params()
-    params["close"]["retracement_base_pct"] = 0.0
-    params["close"]["threshold_we_weight"] = 0.0
+    params["close"]["retracement_base_fraction"] = 0.0
+    params["close"]["threshold_exposure_ratio_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -946,9 +946,9 @@ def test_inspect_rejects_non_finite_derived_geometry():
             position_size=None,
             position_price=100.0,
             wallet_exposure=0.5,
-            effective_wallet_exposure_limit=1.0,
-            volatility_ema_1m=1e308,
-            volatility_ema_1h=0.0,
+            effective_wallet_exposure_limit_ratio=1.0,
+            log_range_ema_1m=1e308,
+            log_range_ema_1h=0.0,
             params=_params(),
             parameter_source="test",
         )
@@ -970,7 +970,7 @@ def test_main_reports_derived_overflow_without_traceback(monkeypatch, capsys, js
             [
                 "--side",
                 "long",
-                "--volatility-scenarios",
+                "--log-range-scenarios",
                 "huge:1e308:0",
                 *json_args,
             ]
@@ -1006,7 +1006,7 @@ def test_overview_qualifies_immediate_close_by_trailing_mode():
 )
 def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected):
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=cooldown)}},
         parameter_source="test config",
@@ -1019,8 +1019,8 @@ def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected)
 
 def test_overview_qualifies_negative_passive_threshold_touch_clamp():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["entry"]["threshold_base_pct"] = -0.1
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["entry"]["threshold_base_fraction"] = -0.1
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
         parameter_source="test config",
@@ -1036,8 +1036,8 @@ def test_overview_qualifies_negative_passive_threshold_touch_clamp():
 
 def test_zero_passive_threshold_reports_touch_and_ema_clamp():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["entry"]["threshold_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["entry"]["threshold_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
         parameter_source="test config",
@@ -1098,13 +1098,13 @@ def test_overview_single_custom_scenario_does_not_invent_sensitivity_comparison(
         sources={"long": {"params": _params(), "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("stress", 0.02, 0.01),),
+        log_range_scenarios=(("stress", 0.02, 0.01),),
         exposure_ratios=(0.75,),
     )
 
     classification = result["sides"]["long"]["classification"]
-    assert classification["entry_headline"].startswith("one volatility scenario shown")
-    assert classification["basis"] == "Headlines use 'stress' volatility at 75% WE/WEL."
+    assert classification["entry_headline"].startswith("one log-range scenario shown")
+    assert classification["basis"] == "Headlines use 'stress' log-range at 75% WE/WEL."
     assert "Only one exposure ratio is shown" in " ".join(classification["entry_comments"])
 
 
@@ -1148,13 +1148,13 @@ def test_overview_explains_protective_reducer_consolidation():
     assert "largest loss-admissible candidate" in report
 
 
-def test_volatility_sensitivity_includes_retracement_changes():
+def test_log_range_sensitivity_includes_retracement_changes():
     params = _params()
     for kind in ("entry", "close"):
-        params[kind]["threshold_volatility_1m_weight"] = 0.0
-        params[kind]["threshold_volatility_1h_weight"] = 0.0
-        params[kind]["retracement_volatility_1m_weight"] = 100.0
-        params[kind]["retracement_volatility_1h_weight"] = 100.0
+        params[kind]["threshold_log_range_1m_coefficient"] = 0.0
+        params[kind]["threshold_log_range_1h_coefficient"] = 0.0
+        params[kind]["retracement_log_range_1m_coefficient"] = 100.0
+        params[kind]["retracement_log_range_1h_coefficient"] = 100.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -1162,21 +1162,21 @@ def test_volatility_sensitivity_includes_retracement_changes():
     )
 
     classification = result["sides"]["long"]["classification"]
-    assert classification["entry_headline"].startswith("very strong volatility sensitivity")
-    assert classification["close_headline"].startswith("very strong volatility sensitivity")
+    assert classification["entry_headline"].startswith("very strong log-range sensitivity")
+    assert classification["close_headline"].startswith("very strong log-range sensitivity")
 
 
-def test_volatility_sensitivity_selects_extremes_independent_of_input_order():
+def test_log_range_sensitivity_selects_extremes_independent_of_input_order():
     params = _params()
-    params["entry"]["threshold_volatility_1m_weight"] = 20.0
-    params["entry"]["threshold_volatility_1h_weight"] = 20.0
-    params["entry"]["retracement_volatility_1m_weight"] = 0.0
-    params["entry"]["retracement_volatility_1h_weight"] = 0.0
+    params["entry"]["threshold_log_range_1m_coefficient"] = 20.0
+    params["entry"]["threshold_log_range_1h_coefficient"] = 20.0
+    params["entry"]["retracement_log_range_1m_coefficient"] = 0.0
+    params["entry"]["retracement_log_range_1h_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(
+        log_range_scenarios=(
             ("quiet", 0.001, 0.0005),
             ("extreme", 0.05, 0.025),
             ("normal", 0.005, 0.0025),
@@ -1184,35 +1184,35 @@ def test_volatility_sensitivity_selects_extremes_independent_of_input_order():
     )
 
     headline = result["sides"]["long"]["classification"]["entry_headline"]
-    assert headline.startswith("very strong volatility sensitivity")
+    assert headline.startswith("very strong log-range sensitivity")
     assert "sensitivity spans all 3 displayed scenarios" in result["sides"]["long"][
         "classification"
     ]["basis"]
 
 
-def test_volatility_sensitivity_includes_effective_middle_extreme():
+def test_log_range_sensitivity_includes_effective_middle_extreme():
     params = _params()
     params["entry"].update(
         {
-            "threshold_volatility_1m_weight": 20.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
+            "threshold_log_range_1m_coefficient": 20.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
         }
     )
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(
+        log_range_scenarios=(
             ("quiet", 0.0, 0.0),
             ("large 1m effect", 0.05, 0.0),
-            ("larger summed volatility", 0.0, 0.06),
+            ("larger summed log-range", 0.0, 0.06),
         ),
     )
 
     headline = result["sides"]["long"]["classification"]["entry_headline"]
-    assert headline.startswith("very strong volatility sensitivity")
+    assert headline.startswith("very strong log-range sensitivity")
 
 
 @pytest.mark.parametrize(("pside", "expected_reference"), [("long", 98.0), ("short", 102.0)])
@@ -1222,18 +1222,18 @@ def test_passive_negative_close_threshold_keeps_rust_analytical_reference(
     params = _params()
     params["close"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
         }
     )
     result = trailing_inspect.build_overview(
         sources={pside: {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("only", 0.0, 0.0),),
+        log_range_scenarios=(("only", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
@@ -1252,18 +1252,18 @@ def test_negative_threshold_exposure_change_uses_absolute_distance():
     params = _params()
     params["close"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": -0.1,
-            "threshold_volatility_1m_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": -0.1,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
         }
     )
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("only", 0.0, 0.0),),
+        log_range_scenarios=(("only", 0.0, 0.0),),
         exposure_ratios=(0.0, 0.9),
     )
 
@@ -1281,23 +1281,23 @@ def test_passive_negative_entry_threshold_keeps_rust_analytical_reference(
     params = _params()
     params["entry"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
         }
     )
     result = trailing_inspect.build_overview(
         sources={pside: {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("only", 0.0, 0.0),),
+        log_range_scenarios=(("only", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
     entry = result["sides"][pside]["scenarios"][0]["entry"]
-    assert entry["threshold_pct"] == pytest.approx(-0.02)
+    assert entry["threshold_fraction"] == pytest.approx(-0.02)
     assert entry["geometry"]["threshold_price"] is None
     assert entry["geometry"]["passive_reference_price"] == pytest.approx(expected_reference)
     table_row = trailing_inspect._scenario_rows(result["sides"][pside], "entry")[0]
@@ -1312,11 +1312,11 @@ def test_trailing_negative_entry_threshold_is_clamped_like_rust():
     params = _params()
     params["entry"].update(
         {
-            "retracement_base_pct": 0.01,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
+            "retracement_base_fraction": 0.01,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
         }
     )
 
@@ -1324,14 +1324,14 @@ def test_trailing_negative_entry_threshold_is_clamped_like_rust():
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("only", 0.0, 0.0),),
+        log_range_scenarios=(("only", 0.0, 0.0),),
         exposure_ratios=(0.0,),
     )
 
     entry = result["sides"]["long"]["scenarios"][0]["entry"]
     assert entry["trailing_enabled"] is True
-    assert entry["threshold_base_pct"] == 0.0
-    assert entry["threshold_pct"] == 0.0
+    assert entry["threshold_base_fraction"] == 0.0
+    assert entry["threshold_fraction"] == 0.0
 
 
 def test_scenario_prices_preserve_precision_for_small_anchor():
@@ -1339,7 +1339,7 @@ def test_scenario_prices_preserve_precision_for_small_anchor():
         sources={"long": {"params": _params(), "context": _context()}},
         parameter_source="test config",
         price_anchor=0.00001,
-        volatility_scenarios=(("only", 0.005, 0.0025),),
+        log_range_scenarios=(("only", 0.005, 0.0025),),
         exposure_ratios=(0.5,),
     )
 
@@ -1351,13 +1351,13 @@ def test_scenario_prices_preserve_precision_for_small_anchor():
 
 def test_scenario_inputs_preserve_small_custom_values():
     params = _params()
-    params["entry"]["threshold_volatility_1m_weight"] = 100_000.0
-    params["entry"]["threshold_we_weight"] = 100.0
+    params["entry"]["threshold_log_range_1m_coefficient"] = 100_000.0
+    params["entry"]["threshold_exposure_ratio_coefficient"] = 100.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
-        volatility_scenarios=(("zero", 0.0, 0.0), ("tiny", 0.00001, 0.0)),
+        log_range_scenarios=(("zero", 0.0, 0.0), ("tiny", 0.00001, 0.0)),
         exposure_ratios=(0.0, 0.004),
     )
 
@@ -1367,13 +1367,13 @@ def test_scenario_inputs_preserve_small_custom_values():
     assert len({row[3] for row in rows}) == 4
 
 
-def test_overview_rejects_duplicate_volatility_scenario_labels():
-    with pytest.raises(ValueError, match="duplicate volatility scenario label.*same"):
+def test_overview_rejects_duplicate_log_range_scenario_labels():
+    with pytest.raises(ValueError, match="duplicate log-range scenario label.*same"):
         trailing_inspect.build_overview(
             sources={"long": {"params": _params(), "context": _context()}},
             parameter_source="test config",
             price_anchor=100.0,
-            volatility_scenarios=(
+            log_range_scenarios=(
                 ("same", 0.001, 0.0005),
                 ("same", 0.02, 0.01),
             ),
@@ -1401,7 +1401,7 @@ def test_overview_describes_effective_cooldown(base, floor, ceiling, weight, exp
     cfg = prepare_config(cfg, verbose=False)
     context = trailing_inspect._extract_side_context(cfg, "long")
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": context}},
         parameter_source="test config", price_anchor=100.0,
@@ -1416,18 +1416,34 @@ def test_overview_exports_fractional_ema_horizons_with_explicit_units(tmp_path, 
 
     source = get_template_config()
     strategy = source["bot"]["long"].setdefault("strategy", {}).setdefault("trailing_martingale", {})
-    strategy["volatility_ema_span_minutes"] = 31.5
-    strategy["volatility_ema_span_1h_candles"] = 4.25
+    strategy["log_range_ema_span_minutes"] = 31.5
+    strategy["log_range_ema_span_1h_candles"] = 4.25
     path = tmp_path / "config.json"
     path.write_text(json.dumps(source))
     original = path.read_bytes()
     assert trailing_inspect.main([str(path), "--side", "long", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     context = result["sides"]["long"]["context"]
-    assert context["volatility_ema_span_minutes"] == 31.5
-    assert context["volatility_ema_span_1h_candles"] == 4.25
+    assert context["log_range_ema_span_minutes"] == 31.5
+    assert context["log_range_ema_span_1h_candles"] == 4.25
     assert not {"volatility_ema_span_1m", "volatility_ema_span_1h"} & context.keys()
     report = trailing_inspect.render_overview(result)
     assert "31.5 minutes" in report
     assert "4.25 one-hour candles" in report
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("stem,section,leaf", [
+    ("entry-threshold", "entry", "threshold_exposure_ratio_coefficient"),
+    ("entry-retracement", "entry", "retracement_exposure_ratio_coefficient"),
+    ("close-threshold", "close", "threshold_exposure_ratio_coefficient"),
+])
+def test_exposure_coefficient_flags_reach_the_actual_parameter_override(stem, section, leaf):
+    parser = trailing_inspect.build_parser()
+    args = parser.parse_args([f"--{stem}-exposure-ratio-coefficient", "0.375"])
+    params, _ = trailing_inspect.load_parameter_source(None, "long")
+    changed = trailing_inspect.apply_parameter_overrides(params, args)
+    assert params[section][leaf] == 0.375
+    assert len(changed) == 1 and leaf in changed[0]
+    with pytest.raises(SystemExit):
+        parser.parse_args([f"--{stem}-we-weight", "0.375"])

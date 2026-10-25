@@ -2372,7 +2372,7 @@ class BitunixBot(CCXTBot):
         for symbol in sizing_symbols:
             # Fail during initialization, before entering the execution loop,
             # if native metadata ever stops providing mandatory planning fees.
-            self._get_exchange_fee_rates(symbol)
+            self._get_exchange_fee_fractions(symbol)
             raw = self.markets_dict[symbol].get("info") or {}
             max_leverage = _float(
                 raw.get("maxLeverage"), field=f"{symbol}.maxLeverage"

@@ -10,7 +10,7 @@ from config.load import prepare_config
 from config.schema import get_template_config
 from config.overrides import parse_overrides
 from risk_limits import (
-    wallet_exposure_limit_with_allowance,
+    wallet_exposure_limit_ratio_with_allowance,
 )
 
 
@@ -122,10 +122,10 @@ def test_scaling_rejects_aggregate_scopes(mode):
     ],
 )
 def test_python_admission_matches_bounded_rust_contract(base, total, expected):
-    assert wallet_exposure_limit_with_allowance(
-        wallet_exposure_limit=base,
-        total_wallet_exposure_limit=total,
-        risk_we_excess_allowance_pct=0.44,
+    assert wallet_exposure_limit_ratio_with_allowance(
+        wallet_exposure_limit_ratio=base,
+        total_wallet_exposure_limit_ratio=total,
+        risk_we_excess_allowance_fraction=0.44,
     ) == pytest.approx(expected)
 
 

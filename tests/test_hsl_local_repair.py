@@ -49,8 +49,8 @@ def test_missing_open_is_green_at_basis_but_current_loss_still_panics(mode, side
                     dict(
                         snapshot=snapshot,
                         slots=1,
-                        drawdown_ratio_ema_span_minutes=356,
-                        threshold=0.06,
+                        drawdown_fraction_ema_span_minutes=356,
+                        drawdown_threshold_fraction=0.06,
                         cooldown_ms=116 * 60000,
                         memory_ema_span_minutes=43200.0,
                         scale_budget_with_excess_allowance=False,

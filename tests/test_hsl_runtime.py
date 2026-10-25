@@ -40,10 +40,10 @@ def bot(mode="coin", *, side="long", events=()):
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"].update(
             enabled=pside == side,
-            drawdown_ratio_threshold=0.05,
+            drawdown_threshold_fraction=0.05,
             # Availability/admission fixtures use an unsmoothed one-minute
             # policy; dedicated bootstrap fixtures exercise very slow spans.
-            drawdown_ratio_ema_span_minutes=1.0,
+            drawdown_fraction_ema_span_minutes=1.0,
         )
         config["bot"][pside]["risk"]["max_positions"] = 1
     if mode == "portfolio":
@@ -52,7 +52,7 @@ def bot(mode="coin", *, side="long", events=()):
         for pside in ("long", "short"):
             config["bot"][pside]["hsl"]["enabled"] = False
             config["bot"][pside]["risk"]["max_positions"] = 0
-            config["bot"][pside]["risk"]["total_wallet_exposure_limit"] = 0
+            config["bot"][pside]["risk"]["total_wallet_exposure_limit_ratio"] = 0
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     ledger = FreshnessLedger(now_ms=NOW)
     for surface in ("balance", "positions"):
@@ -118,7 +118,7 @@ def run(value, marks=None, sources=None, **changes):
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     value = bot(mode, side=side)
     policy = value.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["hsl"]
-    policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
+    policy["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     result, unavailable = run(value, quotes(side))
     assert not unavailable
     (decision,) = result
@@ -126,9 +126,9 @@ def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     raw = json.loads(decision.payload)
     assert raw["episodes"] == 1
     assert raw["risk"]["exposed"] is True
-    assert raw["risk"]["drawdown"] == 100.0
-    assert raw["decision"]["raw"] == pytest.approx(100 / 1000)
-    assert raw["decision"]["ema"] == raw["decision"]["raw"]
+    assert raw["risk"]["drawdown_memory_usd"] == 100.0
+    assert raw["decision"]["signal_raw_fraction"] == pytest.approx(100 / 1000)
+    assert raw["decision"]["signal_ema_fraction"] == raw["decision"]["signal_raw_fraction"]
     assert "fill_capture_unknown" in decision.reasons
     assert decision.execution_type == ("market" if mode == "portfolio" else "limit")
 
@@ -158,8 +158,8 @@ def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     expected_d = fma(beta, 201, 100)
     expected_r = f32(expected_d / f32(900 + expected_d))
     risk = json.loads(decision.payload)["risk"]
-    assert risk["drawdown"] == expected_d
-    assert risk["raw"] == expected_r
+    assert risk["drawdown_memory_usd"] == expected_d
+    assert risk["signal_raw_fraction"] == expected_r
 
 
 def test_current_quote_failure_is_scoped_before_native_evaluation():
@@ -259,7 +259,7 @@ def test_capture_is_immutable_and_does_not_inherit_prior_state():
     assert not unavailable
     before = evaluate(requests)
     value.positions[SYMBOL]["long"]["price"] = 80.0
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
+    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     assert evaluate(requests) == before
     assert run(value)[0][0].action == "normal"
 
@@ -503,7 +503,7 @@ def test_empty_aggregate_cashflow_cannot_invent_a_historical_exposed_episode():
     # The unproven historical cashflow survives as a diagnostic. It cannot
     # invent exposure before the first observed current long position.
     assert "flat_cashflow_without_exposure" in result.reasons
-    assert json.loads(result.payload)["decision"]["raw"] == pytest.approx(0.1)
+    assert json.loads(result.payload)["decision"]["signal_raw_fraction"] == pytest.approx(0.1)
 
 
 def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
@@ -517,7 +517,7 @@ def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
     "field,value",
     [
         ("action", "orange"),
-        ("raw", float("nan")),
+        ("signal_raw_fraction", float("nan")),
         ("timestamp", NOW - 1),
         ("action", []),
     ],
@@ -639,7 +639,7 @@ def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata(
     output = json.loads(result[0].payload)
     assert output["episodes"] == 0 and output["events"] == []
     assert output["risk"]["exposed"] is False
-    assert output["risk"]["drawdown"] == 0.0
+    assert output["risk"]["drawdown_memory_usd"] == 0.0
     assert output["risk"]["cooldown_until"] is None
     requests, _ = capture(
         value,
@@ -724,7 +724,7 @@ def test_negative_historical_equity_uses_explicit_loss_branch():
         ]
     )
     value.positions[SYMBOL]["long"]["size"] = 100.0
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.5
+    value.config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.5
     rows = [
         dict(ts=NOW - (6 - i) * 60_000, o=p, h=p, l=p, c=p)
         for i, p in enumerate([1000.0, 0.001, 0.001, 0.001, 0.001, 0.001])
@@ -735,8 +735,8 @@ def test_negative_historical_equity_uses_explicit_loss_branch():
     result, unavailable = run(value, sources=sources)
     assert not unavailable and result[0].action == "panic"
     payload = json.loads(result[0].payload)
-    assert payload["decision"]["raw"] == 1.0
-    assert 0 <= payload["decision"]["ema"] <= 1.0
+    assert payload["decision"]["signal_raw_fraction"] == 1.0
+    assert 0 <= payload["decision"]["signal_ema_fraction"] <= 1.0
     assert payload["risk"]["nonpositive_equity"] is True
 
 
@@ -752,8 +752,8 @@ def test_negative_historical_equity_uses_explicit_loss_branch():
         dict(red_at=0),
         dict(numeric_range_approximation=1),
         dict(reason=None),
-        dict(ema=-0.01),
-        dict(raw=True),
+        dict(signal_ema_fraction=-0.01),
+        dict(signal_raw_fraction=True),
         dict(timestamp=float(NOW)),
     ],
 )
@@ -821,7 +821,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
 
     fixture = bot(mode)
     policy = fixture.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["hsl"]
-    policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
+    policy["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     # Do not start a bot or exchange client: exercise the real runtime accessors
     # and symbol override resolver against canonical prepared configuration.
     value = Passivbot.__new__(Passivbot)
@@ -831,7 +831,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
         "TEST": {
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_ratio_threshold": 0.99, "panic_close_order_type": "market"}
+                    "hsl": {"drawdown_threshold_fraction": 0.99, "panic_close_order_type": "market"}
                 }
             }
         }
@@ -850,10 +850,10 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     )
     assert not unavailable
     (request,) = requests
-    assert json.loads(request.payload)["threshold"] == (
+    assert json.loads(request.payload)["drawdown_threshold_fraction"] == (
         0.99 if mode == "coin" else 0.05
     )
-    assert json.loads(request.payload)["drawdown_ratio_ema_span_minutes"] == 1_000_000.0
+    assert json.loads(request.payload)["drawdown_fraction_ema_span_minutes"] == 1_000_000.0
     assert request.execution_type == ("limit" if mode == "position_side" else "market")
     assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")
 
@@ -1391,7 +1391,7 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
         else value.config["bot"][side]["hsl"]
     )
     policy.update(
-        drawdown_ratio_ema_span_minutes=1.0, cooldown_after_red_minutes=cooldown, drawdown_ratio_threshold=0.05
+        drawdown_fraction_ema_span_minutes=1.0, cooldown_after_red_minutes=cooldown, drawdown_threshold_fraction=0.05
     )
     marks = {SYMBOL: MarketSnapshot(SYMBOL, 100.0, 100.0, 100.0, NOW - 100, "fixture")}
     results = []
@@ -1456,11 +1456,11 @@ def test_explicit_balance_override_is_the_current_coin_hsl_budget():
     value.balance_raw = prepared["balance_raw"]
     (decision,) = run(value)[0]
     assert decision.action == "panic"
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.1)
+    assert json.loads(decision.payload)["decision"]["signal_raw_fraction"] == pytest.approx(0.1)
     value.balance_raw = 10_000.0
     (decision,) = run(value)[0]
     assert decision.action == "normal"
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.01)
+    assert json.loads(decision.payload)["decision"]["signal_raw_fraction"] == pytest.approx(0.01)
 
 
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
@@ -1497,7 +1497,7 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy.update(drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.095)
+    policy.update(drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.095)
     marks = {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
     tape = capture_candles(
         [
@@ -1512,13 +1512,13 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
     decision = run(value, marks, sources)[0][0]
     _, beta = coefficients(288.0)
     drawdown = fma(beta, 200.0, -100.0)
-    assert json.loads(decision.payload)["risk"]["drawdown"] == drawdown
-    assert json.loads(decision.payload)["decision"]["raw"] == div(drawdown, add(f32(1000), drawdown))
+    assert json.loads(decision.payload)["risk"]["drawdown_memory_usd"] == drawdown
+    assert json.loads(decision.payload)["decision"]["signal_raw_fraction"] == div(drawdown, add(f32(1000), drawdown))
     assert decision.action == "normal"
     value.get_raw_balance = lambda: 900.0
     decision = run(value, marks, sources)[0][0]
-    assert json.loads(decision.payload)["risk"]["drawdown"] == drawdown
-    assert json.loads(decision.payload)["decision"]["raw"] == div(drawdown, add(f32(900), drawdown))
+    assert json.loads(decision.payload)["risk"]["drawdown_memory_usd"] == drawdown
+    assert json.loads(decision.payload)["decision"]["signal_raw_fraction"] == div(drawdown, add(f32(900), drawdown))
     assert decision.action == "panic"
 
 
@@ -1601,10 +1601,10 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     value = bot(side=side)
     risk = value.config["bot"][side]["risk"]
     risk.update(
-        max_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_fraction=0.07
+        max_positions=10, total_wallet_exposure_limit_ratio=2.5, we_excess_allowance_fraction=0.07
     )
     value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
-    value.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.2
+    value.config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.2
     mark = 78.0 if side == "long" else 122.0
     marks = {SYMBOL: MarketSnapshot(SYMBOL, mark, mark, mark, NOW - 100, "fake")}
     ordinary, unavailable = run(value, marks=marks)
@@ -1622,8 +1622,8 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     )
     assert not unavailable
     native_budget = json.loads(requests[0].payload)["exposure_budget"]
-    assert native_budget["we_excess_allowance_pct"] == 0.44
-    assert "we_excess_allowance_fraction" not in native_budget
+    assert native_budget["we_excess_allowance_fraction"] == 0.44
+    assert "we_excess_allowance_pct" not in native_budget
     scaled, unavailable = run(value, marks=marks)
     assert not unavailable and scaled[0].action == "normal"
     assert run(value, marks=marks)[0] == scaled

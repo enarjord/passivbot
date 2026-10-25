@@ -66,7 +66,7 @@ class _FakeBot:
     def refresh_approved_ignored_coins_lists(self):
         return None
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limit_ratios(self):
         return None
 
     async def refresh_authoritative_state(self):
@@ -141,7 +141,7 @@ class _InitMarketsSizingBot(CCXTBot):
     def refresh_approved_ignored_coins_lists(self):
         self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limit_ratios(self):
         return None
 
     async def refresh_authoritative_state(self):
@@ -609,7 +609,7 @@ async def test_init_markets_with_unavailable_overrides_completes_mode_lookup(
     bot.config = {
         "live": {"modes": {"long": None, "short": None}},
         "bot": {"long": {"enabled": True, "risk": {
-            "max_positions": 1, "total_wallet_exposure_limit": 1.0,
+            "max_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
         }}, "short": {"enabled": False}},
         "coin_overrides": {"AAA": {}, "UNLISTED": {}},
     }

@@ -97,9 +97,9 @@ def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
 @pytest.mark.parametrize(
     "key,bound",
     [
-        ("unilateralness_ema_span_1m", [0.0, 60.0]),
-        ("unilateralness_ema_span_1m", [60.0, 100001.0]),
-        ("unilateralness_ema_span_1m", [60.0, float("nan")]),
+        ("unilateralness_ema_span_minutes", [0.0, 60.0]),
+        ("unilateralness_ema_span_minutes", [60.0, 100001.0]),
+        ("unilateralness_ema_span_minutes", [60.0, float("nan")]),
         ("entry_cooldown_weights_minutes_exposure_ratio", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [0.0, float("inf")]),
@@ -128,8 +128,8 @@ def test_adaptive_optimizer_accepts_float_span_boundaries_and_zero_weights():
     validate_optimize_bounds_against_bot_config(
         cfg,
         _nested_bounds({
-            "long_unilateralness_ema_span_1m": [1.0, 100000.0, 0.5],
-            "short_unilateralness_ema_span_1m": [10.5, 20.5],
+            "long_unilateralness_ema_span_minutes": [1.0, 100000.0, 0.5],
+            "short_unilateralness_ema_span_minutes": [10.5, 20.5],
             "long_entry_cooldown_weights_minutes_exposure_ratio": [0.0, 10.0],
             "short_entry_cooldown_weights_minutes_adverse_directionality": 0.0,
         }),
@@ -220,7 +220,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1.0, 1.0])
     if consumer == "forager":
         bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
@@ -325,7 +325,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1.0, 1.0])
     weight_bound = [0.0, 1.0 if positive_bound else 0.0]
     if consumer == "forager":
         bounds["forager"]["score_weights"]["unilateralness"] = weight_bound
@@ -384,18 +384,18 @@ def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("gate", ["max_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("gate", ["max_positions", "total_wallet_exposure_limit_ratio"])
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 @pytest.mark.parametrize("reactivates", [False, True])
 def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consumer, reactivates):
     cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
-    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
     cfg["bot"][side]["risk"][gate] = 0
-    cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     cfg["optimize"]["bounds"][side]["risk"].update(
-        max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0]
+        max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1.0, 1.0]
     )
     cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 1 if reactivates else 0]
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
@@ -509,14 +509,14 @@ def test_optimizer_data_registration_checks_final_coin_rms_policy(side, eligibil
     cfg["optimize"]["enable_overrides"] = []
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     cfg["optimize"]["bounds"] = {side: {
-        "risk": {"max_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]},
+        "risk": {"max_positions": [1, 1], "total_wallet_exposure_limit_ratio": [1, 1]},
         "entry_cooldown": {"weights_minutes": {"adverse_directionality": [0, 10]}},
     }}
     if eligibility == "excluded":
         cfg['bot'][side]['universe']['approved_coins'] = ["UNLOADEDCOIN"]
     elif eligibility in ("zero_wel", "zero_weight"):
         coin = "LONGCOIN" if side == "long" else "SHORTCOIN"
-        patch = ({"wallet_exposure_limit": 0.0} if eligibility == "zero_wel" else
+        patch = ({"wallet_exposure_limit_ratio": 0.0} if eligibility == "zero_wel" else
                  {"entry_cooldown": {"weights_minutes": {"adverse_directionality": 0.0}}})
         cfg["coin_overrides"] = {coin: {"bot": {side: patch}}}
     cfg = parse_overrides(prepare_config(cfg, verbose=False), verbose=False)
@@ -567,7 +567,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit_ratio=[1.0, 1.0])
     bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     if pinned is not None:
         cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.max_positions": pinned}
@@ -603,7 +603,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
         base_duration_minutes=base_bounds[1], min_duration_minutes=floor_bounds[1],
         max_duration_minutes=ceil_bounds[1],
     )
-    cfg["optimize"]["bounds"][side]["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1, 1])
+    cfg["optimize"]["bounds"][side]["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1, 1])
     cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
         base_duration_minutes=base_bounds, min_duration_minutes=floor_bounds,
         max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},

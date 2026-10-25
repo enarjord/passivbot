@@ -35,7 +35,7 @@ def facts(now, size, mode, side, *, slow=1.0):
         },
         "slots": 1, "scale_budget_with_excess_allowance": False,
         "exposure_budget": None, "memory_ema_span_minutes": slow,
-        "drawdown_ratio_ema_span_minutes": 1.0, "threshold": 0.05,
+        "drawdown_fraction_ema_span_minutes": 1.0, "drawdown_threshold_fraction": 0.05,
         "cooldown_ms": 60_000,
         "budget_observations": [{
             "timestamp": 0, "order": -1, "balance": 100.0, "slots": 1,
@@ -54,7 +54,7 @@ def evaluate(replay, value):
 def test_carried_green_retires_old_red_before_sparse_account_flatten(mode, side):
     replay = pbr.HslV9Replay()
     initial = evaluate(replay, facts(1, 1.0, mode, side))
-    assert initial["risk"]["drawdown"] == 10.0
+    assert initial["risk"]["drawdown_memory_usd"] == 10.0
     assert initial["risk"]["action"] == "panic"
     advances = replay.cache_info()["advanced_events"]
     preview = evaluate(replay, facts(60_001, 1.0, mode, side))
@@ -147,7 +147,7 @@ def test_sparse_aggregate_account_cohort_requires_zero_gross_inventory(mode, sid
         return value
 
     replay = pbr.HslV9Replay()
-    assert evaluate(replay, cohort(1, 1.0, 1.0))["risk"]["drawdown"] == 20.0
+    assert evaluate(replay, cohort(1, 1.0, 1.0))["risk"]["drawdown_memory_usd"] == 20.0
     assert evaluate(replay, cohort(60_001, 1.0, 1.0))["risk"]["action"] == "normal"
     flat = evaluate(replay, cohort(120_001, 0.0, 0.0))
     assert not flat["risk"]["exposed"]

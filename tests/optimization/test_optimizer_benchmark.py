@@ -187,8 +187,8 @@ def test_population_obeys_bounds_steps_and_side_class(frozen):
                 index = (value - bound["low"]) / bound["step"]
                 assert abs(index - round(index)) < 1e-7
     for config in entry["configs"]:
-        assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0
-        assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] > 0
+        assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0
+        assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] > 0
         assert not config["bot"]["short"]["hsl"]["enabled"]
         assert not config["bot"]["short"]["unstuck"]["enabled"]
         assert config["bot"]["short"]["entry_cooldown"]["base_duration_minutes"] == 0
@@ -251,12 +251,12 @@ def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_reject
 
     options = dict(profile="standard", patterns=["ema_anchor/both/forager/hsl_portfolio/*"],
                    candidates=3, bars=128)
-    explicit = {"portfolio": {"hsl": {"drawdown_ratio_threshold": [0.11, 0.19, 0.01]}}}
+    explicit = {"portfolio": {"hsl": {"drawdown_threshold_fraction": [0.11, 0.19, 0.01]}}}
     original = deepcopy(explicit)
     manifest = freeze(tmp_path / "explicit", bounds_config=explicit, **options)
     assert explicit == original
     specs = manifest["entries"][0]["bounds"]
-    assert specs == [dict(key="hsl_red_threshold", path=["bot", "portfolio", "hsl", "drawdown_ratio_threshold"],
+    assert specs == [dict(key="hsl_drawdown_threshold_fraction", path=["bot", "portfolio", "hsl", "drawdown_threshold_fraction"],
                           low=0.11, high=0.19, step=0.01)]
     invalid = get_expanded_config_prototype()["optimize"]["bounds"]
     original = deepcopy(invalid)
@@ -867,11 +867,11 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
         assert policy["cooldown_after_red_minutes"] == 0.0
     assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1440.0
     assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 1440.0
-    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == .001
+    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == .001
     population, _vectors, bounds = sampled_population(config, case, 3, 7)
     for spec in bounds:
         if spec["path"][-1] in {"memory_ema_span_minutes", "max_positions"}:
             assert spec["low"] == spec["high"] == get_path(config, spec["path"])
-        if spec["path"][:3] == ("bot", "portfolio", "hsl") and spec["path"][-1] == "drawdown_ratio_threshold":
+        if spec["path"][:3] == ("bot", "portfolio", "hsl") and spec["path"][-1] == "drawdown_threshold_fraction":
             assert (spec["low"] < spec["high"]) == (scope == "portfolio")
     assert all(candidate["bot"]["long"]["risk"]["max_positions"] == 2 for candidate in population)

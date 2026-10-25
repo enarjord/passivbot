@@ -22,7 +22,7 @@ from optimization.gpu.parameters import (
     prepare_candidate_parameters,
 )
 from optimization.gpu.coin_parameters import build_coin_override_parameters
-from config.validate import validate_limit_order_fill_buffer_pct
+from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
@@ -40,20 +40,21 @@ from optimization.gpu.metric_registry import (
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
     FORAGER_HYSTERESIS_ABI,
-    validate_market_order_slippage_pct,
+    validate_market_order_slippage_fraction,
     adaptive_params,
     ADAPTIVE_OVERRIDE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START,
     UNSTUCK_EMA_PARAM_KEYS,
+    COUPLED_UNSTUCK_EMA_SOURCE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GLOBAL_RISK_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
@@ -65,16 +66,16 @@ from optimization.gpu.model import (
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     UNSTUCK_PARAM_KEYS,
     build_mps_multicoin_data,
@@ -673,20 +674,20 @@ def _gpu_proxy_execution_checkpoint_contract(
         "last_valid_indices",
         "trade_start_indices",
         "global_warmup_bars",
-        "liquidation_threshold",
-        "limit_order_fill_buffer_pct",
+        "equity_floor_fraction",
+        "limit_order_fill_buffer_fraction",
         "filter_by_min_effective_cost",
         "side_activation",
         "minimum_coin_age_days",
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
         "unstuck_memory_ema_span_minutes",
         "loss_gate_memory_ema_span_minutes",
-        "market_order_slippage_pct",
+        "market_order_slippage_fraction",
         "market_orders_allowed",
-        "market_order_near_touch_threshold",
+        "market_order_near_touch_fraction",
         "forager_score_hysteresis",
     )
     market_keys = (
@@ -695,8 +696,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "min_qty",
         "min_cost",
         "c_mult",
-        "maker_fee",
-        "taker_fee",
+        "maker_fee_fraction",
+        "taker_fee_fraction",
     )
     contract = {
         "version": 10,
@@ -1063,7 +1064,7 @@ def _multicoin_exposure_eligible_coins(
     return eligible
 
 
-def _candidate_wallet_exposure_limit_outputs(
+def _candidate_wallet_exposure_limit_ratio_outputs(
     candidates: list[dict],
     base_limits: dict[str, float],
     *,
@@ -1075,12 +1076,12 @@ def _candidate_wallet_exposure_limit_outputs(
     for side in ("long", "short"):
         if side not in base_limits:
             raise ValueError(f"GPU candidate TWEL context is missing {side}")
-        key = f"{side}_total_wallet_exposure_limit"
+        key = f"{side}_total_wallet_exposure_limit_ratio"
         values = np.asarray(
             [float(candidate.get(key, base_limits[side])) for candidate in candidates],
             dtype=np.float64,
         )
-        outputs[f"candidate_total_wallet_exposure_limit_{side}"] = torch.from_numpy(
+        outputs[f"candidate_total_wallet_exposure_limit_ratio_{side}"] = torch.from_numpy(
             values
         )
     return outputs
@@ -1100,7 +1101,7 @@ def _candidate_position_slot_outputs(
         if side not in base_n_positions or side not in base_limits:
             raise ValueError(f"GPU candidate position-slot context is missing {side}")
         n_positions_key = f"{side}_n_positions"
-        limit_key = f"{side}_total_wallet_exposure_limit"
+        limit_key = f"{side}_total_wallet_exposure_limit_ratio"
         values = []
         for candidate in candidates:
             n_positions = float(candidate.get(n_positions_key, base_n_positions[side]))
@@ -1376,17 +1377,18 @@ def _candidate_parameter_matrix(
     matrix = np.empty(
         (len(candidates), len(base_params) * len(param_keys)), dtype=np.float64
     )
+    coupled_sources = (
+        COUPLED_UNSTUCK_EMA_SOURCE_KEYS[
+            "trailing_martingale" if "entry_ema_span_0_minutes" in param_keys else "ema_anchor"
+        ]
+        if couple_unstuck_emas else {}
+    )
     for side_index, (side, base) in enumerate(base_params.items()):
         overrides = (static_overrides or {}).get(side, {})
         for column, key in enumerate(param_keys):
             if key == "unilateralness_window":
                 continue
-            source_key = (
-                key.removeprefix("unstuck_")
-                if couple_unstuck_emas
-                and key in ("unstuck_ema_span_0", "unstuck_ema_span_1")
-                else key
-            )
+            source_key = coupled_sources.get(key, key)
             target = side_index * len(param_keys) + column
             if source_key in overrides:
                 matrix[:, target] = float(overrides[source_key])
@@ -1406,7 +1408,7 @@ def _candidate_parameter_matrix(
             offset = side_index * len(param_keys)
             matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
                 20.0
-                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_minutes")]
             )
     return matrix
 
@@ -1428,14 +1430,14 @@ def _prepared_multicoin_data(
     cache=None,
     stream_tick_inputs=False,
     compact_hourly_ranges=False,
-    limit_order_fill_buffer_pct=0.0,
-    market_order_slippage_pct=0.0,
+    limit_order_fill_buffer_fraction=0.0,
+    market_order_slippage_fraction=0.0,
 ):
     """Share immutable suite tensors only for identical validated packing inputs."""
-    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-        limit_order_fill_buffer_pct
+    limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+        limit_order_fill_buffer_fraction
     )
-    market_order_slippage_pct = validate_market_order_slippage_pct(market_order_slippage_pct)
+    market_order_slippage_fraction = validate_market_order_slippage_fraction(market_order_slippage_fraction)
     candles = checkpoint_contract["hlcvs"]
     timeline = checkpoint_contract["timestamps"]
     key = (
@@ -1449,9 +1451,9 @@ def _prepared_multicoin_data(
         timeline["sha256"],
         tuple(runs),
         tuple(markets),
-        limit_order_fill_buffer_pct,
+        limit_order_fill_buffer_fraction,
         MARKET_EXECUTION_TICKS_ABI,
-        market_order_slippage_pct,
+        market_order_slippage_fraction,
         bool(stream_tick_inputs),
         bool(compact_hourly_ranges),
     )
@@ -1473,8 +1475,8 @@ def _prepared_multicoin_data(
             kwargs["compact_hourly_ranges"] = bool(compact_hourly_ranges)
         return build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct, **kwargs,
-            market_order_slippage_pct=market_order_slippage_pct,
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction, **kwargs,
+            market_order_slippage_fraction=market_order_slippage_fraction,
         )
     data = (
         residency.prepare(key, build)
@@ -1661,8 +1663,8 @@ class SharedAccountReplay:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
-        limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-            backtest_params.get("limit_order_fill_buffer_pct", 0.0)
+        limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+            backtest_params.get("limit_order_fill_buffer_fraction", 0.0)
         )
         from optimization.gpu.hsl import project_bot
 
@@ -1689,15 +1691,15 @@ class SharedAccountReplay:
         )
 
         comparable_bot_keys = (
-            "total_wallet_exposure_limit",
-            "filter_volume_ema_span_1m",
-            "filter_volatility_ema_span_1m",
+            "total_wallet_exposure_limit_ratio",
+            "forager_volume_ema_span_minutes",
+            "forager_log_range_ema_span_minutes",
             "forager_score_weights",
             "n_positions",
             "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold",
+            "risk_twel_enforcer_threshold_ratio",
         )
         signal_mode = self.hsl_signal_mode
         hsl_enabled_sides = [
@@ -1724,8 +1726,8 @@ class SharedAccountReplay:
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
             )
-        self.base_total_wallet_exposure_limits = {
-            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit"])
+        self.base_total_wallet_exposure_limit_ratios = {
+            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit_ratio"])
             for side in ("long", "short")
         }
         self.base_n_positions = {
@@ -1821,8 +1823,8 @@ class SharedAccountReplay:
                 min_qty=float(item["min_qty"]),
                 min_cost=float(item["min_cost"]),
                 c_mult=float(item["c_mult"]),
-                maker_fee=float(item["maker_fee"]),
-                taker_fee=float(item["taker_fee"]),
+                maker_fee_fraction=float(item["maker_fee_fraction"]),
+                taker_fee_fraction=float(item["taker_fee_fraction"]),
             )
             for item in payload.exchange_params
         ]
@@ -1847,8 +1849,8 @@ class SharedAccountReplay:
                 ),
                 first_ts_ms=int(backtest_params["first_timestamp_ms"]),
                 interval_ms=interval_ms,
-                liquidation_threshold=float(
-                    backtest_params.get("liquidation_threshold", 0.05)
+                equity_floor_fraction=float(
+                    backtest_params.get("equity_floor_fraction", 0.05)
                 ),
                 first_valid_idx=int(backtest_params["first_valid_indices"][coin]),
                 last_valid_idx=int(backtest_params["last_valid_indices"][coin]),
@@ -1868,7 +1870,7 @@ class SharedAccountReplay:
                 date_to_ts(format_end_date(config["backtest"]["end_date"]))
             ))
         wallet_exposure_column = (
-            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
             if self.strategy_kind == "ema_anchor"
             else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
         )
@@ -1907,8 +1909,8 @@ class SharedAccountReplay:
             cache=prepared_data_cache,
             stream_tick_inputs=stream_tick_inputs,
             compact_hourly_ranges=stream_tick_inputs and runs[0].interval_ms == 60_000,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
-            market_order_slippage_pct=backtest_params.get("market_order_slippage_pct", 0.0),
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
+            market_order_slippage_fraction=backtest_params.get("market_order_slippage_fraction", 0.0),
         )
         if stream_tick_inputs:
             discard_readonly_file_pages(values)
@@ -1946,8 +1948,8 @@ class SharedAccountReplay:
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis": self.forager_score_hysteresis,
-            "max_realized_loss_pct": float(
-                backtest_params.get("max_realized_loss_pct", 1.0)
+            "loss_gate_max_drawdown_fraction": float(
+                backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
             ),
             "collect_coin_fill_counts": bool(
                 self.needed_metrics
@@ -1956,14 +1958,14 @@ class SharedAccountReplay:
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
             ),
-            "market_order_slippage_pct": float(
-                backtest_params.get("market_order_slippage_pct", 0.0)
+            "market_order_slippage_fraction": float(
+                backtest_params.get("market_order_slippage_fraction", 0.0)
             ),
             "market_orders_allowed": bool(
                 backtest_params.get("market_orders_allowed", False)
             ),
-            "market_order_near_touch_threshold": float(
-                backtest_params.get("market_order_near_touch_threshold", 0.001)
+            "market_order_near_touch_fraction": float(
+                backtest_params.get("market_order_near_touch_fraction", 0.001)
             ),
             "hsl_ema_tail_enabled": bool(self.needed_metrics & _HSL_EMA_TAIL_METRICS),
             "hsl_raw_drawdown_enabled": bool(
@@ -2108,8 +2110,8 @@ class SharedAccountReplay:
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
-                    "hsl_red_threshold",
-                    "hsl_drawdown_ratio_ema_span_minutes",
+                    "hsl_drawdown_threshold_fraction",
+                    "hsl_drawdown_fraction_ema_span_minutes",
                     "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:
@@ -2184,8 +2186,8 @@ class SharedAccountReplay:
             # Metric normalization also reads defaults for the disabled side.
             for pside in ("long", "short"):
                 expanded.setdefault(
-                    f"{pside}_total_wallet_exposure_limit",
-                    self.base_total_wallet_exposure_limits[pside],
+                    f"{pside}_total_wallet_exposure_limit_ratio",
+                    self.base_total_wallet_exposure_limit_ratios[pside],
                 )
                 expanded.setdefault(
                     f"{pside}_n_positions", self.base_n_positions[pside]
@@ -2383,9 +2385,9 @@ class SharedAccountReplay:
                 )
             if any("_per_twel_ratio_" in name for name in self.needed_metrics):
                 output.update(
-                    _candidate_wallet_exposure_limit_outputs(
+                    _candidate_wallet_exposure_limit_ratio_outputs(
                         chunk,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )
@@ -2394,7 +2396,7 @@ class SharedAccountReplay:
                     _candidate_position_slot_outputs(
                         chunk,
                         self.base_n_positions,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )

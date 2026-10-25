@@ -58,10 +58,10 @@ def test_absent_and_empty_side_have_identical_activation_and_parameters(side):
 @pytest.mark.parametrize("flag,capacity", product((False, True), (0.0, 1.0)))
 def test_numeric_capacity_never_rewrites_explicit_activation(side, flag, capacity):
     source = {"bot": {side: {"enabled": flag,
-        "risk": {"total_wallet_exposure_limit": capacity, "max_positions": int(capacity)}}}}
+        "risk": {"total_wallet_exposure_limit_ratio": capacity, "max_positions": int(capacity)}}}}
     effective = prepare(source, live_only=True, verbose=False)
     assert side_enabled(effective, side) is flag
-    assert effective["bot"][side]["risk"]["total_wallet_exposure_limit"] == capacity
+    assert effective["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] == capacity
     assert effective["bot"][side]["risk"]["max_positions"] == int(capacity)
 
 
@@ -212,7 +212,7 @@ def test_numeric_search_never_grants_activation_but_fixed_scenario_permission_re
 
     source = {"bot": {"long": {"enabled": flag if channel == "base" else False}},
               "optimize": {"bounds": {"long": {
-                  "risk": {"max_positions": [1, 3], "total_wallet_exposure_limit": [0.5, 1.5]},
+                  "risk": {"max_positions": [1, 3], "total_wallet_exposure_limit_ratio": [0.5, 1.5]},
                   "unstuck": {"close_fraction": [0.01, 0.12]}}}}}
     if channel == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = {"bot.long.enabled": flag}
@@ -281,10 +281,10 @@ def test_released_v8_materializes_true_both_and_preserves_zero_capacity_search(k
     converted = migrate_v8_to_v9(raw, best_effort=True)
     config = prepare_config(converted.config, live_only=True, verbose=False)
     assert side_activation(config) == {"long": True, "short": True}
-    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     bounds = dict(zip((key for key, _ in get_optimization_key_paths(config)),
                       extract_bounds_tuple_list_from_config(config)))
-    assert bounds["bot.short.risk.total_wallet_exposure_limit"].high > 0
+    assert bounds["bot.short.risk.total_wallet_exposure_limit_ratio"].high > 0
     for side in ("long", "short"):
         records = [item for item in converted.changes if item["path"] == f"bot.{side}.enabled"]
         assert len(records) == 1 and records[0]["new"] is True

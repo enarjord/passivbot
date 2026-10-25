@@ -52,8 +52,8 @@ pub struct Input {
     pub scale_budget_with_excess_allowance: bool,
     pub exposure_budget: Option<ExposureBudget>,
     pub memory_ema_span_minutes: f64,
-    pub drawdown_ratio_ema_span_minutes: f64,
-    pub threshold: f64,
+    pub drawdown_fraction_ema_span_minutes: f64,
+    pub drawdown_threshold_fraction: f64,
     pub cooldown_ms: i64,
     pub budget_observations: Vec<BudgetFact>,
     /// Previously supported prices explicitly disputed by corrected source facts.
@@ -111,8 +111,8 @@ impl Recorder {
                 red_at: d.timestamp_ms,
                 flat_at: None,
                 reason: "drawdown",
-                raw: Some(d.raw),
-                ema: Some(d.ema),
+                signal_raw_fraction: Some(d.signal_raw_fraction),
+                signal_ema_fraction: Some(d.signal_ema_fraction),
             });
         }
         if d.flatten_qualified {
@@ -125,8 +125,8 @@ impl Recorder {
                 red_at: red,
                 flat_at: self.flat_at,
                 reason: "stop_flattened",
-                raw: Some(d.raw),
-                ema: Some(d.ema),
+                signal_raw_fraction: Some(d.signal_raw_fraction),
+                signal_ema_fraction: Some(d.signal_ema_fraction),
             });
         } else if (d.exposed && !d.red) || (!d.exposed && d.action == Action::Normal) {
             if let (Some(red), Some(flat)) = (self.red_at, self.flat_at) {
@@ -136,8 +136,8 @@ impl Recorder {
                     red_at: red,
                     flat_at: Some(flat),
                     reason: "cooldown_complete",
-                    raw: None,
-                    ema: None,
+                    signal_raw_fraction: None,
+                    signal_ema_fraction: None,
                 });
             }
             self.red_at = None;
@@ -363,11 +363,11 @@ pub fn realized_memories_v9(input_json: &str) -> PyResult<String> {
 #[pyfunction]
 pub fn calc_auto_unstuck_allowance_v9(
     balance: f64,
-    loss_pct: f64,
+    loss_allowance_fraction: f64,
     twel: f64,
     drawdown: f64,
 ) -> PyResult<f64> {
-    hsl_decay::allowance_for(balance, loss_pct, twel, drawdown).map_err(PyValueError::new_err)
+    hsl_decay::allowance_for(balance, loss_allowance_fraction, twel, drawdown).map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]
@@ -391,7 +391,7 @@ mod tests {
                         {"identity":"manual-close","timestamp":60001,"delta":-1.0,"price":90.0,
                         "realized":-10.0,"fee":1.0,"sequence":1,"revision":0}]}]},
             "slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,
-            "memory_ema_span_minutes":3.0,"drawdown_ratio_ema_span_minutes":1.0,"threshold":0.095,"cooldown_ms":120000,
+            "memory_ema_span_minutes":3.0,"drawdown_fraction_ema_span_minutes":1.0,"drawdown_threshold_fraction":0.095,"cooldown_ms":120000,
             "budget_observations":[
                 {"timestamp":0,"order":-1,"balance":100.0,"slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false},
                 {"timestamp":1,"order":0,"balance":100.0,"slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false},
@@ -407,8 +407,8 @@ mod tests {
         assert_eq!(risk.action, Action::Halted);
         assert!(!risk.red);
         assert_eq!(risk.cooldown_until, Some(180001));
-        assert_eq!(risk.drawdown, 9.0);
-        assert!(risk.raw < 0.095);
+        assert_eq!(risk.drawdown_memory_usd, 9.0);
+        assert!(risk.signal_raw_fraction < 0.095);
         let decision = output.decision.unwrap();
         assert_eq!(decision.flat_at, Some(60001));
         assert_eq!(decision.red_at, Some(60000));
@@ -446,12 +446,12 @@ mod tests {
         pair["prices"] = json!({});
         pair["position"]["size"] = json!(10.0);
         pair["position"]["basis"] = json!(100.0);
-        value["drawdown_ratio_ema_span_minutes"] = json!(1000000.0);
+        value["drawdown_fraction_ema_span_minutes"] = json!(1000000.0);
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         assert_eq!(output.decision.unwrap().action, Action::Panic);
         let risk = output.risk.unwrap();
-        assert_eq!(risk.drawdown, 100.0);
-        assert_eq!(risk.raw, risk.ema);
+        assert_eq!(risk.drawdown_memory_usd, 100.0);
+        assert_eq!(risk.signal_raw_fraction, risk.signal_ema_fraction);
         assert!(output.reasons.contains("unknown_prefix_current_basis_seed"));
     }
 
@@ -465,15 +465,15 @@ mod tests {
         pair["fills"] = json!([{"identity":"damaged-quantity","timestamp":60000,
             "delta":null,"price":90.0,"realized":-200.0,"fee":-1.0,
             "sequence":0,"revision":0}]);
-        value["drawdown_ratio_ema_span_minutes"] = json!(1000000.0);
+        value["drawdown_fraction_ema_span_minutes"] = json!(1000000.0);
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         let risk = output.risk.unwrap();
         assert_eq!(risk.action, Action::Panic);
-        assert!(risk.ema > 0.19);
+        assert!(risk.signal_ema_fraction > 0.19);
         // Seed loss100 is repaid by the estimated historical UPNL transition;
         // known netloss201 then one decay and current UPNL loss100 are separate.
-        assert_eq!(risk.drawdown, 200.5);
-        assert_eq!(risk.raw, (200.5_f32 / 600.5_f32) as f64);
+        assert_eq!(risk.drawdown_memory_usd, 200.5);
+        assert_eq!(risk.signal_raw_fraction, (200.5_f32 / 600.5_f32) as f64);
     }
 
     #[test]

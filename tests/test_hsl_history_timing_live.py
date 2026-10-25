@@ -35,13 +35,13 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            max_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
     policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     policy.update(
         enabled=True,
-        drawdown_ratio_threshold=0.9,
-        drawdown_ratio_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.9,
+        drawdown_fraction_ema_span_minutes=1.0,
         cooldown_after_red_minutes=1.0,
         panic_close_order_type="market",
     )
@@ -102,7 +102,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
             if mode == "portfolio"
             else bot.config["bot"][side]["hsl"]
         )
-        policy["drawdown_ratio_threshold"] = 0.05
+        policy["drawdown_threshold_fraction"] = 0.05
         await bot.update_pnls()
         # Real account reads happen after the same fill receipt. Each fresh owner
         # must still reconstruct the completed cooldown, without a saved RED flag.
@@ -118,7 +118,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
             )
             assert abs(bot.positions[symbol][side]["size"]) == current_size
         # A genuine new loss still reaches the real reduce-only connector.
-        policy["drawdown_ratio_threshold"] = 0.03
+        policy["drawdown_threshold_fraction"] = 0.03
         bot.cca.get_current_step()["prices"][symbol] = 10.0 if side == "long" else 190.0
         bot.market_snapshot_provider._cache.clear()
         await bot.refresh_protective_authoritative_state()

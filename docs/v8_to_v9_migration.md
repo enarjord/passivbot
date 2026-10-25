@@ -14,19 +14,31 @@ before backtesting a proposed replacement.
 | Released field | Final v9 field or action |
 |---|---|
 | `live.hsl_signal_mode` | `bot.portfolio.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
-| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_ratio_threshold`, with the same fractional value |
+| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_threshold_fraction`, with the same fractional value |
 | `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.portfolio.hsl` alongside its scope |
-| HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
+| HSL `ema_span_minutes` | `drawdown_fraction_ema_span_minutes` in the same policy |
 | HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
 | Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
+| Pymoo shared `crossover_eta`, `mutation_eta` | `crossover_distribution_index`, `mutation_distribution_index` |
+| Pymoo shared `crossover_prob_var`, `mutation_prob`, `mutation_prob_per_variable` | `crossover_probability_per_variable`, `mutation_probability`, `mutation_probability_per_variable`; same probability gates and auto formulas |
+| TM `entry.double_down_factor` | `entry.reentry_qty_multiplier`, scaling the absolute current position quantity for an additional entry |
+| TM `entry.threshold_we_weight`, `entry.retracement_we_weight`, `close.threshold_we_weight` | Same role names ending in `_exposure_ratio_coefficient`; values and formulas are unchanged |
+| EMA-anchor `entry_double_down_factor`, `offset_psize_weight` | `entry_qty_exposure_coefficient`, `inventory_offset_exposure_coefficient`; same-side sizing and signed inventory shifts retain their original formulas |
+| Strategy `*_volatility_1m_weight` / `*_volatility_1h_weight` | Corresponding `*_log_range_1m_coefficient` / `*_log_range_1h_coefficient`; the indicator remains EMA of `ln(high / low)` |
+| Forager `score_weights.volatility` | `score_weights.log_range`, preserving relative weights and their normalization |
+| Forager/strategy log-range span names containing `volatility` | Corresponding names containing `log_range`, retaining the same minute or hourly-candle unit |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
-| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_ratio` |
+| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_fraction` |
+| `bot.<side>.risk.total_wallet_exposure_limit` | `bot.<side>.risk.total_wallet_exposure_limit_ratio`, with the same notional-to-balance value |
+| `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
-| `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
+| `backtest.btc_collateral_cap`, `backtest.btc_collateral_ltv_cap` | `backtest.btc_collateral_target_ratio`, `backtest.max_usd_debt_to_wallet_value_ratio`; the same target and USD-debt/total-wallet-value limit, excluding unrealized trading PnL |
+| `backtest.maker_fee_override`, `backtest.taker_fee_override` | `backtest.maker_fee_override_fraction`, `backtest.taker_fee_override_fraction`; signed values and `null` are unchanged |
+| `backtest.liquidation_threshold` | `backtest.equity_floor_fraction` |
 | `live.auto_gs` | `live.modes.disapproved_position`: `graceful_stop` or `manual` |
 | `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.portfolio` |
 | `live.approved_coins` | Common inline approvals become `bot.global.universe.approved_coins`; directional approvals and file bindings remain explicit `bot.<side>.universe.approved_coins` sources |
@@ -34,7 +46,7 @@ before backtesting a proposed replacement.
 | Shared minimum age | Copy `live.minimum_coin_age_days` to `bot.long.universe.minimum_coin_age_days` and `bot.short.universe.minimum_coin_age_days`; report consistent all-mode initial-entry admission |
 | Shared minimum-cost filter | Copy to both `bot.<side>.universe.filter_by_min_effective_cost` leaves; simulation override remains nullable |
 | Shared market-order policy | `bot.portfolio.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
-| `live.warmup_ratio` | `bot.portfolio.warmup.span_multiplier`, with the same value |
+| `live.warmup_ratio` | `bot.portfolio.warmup.activation_span_fraction`, with the same value |
 | Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |
 | `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.portfolio.warmup` |
 | Scale-one sizing, allowance, fee, fill and execution `_pct` fields | Public `_fraction` names; values are unchanged |
@@ -62,11 +74,17 @@ is added.
 
 V9 uses separate slow EMA spans for each HSL policy, account-wide unstuck realized memory and
 account-wide loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
+
+Released flat unstuck fields and optimizer IDs are translated by a frozen versioned map,
+including root optimizer bounds, fixed selectors, referenced coin files and inline overrides.
+Current native identifiers use `_fraction`, `_ratio` and `_minutes`. Conflicting released
+spellings are rejected before defaults are applied, and conversions report final public paths.
+
 The shared span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
 `bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
 
-These unit spelling changes do not rescale values. Price and minute-volatility horizons remain
+These unit spelling changes do not rescale values. Price and minute-log-range horizons remain
 floating-point minutes, including backtests with aggregated candle intervals; hourly horizons
 remain floating-point counts of calendar-hour candles. Native parameter and optimizer identifiers
 keep their established spellings.
@@ -135,11 +153,24 @@ The retired daily-worst underwater mean is replaced by minute-sampled Pain Index
 when explicitly selected and acknowledged; its old thresholds are not equivalent.
 Best-effort migration may infer that choice and records the formula change. The removed
 underwater median has no inferred replacement and requires an explicit metric choice.
-Best-effort migration can infer a supported `_ew` formula, but still requires
-`--metric-replacement` when no supported exponential counterpart exists. Selecting an ordinary
-full-period metric remains a different formula, including when another objective already uses it.
-Existing scoring normalization consolidates duplicate objectives created by an explicit choice;
-inspect the resulting objective list before starting a new search.
+Best-effort migration can infer a supported `_ew` formula. Four released families without an
+exponential counterpart instead have explicit ordinary fallbacks:
+
+| Released selector | Best-effort ordinary replacement |
+| --- | --- |
+| `volume_pct_per_day_avg_w` | `active_day_turnover_proxy_mean_ratio` |
+| `mdg_strategy_eq_w` | `mdg_fraction_strategy_equity` |
+| `adg_pnl_w` | `daily_realized_pnl_mean_fraction` |
+| `mdg_pnl_w` | `daily_realized_pnl_median_fraction` |
+
+These retain the ordinary quantity, statistic and scale, including the realized-PnL basis of
+the last two. They drop the retired equal average of the full-history estimate and up to nine
+shorter suffix estimates. Full-period ordinary statistics are different formulas; they do not
+enable EW analysis or supply an EW half-life. Each inference is reported as such. Supported
+outer statistic suffixes remain intact; unknown families still require `--metric-replacement`.
+Existing scoring normalization consolidates identical objectives created by formula choices;
+the report includes the old/new objective lists and counts. Inspect that list and re-evaluate
+limits before starting a new search. Explicit replacements take precedence over inferred choices.
 `backtest.visible_metrics: null` is retained: it derives displayed metrics from objectives and
 limits. An empty list instead displays all metrics.
 DEAP inputs additionally require an authored `optimize.pymoo.shared` policy and
@@ -177,7 +208,8 @@ are emitted as choices are made, including before a later validation failure.
 
 | Missing choice or saved-result field | Best-effort policy |
 |---|---|
-| Retired `_w` metric | Replace `_w` with `_ew` when that metric exists, preserving currency and supported statistic suffixes |
+| Supported released `_w` family with an EW counterpart | Use its frozen EW replacement, preserving verified currency and supported outer statistic suffixes |
+| The four released turnover / MDG strategy-equity / daily realized-PnL families above | Use the named full-period ordinary statistic and report loss of suffix-window recency averaging |
 | EW half-life absent or `null`, with an EW metric requested | Set global `backtest.ew_half_life_days` to `180.0` |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
 | Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |
@@ -193,8 +225,8 @@ are emitted as choices are made, including before a later validation failure.
 Explicit `--lookback-ema-span-minutes`, `--memory-span` and
 `--metric-replacement` choices take precedence. Authored EW half-lives and pymoo
 shared settings are preserved. For DEAP, candidate-level `mutation_probability`
-initializes `pymoo.shared.mutation_prob`, and per-variable `mutation_indpb`
-initializes `mutation_prob_per_variable`; the old zero `mutation_indpb` sentinel
+initializes `pymoo.shared.mutation_probability`, and per-variable `mutation_indpb`
+initializes `mutation_probability_per_variable`; the old zero `mutation_indpb` sentinel
 uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
 with best-effort mode. Best-effort mode supplies missing consent for formula,

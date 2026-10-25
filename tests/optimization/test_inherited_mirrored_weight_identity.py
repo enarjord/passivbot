@@ -26,7 +26,7 @@ def test_mirrored_searched_weights_keep_logical_fixed_identity_and_static_pin_ga
     ]))
     columns = deepcopy(original["backtest"]["coins"])
     raw = clean_config(original)
-    names = ("volume", "ema_readiness", "volatility", "unilateralness")
+    names = ("volume", "ema_readiness", "log_range", "unilateralness")
     weights = dict(zip(names, (2.0, 5.0, 3.0, 0.0)))
     for side in ("long", "short"):
         raw["bot"][side]["forager"]["score_weights"] = deepcopy(weights)

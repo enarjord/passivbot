@@ -190,14 +190,14 @@ def test_current_registry_hsl_bindings_follow_explicit_scope(kind, scope):
     if scope != "portfolio":
         with pytest.raises(ValueError, match=f"inactive in {scope} HSL scope"):
             build_bound_plan(
-                policy, {"portfolio": {"hsl": {"drawdown_ratio_threshold": [0.1, 0.2]}}},
+                policy, {"portfolio": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}},
                 strategy_kind=kind, hsl_scope=scope,
             )
     if scope == "portfolio":
         for side in ("global", "long", "short"):
             with pytest.raises(ValueError, match="inactive in portfolio HSL scope"):
                 build_bound_plan(
-                    policy, {side: {"hsl": {"drawdown_ratio_threshold": [0.1, 0.2]}}},
+                    policy, {side: {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}},
                     strategy_kind=kind, hsl_scope=scope,
                 )
 

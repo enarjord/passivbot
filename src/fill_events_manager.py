@@ -81,8 +81,8 @@ PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
 PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1 = "gross_pnl_signed_fee_paid_v1"
 PNL_CONTRACT_GROSS_QUOTE_FEE_BEST_EFFORT_V2 = "gross_pnl_quote_fee_best_effort_v2"
 PNL_CONTRACT_CURRENT = PNL_CONTRACT_GROSS_QUOTE_FEE_BEST_EFFORT_V2
-DEFAULT_FEE_PCT_FALLBACK = 0.0002
-DEFAULT_FEE_PCT_SANITY_ABS_MAX = 0.001
+DEFAULT_FALLBACK_FEE_FRACTION = 0.0002
+DEFAULT_MAX_ABS_FEE_FRACTION = 0.001
 DEFAULT_FEE_CONVERSION_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 FEE_SOURCE_REPORTED_QUOTE = "reported_quote"
@@ -334,11 +334,11 @@ def _payload_quote_notional(payload: Dict[str, object]) -> float:
     return qty_abs * price * c_mult
 
 
-def _fallback_fee_paid(payload: Dict[str, object], fee_pct_fallback: float) -> float:
+def _fallback_fee_paid(payload: Dict[str, object], fallback_fee_fraction: float) -> float:
     notional = _payload_quote_notional(payload)
     if notional <= 0.0:
         return 0.0
-    return -abs(notional * float(fee_pct_fallback))
+    return -abs(notional * float(fallback_fee_fraction))
 
 
 def _fee_rate_from_entries(fees: object) -> Optional[float]:
@@ -367,8 +367,8 @@ def _rate_estimated_fee_paid(payload: Dict[str, object], rate: float) -> float:
 def _normalize_fee_paid_from_payload(
     payload: Dict[str, object],
     *,
-    fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
-    fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
+    fallback_fee_fraction: float = DEFAULT_FALLBACK_FEE_FRACTION,
+    max_abs_fee_fraction: float = DEFAULT_MAX_ABS_FEE_FRACTION,
     quote_currency: Optional[str] = None,
     conversion_rates: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, Dict[str, object]]:
@@ -407,8 +407,8 @@ def _normalize_fee_paid_from_payload(
             candidate.pop(key, None)
         resolved_paid, resolved_meta = _normalize_fee_paid_from_payload(
             candidate,
-            fee_pct_fallback=fee_pct_fallback,
-            fee_pct_sanity_abs_max=fee_pct_sanity_abs_max,
+            fallback_fee_fraction=fallback_fee_fraction,
+            max_abs_fee_fraction=max_abs_fee_fraction,
             quote_currency=quote,
             conversion_rates=conversion_rates,
         )
@@ -469,12 +469,12 @@ def _normalize_fee_paid_from_payload(
 
     if fee_source == FEE_SOURCE_NONE:
         rate = _fee_rate_from_entries(entries)
-        if rate is not None and abs(rate) <= max(float(fee_pct_sanity_abs_max), 0.0):
+        if rate is not None and abs(rate) <= max(float(max_abs_fee_fraction), 0.0):
             fee_paid = _rate_estimated_fee_paid(payload, rate)
             fee_source = FEE_SOURCE_ESTIMATED_RATE
             fee_quality = FEE_QUALITY_ESTIMATED
         else:
-            fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
+            fee_paid = _fallback_fee_paid(payload, fallback_fee_fraction)
             fee_source = FEE_SOURCE_FALLBACK_PCT
             fee_quality = FEE_QUALITY_FALLBACK
             if unresolved_non_quote:
@@ -490,13 +490,13 @@ def _normalize_fee_paid_from_payload(
 
     fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
     sanity_replaced = False
-    sanity_max = max(float(fee_pct_sanity_abs_max), 0.0)
+    sanity_max = max(float(max_abs_fee_fraction), 0.0)
     if notional > 0.0 and sanity_max > 0.0 and abs(fee_ratio) > sanity_max:
         original_fee_paid = fee_paid
         original_fee_ratio = fee_ratio
         original_fee_source = fee_source
         original_fee_quality = fee_quality
-        fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
+        fee_paid = _fallback_fee_paid(payload, fallback_fee_fraction)
         fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
         sanity_replaced = True
         fee_source = FEE_SOURCE_FALLBACK_PCT
@@ -1760,7 +1760,7 @@ class FillEvent:
             raise ValueError(f"Fill event missing required keys: {missing}")
         fee_paid, fee_meta = _normalize_fee_paid_from_payload(
             data,
-            fee_pct_sanity_abs_max=float("inf"),
+            max_abs_fee_fraction=float("inf"),
         )
         return cls(
             id=str(data["id"]),
@@ -3640,8 +3640,8 @@ class FillEventsManager:
         user: str,
         fetcher: BaseFetcher,
         cache_path: Path,
-        fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
-        fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
+        fallback_fee_fraction: float = DEFAULT_FALLBACK_FEE_FRACTION,
+        max_abs_fee_fraction: float = DEFAULT_MAX_ABS_FEE_FRACTION,
         fee_conversion_max_age_ms: int = DEFAULT_FEE_CONVERSION_MAX_AGE_MS,
         runtime_identity: Optional[Dict[str, object]] = None,
     ) -> None:
@@ -3649,8 +3649,8 @@ class FillEventsManager:
         self.user = user
         self.fetcher = fetcher
         self.cache = FillEventCache(cache_path)
-        self.fee_pct_fallback = float(fee_pct_fallback)
-        self.fee_pct_sanity_abs_max = float(fee_pct_sanity_abs_max)
+        self.fallback_fee_fraction = float(fallback_fee_fraction)
+        self.max_abs_fee_fraction = float(max_abs_fee_fraction)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
         self.runtime_identity = deepcopy(runtime_identity) if runtime_identity else {}
         self._fill_provenance = (
@@ -3683,8 +3683,8 @@ class FillEventsManager:
     ) -> Dict[str, object]:
         fee_paid, fee_meta = _normalize_fee_paid_from_payload(
             payload,
-            fee_pct_fallback=self.fee_pct_fallback,
-            fee_pct_sanity_abs_max=self.fee_pct_sanity_abs_max,
+            fallback_fee_fraction=self.fallback_fee_fraction,
+            max_abs_fee_fraction=self.max_abs_fee_fraction,
             conversion_rates=conversion_rates,
         )
         payload["fee_paid"] = fee_paid
@@ -3872,12 +3872,12 @@ class FillEventsManager:
         if new_degraded:
             logger.warning(
                 "[fills] fee policy used non-exact fee accounting | exchange=%s user=%s "
-                "fallback_pct=%.8f sanity_abs_max=%.8f estimated=%d fallback=%d "
+                "fallback_fee_fraction=%.8f max_abs_fee_fraction=%.8f estimated=%d fallback=%d "
                 "sanity_replaced=%d new_degraded=%d symbols=%s reasons=%s examples=%s",
                 self.exchange,
                 self.user,
-                self.fee_pct_fallback,
-                self.fee_pct_sanity_abs_max,
+                self.fallback_fee_fraction,
+                self.max_abs_fee_fraction,
                 stats[FEE_SOURCE_ESTIMATED_RATE],
                 stats[FEE_SOURCE_FALLBACK_PCT],
                 stats[FEE_QUALITY_SANITY_REPLACED],
@@ -5212,7 +5212,7 @@ class FillEventsManager:
         # has demonstrated a fixed point. New rows (including duplicate fetches),
         # PnL observations, policy changes and nested-data changes use the full path.
         empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
-        fee_policy = (self.fee_pct_fallback, self.fee_pct_sanity_abs_max)
+        fee_policy = (self.fallback_fee_fraction, self.max_abs_fee_fraction)
         proof = self._empty_refresh_proof
         self._empty_refresh_proof = None
         unchanged = bool(
@@ -8388,12 +8388,12 @@ def _extract_symbol_pool(config: dict, override: Optional[List[str]]) -> List[st
 def fee_policy_kwargs_from_config(config: dict) -> Dict[str, object]:
     live = config.get("live", {}) if isinstance(config, dict) else {}
     return {
-        "fee_pct_fallback": float(
-            live.get("fills", {}).get("fallback_fee_fraction", DEFAULT_FEE_PCT_FALLBACK)
+        "fallback_fee_fraction": float(
+            live.get("fills", {}).get("fallback_fee_fraction", DEFAULT_FALLBACK_FEE_FRACTION)
         ),
-        "fee_pct_sanity_abs_max": float(
+        "max_abs_fee_fraction": float(
             live.get("fills", {}).get(
-                "max_abs_fee_fraction", DEFAULT_FEE_PCT_SANITY_ABS_MAX
+                "max_abs_fee_fraction", DEFAULT_MAX_ABS_FEE_FRACTION
             )
         ),
         "fee_conversion_max_age_ms": int(

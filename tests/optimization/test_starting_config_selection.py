@@ -31,7 +31,7 @@ def _write_candidate(
     payload = {
         "config_version": "v8.0.0",
         "backtest": {"aggregate": {"default": "max"}},
-        "bot": {"long": {"risk": {"total_wallet_exposure_limit": 1.0 + adg_fraction}}},
+        "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg_fraction}}},
         "optimize": {
             "scoring": [
                 {"metric": "adg_fraction_strategy_equity", "goal": "max"},

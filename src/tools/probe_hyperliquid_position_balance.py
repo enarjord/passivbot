@@ -70,10 +70,10 @@ async def _main() -> int:
         help="if a position exists on the symbol, flatten it and exit without opening a new one",
     )
     parser.add_argument(
-        "--close-order-distance-pct",
+        "--close-order-distance-fraction",
         type=float,
         default=0.25,
-        help="distance for the optional resting reduce-only close order",
+        help="fractional price distance for optional resting orders (default 0.25 = 25%%)",
     )
     parser.add_argument(
         "--dump-raw-info",
@@ -166,9 +166,9 @@ async def _main() -> int:
         extra_entry_order = None
         if args.place_resting_entry_order:
             if args.side == "buy":
-                entry_price = last_price * (1.0 - abs(float(args.close_order_distance_pct)))
+                entry_price = last_price * (1.0 - abs(float(args.close_order_distance_fraction)))
             else:
-                entry_price = last_price * (1.0 + abs(float(args.close_order_distance_pct)))
+                entry_price = last_price * (1.0 + abs(float(args.close_order_distance_fraction)))
             extra_entry_order = await session.create_order(
                 args.symbol,
                 "limit",
@@ -223,9 +223,9 @@ async def _main() -> int:
         if args.place_reduce_only_close_order:
             close_side = "sell" if args.side == "buy" else "buy"
             if close_side == "sell":
-                close_price = last_price * (1.0 + abs(float(args.close_order_distance_pct)))
+                close_price = last_price * (1.0 + abs(float(args.close_order_distance_fraction)))
             else:
-                close_price = last_price * (1.0 - abs(float(args.close_order_distance_pct)))
+                close_price = last_price * (1.0 - abs(float(args.close_order_distance_fraction)))
             close_order = await session.create_order(
                 args.symbol,
                 "limit",
