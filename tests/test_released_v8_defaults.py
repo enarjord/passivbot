@@ -189,7 +189,19 @@ def test_full_public_released_defaults_report_metric_and_memory_choices():
     result = migrate(source, best_effort=True)
     assert source == before
     assert result.config["bot"]["long"]["risk"]["max_positions"] == 7
-    assert result.config["optimize"]["pymoo"] == source["optimize"]["pymoo"]
+    expected_pymoo = deepcopy(source["optimize"]["pymoo"])
+    current_names = {
+        "crossover_eta": "crossover_distribution_index",
+        "crossover_prob_var": "crossover_probability_per_variable",
+        "mutation_eta": "mutation_distribution_index",
+        "mutation_prob": "mutation_probability",
+        "mutation_prob_per_variable": "mutation_probability_per_variable",
+    }
+    expected_pymoo["shared"] = {
+        current_names.get(key, key): value
+        for key, value in expected_pymoo["shared"].items()
+    }
+    assert result.config["optimize"]["pymoo"] == expected_pymoo
     assert result.config["backtest"]["filter_by_min_effective_cost"] is False
     guesses = [item for item in result.changes if item.get("best_effort")]
     assert any(item["old"] == "adg_strategy_eq_w" and item["new"] == "adg_strategy_eq_ew" for item in guesses)
