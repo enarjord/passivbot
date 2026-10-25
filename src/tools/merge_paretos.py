@@ -100,6 +100,7 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
             ("n_positions", side_config.get("n_positions"), count),
             ("risk.n_positions", risk.get("n_positions"), count),
             ("total_wallet_exposure_limit", side_config.get("total_wallet_exposure_limit"), exposure),
+            ("risk.total_wallet_exposure_limit", risk.get("total_wallet_exposure_limit"), exposure),
         ):
             if alias is None:
                 continue
@@ -116,7 +117,9 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
         if n_positions_raw is None:
             n_positions_raw = risk.get("n_positions")
         if exposure_limit_raw is None:
-            exposure_limit_raw = risk.get("total_wallet_exposure_limit_ratio")
+            exposure_limit_raw = risk.get(
+                "total_wallet_exposure_limit_ratio", risk.get("total_wallet_exposure_limit")
+            )
     return n_positions_raw, exposure_limit_raw
 
 
