@@ -49,8 +49,8 @@ def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_
     if independent_short:
         raw["optimize"]["bounds"]["short"] = {"unstuck": {"close_fraction": [0.04, 0.09]}}
     if topology_search:
-        raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit": 1.0}
-        raw["optimize"]["bounds"]["global"]["risk"] = {"total_wallet_exposure_limit": [0.0, 1.0]}
+        raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit_ratio": 1.0}
+        raw["optimize"]["bounds"]["global"]["risk"] = {"total_wallet_exposure_limit_ratio": [0.0, 1.0]}
     config = prepare_config(raw, verbose=False)
     config["backtest"]["coins"] = deepcopy(original["backtest"]["coins"])
     manager = SharedArrayManager()
@@ -71,19 +71,19 @@ def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_
         if independent_short:
             vector[keys.index("bot.short.unstuck.close_fraction")] = 0.055
         if topology_search:
-            vector[keys.index("bot.global.risk.total_wallet_exposure_limit")] = 1.0
+            vector[keys.index("bot.global.risk.total_wallet_exposure_limit_ratio")] = 1.0
         first = planner.prepare("first", vector)
         assert len(first.requests) == 1
         parameters = first.requests[0].parameters
-        assert parameters["long_unstuck_close_pct"] == 0.07
-        assert parameters["short_unstuck_close_pct"] == (0.055 if independent_short else 0.07)
+        assert parameters["long_unstuck_close_fraction"] == 0.07
+        assert parameters["short_unstuck_close_fraction"] == (0.055 if independent_short else 0.07)
         assert not any(key.startswith("bot.global") for key in parameters)
         # The second call exercises the exact owned-class projection cache.
         vector[keys.index("bot.global.unstuck.close_fraction")] = 0.06
         if topology_search:
-            vector[keys.index("bot.global.risk.total_wallet_exposure_limit")] = 0.0
+            vector[keys.index("bot.global.risk.total_wallet_exposure_limit_ratio")] = 0.0
         second = planner.prepare("second", vector)
-        assert second.requests[0].parameters["long_unstuck_close_pct"] == 0.06
+        assert second.requests[0].parameters["long_unstuck_close_fraction"] == 0.06
         assert len(registry.bindings) == (2 if topology_search else 1)
         assert "unstuck" not in universe_source_view(second.record_config)["bot"].get("long", {})
     finally:

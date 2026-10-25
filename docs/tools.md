@@ -288,19 +288,19 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
 # Customize the overview grid (values are config ratios, not percentage numbers).
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --exposure-ratios 0,0.25,0.5,0.75,0.95 \
-  --volatility-scenarios quiet:0.001:0.0005,normal:0.005:0.0025,high:0.015:0.0075
+  --log-range-scenarios quiet:0.001:0.0005,normal:0.005:0.0025,high:0.015:0.0075
 
 # Detailed single-scenario mode remains available.
 passivbot tool trailing-inspect \
   --symbol COIN --side long \
   --position-size 150 --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
-  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
+  --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033
 
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --side long --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
-  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
+  --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033 \
   --entry-threshold-base-fraction 0.02 --json
 ```
 
@@ -499,8 +499,8 @@ passivbot tool crash-finder \
   --source-timeframe 1m \
   --timeframe 1h \
   --direction both \
-  --threshold -0.10 \
-  --pump-threshold 0.10 \
+  --crash-log-return-threshold -0.10 \
+  --pump-log-return-threshold 0.10 \
   --pre-days 14 \
   --post-days 60 \
   --scenario-force-normal adverse \
@@ -521,8 +521,9 @@ passivbot tool crash-finder \
 Useful suite controls:
 
 - `--direction down|up|both` chooses high-to-later-low crashes, low-to-later-high pumps, or both.
-  `--threshold` is the negative crash threshold and `--pump-threshold` is the positive pump
-  threshold, both expressed as log returns.
+  `--crash-log-return-threshold` is the negative crash threshold and
+  `--pump-log-return-threshold` is the positive pump threshold, both expressed as natural-log
+  returns (no percentage rescaling).
 - `--scenario-kind market-wide` keeps broad market crashes only.
 - `--scenario-kind coin-focused` keeps non-market-wide crashes, including isolated multi-coin
   clusters such as a DEXE/M event.

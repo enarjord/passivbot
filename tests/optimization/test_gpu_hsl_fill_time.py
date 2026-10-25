@@ -23,21 +23,21 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = True
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0
-    config["backtest"].update(hsl_detailed_report=False, market_order_slippage_pct=0.,
-                              maker_fee_override=0., taker_fee_override=0.)
+    config["backtest"].update(hsl_detailed_report=False, market_order_slippage_fraction=0.,
+                              maker_fee_override_fraction=0., taker_fee_override_fraction=0.)
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
-                      drawdown_ratio_threshold=.01, ema_span_minutes=1.,
+                      drawdown_threshold_fraction=.01, ema_span_minutes=1.,
                       cooldown_minutes_after_red=5.,
                       panic_close_order_type="market")
         strategy = config["bot"][direction]["strategy"]["trailing_martingale"]
-        strategy["entry"].update(initial_qty_pct=.5, threshold_base_pct=.5,
-                                 retracement_base_pct=0.)
-        strategy["close"].update(threshold_base_pct=.5, retracement_base_pct=0.)
+        strategy["entry"].update(initial_qty_fraction=.5, threshold_base_fraction=.5,
+                                 retracement_base_fraction=0.)
+        strategy["close"].update(threshold_base_fraction=.5, retracement_base_fraction=0.)
         config["bot"][direction]["strategy"]["ema_anchor"].update(
-            base_qty_pct=.5, ema_span_0=2., ema_span_1=3., offset=.01,
-            offset_psize_weight=0., entry_double_down_factor=0.,
+            base_qty_fraction=.5, ema_span_0_minutes=2., ema_span_1_minutes=3., offset_fraction=.01,
+            inventory_offset_exposure_coefficient=0., entry_qty_exposure_coefficient=0.,
         )
     if mode == "portfolio":
         config["bot"]["hsl"] = deepcopy(config["bot"][side]["hsl"])

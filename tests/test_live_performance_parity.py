@@ -377,8 +377,8 @@ def hsl_case(index):
     return dict(snapshot=snapshot,slots=0 if index%17==0 else 1,
                 scale_budget_with_excess_allowance=False, exposure_budget=None,
                 memory_ema_span_minutes=[1,2.5,703][index%3],
-                drawdown_ratio_ema_span_minutes=[1,2.5,703][index%3],
-                threshold=[.01,.2,.5][index%3],
+                drawdown_fraction_ema_span_minutes=[1,2.5,703][index%3],
+                drawdown_threshold_fraction=[.01,.2,.5][index%3],
                 cooldown_ms=[0,60000,3600000][index%3], budget_observations=[])
 
 

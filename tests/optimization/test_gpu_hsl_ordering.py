@@ -35,14 +35,14 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
         enabled = sides == "both" or side == sides
         inputs[0]["bot"][side]["risk"].update(
             n_positions=1 if enabled else 0,
-            total_wallet_exposure_limit=2 if enabled else 0,
+            total_wallet_exposure_limit_ratio=2 if enabled else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
-            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
-            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     if shocks:
         # Trigger TM at a practical threshold after established exposure;
@@ -124,12 +124,12 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
         bot = config["bot"][side]
         enabled = side == "long" or sides == "both"
         bot["risk"].update(n_positions=1 if enabled else 0,
-                           total_wallet_exposure_limit=(5.0 if side == "long" else 0.001) if enabled else 0)
-        bot["hsl"].update(enabled=enabled, drawdown_ratio_threshold=0.002, ema_span_minutes=1,
+                           total_wallet_exposure_limit_ratio=(5.0 if side == "long" else 0.001) if enabled else 0)
+        bot["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, ema_span_minutes=1,
                           cooldown_minutes_after_red=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
-        bot["strategy"]["ema_anchor"]["base_qty_pct"] = 0.8
-        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.8
+        bot["strategy"]["ema_anchor"]["base_qty_fraction"] = 0.8
+        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.8
     candles = inputs[1]
     # Entry at 3, RED at 4, liquidation at 5. A limit panic cannot fill across
     # the gap; a market panic liquidates at the earlier factual fill boundary.

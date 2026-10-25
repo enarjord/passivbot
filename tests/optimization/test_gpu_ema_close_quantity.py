@@ -29,7 +29,7 @@ kernel void ema_close_quantity_probe(
     float step = cases[b * 5 + 2];
     float size = cases[b * 5 + 3] * step;
     EmaMulticoinSideConfig config = {};
-    config.base_qty_pct = 1.0f;
+    config.base_qty_fraction = 1.0f;
     config.twel = float(coins);
     config.n_positions = coins;
     EmaMulticoinSideState side;

@@ -184,14 +184,14 @@ def test_sparse_dynamic_fields_and_all_bound_types_are_declared():
 
 def test_coin_only_wallet_exposure_type_does_not_create_a_root_setting():
     registry = get_field_registry()
-    field = registry.find(("coin_overrides", "BTC", "bot", "long", "wallet_exposure_limit"))
+    field = registry.find(("coin_overrides", "BTC", "bot", "long", "wallet_exposure_limit_ratio"))
     assert field.numeric_type is float
     assert field.coin_override is CoinOverridePolicy.ALLOWED
     assert field.default is NO_DEFAULT
-    assert registry.find(("bot", "long", "wallet_exposure_limit")) is None
-    source = {"coin_overrides": {"BTC": {"bot": {"long": {"wallet_exposure_limit": 1}}}}}
+    assert registry.find(("bot", "long", "wallet_exposure_limit_ratio")) is None
+    source = {"coin_overrides": {"BTC": {"bot": {"long": {"wallet_exposure_limit_ratio": 1}}}}}
     exported = normalize_export_numbers(source)
-    assert type(exported["coin_overrides"]["BTC"]["bot"]["long"]["wallet_exposure_limit"]) is float
+    assert type(exported["coin_overrides"]["BTC"]["bot"]["long"]["wallet_exposure_limit_ratio"]) is float
 
 
 def test_serialization_metadata_does_not_round_or_validate_integer_inputs():

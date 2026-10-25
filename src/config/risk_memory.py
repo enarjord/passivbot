@@ -67,7 +67,7 @@ def risk_memory_spans(config):
                     spans.append(policy["memory_ema_span_minutes"])
     unstuck_enabled = False
     for side in ("long", "short"):
-        if bot[side]["risk"]["total_wallet_exposure_limit"] <= 0:
+        if bot[side]["risk"]["total_wallet_exposure_limit_ratio"] <= 0:
             continue
         base_enabled = bot[side]["unstuck"]["enabled"]
         unstuck_enabled |= base_enabled or any(
@@ -77,7 +77,7 @@ def risk_memory_spans(config):
     if unstuck_enabled:
         spans.append(bot["portfolio"]["unstuck"]["memory_ema_span_minutes"])
     gate = bot["portfolio"]["loss_gate"]
-    if gate["max_drawdown_ratio"] < 1.0:
+    if gate["max_drawdown_fraction"] < 1.0:
         spans.append(gate["memory_ema_span_minutes"])
     return tuple(sorted(set(spans)))
 
@@ -101,10 +101,10 @@ def normalize_risk_memory_config(config):
             block["memory_ema_span_minutes"], field=f"{path}.memory_ema_span_minutes"
         )
     gate = bot["portfolio"]["loss_gate"]
-    ratio = _finite_number(gate["max_drawdown_ratio"], "bot.portfolio.loss_gate.max_drawdown_ratio")
+    ratio = _finite_number(gate["max_drawdown_fraction"], "bot.portfolio.loss_gate.max_drawdown_fraction")
     if ratio < 0:
-        raise ValueError("bot.portfolio.loss_gate.max_drawdown_ratio must be >= 0")
-    gate["max_drawdown_ratio"] = ratio
+        raise ValueError("bot.portfolio.loss_gate.max_drawdown_fraction must be >= 0")
+    gate["max_drawdown_fraction"] = ratio
     live["startup"]["risk_bootstrap_max_lookback_minutes"] = (
         normalize_risk_bootstrap_max_lookback_minutes(
             live["startup"]["risk_bootstrap_max_lookback_minutes"]

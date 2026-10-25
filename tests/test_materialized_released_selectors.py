@@ -16,8 +16,8 @@ from tools.migrate_config_v9 import migrate
 
 
 @pytest.mark.parametrize("owner,native", [
-    ("position_exposure_enforcer", "risk_wel_enforcer_threshold"),
-    ("total_exposure_enforcer", "risk_twel_enforcer_threshold"),
+    ("position_exposure_enforcer", "risk_wel_enforcer_threshold_ratio"),
+    ("total_exposure_enforcer", "risk_twel_enforcer_threshold_ratio"),
 ])
 @pytest.mark.parametrize("shape", ["flat", "object"])
 @pytest.mark.parametrize("layer", ["fixed", "scenario"])
@@ -91,7 +91,7 @@ def test_materialized_enforcer_override_keeps_policy_value_and_scope(
 
 @pytest.mark.parametrize("old,new", [
     ("bot.long.risk.n_positions", "bot.long.risk.max_positions"),
-    ("bot.long.hsl.red_threshold", "bot.long.hsl.drawdown_ratio_threshold"),
+    ("bot.long.hsl.red_threshold", "bot.long.hsl.drawdown_threshold_fraction"),
     ("bot.short.unstuck.threshold", "bot.short.unstuck.exposure_trigger_ratio"),
     ("bot.short.unstuck.ema_dist", "bot.short.unstuck.ema_distance_fraction"),
 ])

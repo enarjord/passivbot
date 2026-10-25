@@ -37,24 +37,24 @@ def test_martingale_close_diagnostics_remain_available(
         "pside": side,
         "exchange": {
             "qty_step": 0.01, "price_step": 0.01, "min_qty": 0.01,
-            "min_cost": 1.0, "c_mult": 1.0, "maker_fee": 0.0, "taker_fee": 0.0,
+            "min_cost": 1.0, "c_mult": 1.0, "maker_fee_fraction": 0.0, "taker_fee_fraction": 0.0,
         },
         "state": {
             "balance": 1000.0, "order_book": {"bid": 110.0, "ask": 110.1},
             "ema_bands": {"lower": 100.0, "upper": 100.0},
-            "volatility_ema_1m": 0.0, "volatility_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0, "log_range_ema_1h": 0.0,
         },
         "bot_params": {
-            "wallet_exposure_limit": 1.0, "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit_ratio": 1.0, "total_wallet_exposure_limit_ratio": 1.0,
             "n_positions": 1,
         },
-        "runtime": {"effective_wallet_exposure_limit": 1.0},
+        "runtime": {"effective_wallet_exposure_limit_ratio": 1.0},
         "position": {"size": sign * 5.0, "price": 100.0},
         "trailing": {
             "min_since_open": 100.0, "max_since_min": 110.0,
             "max_since_open": 110.0, "min_since_max": 100.0,
         },
-        "close_params": {"qty_pct": 0.25, "threshold_base_pct": 0.01},
+        "close_params": {"qty_fraction": 0.25, "threshold_base_fraction": 0.01},
     }
     result = json.loads(require_real_passivbot_rust_module.calc_trailing_martingale_close_diagnostic_py(
         json.dumps(payload)

@@ -34,9 +34,9 @@ def _base_config(candle_interval_minutes: int = 1) -> dict:
     cfg["backtest"]["filter_by_min_effective_cost"] = False
     cfg["backtest"]["start_date"] = "2021-01-01"
     cfg["backtest"]["end_date"] = "2021-01-02"
-    cfg["backtest"]["maker_fee_override"] = None
-    cfg["backtest"]["taker_fee_override"] = None
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg["backtest"]["maker_fee_override_fraction"] = None
+    cfg["backtest"]["taker_fee_override_fraction"] = None
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = None
     cfg['bot']["portfolio"]['hedge_mode'] = False
     return cfg
@@ -91,9 +91,9 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
         "short": ["COIN1", "COIN2", "COIN3", "COIN4"],
     })
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 3
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["short"]["risk"]["max_positions"] = 4
     mss = {
         coin: {
@@ -122,8 +122,8 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
     coin4_idx = payload.backtest_params["coins"].index("COIN4")
 
-    assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit"] == 0.0
-    assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
+    assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit_ratio"] != 0.0
     assert payload.bot_params_list[coin4_idx]["long"]["entry_eligible"] is False
     assert payload.bot_params_list[coin4_idx]["short"]["entry_eligible"] is True
 
@@ -216,7 +216,7 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
     config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC", "OM"], "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     config["coin_overrides"] = {"OM": {"live": {"modes": {"long": "normal"}}}}
     mss = {
@@ -895,7 +895,7 @@ def test_build_backtest_payload_allows_empty_multicoin_valid_window():
     config["backtest"]["coins"] = {"binance": coins}
     set_side_universe_sources(config, 'approved_coins', {"long": coins, "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     mss = {
         coin: {

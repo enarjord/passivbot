@@ -34,27 +34,27 @@ def _sample_config() -> dict:
         "bot": {
             "portfolio": {"unstuck": {"memory_ema_span_minutes": 10080.0}, "loss_gate": {
                     "memory_ema_span_minutes": 20160.0,
-                    "max_drawdown_ratio": 0.2,
+                    "max_drawdown_fraction": 0.2,
                 }, "hsl": {
                     "scope": "portfolio",
                     "enabled": True,
-                    "drawdown_ratio_threshold": 0.05,
+                    "drawdown_threshold_fraction": 0.05,
                     "cooldown_after_red_minutes": 60.0,
                     "memory_ema_span_minutes": 43200.0,
-                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "drawdown_fraction_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
                     "panic_close_order_type": "limit",
                 }, "warmup": {"max_minutes": 30}}, "global": {"forager": {"score_hysteresis_margin": 0.02}},
             "long": {
-                "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.0},
+                "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 1.0},
                 "unstuck": {"enabled": True},
                 "forager": {"volume_ema_span_minutes": 120.0},
                 "hsl": {
                     "enabled": True,
-                    "drawdown_ratio_threshold": 0.05,
+                    "drawdown_threshold_fraction": 0.05,
                     "cooldown_after_red_minutes": 60,
                     "memory_ema_span_minutes": 43200.0,
-                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "drawdown_fraction_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
                     "panic_close_order_type": "limit",
                 },
@@ -64,14 +64,14 @@ def _sample_config() -> dict:
                 },
             },
             "short": {
-                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.0},
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0},
                 "unstuck": {"enabled": False},
                 "hsl": {
                     "enabled": False,
-                    "drawdown_ratio_threshold": 0.04,
+                    "drawdown_threshold_fraction": 0.04,
                     "cooldown_after_red_minutes": 30,
                     "memory_ema_span_minutes": 43200.0,
-                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "drawdown_fraction_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
                     "panic_close_order_type": "limit",
                 },
@@ -91,6 +91,25 @@ def test_preflight_recognizes_explicit_uncapped_warmup(tmp_path, cap, expected):
     attention = report["cache"]["readiness"]["surfaces"]["candles"]["attention"]
     codes = {row["code"] for row in attention if row["code"].startswith("max_warmup_minutes_")}
     assert codes == ({f"max_warmup_minutes_{expected}"} if expected else set())
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, "activation_span_fraction_missing"),
+    (-0.2, "activation_span_fraction_negative"), (0.0, None), (0.2, None),
+])
+def test_preflight_warmup_issue_codes_use_the_current_quantity_name(value, expected):
+    config = _sample_config()
+    if value is not None:
+        config["bot"]["portfolio"]["warmup"]["activation_span_fraction"] = value
+    report = live_config_preflight._cache_readiness_report(
+        config["live"], config=config, identity={}, hsl_sides={},
+    )
+    attention = report["surfaces"]["candles"]["attention"]
+    codes = {row["code"] for row in attention}
+    assert not any(code.startswith("warmup_ratio_") for code in codes)
+    assert {code for code in codes if code.startswith("activation_span_fraction_")} == (
+        {expected} if expected else set()
+    )
 
 
 def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tmp_path):
@@ -114,7 +133,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert report["hsl"]["signal_mode"] == "portfolio"
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_threshold_fraction"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
     hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
     assert {item["code"] for item in hsl_evidence} >= {
@@ -172,7 +191,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "max_disk_candles_per_symbol_per_tf_missing",
         "max_memory_candles_per_symbol_missing",
     }
-    assert report["cache"]["readiness"]["checks"]["bot.portfolio.warmup.span_multiplier"] == {"present": True, "value": 0.3}
+    assert report["cache"]["readiness"]["checks"]["bot.portfolio.warmup.activation_span_fraction"] == {"present": True, "value": 0.3}
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
 
@@ -234,7 +253,7 @@ def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
     }
     assert report["issues"] == [
         {
-            "code": "balance_hysteresis_snap_pct_high",
+            "code": "balance_hysteresis_snap_fraction_high",
             "message": (
                 "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
             ),
@@ -266,7 +285,7 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
     tmp_path,
 ):
     config = _sample_config()
-    config["bot"]["portfolio"]["warmup"]["span_multiplier"] = 0.3
+    config["bot"]["portfolio"]["warmup"]["activation_span_fraction"] = 0.3
     config["live"].update(
         {
             "startup": {
@@ -446,10 +465,10 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
         "forager": {"volume_ema_span_minutes": 120.0},
         "hsl": {
             "enabled": True,
-            "drawdown_ratio_threshold": 0.05,
+            "drawdown_threshold_fraction": 0.05,
             "cooldown_after_red_minutes": 60,
             "memory_ema_span_minutes": 43200.0,
-            "drawdown_ratio_ema_span_minutes": 120.0,
+            "drawdown_fraction_ema_span_minutes": 120.0,
             "panic_close_order_type": "limit",
         },
     }
@@ -461,12 +480,12 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert report["ok"] is True
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_threshold_fraction"] == 0.05
     assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
     assert report["forager"]["sides"]["long"]["settings"] == {
-        "volume_ema_span_minutes": 120.0, "volatility_ema_span_minutes": 2274.0,
+        "volume_ema_span_minutes": 120.0, "log_range_ema_span_minutes": 2274.0,
         "score_hysteresis_margin": 0.02,
     }
 

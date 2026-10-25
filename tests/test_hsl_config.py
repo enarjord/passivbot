@@ -139,10 +139,10 @@ def test_slow_memory_rejects_invalid_or_nondecaying_spans(span):
 def test_independent_slow_and_fast_spans_preserve_fractional_minutes(span):
     cfg = source()
     cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
-    cfg["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 2.5
+    cfg["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 2.5
     result = prepared(cfg)
     assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
-    assert result["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
+    assert result["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
 
 
 @pytest.mark.parametrize("cap", [0.0, -1.0, 0.99, 129600.01, float("inf"), float("nan"), True])
@@ -191,10 +191,10 @@ def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
 def test_portfolio_optimizer_paths_target_portfolio_only():
     cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["bot.portfolio.hsl.drawdown_ratio_threshold"] == ("bot", "portfolio", "hsl", "drawdown_ratio_threshold")
-    assert keys["bot.portfolio.hsl.drawdown_ratio_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_ratio_ema_span_minutes")
+    assert keys["bot.portfolio.hsl.drawdown_threshold_fraction"] == ("bot", "portfolio", "hsl", "drawdown_threshold_fraction")
+    assert keys["bot.portfolio.hsl.drawdown_fraction_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
     assert not any(k.startswith(("bot.long.hsl.", "bot.short.hsl.")) for k in keys)
-    assert "hsl_red_threshold" in flatten_optimize_bounds(
+    assert "hsl_drawdown_threshold_fraction" in flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
 
@@ -203,9 +203,9 @@ def test_portfolio_optimizer_paths_target_portfolio_only():
 def test_portfolio_rejects_inactive_side_optimizer_paths(section):
     cfg = source("portfolio")
     if section == "bounds":
-        cfg["optimize"][section]["long"]["hsl"] = {"drawdown_ratio_threshold": [0.1, 0.2]}
+        cfg["optimize"][section]["long"]["hsl"] = {"drawdown_threshold_fraction": [0.1, 0.2]}
     else:
-        cfg["optimize"][section]["bot.short.hsl.drawdown_ratio_threshold"] = 0.2
+        cfg["optimize"][section]["bot.short.hsl.drawdown_threshold_fraction"] = 0.2
     with pytest.raises(ValueError, match="inactive in portfolio"):
         prepared(cfg)
 
@@ -223,7 +223,7 @@ def test_enabling_coin_override_inherits_finite_policy():
 @pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_inactive_coin_hsl_override_is_not_silently_ignored(mode):
     cfg = source(mode)
-    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.2}}}}}
+    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}}
     with pytest.raises(ValueError, match="inactive in portfolio|overridable only.*scope"):
         prepared(cfg)
 
@@ -267,7 +267,7 @@ def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch)
 
 @pytest.mark.parametrize(
     "path",
-    ["bot.long.hsl.drawdown_ratio_threshold", "bot.short.hsl.no_restart_drawdown_threshold"],
+    ["bot.long.hsl.drawdown_threshold_fraction", "bot.short.hsl.no_restart_drawdown_threshold"],
 )
 def test_cli_cannot_target_inactive_or_removed_hsl_settings(path):
     cfg = prepared(source("portfolio"))
@@ -280,11 +280,11 @@ def test_hsl_coin_override_parsing_keeps_explicit_threshold():
 
     cfg = source()
     cfg["coin_overrides"] = {
-        "TEST": {"bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.12}}}}
+        "TEST": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.12}}}}
     }
     result = parse_overrides(prepared(cfg), verbose=False)
     assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"] == {
-        "drawdown_ratio_threshold": 0.12
+        "drawdown_threshold_fraction": 0.12
     }
 
 
@@ -298,7 +298,7 @@ def test_scenario_rechecks_effective_hsl_contract(change):
         "enable": {"bot.long.hsl.enabled": True},
         "mode": {"bot.portfolio.hsl.scope": "portfolio"},
         "removed": {"bot.long.hsl.no_restart_drawdown_threshold": 0.3},
-        "inactive": {"bot.long.hsl.drawdown_ratio_threshold": 0.3},
+        "inactive": {"bot.long.hsl.drawdown_threshold_fraction": 0.3},
     }[change]
     scenario = SuiteScenario(
         "test", None, None, ["TEST"], [], exchanges=["binance"], overrides=overrides
@@ -340,8 +340,8 @@ def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
 @pytest.mark.parametrize(
     "field,bounds",
     [
-        ("drawdown_ratio_threshold", [0, 0.2]),
-        ("drawdown_ratio_ema_span_minutes", [0.5, 2]),
+        ("drawdown_threshold_fraction", [0, 0.2]),
+        ("drawdown_fraction_ema_span_minutes", [0.5, 2]),
         ("cooldown_after_red_minutes", [-1, 2]),
     ],
 )

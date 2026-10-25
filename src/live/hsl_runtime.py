@@ -675,8 +675,8 @@ def capture(
             snapshot=snapshot,
             slots=slots,
             memory_ema_span_minutes=policy["memory_ema_span_minutes"],
-            drawdown_ratio_ema_span_minutes=policy["drawdown_ratio_ema_span_minutes"],
-            threshold=policy["drawdown_ratio_threshold"],
+            drawdown_fraction_ema_span_minutes=policy["drawdown_fraction_ema_span_minutes"],
+            drawdown_threshold_fraction=policy["drawdown_threshold_fraction"],
             cooldown_ms=math.floor(policy["cooldown_after_red_minutes"] * 60_000 + 0.5),
         )
         payload["scale_budget_with_excess_allowance"] = policy[
@@ -689,11 +689,11 @@ def capture(
                 .get("bot", {}).get(scope.pside, {})
             )
             payload["exposure_budget"] = dict(
-                wallet_exposure_limit=override.get(
-                    "wallet_exposure_limit", side_config.get("wallet_exposure_limit", -1.0)
+                wallet_exposure_limit_ratio=override.get(
+                    "wallet_exposure_limit_ratio", side_config.get("wallet_exposure_limit_ratio", -1.0)
                 ),
-                total_wallet_exposure_limit=side_config["risk"]["total_wallet_exposure_limit"],
-                we_excess_allowance_pct=override.get("risk", {}).get(
+                total_wallet_exposure_limit_ratio=side_config["risk"]["total_wallet_exposure_limit_ratio"],
+                we_excess_allowance_fraction=override.get("risk", {}).get(
                     "we_excess_allowance_fraction", side_config["risk"]["we_excess_allowance_fraction"]
                 ),
             )
@@ -797,7 +797,7 @@ def _evaluate(requests):
             snapshot = submitted["snapshot"]
             exposed = any(pair["position"]["size"] != 0 for pair in snapshot["pairs"])
             risk = output["risk"]
-            threshold = struct.unpack("f", struct.pack("f", submitted["threshold"]))[0]
+            threshold = struct.unpack("f", struct.pack("f", submitted["drawdown_threshold_fraction"]))[0]
             deadline = risk["cooldown_until"]
             if (
                 type(risk["timestamp_ms"]) is not int or risk["timestamp_ms"] != snapshot["now"]
@@ -850,7 +850,7 @@ def _evaluate(requests):
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))
         decisions.append(
             Decision(
-                submitted["threshold"],
+                submitted["drawdown_threshold_fraction"],
                 request.scope,
                 None if decision is None else decision["action"],
                 request.execution_type,

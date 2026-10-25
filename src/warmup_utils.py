@@ -147,13 +147,13 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
     )
-    if pinned.get("wallet_exposure_limit") == 0:
+    if pinned.get("wallet_exposure_limit_ratio") == 0:
         return False
     for key in (
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
+        "total_wallet_exposure_limit_ratio",
         "n_positions",
     ):
         if key not in params or _to_float(params[key], context=key) > 0.0:
@@ -166,7 +166,7 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
 
 def rms_side_enabled(params, pside, *, bounds=None):
     """RMS consumers need an enabled fixed side or an optimizer-reachable side."""
-    gates = ("total_wallet_exposure_limit", "n_positions")
+    gates = ("total_wallet_exposure_limit_ratio", "n_positions")
     fixed = [float(params.get(key, 0.0)) for key in gates]
     if all(value > 0.0 for value in fixed):
         return True
@@ -185,7 +185,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         return 0
     scoring = params.get("forager_score_weights", {}).get("unilateralness", 0.0)
     adverse = params.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0.0)
-    span = params.get("unilateralness_ema_span_1m")
+    span = params.get("unilateralness_ema_span_minutes")
     if bounds and not for_trade_activation:
         def upper(key, fixed):
             raw = bounds.get(f"{pside}_{key}")
@@ -196,7 +196,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
 
         scoring = upper("forager_score_weights_unilateralness", scoring)
         adverse = upper("entry_cooldown_weights_minutes_adverse_directionality", adverse)
-        span = upper("unilateralness_ema_span_1m", span)
+        span = upper("unilateralness_ema_span_minutes", span)
     from config.entry_cooldown import constant_duration
     duration_params = dict(params)
     if bounds and not for_trade_activation:
@@ -211,7 +211,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         adverse = 0.0
     if adverse <= 0.0 and (for_trade_activation or not ranking_possible or scoring <= 0.0):
         return 0
-    n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_1m") * 20.0)
+    n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_minutes") * 20.0)
     # N returns need N+1 closes, available at offset N from the first valid close.
     return n_returns if for_trade_activation else n_returns + 1
 
@@ -314,7 +314,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=Fal
     for side, eligible in by_side.items():
         eligible_counts[side] = None if eligible is None else sum(
             any(
-                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit") != 0.0
+                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit_ratio") != 0.0
                 for key in _rms_policy_keys(config, {coin}, overrides)
             )
             for coin in eligible
@@ -329,7 +329,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=Fal
             if coin not in policies_by_side[side]:
                 continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
-            if patch.get("wallet_exposure_limit") == 0.0:
+            if patch.get("wallet_exposure_limit_ratio") == 0.0:
                 continue
             # Coin pins supersede global search dimensions for this side.
             effective_bounds = dict(bounds)
@@ -406,12 +406,12 @@ def compute_backtest_warmup_minutes(
     max_minutes = 0.0
     unstuck_gate_sides = set()
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
-        "forager_volume_ema_span_1m",
-        "forager_volatility_ema_span_1m",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
+        "forager_volume_ema_span_minutes",
+        "forager_log_range_ema_span_minutes",
     ]
 
     for (
@@ -455,13 +455,13 @@ def compute_backtest_warmup_minutes(
         strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     bound_keys_minutes = [
-        "long_forager_volume_ema_span_1m",
-        "long_forager_volatility_ema_span_1m",
-        "short_forager_volume_ema_span_1m",
-        "short_forager_volatility_ema_span_1m",
+        "long_forager_volume_ema_span_minutes",
+        "long_forager_log_range_ema_span_minutes",
+        "short_forager_volume_ema_span_minutes",
+        "short_forager_log_range_ema_span_minutes",
     ]
     bound_keys_minutes.extend(
-        f"{side}_unstuck_ema_span_{i}"
+        f"{side}_unstuck_ema_span_{i}_minutes"
         for side in sorted(unstuck_gate_sides)
         for i in (0, 1)
     )
@@ -479,13 +479,13 @@ def compute_backtest_warmup_minutes(
             return 0
         max_minutes = max(max_minutes, extracted * 60.0)
 
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
 
-    warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+    warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
     if limit is not None:
         warmup_minutes = min(warmup_minutes, limit)
     if include_rms:
@@ -512,9 +512,9 @@ def compute_backtest_warmup_minutes(
 def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
@@ -525,12 +525,12 @@ def compute_per_coin_warmup_minutes(
             config, {}, param_sets=param_sets, for_trade_activation=for_trade_activation)
     } if include_rms else {}
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
-        "forager_volume_ema_span_1m",
-        "forager_volatility_ema_span_1m",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
+        "forager_volume_ema_span_minutes",
+        "forager_log_range_ema_span_minutes",
     ]
     for coin, long_params, short_params, long_strategy, short_strategy in param_sets:
         max_minutes = 0.0
@@ -561,7 +561,7 @@ def compute_per_coin_warmup_minutes(
                 requirements.max_1m_span_minutes,
                 requirements.max_h1_span_hours * 60.0,
             )
-        warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+        warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
         if limit is not None:
             warmup_minutes = min(warmup_minutes, limit)
         if include_rms:

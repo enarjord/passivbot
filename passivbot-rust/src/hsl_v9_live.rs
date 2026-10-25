@@ -52,8 +52,8 @@ pub struct Input {
     pub scale_budget_with_excess_allowance: bool,
     pub exposure_budget: Option<ExposureBudget>,
     pub memory_ema_span_minutes: f64,
-    pub drawdown_ratio_ema_span_minutes: f64,
-    pub threshold: f64,
+    pub drawdown_fraction_ema_span_minutes: f64,
+    pub drawdown_threshold_fraction: f64,
     pub cooldown_ms: i64,
     pub budget_observations: Vec<BudgetFact>,
     /// Previously supported prices explicitly disputed by corrected source facts.
@@ -363,11 +363,11 @@ pub fn realized_memories_v9(input_json: &str) -> PyResult<String> {
 #[pyfunction]
 pub fn calc_auto_unstuck_allowance_v9(
     balance: f64,
-    loss_pct: f64,
+    loss_allowance_fraction: f64,
     twel: f64,
     drawdown: f64,
 ) -> PyResult<f64> {
-    hsl_decay::allowance_for(balance, loss_pct, twel, drawdown).map_err(PyValueError::new_err)
+    hsl_decay::allowance_for(balance, loss_allowance_fraction, twel, drawdown).map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]
@@ -391,7 +391,7 @@ mod tests {
                         {"identity":"manual-close","timestamp":60001,"delta":-1.0,"price":90.0,
                         "realized":-10.0,"fee":1.0,"sequence":1,"revision":0}]}]},
             "slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,
-            "memory_ema_span_minutes":3.0,"drawdown_ratio_ema_span_minutes":1.0,"threshold":0.095,"cooldown_ms":120000,
+            "memory_ema_span_minutes":3.0,"drawdown_fraction_ema_span_minutes":1.0,"drawdown_threshold_fraction":0.095,"cooldown_ms":120000,
             "budget_observations":[
                 {"timestamp":0,"order":-1,"balance":100.0,"slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false},
                 {"timestamp":1,"order":0,"balance":100.0,"slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false},
@@ -446,7 +446,7 @@ mod tests {
         pair["prices"] = json!({});
         pair["position"]["size"] = json!(10.0);
         pair["position"]["basis"] = json!(100.0);
-        value["drawdown_ratio_ema_span_minutes"] = json!(1000000.0);
+        value["drawdown_fraction_ema_span_minutes"] = json!(1000000.0);
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         assert_eq!(output.decision.unwrap().action, Action::Panic);
         let risk = output.risk.unwrap();
@@ -465,7 +465,7 @@ mod tests {
         pair["fills"] = json!([{"identity":"damaged-quantity","timestamp":60000,
             "delta":null,"price":90.0,"realized":-200.0,"fee":-1.0,
             "sequence":0,"revision":0}]);
-        value["drawdown_ratio_ema_span_minutes"] = json!(1000000.0);
+        value["drawdown_fraction_ema_span_minutes"] = json!(1000000.0);
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         let risk = output.risk.unwrap();
         assert_eq!(risk.action, Action::Panic);

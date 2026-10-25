@@ -78,7 +78,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     cfg["backtest"]["coins"] = {"binance": ["BTCUSDT"]}
     cfg["live"]["base_config_path"] = "old-runtime-path"
     cfg["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.risk.total_wallet_exposure_limit": 2.5
+        "bot.long.risk.total_wallet_exposure_limit_ratio": 2.5
     }
     cfg["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 3.0}}}}
     cfg["_raw"] = {"bad": "metadata"}
@@ -109,8 +109,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert "strategy" not in result["bot"]["long"]
     assert result["coin_overrides"]["BTC"] == {"live": {"account": {"leverage": 3.0}}}
     assert (
-        result["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
-        == cfg["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
+        result["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"]
+        == cfg["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
         result["optimize"]["fixed_runtime_overrides"]
@@ -155,8 +155,8 @@ def test_cleanup_extracts_prepared_membership_only_from_result_records():
 
 
 @pytest.mark.parametrize("selector", [
-    "bot.long.unstuck_ema_span_0", "long.unstuck_ema_span_0",
-    "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0",
+    "bot.long.unstuck_ema_span_0_minutes", "long.unstuck_ema_span_0_minutes",
+    "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0_minutes",
 ])
 @pytest.mark.parametrize("container", ["pins", "scenario"])
 def test_cleanup_rejects_retired_override_selectors(selector, container):
@@ -220,7 +220,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
     outputs = []
     for number in (int, float):
         cfg = get_expanded_config_prototype()
-        close = {"retracement_volatility_1h_weight": number(0)}
+        close = {"retracement_log_range_1h_coefficient": number(0)}
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"].update(close)
         cfg["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = number(60)
         cfg["bot"]["long"]["risk"]["max_positions"] = number(7)
@@ -250,7 +250,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
             "bot.long.unstuck.ema_span_0_minutes": number(60)
         }
         cfg["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ] = [number(0), number(1), 0.01]
         output = render_source(
             json.dumps(cfg),
@@ -277,10 +277,10 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
     }
     assert type(patch["bot"]["long"]["entry_cooldown"]["max_duration_minutes"]) is float
     assert set(patch["bot"]["long"]["strategy"]["trailing_martingale"]["close"]) == {
-        "retracement_volatility_1h_weight"
+        "retracement_log_range_1h_coefficient"
     }
     assert type(patch["live"]["account"]["leverage"]) is int
-    assert '"retracement_volatility_1h_weight": 0.0' in outputs[0]
+    assert '"retracement_log_range_1h_coefficient": 0.0' in outputs[0]
     if "backtest" in result:
         assert type(result["backtest"]["balance_sample_divider"]) is int
         assert result["backtest"]["starting_balance"] == 1000.25
@@ -291,7 +291,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         assert type(pins["bot.long.unstuck.ema_span_0_minutes"]) is float
         bounds = result["optimize"]["bounds"]["long"]
         weight_bounds = bounds["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ]
         assert all(type(value) is float for value in weight_bounds)
         assert all(type(value) is int for value in bounds["risk"]["max_positions"])
@@ -300,7 +300,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
 def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
     source = tmp_path / "config.json"
     cfg = get_template_config()
-    close = {"retracement_volatility_1h_weight": 0}
+    close = {"retracement_log_range_1h_coefficient": 0}
     cfg["coin_overrides"] = {
         "BTC": {
             "bot": {"long": {"strategy": {"trailing_martingale": {"close": close}}}}
@@ -457,7 +457,7 @@ def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field
 
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("field", [
-    "drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
+    "drawdown_threshold_fraction", "drawdown_fraction_ema_span_minutes", "memory_ema_span_minutes",
     "cooldown_after_red_minutes",
 ])
 def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
@@ -513,7 +513,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     cfg["backtest"]["reducer"] = {"default": "mean", "adg_fraction_strategy_equity": "min"}
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
-        cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)
+        cfg["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = rng.uniform(0.1, 2.0)
         cfg["bot"][side]["risk"]["max_positions"] = rng.randint(1, 10)
         cfg["bot"][side]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.5)
         cfg["bot"][side]["unstuck"]["ema_span_0_minutes"] = rng.uniform(5.1, 1000.9)

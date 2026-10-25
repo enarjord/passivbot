@@ -12,9 +12,9 @@ pub struct Policy {
     pub enabled: bool,
     #[serde(default)]
     pub scale_budget_with_excess_allowance: bool,
-    pub red_threshold: f64,
+    pub drawdown_threshold_fraction: f64,
     pub memory_ema_span_minutes: f64,
-    pub drawdown_ratio_ema_span_minutes: f64,
+    pub drawdown_fraction_ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
     pub panic_close_order_type: String,
 }
@@ -33,9 +33,9 @@ impl Default for Policy {
         Self {
             enabled: false,
             scale_budget_with_excess_allowance: false,
-            red_threshold: 0.25,
+            drawdown_threshold_fraction: 0.25,
             memory_ema_span_minutes: 43_200.0,
-            drawdown_ratio_ema_span_minutes: 60.0,
+            drawdown_fraction_ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
             panic_close_order_type: "limit".into(),
         }
@@ -89,8 +89,8 @@ impl Config {
             }
             hsl_decay::Policy::new(
                 policy.memory_ema_span_minutes,
-                policy.drawdown_ratio_ema_span_minutes,
-                policy.red_threshold,
+                policy.drawdown_fraction_ema_span_minutes,
+                policy.drawdown_threshold_fraction,
                 cooldown.round() as i64,
             )?;
         }
@@ -195,8 +195,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 coin,
                 policy: hsl_decay::Policy::new(
                     p.memory_ema_span_minutes,
-                    p.drawdown_ratio_ema_span_minutes,
-                    p.red_threshold,
+                    p.drawdown_fraction_ema_span_minutes,
+                    p.drawdown_threshold_fraction,
                     (p.cooldown_minutes_after_red * 60_000.0).round() as i64,
                 )?,
                 state: ScopeState::default(),
@@ -280,12 +280,12 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 } else {
                     &self.bot_params_original[c].short
                 };
-                let base = if authored.wallet_exposure_limit < 0.0 {
-                    authored.total_wallet_exposure_limit / slots as f64
+                let base = if authored.wallet_exposure_limit_ratio < 0.0 {
+                    authored.total_wallet_exposure_limit_ratio / slots as f64
                 } else {
-                    authored.wallet_exposure_limit
+                    authored.wallet_exposure_limit_ratio
                 };
-                budget *= 1.0 + effective_we_excess_allowance_pct(authored, base);
+                budget *= 1.0 + effective_we_excess_allowance_fraction(authored, base);
             }
         }
         Ok((budget, upnl, exposed))
@@ -585,9 +585,9 @@ mod tests {
     fn params(mode: &str, coins: usize) -> BacktestParams {
         let policy = Policy {
             enabled: true,
-            red_threshold: 0.005,
+            drawdown_threshold_fraction: 0.005,
             memory_ema_span_minutes: 3.0,
-            drawdown_ratio_ema_span_minutes: 1.0,
+            drawdown_fraction_ema_span_minutes: 1.0,
             cooldown_minutes_after_red: 2.0,
             ..Policy::default()
         };
@@ -602,8 +602,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.001,
-            taker_fee: 0.002,
+            maker_fee_fraction: 0.001,
+            taker_fee_fraction: 0.002,
             coins: (0..coins).map(|i| format!("COIN{i}")).collect(),
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -613,8 +613,8 @@ mod tests {
             warmup_minutes: vec![0; coins],
             trade_start_indices: vec![0; coins],
             global_warmup_bars: 1,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: false,
             ew_half_life_days: None,
             hsl_detailed_report: true,
@@ -622,15 +622,15 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
-            max_realized_loss_pct: 1.0,
+            loss_gate_max_drawdown_fraction: 1.0,
             unstuck_memory_ema_span_minutes: 3.0,
             loss_gate_memory_ema_span_minutes: 3.0,
-            liquidation_threshold: 0.05,
+            equity_floor_fraction: 0.05,
             equity_hard_stop_loss: crate::types::EquityHardStopLossConfig { hsl: Some(config) },
             market_orders_allowed: true,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0,
-            limit_order_fill_buffer_pct: 0.0,
+            market_order_near_touch_fraction: 0.001,
+            market_order_slippage_fraction: 0.0,
+            limit_order_fill_buffer_fraction: 0.0,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         }
@@ -642,12 +642,12 @@ mod tests {
                 let mut pair = BotParamsPair::default();
                 for side in [&mut pair.long, &mut pair.short] {
                     side.n_positions = coins;
-                    side.total_wallet_exposure_limit = 1.0;
-                    side.unstuck_loss_allowance_pct = 0.01;
-                    side.unstuck_close_pct = 0.1;
-                    side.unstuck_threshold = 0.95;
-                    side.ema_span_0 = 1.0;
-                    side.ema_span_1 = 2.0;
+                    side.total_wallet_exposure_limit_ratio = 1.0;
+                    side.unstuck_loss_allowance_fraction = 0.01;
+                    side.unstuck_close_fraction = 0.1;
+                    side.unstuck_exposure_trigger_ratio = 0.95;
+                    side.ema_span_0_minutes = 1.0;
+                    side.ema_span_1_minutes = 2.0;
                 }
                 pair
             })
@@ -665,7 +665,7 @@ mod tests {
         OrderFillExecution {
             at_bar_close: false,
             price,
-            fee_rate: 0.001,
+            fee_fraction: 0.001,
             liquidity: "maker",
         }
     }
@@ -986,7 +986,7 @@ mod tests {
         let values = candles(2, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 2);
-        p.max_realized_loss_pct = 0.05;
+        p.loss_gate_max_drawdown_fraction = 0.05;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(2);
         for pair in &mut bot_params {
@@ -1062,7 +1062,7 @@ mod tests {
         // A signed entry rebate reduces the same D, without resetting a flat
         // account or a newly opened position to zero.
         let mut rebate = execution(100.0);
-        rebate.fee_rate = -0.001;
+        rebate.fee_fraction = -0.001;
         bt.process_entry_fill_long(1, 0, &order(1.0, OrderType::EntryInitialNormalLong), rebate)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
@@ -1073,17 +1073,17 @@ mod tests {
         let values = candles(1, 90.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 1);
-        p.max_realized_loss_pct = 0.15;
+        p.loss_gate_max_drawdown_fraction = 0.15;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(1);
         bot_params[0].short.unstuck_enabled = false;
         let long = &mut bot_params[0].long;
         long.unstuck_enabled = true;
         long.unstuck_ema_gating_enabled = false;
-        long.unstuck_loss_allowance_pct = 0.02;
-        long.unstuck_close_pct = 0.5;
-        long.unstuck_threshold = 0.5;
-        long.wallet_exposure_limit = 0.5;
+        long.unstuck_loss_allowance_fraction = 0.02;
+        long.unstuck_close_fraction = 0.5;
+        long.unstuck_exposure_trigger_ratio = 0.5;
+        long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
         long.risk_twel_enforcer_enabled = false;
         let mut bt = Backtest::new(
@@ -1094,11 +1094,11 @@ mod tests {
             &p,
         );
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
@@ -1108,7 +1108,8 @@ mod tests {
         assert_eq!(input.global.unstuck_realized_pnl_drawdown, 50.0);
         assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
         assert_eq!(
-            crate::hsl_decay::allowance(input.balance_raw, p.max_realized_loss_pct, 50.0).unwrap(),
+            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction, 50.0)
+                .unwrap(),
             0.15_f32.mul_add(1000.0, -50.0) as f64,
         );
         let actual = orchestrator::compute_ideal_orders(&input).unwrap();
@@ -1133,7 +1134,7 @@ mod tests {
         let btc = Array1::from_elem(6, 20_000.0);
         for interval in [1, 5] {
             let mut p = params("coin", 1);
-            p.max_realized_loss_pct = 0.0;
+            p.loss_gate_max_drawdown_fraction = 0.0;
             p.candle_interval_minutes = interval;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
@@ -1151,11 +1152,11 @@ mod tests {
                 &p,
             );
             let mut entry = execution(100.0);
-            entry.fee_rate = 0.0;
+            entry.fee_fraction = 0.0;
             bt.process_entry_fill_long(0, 0, &order(1.0, OrderType::EntryInitialNormalLong), entry)
                 .unwrap();
             let mut exit = execution(36.0);
-            exit.fee_rate = 0.0;
+            exit.fee_fraction = 0.0;
             bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
                 .unwrap();
             assert_eq!(bt.loss_gate_memory.drawdown(), 64.0);
@@ -1177,7 +1178,7 @@ mod tests {
         let btc = Array1::from_elem(6, 20_000.0);
         for pct in [0.0, 1.0 - f64::EPSILON, 1.0, 2.0] {
             let mut p = params("coin", 1);
-            p.max_realized_loss_pct = pct;
+            p.loss_gate_max_drawdown_fraction = pct;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
             bot_params[0].long.unstuck_enabled = false;
@@ -1221,7 +1222,7 @@ mod tests {
         let values = candles(1, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 1);
-        p.max_realized_loss_pct = 0.15;
+        p.loss_gate_max_drawdown_fraction = 0.15;
         p.unstuck_memory_ema_span_minutes = 3.0;
         p.loss_gate_memory_ema_span_minutes = 7.0;
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
@@ -1234,11 +1235,11 @@ mod tests {
         );
         assert!(bt.unstuck_memory_enabled && bt.loss_gate_memory_enabled);
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         // The ordinary ledger has one loss, while each filter remembers all of it.
@@ -1254,7 +1255,7 @@ mod tests {
         assert_eq!(input.global.loss_gate_realized_pnl_drawdown, 37.5);
         // A later actual profit repays each existing memory independently.
         let mut profit = execution(110.0);
-        profit.fee_rate = 0.0;
+        profit.fee_fraction = 0.0;
         bt.process_close_fill_long(1, 0, &order(-1.0, OrderType::CloseGridLong), profit)
             .unwrap();
         assert_eq!(bt.unstuck_memory.drawdown(), 15.0);
@@ -1272,7 +1273,7 @@ mod tests {
         let config = p.equity_hard_stop_loss.hsl.as_mut().unwrap();
         let mut local = config.sides.clone();
         local[LONG].memory_ema_span_minutes = 7.0;
-        local[LONG].drawdown_ratio_ema_span_minutes = 3.0;
+        local[LONG].drawdown_fraction_ema_span_minutes = 3.0;
         local[LONG].scale_budget_with_excess_allowance = true;
         config.coins.insert("COIN1".into(), local);
         let mut bt = Backtest::new(

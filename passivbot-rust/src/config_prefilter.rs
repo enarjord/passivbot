@@ -1,8 +1,8 @@
 //! Hypothetical normalized strategy probes, never live inputs or candle replay.
-use crate::closes::{calc_close_retracement_multiplier, calc_close_threshold_pct};
+use crate::closes::{calc_close_retracement_multiplier, calc_close_threshold_fraction};
 use crate::entries::{
     calc_entry_distance_multiplier, calc_entry_retracement_multiplier, calc_next_entry_long,
-    calc_next_entry_short, wallet_exposure_limit_with_allowance,
+    calc_next_entry_short, wallet_exposure_limit_ratio_with_allowance,
 };
 use crate::strategies::TrailingMartingaleParams;
 use crate::types::{
@@ -19,17 +19,17 @@ use serde::{Deserialize, Serialize};
 struct Probe {
     side: String,
     strategy: TrailingMartingaleParams,
-    wallet_exposure_limit: f64,
-    total_wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    total_wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     cooldown_base: f64,
     cooldown_min: f64,
     cooldown_max: Option<f64>,
     cooldown_exposure_weight: f64,
     cooldown_adverse_weight: f64,
     exposure_ratios: Vec<f64>,
-    volatility_ema_1m: f64,
-    volatility_ema_1h: f64,
+    log_range_ema_1m: f64,
+    log_range_ema_1h: f64,
     adverse_directionality: f64,
     grid_max_entries: usize,
     calculate_grid: bool,
@@ -54,9 +54,9 @@ struct Measurements {
 
 fn bot(p: &Probe) -> BotParams {
     BotParams {
-        wallet_exposure_limit: p.wallet_exposure_limit,
-        total_wallet_exposure_limit: p.total_wallet_exposure_limit,
-        risk_we_excess_allowance_pct: p.risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio: p.wallet_exposure_limit_ratio,
+        total_wallet_exposure_limit_ratio: p.total_wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction: p.risk_we_excess_allowance_fraction,
         risk_entry_cooldown_minutes: p.cooldown_base,
         entry_cooldown_min_duration_minutes: p.cooldown_min,
         entry_cooldown_max_duration_minutes: p.cooldown_max,
@@ -71,21 +71,21 @@ fn bot(p: &Probe) -> BotParams {
 fn distances(p: &Probe, exposure: f64, allowed: f64) -> (f64, f64) {
     let e = &p.strategy.entry;
     (
-        e.threshold_base_pct.max(0.0)
+        e.threshold_base_fraction.max(0.0)
             * calc_entry_distance_multiplier(
                 exposure,
                 allowed,
                 e,
-                p.volatility_ema_1h,
-                p.volatility_ema_1m,
+                p.log_range_ema_1h,
+                p.log_range_ema_1m,
             ),
-        e.retracement_base_pct.max(0.0)
+        e.retracement_base_fraction.max(0.0)
             * calc_entry_retracement_multiplier(
                 exposure,
                 allowed,
                 e,
-                p.volatility_ema_1h,
-                p.volatility_ema_1m,
+                p.log_range_ema_1h,
+                p.log_range_ema_1m,
             ),
     )
 }
@@ -106,8 +106,8 @@ fn grid(
         min_qty: 1e-12,
         min_cost: 0.0,
         c_mult: 1.0,
-        maker_fee: 0.0,
-        taker_fee: 0.0,
+        maker_fee_fraction: 0.0,
+        taker_fee_fraction: 0.0,
     };
     let mut position = Position {
         size: 0.0,
@@ -156,8 +156,8 @@ fn grid(
                 lower: 1.0,
                 upper: 1.0,
             },
-            volatility_ema_1m: p.volatility_ema_1m,
-            volatility_ema_1h: p.volatility_ema_1h,
+            log_range_ema_1m: p.log_range_ema_1m,
+            log_range_ema_1h: p.log_range_ema_1h,
         };
         let entry = if long {
             calc_next_entry_long(
@@ -230,11 +230,11 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         return Err("invalid probe exposure ratios or grid bound".into());
     }
     for value in [
-        p.wallet_exposure_limit,
-        p.total_wallet_exposure_limit,
-        p.risk_we_excess_allowance_pct,
-        p.volatility_ema_1m,
-        p.volatility_ema_1h,
+        p.wallet_exposure_limit_ratio,
+        p.total_wallet_exposure_limit_ratio,
+        p.risk_we_excess_allowance_fraction,
+        p.log_range_ema_1m,
+        p.log_range_ema_1h,
         p.adverse_directionality,
     ] {
         if !value.is_finite() || value < 0.0 {
@@ -255,9 +255,9 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
     let bp = bot(p);
     crate::entry_cooldown::validate(&bp)?;
     let runtime = RuntimeOrderContext {
-        effective_wallet_exposure_limit: p.wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: p.wallet_exposure_limit_ratio,
     };
-    let allowed = wallet_exposure_limit_with_allowance(&bp, &runtime);
+    let allowed = wallet_exposure_limit_ratio_with_allowance(&bp, &runtime);
     if !allowed.is_finite() || allowed <= 0.0 {
         return Err("probe requires positive exposure capacity".into());
     }
@@ -275,8 +275,8 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             lower: 1.0,
             upper: 1.0,
         },
-        volatility_ema_1m: p.volatility_ema_1m,
-        volatility_ema_1h: p.volatility_ema_1h,
+        log_range_ema_1m: p.log_range_ema_1m,
+        log_range_ema_1h: p.log_range_ema_1h,
     };
     let flat = Position {
         size: 0.0,
@@ -319,15 +319,15 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         }
         let state = StateParams {
             balance: 1.0,
-            volatility_ema_1m: p.volatility_ema_1m,
-            volatility_ema_1h: p.volatility_ema_1h,
+            log_range_ema_1m: p.log_range_ema_1m,
+            log_range_ema_1h: p.log_range_ema_1h,
             ..Default::default()
         };
         let position = Position {
             size: ratio * allowed,
             price: 1.0,
         };
-        let close = calc_close_threshold_pct(
+        let close = calc_close_threshold_fraction(
             &exchange,
             &state,
             &bp,
@@ -335,11 +335,11 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             &p.strategy.close,
             &position,
         );
-        let close_retracement = p.strategy.close.retracement_base_pct.max(0.0)
+        let close_retracement = p.strategy.close.retracement_base_fraction.max(0.0)
             * calc_close_retracement_multiplier(&state, &p.strategy.close);
         // A nonpositive trailing close threshold has no profit-excursion gate.
         let span = (distance
-            + if p.strategy.close.retracement_base_pct > 0.0 {
+            + if p.strategy.close.retracement_base_fraction > 0.0 {
                 close.max(0.0)
             } else {
                 close
@@ -347,7 +347,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         .max(0.0);
         let cooldown = crate::entry_cooldown::effective_duration(
             &bp,
-            Some(ratio * allowed / p.wallet_exposure_limit),
+            Some(ratio * allowed / p.wallet_exposure_limit_ratio),
             Some(p.adverse_directionality),
         )?;
         if [span, retracement, close_retracement, cooldown]
@@ -397,17 +397,17 @@ mod tests {
         Probe {
             side: "long".into(),
             strategy: TrailingMartingaleParams::default(),
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             cooldown_base: 0.0,
             cooldown_min: 0.0,
             cooldown_max: None,
             cooldown_exposure_weight: 0.0,
             cooldown_adverse_weight: 0.0,
             exposure_ratios: vec![0.8],
-            volatility_ema_1m: 0.0,
-            volatility_ema_1h: 0.0,
+            log_range_ema_1m: 0.0,
+            log_range_ema_1h: 0.0,
             adverse_directionality: 0.0,
             grid_max_entries: 1024,
             calculate_grid: true,
@@ -417,12 +417,12 @@ mod tests {
     #[test]
     fn geometry_uses_separate_entry_and_close_weights() {
         let mut p = probe();
-        p.strategy.entry.threshold_base_pct = 0.03;
-        p.strategy.entry.threshold_we_weight = 5.0;
-        p.strategy.entry.retracement_base_pct = 0.001;
-        p.strategy.entry.retracement_we_weight = 0.1;
-        p.strategy.close.threshold_base_pct = 0.01;
-        p.strategy.close.threshold_we_weight = -0.005;
+        p.strategy.entry.threshold_base_fraction = 0.03;
+        p.strategy.entry.threshold_exposure_ratio_coefficient = 5.0;
+        p.strategy.entry.retracement_base_fraction = 0.001;
+        p.strategy.entry.retracement_exposure_ratio_coefficient = 0.1;
+        p.strategy.close.threshold_base_fraction = 0.01;
+        p.strategy.close.threshold_exposure_ratio_coefficient = -0.005;
         let result = measure(&p).unwrap();
         assert!((result.observations[0].entry_close_span - 0.156).abs() < 1e-12);
         assert!((result.observations[0].entry_retracement - 0.00108).abs() < 1e-12);
@@ -433,9 +433,9 @@ mod tests {
         for side in ["long", "short"] {
             let mut p = probe();
             p.side = side.into();
-            p.strategy.entry.initial_qty_pct = 0.1;
-            p.strategy.entry.double_down_factor = 1.0;
-            p.strategy.entry.threshold_base_pct = 0.05;
+            p.strategy.entry.initial_qty_fraction = 0.1;
+            p.strategy.entry.reentry_qty_multiplier = 1.0;
+            p.strategy.entry.threshold_base_fraction = 0.05;
             let result = measure(&p).unwrap();
             assert!(result.grid_complete);
             assert!(result.grid_entries > 2);
@@ -449,15 +449,15 @@ mod tests {
     fn partial_initial_and_ema_gates_use_their_own_price_branch() {
         let mut p = probe();
         p.calculate_grid = false;
-        p.strategy.entry.initial_qty_pct = 0.9;
-        p.strategy.entry.threshold_base_pct = 0.5;
-        p.strategy.entry.retracement_base_pct = 0.1;
+        p.strategy.entry.initial_qty_fraction = 0.9;
+        p.strategy.entry.threshold_base_fraction = 0.5;
+        p.strategy.entry.retracement_base_fraction = 0.1;
         p.exposure_ratios = vec![0.25];
         let row = &measure(&p).unwrap().observations[0];
         assert_eq!(row.entry_close_span, 0.0);
         assert_eq!(row.entry_retracement, 0.0);
-        p.strategy.entry.initial_qty_pct = 0.01;
-        p.strategy.entry.initial_ema_dist = 0.6;
+        p.strategy.entry.initial_qty_fraction = 0.01;
+        p.strategy.entry.initial_ema_distance_fraction = 0.6;
         p.strategy.entry.ema_gate_mode = crate::strategies::EmaGateMode::All;
         assert!((measure(&p).unwrap().observations[0].entry_close_span - 0.6).abs() < 1e-9);
     }

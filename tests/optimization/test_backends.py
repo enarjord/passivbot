@@ -126,19 +126,19 @@ def test_format_config_normalizes_canonical_pymoo_nested_defaults():
     current = copy.deepcopy(get_template_config())
     current["optimize"]["backend"] = "pymoo"
     current["optimize"]["pymoo"]["shared"] = {
-        "crossover_eta": 17.0, "crossover_prob_var": 0.33,
-        "mutation_eta": 11.0, "mutation_prob": 0.07,
+        "crossover_distribution_index": 17.0, "crossover_probability_per_variable": 0.33,
+        "mutation_distribution_index": 11.0, "mutation_probability": 0.07,
     }
 
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["pymoo"]["algorithm"] == "auto"
     assert out["optimize"]["pymoo"]["shared"] == {
-        "crossover_eta": 17.0,
-        "crossover_prob_var": 0.33,
-        "mutation_eta": 11.0,
-        "mutation_prob": 0.07,
-        "mutation_prob_per_variable": "auto",
+        "crossover_distribution_index": 17.0,
+        "crossover_probability_per_variable": 0.33,
+        "mutation_distribution_index": 11.0,
+        "mutation_probability": 0.07,
+        "mutation_probability_per_variable": "auto",
         "eliminate_duplicates": True,
     }
     assert out["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"] == {

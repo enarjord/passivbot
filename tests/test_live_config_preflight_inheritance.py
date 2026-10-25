@@ -10,9 +10,9 @@ from tools.live_config_preflight import build_live_config_diff_report, build_liv
 
 
 def _hsl(enabled):
-    return dict(enabled=enabled, drawdown_ratio_threshold=0.05,
+    return dict(enabled=enabled, drawdown_threshold_fraction=0.05,
                 cooldown_after_red_minutes=60.0, memory_ema_span_minutes=43200.0,
-                drawdown_ratio_ema_span_minutes=120.0,
+                drawdown_fraction_ema_span_minutes=120.0,
                 scale_budget_with_excess_allowance=False, panic_close_order_type="limit")
 
 

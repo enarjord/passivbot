@@ -91,7 +91,7 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     entry = {
         "bot": {
             "long": {
-                "entry_we_weight": 1.384,
+                "entry_exposure_ratio_coefficient": 1.384,
             },
             "short": {},
         },
@@ -117,7 +117,7 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     assert len(saved_files) == 1
     saved = json.loads(saved_files[0].read_text())
 
-    assert saved["bot"]["long"]["entry_we_weight"] == 1.384
+    assert saved["bot"]["long"]["entry_exposure_ratio_coefficient"] == 1.384
 
 
 def test_pareto_store_single_pass_drops_and_removes_dominated_entries(tmp_path):

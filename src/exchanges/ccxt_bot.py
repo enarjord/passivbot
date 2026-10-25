@@ -978,8 +978,8 @@ class CCXTBot(Passivbot):
         Returns:
             Minimum leverage (ceiling of max TWEL across both sides)
         """
-        long_twel = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
-        short_twel = float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0)
+        long_twel = float(self.bot_value("long", "total_wallet_exposure_limit_ratio") or 0.0)
+        short_twel = float(self.bot_value("short", "total_wallet_exposure_limit_ratio") or 0.0)
         max_twel = max(long_twel, short_twel)
 
         if max_twel <= 0:

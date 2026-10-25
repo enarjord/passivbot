@@ -188,7 +188,7 @@ def test_declared_coin_file_global_defaults_project_without_hydrating_or_widenin
     raw = {"bot": {"global": {
         "enabled": True,
         "universe": {"approved_coins": ["BTC"], "ignored_coins": []},
-        "risk": {"total_wallet_exposure_limit": 2.0, "max_positions": 3},
+        "risk": {"total_wallet_exposure_limit_ratio": 2.0, "max_positions": 3},
         "strategy": {kind: {"entry": {"ema_span_0_minutes": 12.5}},
                      "ema_anchor": {"fast_span_minutes": 42.0}},
         "unstuck": {"ema_span_0_minutes": 30.5},

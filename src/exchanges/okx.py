@@ -9,7 +9,7 @@ import asyncio
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 
-calc_order_price_diff = pbr.calc_order_price_diff
+calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 
 class OKXBot(CCXTBot):
@@ -478,7 +478,7 @@ class OKXBot(CCXTBot):
             for x in ideal_orders[s]:
                 ideal_orders_tmp.append(
                     (
-                        calc_order_price_diff(
+                        calc_order_price_gap_fraction(
                             x["side"],
                             x["price"],
                             market_prices[s],

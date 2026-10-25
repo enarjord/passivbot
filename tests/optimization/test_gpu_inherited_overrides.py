@@ -26,9 +26,9 @@ def test_inherited_overrides_preserve_hsl_and_temporal_continuation(monkeypatch,
 
         def with_overrides(config, **kwargs):
             patch = {"entry_cooldown": {"min_duration_minutes": 0.0},
-                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": 0.07}}}}
+                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.07}}}}
             if mode == "coin":
-                patch["hsl"] = {"enabled": False, "drawdown_ratio_threshold": 0.03}
+                patch["hsl"] = {"enabled": False, "drawdown_threshold_fraction": 0.03}
             # A short-side-only finite zero must retain lookup in fused replay.
             config["coin_overrides"] = {"AAA": {"bot": {sides[-1]: patch}}}
             return prepare(config, **kwargs)
@@ -39,12 +39,12 @@ def test_inherited_overrides_preserve_hsl_and_temporal_continuation(monkeypatch,
     assert runner.coin_overrides_absent is not overridden
     runner.max_dispatch_candidate_bars = 3 * 3 * len(sides) * 17
     candidates = [
-        {f"{side}_hsl_red_threshold": 1e-6 for side in sides},
+        {f"{side}_hsl_drawdown_threshold_fraction": 1e-6 for side in sides},
         {f"{side}_{key}": value for side in sides for key, value in {
-            "hsl_red_threshold": 0.03, "entry_cooldown_min_duration_minutes": 3.,
+            "hsl_drawdown_threshold_fraction": 0.03, "entry_cooldown_min_duration_minutes": 3.,
             "entry_cooldown_max_duration_minutes": 60.,
             "entry_cooldown_exposure_weight": 20., "entry_cooldown_adverse_weight": 30.,
-            "unilateralness_ema_span_1m": 15., "forager_score_weights_unilateralness": .5,
+            "unilateralness_ema_span_minutes": 15., "forager_score_weights_unilateralness": .5,
         }.items()},
         {},
     ]

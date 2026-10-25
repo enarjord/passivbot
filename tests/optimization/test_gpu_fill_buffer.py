@@ -40,14 +40,14 @@ def test_buffered_suite_cache_separates_fill_assumptions(monkeypatch):
     from test_gpu_prepared_data import _inputs
     calls = []
     def build(*args, **kwargs):
-        calls.append(kwargs['limit_order_fill_buffer_pct'])
+        calls.append(kwargs['limit_order_fill_buffer_fraction'])
         return dict(n_coins=2, n=10, invariant_bytes=1)
     monkeypatch.setattr(service, 'build_mps_multicoin_data', build)
     cache = {}
     original = service._prepared_multicoin_data(**_inputs(), cache=cache)
-    buffered = service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_pct=0.0015)
+    buffered = service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_fraction=0.0015)
     assert buffered is not original
-    assert service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_pct=0.0015) is buffered
+    assert service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_fraction=0.0015) is buffered
     assert calls == [0.0, 0.0015]
 
 
@@ -55,13 +55,13 @@ def test_buffer_changes_gpu_checkpoint_identity():
     from optimization.gpu.service import _gpu_proxy_execution_checkpoint_contract
     args = dict(strategy_kind='trailing_martingale', exchange='bybit', enabled_sides=['long'],
                 hlcvs=np.ones((3, 1, 4)), timestamps=np.arange(3),
-                backtest_params={'coins': ['BTC'], 'limit_order_fill_buffer_pct': 0.0},
+                backtest_params={'coins': ['BTC'], 'limit_order_fill_buffer_fraction': 0.0},
                 exchange_params=[], base_params={})
     zero = _gpu_proxy_execution_checkpoint_contract(**args)
-    args['backtest_params']['limit_order_fill_buffer_pct'] = 0.0015
+    args['backtest_params']['limit_order_fill_buffer_fraction'] = 0.0015
     buffered = _gpu_proxy_execution_checkpoint_contract(**args)
     assert zero != buffered
-    assert buffered['backtest']['limit_order_fill_buffer_pct'] == 0.0015
+    assert buffered['backtest']['limit_order_fill_buffer_fraction'] == 0.0015
 
 
 def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
@@ -74,27 +74,27 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     coins = ['BTC', 'ETH'][:coin_count]
     set_side_universe_sources(cfg, 'approved_coins', {s: coins if s == side else [] for s in ['long', 'short']})
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
-                          starting_balance=1000.0, limit_order_fill_buffer_pct=buffer)
+                          starting_balance=1000.0, limit_order_fill_buffer_fraction=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
             st = cfg['bot'][s]['strategy'][strategy_kind]
-            st['entry'].update(ema_span_0=2., ema_span_1=3., initial_ema_dist=0.,
-                               initial_qty_pct=0.1, ema_gate_mode='disabled',
-                               threshold_base_pct=0.01, threshold_we_weight=0.,
-                               threshold_volatility_1m_weight=0., threshold_volatility_1h_weight=0.,
-                               retracement_base_pct=0., retracement_we_weight=0.,
-                               retracement_volatility_1m_weight=0., retracement_volatility_1h_weight=0.)
-            st['close'].update(qty_pct=1., threshold_base_pct=0.01, threshold_we_weight=0.,
-                               threshold_volatility_1m_weight=0., threshold_volatility_1h_weight=0.,
-                               retracement_base_pct=0., retracement_volatility_1m_weight=0.,
-                               retracement_volatility_1h_weight=0.)
+            st['entry'].update(ema_span_0_minutes=2., ema_span_1_minutes=3., initial_ema_distance_fraction=0.,
+                               initial_qty_fraction=0.1, ema_gate_mode='disabled',
+                               threshold_base_fraction=0.01, threshold_exposure_ratio_coefficient=0.,
+                               threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
+                               retracement_base_fraction=0., retracement_exposure_ratio_coefficient=0.,
+                               retracement_log_range_1m_coefficient=0., retracement_log_range_1h_coefficient=0.)
+            st['close'].update(qty_fraction=1., threshold_base_fraction=0.01, threshold_exposure_ratio_coefficient=0.,
+                               threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
+                               retracement_base_fraction=0., retracement_log_range_1m_coefficient=0.,
+                               retracement_log_range_1h_coefficient=0.)
         else:
-            cfg['bot'][s]['strategy'][strategy_kind].update(base_qty_pct=0.1, ema_span_0=2.,
-                                                            ema_span_1=3., offset=0., offset_psize_weight=0.,
-                                                            offset_volatility_1m_weight=0., offset_volatility_1h_weight=0.)
+            cfg['bot'][s]['strategy'][strategy_kind].update(base_qty_fraction=0.1, ema_span_0_minutes=2.,
+                                                            ema_span_1_minutes=3., offset_fraction=0., inventory_offset_exposure_coefficient=0.,
+                                                            offset_log_range_1m_coefficient=0., offset_log_range_1h_coefficient=0.)
     n = 120
     candles = np.tile([[[100.005, 99.995, 100., 1000.]]], (n, coin_count, 1))
     timestamps = 1704067200000 + np.arange(n, dtype=np.int64) * 60000

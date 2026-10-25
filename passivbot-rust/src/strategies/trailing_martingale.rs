@@ -38,7 +38,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
         _ => panic!("trailing_martingale strategy received non-trailing_martingale params"),
     };
     let runtime_context = RuntimeOrderContext {
-        effective_wallet_exposure_limit: request.runtime_budget.effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: request.runtime_budget.effective_wallet_exposure_limit_ratio,
     };
     let entry_params = params.entry_params();
     let close_params = params.close_params();
@@ -90,7 +90,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
-                            next.limit_order_fill_buffer_pct,
+                            next.limit_order_fill_buffer_fraction,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -174,7 +174,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.trailing,
                         );
                         if any_order_would_fill_next_candle(
-                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_fraction,
                         ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
@@ -245,7 +245,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
-                            next.limit_order_fill_buffer_pct,
+                            next.limit_order_fill_buffer_fraction,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -329,7 +329,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.trailing,
                         );
                         if any_order_would_fill_next_candle(
-                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_fraction,
                         ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
@@ -387,15 +387,15 @@ mod tests {
             bot_params: bot,
             strategy_params: params,
             runtime_budget: RuntimeBudgetState {
-                configured_wallet_exposure_limit: 1.0,
-                effective_wallet_exposure_limit: 1.0,
+                configured_wallet_exposure_limit_ratio: 1.0,
+                effective_wallet_exposure_limit_ratio: 1.0,
                 configured_n_positions: 1,
                 effective_n_positions: 1,
             },
             position,
             trailing,
             next_candle: Some(NextStepHint {
-                limit_order_fill_buffer_pct: 0.0,
+                limit_order_fill_buffer_fraction: 0.0,
                 low: next_low,
                 high: next_high,
                 tradable: true,
@@ -423,18 +423,18 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             ..Default::default()
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -458,7 +458,7 @@ mod tests {
         let mut buffered_request = recursive_close_request(
             &exchange, &state, &bot, &params, &position, &trailing, 0.0, 101.55,
         );
-        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_fraction = 0.01;
         let buffered = generate_orders(StrategySide::Long, buffered_request);
         assert_eq!(buffered.closes.len(), 1);
     }
@@ -482,18 +482,18 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             ..Default::default()
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -517,7 +517,7 @@ mod tests {
         let mut buffered_request = recursive_close_request(
             &exchange, &state, &bot, &params, &position, &trailing, 98.05, 200.0,
         );
-        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_fraction = 0.01;
         let buffered = generate_orders(StrategySide::Short, buffered_request);
         assert_eq!(buffered.closes.len(), 1);
     }
@@ -540,13 +540,13 @@ mod tests {
                 ..Default::default()
             };
             let bot = BotParams {
-                wallet_exposure_limit: 1.0, total_wallet_exposure_limit: 1.0,
+                wallet_exposure_limit_ratio: 1.0, total_wallet_exposure_limit_ratio: 1.0,
                 risk_wel_enforcer_enabled: false, ..Default::default()
             };
             let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
                 close: TrailingMartingaleCloseParams {
-                    qty_pct: 1.0, threshold_base_pct: 0.001,
-                    retracement_base_pct: 0.001, ..Default::default()
+                    qty_fraction: 1.0, threshold_base_fraction: 0.001,
+                    retracement_base_fraction: 0.001, ..Default::default()
                 },
                 ..Default::default()
             });

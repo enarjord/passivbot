@@ -110,7 +110,7 @@ def test_automatic_cache_rebuild_publishes_recovered_inception(tmp_path, monkeyp
     from optimization.warmup import build_optimizer_data_config
     config = _cache_config(tmp_path, (0.0, 60.0))
     config["optimize"]["bounds"] = {"short": {"risk": {
-        "total_wallet_exposure_limit": [0.0, 1.0], "max_positions": [1, 1],
+        "total_wallet_exposure_limit_ratio": [0.0, 1.0], "max_positions": [1, 1],
     }}}
     config = build_optimizer_data_config(config)
     directory, arrays, original_mss = _save_cache(bt, config, unknown)
@@ -154,9 +154,9 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
     source = released_v8_policy()
     file = tmp_path / "coin.json"
     file.write_text(json.dumps({"live": {"minimum_coin_age_days": 7.25},
-                                "bot": {"long": {"unstuck_close_pct": 0.15}}}))
+                                "bot": {"long": {"unstuck_close_fraction": 0.15}}}))
     inline = {"override_config_path": file.name, "live": {"minimum_coin_age_days": 12.5},
-              "bot": {"long": {"unstuck_close_pct": 0.25}}}
+              "bot": {"long": {"unstuck_close_fraction": 0.25}}}
     if context == "inline_only":
         inline.pop("override_config_path")
     source["coin_overrides"] = {"AAA": inline}
@@ -165,7 +165,7 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
     elif context == "fixed_root_age":
         source["optimize"]["fixed_runtime_overrides"] = {"live.minimum_coin_age_days": 5.5}
     elif context == "fixed_coin_leaf":
-        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA.bot.long.unstuck_close_pct": 0.25}
+        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA.bot.long.unstuck_close_fraction": 0.25}
     elif context == "fixed_coin_object":
         source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA": inline}
     before, contents = deepcopy(source), file.read_bytes()

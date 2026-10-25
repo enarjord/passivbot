@@ -189,7 +189,7 @@ inline bool should_use_ordinary_market_execution(
     float market_price,
     float price_step,
     bool market_orders_allowed,
-    float near_touch_threshold
+    float near_touch_fraction
 ) {
     if (!market_orders_allowed || order_ticks <= 0
         || !(market_price > 0.0f) || !isfinite(market_price)) {
@@ -200,7 +200,7 @@ inline bool should_use_ordinary_market_execution(
         return true;
     }
     return fabs(order_price / market_price - 1.0f)
-        <= fmax(near_touch_threshold, 0.0f);
+        <= fmax(near_touch_fraction, 0.0f);
 }
 
 inline int market_execution_tick_at(
@@ -464,10 +464,10 @@ inline float coin_override_or(
 }
 
 #pragma STDC FP_CONTRACT OFF
-inline float allowed_wallet_exposure_limit(
-    float base_limit, float total_limit, float allowance_pct) {
+inline float allowed_wallet_exposure_limit_ratio(
+    float base_limit, float total_limit, float allowance_fraction) {
     if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
-    float raw = fmax(allowance_pct, 0.0f);
+    float raw = fmax(allowance_fraction, 0.0f);
     float max_effective = (isfinite(total_limit) && total_limit > 0.0f)
         ? fmax(total_limit / base_limit - 1.0f, 0.0f) : 0.0f;
     float effective = fmin(raw, max_effective);
@@ -484,7 +484,7 @@ inline float coin_hsl_budget_multiplier(
     float authored_wel = coin_override_or(overrides, coin, wel_col, -1.0f);
     float base = authored_wel >= 0.0f ? authored_wel : twel / float(slots);
     if (!(isfinite(base) && base > 0.0f)) return 1.0f;
-    return allowed_wallet_exposure_limit(base, twel,
+    return allowed_wallet_exposure_limit_ratio(base, twel,
         coin_override_or(overrides, coin, allowance_col, allowance)) / base;
 }
 
@@ -516,7 +516,7 @@ inline bool passes_multicoin_age(
 
 inline bool passes_multicoin_min_effective_cost(
     bool enabled, float balance, float wel,
-    float initial_qty_pct, float price,
+    float initial_qty_fraction, float price,
     constant float* coin_settings ORGANILLO_ARGS, int coin_offset
 ) {
     if (!enabled) return true;
@@ -526,7 +526,7 @@ inline bool passes_multicoin_min_effective_cost(
         price, coin_settings[coin_offset + 0], coin_settings[coin_offset + 2],
         coin_settings[coin_offset + 3], c_mult
     ) * price * c_mult;
-    const float projected_cost = balance * wel * initial_qty_pct;
+    const float projected_cost = balance * wel * initial_qty_fraction;
     return isfinite(projected_cost) && projected_cost > 0.0f
         && projected_cost >= minimum_cost;
 }
