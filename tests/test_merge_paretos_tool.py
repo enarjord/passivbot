@@ -273,7 +273,7 @@ def test_merge_paretos_supports_canonical_v9_risk_and_bound_union(tmp_path: Path
             bounds = merged["optimize"]["bounds"][side]["risk"]
             assert bounds["max_positions"] == [1, 1, 1]
             assert "n_positions" not in bounds
-            assert bounds["total_wallet_exposure_limit"] == exposure_bounds
+            assert bounds["total_wallet_exposure_limit_ratio"] == exposure_bounds
     assert all(path.read_bytes() == raw for path, raw in originals.items())
 
 

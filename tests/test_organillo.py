@@ -354,7 +354,7 @@ def test_idle_clock_preserves_unmasked_capacity_and_readiness(tmp_path, strategy
         for coin in config["backtest"]["coins"]["binance"]:
             markets[coin]["first_valid_index"] = 120
     else:
-        key = "max_positions" if condition == "zero_slots" else "total_wallet_exposure_limit"
+        key = "max_positions" if condition == "zero_slots" else "total_wallet_exposure_limit_ratio"
         for side in ("long", "short"):
             config["bot"][side]["risk"][key] = 0
     ones = deepcopy(config)
