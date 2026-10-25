@@ -134,12 +134,17 @@ Retired metrics require a specific replacement and a separate formula acknowledg
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
   --metric-replacement adg_strategy_eq_w=adg_strategy_eq \
+  --metric-replacement strategy_eq_underwater_pct_mean=pain_index_strategy_eq \
   --acknowledge-metric-formula-change --report migration-report.json
 ```
 
 This example deliberately selects ordinary full-period growth. `_ew` is another distinct,
 opt-in formula and requires `backtest.ew_half_life_days`. Neither is an alias for `_w`.
 Objectives, limits, visibility lists and reducer mappings all require explicit choices.
+The retired daily-worst underwater mean is replaced by minute-sampled Pain Index only
+when explicitly selected and acknowledged; its old thresholds are not equivalent.
+Best-effort migration may infer that choice and records the formula change. The removed
+underwater median has no inferred replacement and requires an explicit metric choice.
 Best-effort migration can infer a supported `_ew` formula, but still requires
 `--metric-replacement` when no supported exponential counterpart exists. Selecting an ordinary
 full-period metric remains a different formula, including when another objective already uses it.

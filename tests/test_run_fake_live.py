@@ -1086,10 +1086,10 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
         "initial_qty_fraction"
     ] = 0.0276
     cfg["bot"]["long"]["risk"]["max_positions"] = 5
-    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.8
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.8
     cfg["bot"]["long"]["risk"]["we_excess_allowance_fraction"] = 0.37
     cfg["bot"]["short"]["risk"]["max_positions"] = 0
-    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     cfg['bot']["long"]['universe']['approved_coins'] = ["SOL"]
     cfg['bot']["short"]['universe']['approved_coins'] = []
     cfg['bot']["long"]['universe']['ignored_coins'] = []

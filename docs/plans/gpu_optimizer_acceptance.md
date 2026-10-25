@@ -448,7 +448,7 @@ an optimal dispatch width remain separate acceptance work.
 The CPU export distinguishes actual portfolio strategy equity from account equity,
 which is clamped at the liquidation floor. Shared GPU replay keeps those meanings
 separate for `drawdown_worst_strategy_eq`,
-`drawdown_worst_mean_1pct_strategy_eq` and `strategy_eq_underwater_pct_mean`.
+`drawdown_worst_mean_1pct_strategy_eq` and `pain_index_strategy_eq`.
 A requested-only daily maximum-drawdown column includes raw realized net cashflows
 and marked UPNL, including the actual terminal mark. Ordinary USD account risk
 retains its original summaries. This correction does not establish raw growth,

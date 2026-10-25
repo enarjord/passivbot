@@ -67,8 +67,8 @@ def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("strategy_eq_recovery_days_mean_worst_5pct") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_mean_worst_1pct") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_max") == "min"
-    assert default_objective_goal("strategy_eq_underwater_pct_mean") == "min"
-    assert default_objective_goal("strategy_eq_underwater_pct_median") == "min"
+    assert default_objective_goal("pain_index_strategy_eq") == "min"
+    assert default_objective_goal("ulcer_index_strategy_eq") == "min"
     assert default_objective_goal("peak_recovery_days_strategy_eq") == "min"
     assert default_objective_goal("peak_recovery_hours_strategy_eq_long") == "min"
     assert default_objective_goal("peak_recovery_hours_strategy_eq_short") == "min"
@@ -76,22 +76,22 @@ def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("peak_recovery_days_strategy_eq_short") == "min"
 
 
-def test_strategy_eq_underwater_metrics_are_shared_despite_stat_like_suffixes():
+def test_drawdown_indices_are_shared_and_default_to_minimize():
     specs, changed = normalize_scoring_entries(
-        ["strategy_eq_underwater_pct_mean", "strategy_eq_underwater_pct_median"]
+        ["pain_index_strategy_eq", "ulcer_index_strategy_eq"]
     )
 
     assert changed
     assert [(spec.metric, spec.goal) for spec in specs] == [
-        ("strategy_eq_underwater_pct_mean", "min"),
-        ("strategy_eq_underwater_pct_median", "min"),
+        ("pain_index_strategy_eq", "min"),
+        ("ulcer_index_strategy_eq", "min"),
     ]
     metrics = {
-        "strategy_eq_underwater_pct_mean": 0.12,
-        "strategy_eq_underwater_pct_mean_mean": 0.13,
+        "pain_index_strategy_eq": 0.12,
+        "pain_index_strategy_eq_mean": 0.13,
     }
-    assert resolve_metric_value(metrics, "strategy_eq_underwater_pct_mean") == 0.12
-    assert resolve_metric_value(metrics, "strategy_eq_underwater_pct_mean_mean") == 0.13
+    assert resolve_metric_value(metrics, "pain_index_strategy_eq") == 0.12
+    assert resolve_metric_value(metrics, "pain_index_strategy_eq_mean") == 0.13
 
 
 def test_hard_stop_panic_close_drawdown_metrics_are_shared():
@@ -136,7 +136,7 @@ def test_scoring_basis_preserves_inherit_named_and_explicit_reducer_scenarios():
         [
             {"metric": "adg_strategy_eq", "goal": "max"},
             {
-                "metric": "strategy_eq_underwater_pct_mean",
+                "metric": "pain_index_strategy_eq",
                 "goal": "min",
                 "scenario": " stress ",
             },
@@ -155,7 +155,7 @@ def test_scoring_basis_preserves_inherit_named_and_explicit_reducer_scenarios():
         "goal": "max",
     }
     assert specs[1].to_config() == {
-        "metric": "strategy_eq_underwater_pct_mean",
+        "metric": "pain_index_strategy_eq",
         "goal": "min",
         "scenario": "stress",
     }
@@ -176,7 +176,7 @@ def test_scoring_basis_resolves_omitted_and_null_scenario_in_both_default_direct
         [
             {"metric": "adg_strategy_eq", "goal": "max"},
             {
-                "metric": "strategy_eq_underwater_pct_mean",
+                "metric": "pain_index_strategy_eq",
                 "goal": "min",
                 "scenario": None,
             },
@@ -295,3 +295,26 @@ def test_position_held_time_weighted_metric_defaults_to_minimize():
     assert [(spec.metric, spec.goal) for spec in specs] == [
         ("position_held_time_weighted_mean_hours", "min")
     ]
+
+
+@pytest.mark.parametrize("old", ["strategy_eq_underwater_pct_mean", "strategy_eq_underwater_pct_median"])
+@pytest.mark.parametrize("object_form", [False, True])
+def test_removed_underwater_metrics_are_rejected_without_aliases(old, object_form):
+    entry = {"metric": old, "goal": "min"} if object_form else old
+    with pytest.raises(ValueError, match="daily-worst underwater metric.*removed"):
+        normalize_scoring_entries([entry])
+
+
+@pytest.mark.parametrize('old', ['strategy_eq_underwater_pct_mean', 'strategy_eq_underwater_pct_median'])
+@pytest.mark.parametrize('surface', ['limit', 'visible', 'reducer'])
+def test_removed_underwater_metrics_are_rejected_in_limits_visibility_and_reducers(old, surface):
+    from analysis_visibility import validate_visible_metrics_config
+    from config.limits import normalize_limit_entries
+    from config.reducers import reducer_mapping_from_aliases
+    with pytest.raises(ValueError, match='daily-worst underwater metric.*removed'):
+        if surface == 'limit':
+            normalize_limit_entries([{'metric': old, 'penalize_if': 'greater_than', 'value': .1}])
+        elif surface == 'visible':
+            validate_visible_metrics_config({'backtest': {'visible_metrics': [old]}})
+        else:
+            reducer_mapping_from_aliases({'reducer': {old: 'mean'}}, path='backtest')
