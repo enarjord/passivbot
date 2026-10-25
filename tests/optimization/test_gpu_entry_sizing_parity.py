@@ -12,10 +12,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fixture(side, coin_count, entry_kind):
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
     coins = ["BTC", "ETH"][:coin_count]
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']["portfolio"]['strategy_kind'] = 'trailing_martingale'
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
@@ -25,24 +25,31 @@ def _fixture(side, coin_count, entry_kind):
     )
     for direction in ("long", "short"):
         bot = config["bot"][direction]
+        bot["enabled"] = direction == side
+        bot["universe"]["minimum_coin_age_days"] = 0.0
+        bot["universe"]["filter_by_min_effective_cost"] = False
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
-        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'max_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
-            ema_span_0=2.0,
-            ema_span_1=3.0,
+            ema_span_0_minutes=2.0,
+            ema_span_1_minutes=3.0,
             ema_gate_mode="disabled",
-            initial_qty_pct=0.1,
-            threshold_base_pct=0.5,
-            retracement_base_pct=0.1,
+            initial_qty_fraction=0.1,
+            threshold_base_fraction=0.5,
+            retracement_base_fraction=0.1,
         )
-        strategy["close"].update(threshold_base_pct=0.5, retracement_base_pct=0.1)
+        strategy["close"].update(threshold_base_fraction=0.5, retracement_base_fraction=0.1)
+        # These short sizing fixtures have no completed hourly candle basis.
+        for leg in ("entry", "close"):
+            strategy[leg].update(threshold_volatility_1h_weight=0.0,
+                                 retracement_volatility_1h_weight=0.0)
     if entry_kind == "reentry":
         config["bot"][side]["strategy"]["trailing_martingale"]["entry"].update(
-            threshold_base_pct=0.01,
-            retracement_base_pct=0.001,
+            threshold_base_fraction=0.01,
+            retracement_base_fraction=0.001,
             double_down_factor=0.1,
             threshold_we_weight=0.0,
             threshold_volatility_1h_weight=0.0,
@@ -53,7 +60,7 @@ def _fixture(side, coin_count, entry_kind):
         )
     elif entry_kind == "minimum":
         entry = config["bot"][side]["strategy"]["trailing_martingale"]["entry"]
-        entry["initial_qty_pct"] = 0.001
+        entry["initial_qty_fraction"] = 0.001
     count = 7
     candles = np.full((count, coin_count, 4), 100.4, dtype=np.float64)
     candles[:, :, 3] = 1.0
