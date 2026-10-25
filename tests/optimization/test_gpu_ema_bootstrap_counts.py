@@ -42,13 +42,16 @@ def test_original_float64_candidate_and_coin_pins_reach_rust_before_scaling(monk
     strategy = (model.EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS if kind == "EMA_ANCHOR" else
                 tuple(key for key, _ in model.TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS))
     minute = "offset_log_range_ema_span_minutes" if kind == "EMA_ANCHOR" else "log_range_ema_span_minutes"
-    hour = minute.removesuffix("1m") + "1h"
+    hour = ("offset_log_range_ema_span_1h_candles" if kind == "EMA_ANCHOR"
+            else "log_range_ema_span_1h_candles")
+    price_spans = (("ema_span_0_minutes", "ema_span_1_minutes") if kind == "EMA_ANCHOR"
+                   else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes"))
     near = np.nextafter(3.0, np.inf)
     matrix = np.full((2, len(keys) * sides), near, dtype=np.float64)
     overrides = tuple(np.full((2, cols), np.nan, dtype=np.float64) for _ in range(sides))
     for side, pins in enumerate(overrides):
-        matrix[1, side * len(keys) + keys.index("ema_span_1_minutes")] = 9.0 + side
-        pins[0, strategy.index("ema_span_0_minutes")] = np.nextafter(1.0, np.inf)
+        matrix[1, side * len(keys) + keys.index(price_spans[1])] = 9.0 + side
+        pins[0, strategy.index(price_spans[0])] = np.nextafter(1.0, np.inf)
         pins[1, unstuck] = near * 3.0
         pins[1, strategy.index(minute)] = 12.0 + side
         pins[0, strategy.index(hour)] = 15.0 + side
