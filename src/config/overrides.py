@@ -482,6 +482,15 @@ def _validate_effective_coin_config(
         "_raw",
         "_raw_effective",
         "_transform_log",
+        # Optimizer owners retain these on the parent config. They are not
+        # authored policy and must not enter this temporary coin-policy check.
+        "_optimizer_prepared_dataset_identity",
+        "_optimizer_evaluation_contract",
+        "_fine_tune_anchor_plan",
+        "_optimizer_anchor",
+        "_hlcvs_dataset_override_meta",
+        "results_dir",
+        "results_filename",
     ):
         effective.pop(metadata_key, None)
     # Runtime dataset metadata has no role in validating a coin's policy.
