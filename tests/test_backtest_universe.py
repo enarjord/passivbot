@@ -22,9 +22,9 @@ def _base_config() -> dict:
         "short": ["A"],
     })
     set_side_universe_sources(cfg, 'ignored_coins', {"long": [], "short": []})
-    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     cfg["bot"]["long"]["risk"]["max_positions"] = 3
-    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     cfg["bot"]["short"]["risk"]["max_positions"] = 1
     return cfg
 
@@ -82,7 +82,7 @@ def test_effective_backtest_data_coins_supports_canonical_grouped_bot_config():
 
     assert "total_wallet_exposure_limit" not in cfg["bot"]["long"]
     assert "n_positions" not in cfg["bot"]["short"]
-    assert cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     assert cfg["bot"]["short"]["risk"]["max_positions"] == 1
     assert effective_backtest_data_coins(cfg) == ["A"]
 
@@ -90,7 +90,7 @@ def test_effective_backtest_data_coins_supports_canonical_grouped_bot_config():
 def test_hlcvs_cache_hash_changes_when_disabled_side_becomes_enabled():
     disabled_long = _base_config()
     enabled_long = deepcopy(disabled_long)
-    enabled_long["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    enabled_long["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
 
     assert effective_backtest_data_coins(disabled_long) == ["A"]
     assert effective_backtest_data_coins(enabled_long) == ["A", "B", "C"]
@@ -172,7 +172,7 @@ def test_hlcvs_cache_hash_changes_for_canonical_grouped_side_enablement():
         runtime=None,
     )
     enabled_long = deepcopy(disabled_long)
-    enabled_long["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    enabled_long["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
 
     assert effective_backtest_data_coins(disabled_long) == ["A"]
     assert effective_backtest_data_coins(enabled_long) == ["A", "B", "C"]
@@ -181,7 +181,7 @@ def test_hlcvs_cache_hash_changes_for_canonical_grouped_side_enablement():
 
 def test_effective_backtest_data_coins_inherits_shared_approval_for_omitted_side():
     cfg = _base_config()
-    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     cfg["bot"]["global"]["universe"]["approved_coins"] = ["B", "C"]
     del cfg["bot"]["long"]["universe"]["approved_coins"]
 
@@ -190,7 +190,7 @@ def test_effective_backtest_data_coins_inherits_shared_approval_for_omitted_side
 
 def test_effective_backtest_data_coins_inherits_shared_approval_for_null_side():
     cfg = _base_config()
-    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     cfg['bot']["long"]['universe']['approved_coins'] = None
 
     cfg["bot"]["global"]["universe"]["approved_coins"] = ["B", "C"]

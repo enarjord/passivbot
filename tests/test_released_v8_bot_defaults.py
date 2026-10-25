@@ -117,12 +117,12 @@ def test_omitted_short_positive_search_bounds_keep_old_runtime_policy_and_couple
         assert result.config["bot"][side] == expected["bot"][side]
     short = result.config["bot"]["short"]
     assert short["entry_cooldown"]["base_duration_minutes"] == 0.0
-    assert short["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert short["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     assert short["risk"]["max_positions"] == 1
     assert short["enabled"] is True  # Historical search bounds can still activate capacity.
     assert short["unstuck"]["ema_span_0_minutes"] == 60.0
     assert short["unstuck"]["ema_span_1_minutes"] == 60.0
-    assert result.config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] == [0.0, 1.0]
+    assert result.config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == [0.0, 1.0]
     assert source == original
 
 
@@ -146,7 +146,7 @@ def test_explicit_alias_presence_precedes_frozen_root_defaults(path, value):
         ("n_positions",): ("risk", "max_positions"),
         ("risk_entry_cooldown_minutes",): ("entry_cooldown", "base_duration_minutes"),
         ("risk", "we_excess_allowance_fraction"): ("risk", "we_excess_allowance_fraction"),
-        ("forager_volatility_ema_span_1m",): ("forager", "volatility_ema_span_minutes"),
+        ("forager_volatility_ema_span_1m",): ("forager", "log_range_ema_span_minutes"),
         ("strategy", "trailing_martingale", "entry", "ema_span_0_minutes"): path,
     }
     selected = result.config["bot"]["long"]

@@ -1858,7 +1858,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_ratio"))
+        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -2648,7 +2648,7 @@ class Passivbot:
         drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
         balance_peak = balance_raw + drawdown
-        pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
+        change_from_peak_percent = (balance_raw / balance_peak - 1.0) * 100.0
         allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
         override_allowances = {
             symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
@@ -2661,7 +2661,7 @@ class Passivbot:
             # Signed deficit is observability only; execution uses Rust output.
             "raw_allowance": pct * twel * balance_peak - drawdown,
             "peak": balance_peak,
-            "pct_from_peak": pct_from_peak,
+            "change_from_peak_percent": change_from_peak_percent,
             "loss_allowance_pct": pct,
             "override_loss_allowance_pcts": override_pcts,
             "override_allowances": override_allowances,
@@ -2710,23 +2710,23 @@ class Passivbot:
                 )
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
@@ -2890,10 +2890,10 @@ class Passivbot:
         ):
             return
         if entry_price > 0 and current_price > 0:
-            price_diff_pct = (current_price / entry_price - 1.0) * 100
-            sign = "+" if price_diff_pct >= 0 else ""
+            price_change_percent = (current_price / entry_price - 1.0) * 100
+            sign = "+" if price_change_percent >= 0 else ""
         else:
-            price_diff_pct = 0.0
+            price_change_percent = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
         if not Passivbot._live_event_console_available(self):
@@ -2904,7 +2904,7 @@ class Passivbot:
                 entry_price,
                 current_price,
                 sign,
-                price_diff_pct,
+                price_change_percent,
                 allowance,
             )
         self._emit_unstuck_selection_event(
@@ -4094,7 +4094,7 @@ class Passivbot:
                 try:
                     emit_memory_snapshot(
                         rss_bytes=rss,
-                        rss_delta_pct=pct_change,
+                        rss_delta_percent=pct_change,
                         cache_bytes=cache_bytes,
                         cache_candles=cache_candles,
                         cache_symbols=cache_symbols,
@@ -4116,7 +4116,7 @@ class Passivbot:
                     format_memory_snapshot_console(
                         {
                             "rss_bytes": rss,
-                            "rss_delta_pct": pct_change,
+                            "rss_delta_percent": pct_change,
                             "cache": {
                                 "bytes": cache_bytes,
                                 "candles": cache_candles,
@@ -7415,9 +7415,9 @@ class Passivbot:
             po, pn = delta.get("price_old"), delta.get("price_new")
             qo, qn = delta.get("qty_old"), delta.get("qty_new")
             if po is not None and pn is not None:
-                parts.append(f"price {po} -> {pn} ({delta.get('price_pct_diff','?')}%)")
+                parts.append(f"price {po} -> {pn} ({delta.get('price_difference_percent','?')}%)")
             if qo is not None and qn is not None:
-                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
+                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_difference_percent','?')}%)")
             if parts:
                 extra_parts.append("delta=" + "; ".join(parts))
         msg = (
@@ -7530,8 +7530,8 @@ class Passivbot:
                 if execution_type == "market":
                     extras.append("exec=market")
                 delta = order.get("_delta") or {}
-                price_diff = delta.get("price_pct_diff")
-                qty_diff = delta.get("qty_pct_diff")
+                price_diff = delta.get("price_difference_percent")
+                qty_diff = delta.get("qty_difference_percent")
                 delta_parts = []
                 if isinstance(price_diff, (int, float)) and price_diff:
                     delta_parts.append(f"Δp={price_diff:.3g}%")
@@ -10363,9 +10363,9 @@ class Passivbot:
             )
             for symbol in self.coin_overrides:
                 ov_conf = self.coin_overrides[symbol].get("bot", {}).get(pside, {})
-                if "wallet_exposure_limit" in ov_conf:
+                if "wallet_exposure_limit_ratio" in ov_conf:
                     self.coin_overrides[symbol]["bot"][pside][
-                        "wallet_exposure_limit"
+                        "wallet_exposure_limit_ratio"
                     ] = self.get_wallet_exposure_limit(pside, symbol)
         if policy is not None:
             # These calculated allocation values serve live consumers, never
@@ -10381,7 +10381,7 @@ class Passivbot:
                 self.coin_overrides.get(symbol, {})
                 .get("bot", {})
                 .get(pside, {})
-                .get("wallet_exposure_limit")
+                .get("wallet_exposure_limit_ratio")
             )
             if fwel is not None:
                 return fwel
@@ -13403,7 +13403,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust bot.portfolio.loss_gate.max_drawdown_ratio to change behavior",
+                    "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,

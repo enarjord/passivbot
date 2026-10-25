@@ -572,7 +572,7 @@ def test_cuda_prepared_service_reuses_packing_and_bounds_resident_scenarios(cuda
                       markets=markets, metrics=DEFAULT_METRICS)
         base = PreparedGpuDataset(config=config, **common)
         changed_config = deepcopy(config)
-        changed_config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.5
+        changed_config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.5
         changed = PreparedGpuDataset(config=changed_config, **common)
         indices = (0,) if coins == 1 else (0, 2)
         subset_config = deepcopy(config)
@@ -701,7 +701,7 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
     candles[:, :, :3] = [101.0, 99.0, 100.0]
     candles[80:, :, :3] *= 0.01
     bot = config["bot"]["long"]
-    bot["risk"]["total_wallet_exposure_limit"] = 10.0
+    bot["risk"]["total_wallet_exposure_limit_ratio"] = 10.0
     strategy = bot["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_pct=1.0, ema_gate_mode="disabled")
     strategy["close"]["threshold_base_pct"] = 1.0
@@ -726,7 +726,7 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
         for index, result in enumerate(results):
             candidate = deepcopy(config)
             if index:
-                candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.1
+                candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.1
                 candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.01
             payload = backtest.build_backtest_payload(
                 candles, markets, candidate, "binance", btc, timestamps, metrics_only=True,
@@ -801,7 +801,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
         suite = SuiteEvaluator(base, contexts, {"default": "mean"})
         scorer = CanonicalResultScorer(suite)
         scenario_configs = {"base": config, "stress": deepcopy(config)}
-        scenario_configs["stress"]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.5
+        scenario_configs["stress"]["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.5
         def forbidden(*_args, **_kwargs):
             pytest.fail("native completion scoring must not run CPU simulations")
         monkeypatch.setattr(backtest, "execute_backtest", forbidden)

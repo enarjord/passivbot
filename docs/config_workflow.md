@@ -74,7 +74,7 @@ and disables short. Its shared numerical profile is:
 
 - trailing martingale style configuration
 - `bot.global.risk.max_positions = 7`, inherited separately by each side
-- `bot.global.risk.total_wallet_exposure_limit = 1.5`, a per-side budget rather than a shared pool
+- `bot.global.risk.total_wallet_exposure_limit_ratio = 1.5`, a per-side budget rather than a shared pool
 - HSL present but disabled with `bot.global.hsl.enabled = false`
 - HSL signal mode set to per-coin slots with `bot.portfolio.hsl.scope = "coin"`
 - approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it

@@ -80,7 +80,7 @@ def _gate_history_config(patch, *, memory_span_minutes=None):
     """Exercise explicit independent memories with auto-unstuck disabled."""
     patch = deepcopy(patch)
     policy = patch.setdefault("bot", {}).setdefault("portfolio", {})
-    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_ratio", 0.5)
+    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_fraction", 0.5)
     if memory_span_minutes is not None:
         policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
         policy.setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
@@ -4450,7 +4450,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         },
         "short": {"status": "disabled"},
     }
@@ -4466,7 +4466,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.03,
             "peak": 16550.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         bot._monitor_runtime_unstuck_hints["long"] = {
             "next_symbol": "ETH/USDT:USDT",
@@ -4480,7 +4480,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.20,
             "peak": 16580.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
@@ -4530,7 +4530,7 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         }
         if pside == "long"
         else {"status": "disabled"}
@@ -8022,10 +8022,10 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
     assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
-    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.0
+    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.0
     assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
-    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"]
-    with pytest.raises(KeyError, match="max_drawdown_ratio"):
+    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"]
+    with pytest.raises(KeyError, match="max_drawdown_fraction"):
         bot._live_max_realized_loss_pct()
 
 
@@ -8098,7 +8098,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
 
     assert info["status"] == "ok"
     assert info["peak"] == 1005.0
-    assert info["pct_from_peak"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
+    assert info["change_from_peak_percent"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
     assert info["allowance"] == allowance(1000.0, mul(f32(0.01), f32(1.0)), 5.0)
 
 
@@ -12042,7 +12042,7 @@ def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(
 
     bot = make_bot()
     bot.get_raw_balance = lambda: balance
-    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_ratio_threshold=0.99)
+    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_threshold_fraction=0.99)
     decisions, unavailable = run(bot)
     assert not unavailable
     assert decisions[0].action == "panic"

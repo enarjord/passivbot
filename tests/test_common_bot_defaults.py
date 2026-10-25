@@ -42,11 +42,11 @@ def test_common_shared_profile_retains_former_long_values_and_separate_permissio
     assert inherited == common
     assert "enabled" not in common
     assert common["universe"]["approved_coins"] == []
-    assert common["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert common["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert common["risk"]["max_positions"] == 7
     assert common["forager"]["score_hysteresis_margin"] == 0.02
-    common["risk"]["total_wallet_exposure_limit"] = 0.0
-    assert get_common_bot_defaults()["risk"]["total_wallet_exposure_limit"] == 1.5
+    common["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
+    assert get_common_bot_defaults()["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
 
 
 def test_frozen_v8_defaults_keep_their_original_asymmetric_policy_and_ranges():

@@ -115,7 +115,7 @@ class NativeDatasetRegistry:
         for index, ((key, path), bound) in enumerate(zip(base.key_paths, base.bounds, strict=True)):
             if key == ANCHOR_GENE_KEY:
                 dimensions.append((index, range(int(bound.low), int(bound.high) + 1)))
-            elif (tuple(path[-2:]) in {("risk", "max_positions"), ("risk", "total_wallet_exposure_limit")}
+            elif (tuple(path[-2:]) in {("risk", "max_positions"), ("risk", "total_wallet_exposure_limit_ratio")}
                   and bound.low < bound.high):
                 # Canonical endpoint preparation handles position rounding,
                 # stepped bounds and fixed/mirrored policies. Raw zero crossing

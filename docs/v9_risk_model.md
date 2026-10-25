@@ -23,7 +23,7 @@ capability decision; an adapter must not guess their scope.
 ## Ordered arithmetic and sampling
 
 Each HSL policy has independent `memory_ema_span_minutes` currency drawdown memory and
-`drawdown_ratio_ema_span_minutes` ratio smoothing. Local policies live under
+`drawdown_fraction_ema_span_minutes` ratio smoothing. Local policies live under
 `bot.<side>.hsl`; the explicit portfolio policy and global scope live under `bot.portfolio.hsl`.
 The account-wide unstuck and loss-gate memories have separate spans under
 `bot.portfolio.unstuck.memory_ema_span_minutes` and `bot.portfolio.loss_gate.memory_ema_span_minutes`.
@@ -112,7 +112,7 @@ p = f32(loss_allowance_fraction) * f32(applicable_TWEL)
 allowance = max(0, fma(p, f32(raw_balance) + D_realized, -D_realized))
 ```
 
-For the global realized-loss gate use `p = f32(bot.portfolio.loss_gate.max_drawdown_ratio)` in the same
+For the global realized-loss gate use `p = f32(bot.portfolio.loss_gate.max_drawdown_fraction)` in the same
 allowance graph, without TWEL multiplication. Its original configured fraction determines
 enablement: finite values in [0, 1) activate the gate and values at least 1 disable it.
 Zero blocks lossy non-panic closes; negative or nonfinite fractions are invalid.

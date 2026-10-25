@@ -193,9 +193,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.0
+    config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
     config["bot"]["short"]["hsl"]["enabled"] = True
-    config["bot"]["short"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.0
+    config["bot"]["short"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
 
     n_minutes = 60
     start_ts = 1609459200000

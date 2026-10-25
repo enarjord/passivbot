@@ -314,7 +314,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=Fal
     for side, eligible in by_side.items():
         eligible_counts[side] = None if eligible is None else sum(
             any(
-                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit") != 0.0
+                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit_ratio") != 0.0
                 for key in _rms_policy_keys(config, {coin}, overrides)
             )
             for coin in eligible

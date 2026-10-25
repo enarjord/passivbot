@@ -94,7 +94,7 @@ def build_coin_override_parameters(
             matrix[row, column("COOLDOWN_COLUMN")] = float(
                 effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0,
             )
-        if not bool(effective_bot.get("entry_eligible", True)) or "wallet_exposure_limit" in side_patch:
+        if not bool(effective_bot.get("entry_eligible", True)) or "wallet_exposure_limit_ratio" in side_patch:
             matrix[row, column("WALLET_EXPOSURE_COLUMN")] = float(effective_bot["wallet_exposure_limit"])
         risk_patch = side_patch.get("risk", {}) or {}
         if "we_excess_allowance_fraction" in risk_patch:

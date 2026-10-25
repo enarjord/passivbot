@@ -31,11 +31,11 @@ To measure risk, the bot calculates the ratio of the position size to the total 
 > `WE = (100 * 35) / 1000 = 3.5`
 
 ### Wallet Exposure Limit (WEL)
-The `wallet_exposure_limit` acts as a ceiling. If a position's exposure reaches this limit, the bot stops adding new entries to that position to prevent risk from spiraling out of control.
+The `wallet_exposure_limit_ratio` acts as a ceiling. If a position's exposure reaches this limit, the bot stops adding new entries to that position to prevent risk from spiraling out of control.
 
 In a multi-coin setup, the limits are derived from the total limit:
-* **Total Limit:** User sets `total_wallet_exposure_limit`.
-* **Per-Position Limit:** `total_wallet_exposure_limit / max_positions`.
+* **Total Limit:** User sets `total_wallet_exposure_limit_ratio`.
+* **Per-Position Limit:** `total_wallet_exposure_limit_ratio / max_positions`.
 
 ---
 
@@ -93,7 +93,7 @@ minimum executable close, the close may exceed the remaining allowance. Further
 unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
 allowance.
 
-The global realized-loss gate has its own threshold, `bot.portfolio.loss_gate.max_drawdown_ratio`,
+The global realized-loss gate has its own threshold, `bot.portfolio.loss_gate.max_drawdown_fraction`,
 and consumes the same account-wide ordered net fills with its own span and accumulator. It can still block a
 non-panic unstuck close if the projected loss exceeds its remaining allowance.
 
@@ -147,13 +147,13 @@ In practice, the bot rarely fills all positions simultaneously. Therefore, the b
 
 The excess allowance is always bounded. The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 
-`effective_we_excess_allowance_pct = min(max(0, risk_we_excess_allowance_pct), max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1))`
+`effective_we_excess_allowance_pct = min(max(0, risk_we_excess_allowance_pct), max(0, total_wallet_exposure_limit_ratio / wallet_exposure_limit_ratio - 1))`
 
-`effective_limit = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)`
+`effective_limit = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)`
 
-If `wallet_exposure_limit` is non-positive or non-finite, Passivbot treats
+If `wallet_exposure_limit_ratio` is non-positive or non-finite, Passivbot treats
 the effective excess allowance and effective limit as zero. If
-`total_wallet_exposure_limit` is non-positive or non-finite, bounded mode
+`total_wallet_exposure_limit_ratio` is non-positive or non-finite, bounded mode
 grants no excess headroom.
 
 In coin HSL mode, `bot.<side>.hsl.scale_budget_with_excess_allowance=true` also
@@ -208,7 +208,7 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 #### Total Exposure Enforcer (`total_exposure_enforcer.threshold_ratio`)
 This controls **total portfolio** trimming. It monitors the sum of all same-side long or short
 exchange exposure, including manual and panic positions. If the raw-balance total exceeds:
-`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`
+`total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio`
 The bot reduces positions according to `total_exposure_enforcer.policy`.
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
@@ -218,7 +218,7 @@ The bot reduces positions according to `total_exposure_enforcer.policy`.
 The unconditional entry cap is separate from auto-reduce. Bot-generated
 entries are blocked or cropped before projected snapped-balance TWE, including existing same-side
 exchange positions, can exceed
-`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio)`.
+`min(total_wallet_exposure_limit_ratio, total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio)`.
 
 Set `total_exposure_enforcer.enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
@@ -231,10 +231,10 @@ reductions, with stable symbol tie-breaks, and stop once projected TWE reaches t
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
 panic exposure contributes to the same-side TWE measurement, but those positions remain outside
-TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.portfolio.loss_gate.max_drawdown_ratio`; only
+TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.portfolio.loss_gate.max_drawdown_fraction`; only
 panic close orders bypass the realized-loss gate.
 
-### C. Realized-Loss Gate (`bot.portfolio.loss_gate.max_drawdown_ratio`)
+### C. Realized-Loss Gate (`bot.portfolio.loss_gate.max_drawdown_fraction`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 
 The gate consumes the same ordered account-wide net-realized facts as auto-unstuck,
@@ -242,7 +242,7 @@ using its own drawdown D and elapsed-minute decay from `bot.portfolio.loss_gate.
 All actual fills contribute net PnL and signed fees once, even when HSL and unstuck
 are disabled. UPNL and external balance changes do not change D.
 
-With raw balance B and fraction r=`max_drawdown_ratio`, Rust computes:
+With raw balance B and fraction r=`max_drawdown_fraction`, Rust computes:
 
 `remaining_allowance = max(0, r * (B + D) - D)`
 
@@ -251,9 +251,9 @@ not multiply r. A candidate close whose projected loss exceeds the remaining
 allowance is blocked; fills and decay replenish or consume that allowance.
 
 Behavior by value:
-* `max_drawdown_ratio == 0.0`: block all lossy closes; negative or nonfinite values are invalid.
-* `0.0 < max_drawdown_ratio < 1.0`: allow losses within the remaining gate-memory allowance.
-* `max_drawdown_ratio >= 1.0`: disabled.
+* `max_drawdown_fraction == 0.0`: block all lossy closes; negative or nonfinite values are invalid.
+* `0.0 < max_drawdown_fraction < 1.0`: allow losses within the remaining gate-memory allowance.
+* `max_drawdown_fraction >= 1.0`: disabled.
 
 Operational notes:
 * The shipped default is `1.0`, which keeps the gate disabled until you opt in explicitly.

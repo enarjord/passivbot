@@ -88,7 +88,7 @@ def _risk_memory_config(span_minutes=3.0):
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = span_minutes
     config["bot"]["portfolio"]["loss_gate"].update(
-        memory_ema_span_minutes=span_minutes, max_drawdown_ratio=.99,
+        memory_ema_span_minutes=span_minutes, max_drawdown_fraction=.99,
     )
     for side in ("long", "short"):
         config["bot"][side]["unstuck"]["enabled"] = False
@@ -1040,12 +1040,12 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
                                   btc_collateral_target_ratio=.5)
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
-        config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
-        config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
+        config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
+        config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)
         config["bot"]["long"]["wallet_exposure_limit"] = .5
         config["bot"]["short"]["wallet_exposure_limit"] = 0.0
         if max_realized_loss_pct is not None:
-            config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = max_realized_loss_pct
+            config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_realized_loss_pct
         return config
 
     def _make_mss(self):
@@ -1122,7 +1122,8 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         assert hs["portfolio"] is None
         expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
         for policy in expected:
-            policy["red_threshold"] = policy.pop("drawdown_ratio_threshold")
+            policy["red_threshold"] = policy.pop("drawdown_threshold_fraction")
+            policy["drawdown_ratio_ema_span_minutes"] = policy.pop("drawdown_fraction_ema_span_minutes")
             policy["cooldown_minutes_after_red"] = policy.pop("cooldown_after_red_minutes")
         assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
@@ -1130,8 +1131,8 @@ class TestPrepBacktestArgsEquityHardStopLoss:
     def test_custom_passthrough(self):
         policy = dict(
             enabled=True,
-            drawdown_ratio_threshold=0.3,
-            drawdown_ratio_ema_span_minutes=45.5,
+            drawdown_threshold_fraction=0.3,
+            drawdown_fraction_ema_span_minutes=45.5,
             memory_ema_span_minutes=123.5,
             cooldown_after_red_minutes=30.0,
             panic_close_order_type="limit",
@@ -1139,7 +1140,8 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         expected = {**policy, "scale_budget_with_excess_allowance": False}
-        expected["red_threshold"] = expected.pop("drawdown_ratio_threshold")
+        expected["red_threshold"] = expected.pop("drawdown_threshold_fraction")
+        expected["drawdown_ratio_ema_span_minutes"] = expected.pop("drawdown_fraction_ema_span_minutes")
         expected["cooldown_minutes_after_red"] = expected.pop("cooldown_after_red_minutes")
         assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 
@@ -1147,8 +1149,8 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         "policy,field",
         [
             ({"cooldown_after_red_minutes": -1.0}, "cooldown_after_red_minutes"),
-            ({"drawdown_ratio_threshold": 0.0}, "drawdown_ratio_threshold"),
-            ({"drawdown_ratio_ema_span_minutes": 0.5}, "drawdown_ratio_ema_span_minutes"),
+            ({"drawdown_threshold_fraction": 0.0}, "drawdown_threshold_fraction"),
+            ({"drawdown_fraction_ema_span_minutes": 0.5}, "drawdown_fraction_ema_span_minutes"),
             ({"memory_ema_span_minutes": 0.5}, "memory_ema_span_minutes"),
             ({"restart_after_red_policy": "threshold"}, "restart_after_red_policy"),
         ],

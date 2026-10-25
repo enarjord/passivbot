@@ -32,7 +32,7 @@ A nonpositive base WEL grants no headroom. The switch may vary per coin; coin-sp
 WEL/excess values apply. It uses configured headroom rather than current utilization.
 The option is rejected in position_side/portfolio modes.
 
-The configured `drawdown_ratio_threshold` is a fraction: `0.05` means 5%.
+The configured `drawdown_threshold_fraction` is a fraction: `0.05` means 5%.
 The native replay payload, reports and optimizer parameter IDs retain their
 existing `red_threshold`, `pside` and `hsl_red_threshold` names. Configuration
 adapters translate the public names without rescaling their values.
@@ -40,18 +40,18 @@ adapters translate the public names without rescaling their values.
 ## Drawdown and ratio smoothing
 
 Each HSL policy's `memory_ema_span_minutes` controls slow decay. Its
-`drawdown_ratio_ema_span_minutes` independently controls fast smoothing of the sampled ratio. Both are
+`drawdown_fraction_ema_span_minutes` independently controls fast smoothing of the sampled ratio. Both are
 float EMA spans in minutes. For one observation, omitting numerical rounding details:
 
 ```text
 alpha_slow = 2 / (memory_ema_span_minutes + 1)
-alpha_fast = 2 / (drawdown_ratio_ema_span_minutes + 1)
+alpha_fast = 2 / (drawdown_fraction_ema_span_minutes + 1)
 loss = previous_UPNL - current_UPNL - net_realized_cashflow
 D = max(0, (1 - alpha_slow) * D_previous + loss) # first event of a new minute
 E = current_budget + current_UPNL
 R = D / (E + D)
 M = (1 - alpha_fast) * M_previous_minute + alpha_fast * R
-RED = min(R, M) > drawdown_ratio_threshold
+RED = min(R, M) > drawdown_threshold_fraction
 ```
 
 Currency D and dimensionless R/M are different quantities. Historical ratios retain their

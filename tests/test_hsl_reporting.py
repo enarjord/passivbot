@@ -36,7 +36,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         cfg["coin_overrides"] = {
             "AAA": {
                 "bot": {
-                    "long": {"hsl": {"drawdown_ratio_threshold": 0.025, "drawdown_ratio_ema_span_minutes": 2.75}}
+                    "long": {"hsl": {"drawdown_threshold_fraction": 0.025, "drawdown_fraction_ema_span_minutes": 2.75}}
                 }
             }
         }

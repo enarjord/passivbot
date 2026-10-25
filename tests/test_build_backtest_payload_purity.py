@@ -91,9 +91,9 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
         "short": ["COIN1", "COIN2", "COIN3", "COIN4"],
     })
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 3
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["short"]["risk"]["max_positions"] = 4
     mss = {
         coin: {
@@ -216,7 +216,7 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
     config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC", "OM"], "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     config["coin_overrides"] = {"OM": {"live": {"modes": {"long": "normal"}}}}
     mss = {
@@ -895,7 +895,7 @@ def test_build_backtest_payload_allows_empty_multicoin_valid_window():
     config["backtest"]["coins"] = {"binance": coins}
     set_side_universe_sources(config, 'approved_coins', {"long": coins, "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     mss = {
         coin: {

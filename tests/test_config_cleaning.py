@@ -363,13 +363,13 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     assert contract["version"] == CONTRACT_VERSION
     assert "independent_loss_memories" in contract["risk_model"]
     assert contract["risk_model"].startswith("v9_")
-    assert "drawdown_ratio_threshold" not in block  # candidate value, not fixed policy
+    assert "drawdown_threshold_fraction" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
         cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     )
-    candidate_block["drawdown_ratio_threshold"] = 0.031
+    candidate_block["drawdown_threshold_fraction"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
     path = (
         "bot.portfolio.hsl.panic_close_order_type"
@@ -389,12 +389,12 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     cfg = generated_template(get_expanded_config_prototype(), "portfolio")
     cfg["bot"]["portfolio"]["hsl"].update(
         enabled=True,
-        drawdown_ratio_ema_span_minutes=12.5,
-        drawdown_ratio_threshold=0.07,
+        drawdown_fraction_ema_span_minutes=12.5,
+        drawdown_threshold_fraction=0.07,
     )
-    cfg["optimize"]["bounds"]["portfolio"]["hsl"] = {"drawdown_ratio_threshold": [0.02, 0.2]}
+    cfg["optimize"]["bounds"]["portfolio"]["hsl"] = {"drawdown_threshold_fraction": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
     loaded = format_config(json.loads(json.dumps(exported)), verbose=False)
     assert loaded["bot"]["portfolio"]["hsl"] == cfg["bot"]["portfolio"]["hsl"]
-    assert loaded["optimize"]["bounds"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == [0.02, 0.2]
+    assert loaded["optimize"]["bounds"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == [0.02, 0.2]
     assert not REMOVED_FIELDS.intersection(loaded["bot"]["long"]["hsl"])

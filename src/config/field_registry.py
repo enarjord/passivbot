@@ -176,11 +176,11 @@ _FIELDS_BY_TYPE = {
             checkpoint_interval_minutes event_rotation_mb event_rotation_minutes
             retain_days snapshot_interval_seconds
         """,
-        "optimize.prefilter": "adverse_directionality volatility_ema_1m volatility_ema_1h penalty_weight",
+        "optimize.prefilter": "adverse_directionality_score log_range_ema_1m log_range_ema_1h penalty_weight",
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
-        "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
-        "bot.portfolio.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
+        "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
+        "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
@@ -225,7 +225,7 @@ _FIELDS_BY_TYPE = {
         "backtest": "exchanges scenarios visible_metrics",
         "logging": "live_event_debug_profiles",
         "optimize": "enable_overrides fixed_params limits scoring",
-        "optimize.prefilter": "checks exposure_ratios",
+        "optimize.prefilter": "checks exposure_probe_fractions",
         "optimize.gpu.screening": "scenarios",
     },
     FieldType.OBJECT: {
@@ -260,15 +260,15 @@ _SHARED_SIDE_FIELDS = {
     FieldType.FLOAT: """
         universe.minimum_coin_age_days
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
-        forager.score_weights.volatility forager.score_weights.volume
-        forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
+        forager.score_weights.log_range forager.score_weights.volume
+        forager.unilateralness_ema_span_minutes forager.log_range_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
-        hsl.cooldown_after_red_minutes hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
+        hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
-        risk.total_wallet_exposure_limit risk.we_excess_allowance_fraction
+        risk.total_wallet_exposure_limit_ratio risk.we_excess_allowance_fraction
         unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
         unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
@@ -344,7 +344,7 @@ def get_field_registry() -> FieldRegistry:
         add(f"bot.{side}.entry_cooldown.max_duration_minutes", FieldType.FLOAT,
             nullable=True, unit="minutes", description="Null means an unbounded duration.")
         # This setting exists only inside coin patches, never as a root bot field.
-        add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit", FieldType.FLOAT,
+        add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit_ratio", FieldType.FLOAT,
             coin_override=CoinOverridePolicy.ALLOWED)
     for side in ("long", "short"):
         add(f"bot.{side}.forager.always_include.*", FieldType.STRING,
@@ -355,7 +355,7 @@ def get_field_registry() -> FieldRegistry:
     for name in ("enabled", "scale_budget_with_excess_allowance"):
         add(f"bot.portfolio.hsl.{name}", FieldType.BOOLEAN)
     add("bot.portfolio.hsl.panic_close_order_type", FieldType.STRING)
-    for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
+    for name in ("drawdown_threshold_fraction", "drawdown_fraction_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_after_red_minutes"):
         add(f"bot.portfolio.hsl.{name}", FieldType.FLOAT)
 
@@ -379,7 +379,7 @@ def get_field_registry() -> FieldRegistry:
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
-    for name in ("mutation_prob", "mutation_prob_per_variable"):
+    for name in ("mutation_probability", "mutation_probability_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):
@@ -412,7 +412,7 @@ def get_field_registry() -> FieldRegistry:
     add("backtest.scenarios.*.exchanges", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.scenarios.*.coin_sources", FieldType.OBJECT, nullable=True)
     add("backtest.scenarios.*.overrides", FieldType.OBJECT)
-    add("optimize.prefilter.exposure_ratios.*", FieldType.FLOAT)
+    add("optimize.prefilter.exposure_probe_fractions.*", FieldType.FLOAT)
     add("optimize.prefilter.checks.*.enabled", FieldType.BOOLEAN)
     add("optimize.prefilter.checks.*.metric", FieldType.STRING)
     add("optimize.prefilter.checks.*.sides", FieldType.ARRAY)

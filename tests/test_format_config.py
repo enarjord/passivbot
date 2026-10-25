@@ -57,7 +57,7 @@ def test_format_config_missing_short_side_stays_disabled():
         "config_version": _template()["config_version"],
         "bot": {
             "long": {
-                "risk": {"total_wallet_exposure_limit": 0.7},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.7},
             }
         },
         "live": {},
@@ -69,7 +69,7 @@ def test_format_config_missing_short_side_stays_disabled():
 
     out = format_config(current, verbose=False)
 
-    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.7
     assert out["bot"]["short"]["enabled"] is False
     assert out["bot"]["short"]["risk"] == _template()["bot"]["global"]["risk"]
 
@@ -79,7 +79,7 @@ def test_format_config_missing_long_side_stays_disabled():
         "config_version": _template()["config_version"],
         "bot": {
             "short": {
-                "risk": {"total_wallet_exposure_limit": 0.7},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.7},
             }
         },
         "live": {},
@@ -91,7 +91,7 @@ def test_format_config_missing_long_side_stays_disabled():
 
     out = format_config(current, verbose=False)
 
-    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.7
     assert out["bot"]["long"]["enabled"] is False
     assert out["bot"]["long"]["risk"] == _template()["bot"]["long"]["risk"]
 
@@ -131,19 +131,19 @@ def test_format_config_restores_missing_trailing_martingale_weight_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     strategy = current["bot"]["long"]["strategy"]["trailing_martingale"]
-    strategy["entry"].pop("threshold_volatility_1h_weight")
-    strategy["close"].pop("threshold_volatility_1h_weight")
+    strategy["entry"].pop("threshold_log_range_1h_coefficient")
+    strategy["close"].pop("threshold_log_range_1h_coefficient")
 
     out = format_config(current, verbose=False)
     trailing_martingale = out["bot"]["long"]["strategy"]["trailing_martingale"]
     default_strategy = tmpl["bot"]["long"]["strategy"]["trailing_martingale"]
 
     assert trailing_martingale["entry"][
-        "threshold_volatility_1h_weight"
-    ] == pytest.approx(default_strategy["entry"]["threshold_volatility_1h_weight"])
+        "threshold_log_range_1h_coefficient"
+    ] == pytest.approx(default_strategy["entry"]["threshold_log_range_1h_coefficient"])
     assert trailing_martingale["close"][
-        "threshold_volatility_1h_weight"
-    ] == pytest.approx(default_strategy["close"]["threshold_volatility_1h_weight"])
+        "threshold_log_range_1h_coefficient"
+    ] == pytest.approx(default_strategy["close"]["threshold_log_range_1h_coefficient"])
 
 
 def test_format_config_preserves_approved_coins_dict():
@@ -337,18 +337,18 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     trailing_martingale = current["bot"]["long"]["strategy"]["trailing_martingale"]
-    trailing_martingale.pop("volatility_ema_span_1h_candles")
-    trailing_martingale.pop("volatility_ema_span_minutes")
+    trailing_martingale.pop("log_range_ema_span_1h_candles")
+    trailing_martingale.pop("log_range_ema_span_minutes")
     for key in (
-        "threshold_volatility_1h_weight",
-        "threshold_volatility_1m_weight",
-        "threshold_we_weight",
+        "threshold_log_range_1h_coefficient",
+        "threshold_log_range_1m_coefficient",
+        "threshold_exposure_ratio_coefficient",
         "retracement_base_fraction",
     ):
         trailing_martingale["entry"].pop(key)
-    for key in ("threshold_volatility_1h_weight", "retracement_base_fraction"):
+    for key in ("threshold_log_range_1h_coefficient", "retracement_base_fraction"):
         trailing_martingale["close"].pop(key)
-    current["bot"]["long"]["forager"].pop("volatility_ema_span_minutes")
+    current["bot"]["long"]["forager"].pop("log_range_ema_span_minutes")
     current["bot"]["long"]["forager"].pop("volume_ema_span_minutes")
     current["bot"]["long"]["hsl"].pop("panic_close_order_type")
     current["bot"]["long"]["risk"]["total_exposure_enforcer"].pop("threshold_ratio")
@@ -365,32 +365,32 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     long_strategy = long_cfg["strategy"]["trailing_martingale"]
     default_long = tmpl["bot"]["long"]
     default_strategy = default_long["strategy"]["trailing_martingale"]
-    assert long_strategy["volatility_ema_span_1h_candles"] == pytest.approx(
-        default_strategy["volatility_ema_span_1h_candles"]
+    assert long_strategy["log_range_ema_span_1h_candles"] == pytest.approx(
+        default_strategy["log_range_ema_span_1h_candles"]
     )
-    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(
-        default_strategy["volatility_ema_span_minutes"]
+    assert long_strategy["log_range_ema_span_minutes"] == pytest.approx(
+        default_strategy["log_range_ema_span_minutes"]
     )
-    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(
-        default_strategy["entry"]["threshold_volatility_1h_weight"]
+    assert long_strategy["entry"]["threshold_log_range_1h_coefficient"] == pytest.approx(
+        default_strategy["entry"]["threshold_log_range_1h_coefficient"]
     )
-    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(
-        default_strategy["entry"]["threshold_volatility_1m_weight"]
+    assert long_strategy["entry"]["threshold_log_range_1m_coefficient"] == pytest.approx(
+        default_strategy["entry"]["threshold_log_range_1m_coefficient"]
     )
-    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
-        default_strategy["entry"]["threshold_we_weight"]
+    assert long_strategy["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(
+        default_strategy["entry"]["threshold_exposure_ratio_coefficient"]
     )
     assert long_strategy["entry"]["retracement_base_fraction"] == pytest.approx(
         default_strategy["entry"]["retracement_base_fraction"]
     )
-    assert long_strategy["close"]["threshold_volatility_1h_weight"] == pytest.approx(
-        default_strategy["close"]["threshold_volatility_1h_weight"]
+    assert long_strategy["close"]["threshold_log_range_1h_coefficient"] == pytest.approx(
+        default_strategy["close"]["threshold_log_range_1h_coefficient"]
     )
     assert long_strategy["close"]["retracement_base_fraction"] == pytest.approx(
         default_strategy["close"]["retracement_base_fraction"]
     )
-    assert long_cfg["forager"]["volatility_ema_span_minutes"] == pytest.approx(
-        default_long["forager"]["volatility_ema_span_minutes"]
+    assert long_cfg["forager"]["log_range_ema_span_minutes"] == pytest.approx(
+        default_long["forager"]["log_range_ema_span_minutes"]
     )
     assert long_cfg["forager"]["volume_ema_span_minutes"] == pytest.approx(
         default_long["forager"]["volume_ema_span_minutes"]
@@ -522,8 +522,8 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = [
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = [
         10.0,
         120.0,
         5.0,
@@ -531,12 +531,12 @@ def test_format_config_preserves_live_optimize_bounds():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,

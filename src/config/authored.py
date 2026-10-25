@@ -103,7 +103,7 @@ def validate_authored_config(config, template, *, policy_context=None):
     bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
     bounds.setdefault("portfolio", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
     bounds["portfolio"].setdefault("hsl", {}).update({
-        "drawdown_ratio_threshold": [], "drawdown_ratio_ema_span_minutes": [],
+        "drawdown_threshold_fraction": [], "drawdown_fraction_ema_span_minutes": [],
         "memory_ema_span_minutes": [], "cooldown_after_red_minutes": [],
     })
 

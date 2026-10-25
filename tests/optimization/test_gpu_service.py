@@ -116,11 +116,11 @@ def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pi
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
     assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
-    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_ratio_threshold"]
+    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_threshold_fraction"]
     assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
     assert native["portfolio"]["red_threshold"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
-        assert "drawdown_ratio_threshold" not in policy
+        assert "drawdown_threshold_fraction" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
@@ -1046,7 +1046,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = True
-        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
+        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit_ratio': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
         # Construction must retain the fused shared-account path when both
         # directional surfaces participate in global auto-unstuck selection.
         config["bot"][side]["unstuck"]["enabled"] = True
@@ -1759,7 +1759,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "risk": {
                             "we_excess_allowance_fraction": 0.25,
                         },
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                         "unstuck": {
                             "ema_span_0_minutes": 17.25,
                             "ema_span_1_minutes": 211.75,
@@ -1999,7 +1999,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
                 "bot": {
                     "long": {
                         "strategy": {"ema_anchor": {"offset_fraction": 0.25}},
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                     },
                     "short": {
                         "strategy": {"ema_anchor": {"offset_fraction": 0.5}},
@@ -2116,8 +2116,8 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     _complete_hsl_payload(payload)
     hsl_patch = {
         "enabled": False,
-        "drawdown_ratio_threshold": 0.2,
-        "drawdown_ratio_ema_span_minutes": 5.5,
+        "drawdown_threshold_fraction": 0.2,
+        "drawdown_fraction_ema_span_minutes": 5.5,
         "memory_ema_span_minutes": 7.5,
         "scale_budget_with_excess_allowance": True,
         "cooldown_after_red_minutes": 12.5,
@@ -2293,7 +2293,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                                 'threshold_ratio': 0.8,
                             },
                         },
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                         "unstuck": {
                             "enabled": True,
                             "ema_gating_enabled": False,
@@ -2370,12 +2370,12 @@ def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
         "bot": {
             "long": {
                 "enabled": True,
-                "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1},
+                "risk": {"total_wallet_exposure_limit_ratio": 1.0, "max_positions": 1},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
                 "enabled": True,
-                "risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.0, "max_positions": 0},
                 "universe": {"approved_coins": ["BTC"]},
             },
         },

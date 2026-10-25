@@ -178,17 +178,17 @@
                 "score_weights": {
                     "ema_readiness": 0.21,
                     "unilateralness": 0.0,
-                    "volatility": 0.61,
+                    "log_range": 0.61,
                     "volume": 0.18
                 },
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 2274.0,
+                "log_range_ema_span_minutes": 2274.0,
                 "volume_ema_span_minutes": 310.0
             },
             "hsl": {
                 "cooldown_after_red_minutes": 2160.0,
-                "drawdown_ratio_ema_span_minutes": 720.0,
-                "drawdown_ratio_threshold": 0.15,
+                "drawdown_fraction_ema_span_minutes": 720.0,
+                "drawdown_threshold_fraction": 0.15,
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
@@ -198,7 +198,7 @@
                 "max_positions": 7,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
                 "total_exposure_enforcer": {"enabled": false, "policy": "reduce_overweight", "threshold_ratio": 1.0},
-                "total_wallet_exposure_limit": 1.5,
+                "total_wallet_exposure_limit_ratio": 1.5,
                 "we_excess_allowance_fraction": 0.37
             },
             "strategy": {
@@ -206,31 +206,31 @@
                     "close": {
                         "qty_fraction": 0.84,
                         "retracement_base_fraction": 0.0005,
-                        "retracement_volatility_1h_weight": 22.95,
-                        "retracement_volatility_1m_weight": 52.34,
+                        "retracement_log_range_1h_coefficient": 22.95,
+                        "retracement_log_range_1m_coefficient": 52.34,
                         "threshold_base_fraction": -0.0027,
-                        "threshold_volatility_1h_weight": 0.48,
-                        "threshold_volatility_1m_weight": 3.22,
-                        "threshold_we_weight": -0.0001
+                        "threshold_log_range_1h_coefficient": 0.48,
+                        "threshold_log_range_1m_coefficient": 3.22,
+                        "threshold_exposure_ratio_coefficient": -0.0001
                     },
                     "entry": {
-                        "double_down_factor": 0.94,
+                        "reentry_qty_multiplier": 0.94,
                         "ema_gate_mode": "all",
                         "ema_span_0_minutes": 790.0,
                         "ema_span_1_minutes": 1080.0,
                         "initial_ema_distance_fraction": 0.0028,
                         "initial_qty_fraction": 0.0081,
                         "retracement_base_fraction": 0.0008,
-                        "retracement_volatility_1h_weight": 15.5,
-                        "retracement_volatility_1m_weight": 50.42,
-                        "retracement_we_weight": 0.334,
+                        "retracement_log_range_1h_coefficient": 15.5,
+                        "retracement_log_range_1m_coefficient": 50.42,
+                        "retracement_exposure_ratio_coefficient": 0.334,
                         "threshold_base_fraction": 0.019,
-                        "threshold_volatility_1h_weight": 4.58,
-                        "threshold_volatility_1m_weight": 17.68,
-                        "threshold_we_weight": 1.007
+                        "threshold_log_range_1h_coefficient": 4.58,
+                        "threshold_log_range_1m_coefficient": 17.68,
+                        "threshold_exposure_ratio_coefficient": 1.007
                     },
-                    "volatility_ema_span_1h_candles": 683.0,
-                    "volatility_ema_span_minutes": 604.0
+                    "log_range_ema_span_1h_candles": 683.0,
+                    "log_range_ema_span_minutes": 604.0
                 }
             },
             "universe": {
@@ -296,7 +296,7 @@
             "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": false},
             "hedge_mode": false,
             "hsl": {"scope": "coin"},
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+            "loss_gate": {"max_drawdown_fraction": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "trailing_martingale",
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "activation_span_fraction": 0.3}
@@ -411,22 +411,22 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 2880, 1],
+                    "log_range_ema_span_minutes": [10, 2880, 1],
                     "volume_ema_span_minutes": [180, 2880, 1]
                 },
                 "hsl": {
                     "cooldown_after_red_minutes": [2160, 2160, 10],
-                    "drawdown_ratio_ema_span_minutes": [720, 720, 1],
+                    "drawdown_fraction_ema_span_minutes": [720, 720, 1],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
+                    "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [7, 7, 1],
-                    "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
+                    "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
                     "we_excess_allowance_fraction": [0, 0.4, 0.01],
                     "position_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
                     "total_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]}
@@ -436,30 +436,30 @@
                         "close": {
                             "qty_fraction": [0.05, 1, 0.01],
                             "retracement_base_fraction": [0.0001, 0.01, 0.0001],
-                            "retracement_volatility_1h_weight": [0.01, 80, 0.01],
-                            "retracement_volatility_1m_weight": [0.01, 80, 0.01],
+                            "retracement_log_range_1h_coefficient": [0.01, 80, 0.01],
+                            "retracement_log_range_1m_coefficient": [0.01, 80, 0.01],
                             "threshold_base_fraction": [-0.005, 0.01, 0.0001],
-                            "threshold_volatility_1h_weight": [0.01, 80, 0.01],
-                            "threshold_volatility_1m_weight": [0.01, 80, 0.01],
-                            "threshold_we_weight": [-0.05, 0.05, 0.0001]
+                            "threshold_log_range_1h_coefficient": [0.01, 80, 0.01],
+                            "threshold_log_range_1m_coefficient": [0.01, 80, 0.01],
+                            "threshold_exposure_ratio_coefficient": [-0.05, 0.05, 0.0001]
                         },
                         "entry": {
-                            "double_down_factor": [0.2, 1.2, 0.01],
+                            "reentry_qty_multiplier": [0.2, 1.2, 0.01],
                             "ema_span_0_minutes": [100.0, 2880.0, 10.0],
                             "ema_span_1_minutes": [100.0, 2880.0, 10.0],
                             "initial_ema_distance_fraction": [-0.05, 0.005, 0.0001],
                             "initial_qty_fraction": [0.005, 0.1, 0.0001],
                             "retracement_base_fraction": [0.0001, 0.01, 0.0001],
-                            "retracement_volatility_1h_weight": [0.01, 80, 0.01],
-                            "retracement_volatility_1m_weight": [0.01, 80, 0.01],
-                            "retracement_we_weight": [0, 5, 0.001],
+                            "retracement_log_range_1h_coefficient": [0.01, 80, 0.01],
+                            "retracement_log_range_1m_coefficient": [0.01, 80, 0.01],
+                            "retracement_exposure_ratio_coefficient": [0, 5, 0.001],
                             "threshold_base_fraction": [0.001, 0.035, 0.0001],
-                            "threshold_volatility_1h_weight": [0.01, 80, 0.01],
-                            "threshold_volatility_1m_weight": [0.01, 80, 0.01],
-                            "threshold_we_weight": [0, 5, 0.001]
+                            "threshold_log_range_1h_coefficient": [0.01, 80, 0.01],
+                            "threshold_log_range_1m_coefficient": [0.01, 80, 0.01],
+                            "threshold_exposure_ratio_coefficient": [0, 5, 0.001]
                         },
-                        "volatility_ema_span_1h_candles": [168.0, 2016.0, 1.0],
-                        "volatility_ema_span_minutes": [5.0, 2880.0, 1.0]
+                        "log_range_ema_span_1h_candles": [168.0, 2016.0, 1.0],
+                        "log_range_ema_span_minutes": [5.0, 2880.0, 1.0]
                     }
                 },
                 "unstuck": {
@@ -508,13 +508,13 @@
         "pareto_max_size": 1000,
         "population_size": null,
         "prefilter": {
-            "adverse_directionality": 0.0,
+            "adverse_directionality_score": 0.0,
             "checks": [],
-            "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
+            "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
             "grid_max_entries": 1024,
             "penalty_weight": 1000000.0,
-            "volatility_ema_1h": 0.0,
-            "volatility_ema_1m": 0.0
+            "log_range_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0
         },
         "pymoo": {
             "algorithm": "auto",
@@ -523,12 +523,12 @@
                 "nsga3": {"ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}}
             },
             "shared": {
-                "crossover_eta": 20.0,
-                "crossover_prob_var": 0.5,
+                "crossover_distribution_index": 20.0,
+                "crossover_probability_per_variable": 0.5,
                 "eliminate_duplicates": true,
-                "mutation_eta": 20.0,
-                "mutation_prob": "auto",
-                "mutation_prob_per_variable": "auto"
+                "mutation_distribution_index": 20.0,
+                "mutation_probability": "auto",
+                "mutation_probability_per_variable": "auto"
             }
         },
         "round_to_n_significant_digits": 3,

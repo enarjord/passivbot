@@ -26,7 +26,7 @@ def _base_config():
                 "enabled": True,
                 "risk": {
                     "max_positions": 4,
-                    "total_wallet_exposure_limit": 1.0
+                    "total_wallet_exposure_limit_ratio": 1.0
                 },
                 "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],
@@ -37,7 +37,7 @@ def _base_config():
                 "enabled": False,
                 "risk": {
                     "max_positions": 0,
-                    "total_wallet_exposure_limit": 0.0
+                    "total_wallet_exposure_limit_ratio": 0.0
                 },
                 "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],

@@ -70,8 +70,8 @@ def test_authoring_views_preserve_whole_section_omission(sections):
     assert effective(compact) == expected
     assert compact_config(compact) == compact
     assert effective(resolved_config(source)) == expected
-    report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit")
-    assert report["value"] == expected["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+    report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit_ratio")
+    assert report["value"] == expected["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
     assert report["sources"][0]["kind"] == "default_or_derived"
     assert "rule" not in report["sources"][0]
     assert expected["bot"]["long"]["enabled"] is False
@@ -102,13 +102,13 @@ def test_compact_retains_side_presence_and_explicit_disable(side):
     compact = compact_config(source)
     assert side in compact["bot"]
     assert effective(compact) == effective(source)
-    source["bot"][side]["risk"] = {"total_wallet_exposure_limit": 0.0}
+    source["bot"][side]["risk"] = {"total_wallet_exposure_limit_ratio": 0.0}
     assert effective(compact_config(source)) == effective(source)
 
 
 @pytest.mark.parametrize("weights", [
-    {"volume": 2.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0},
-    {"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0},
+    {"volume": 2.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0},
+    {"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
 ])
 def test_compact_preserves_effective_normalized_weights(weights):
     source = policy()
@@ -502,7 +502,7 @@ def test_explain_default_activation_and_normalized_weights_are_visible():
     }
     source = policy()
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "ema_readiness": 1.0, "volume": 2.0, "volatility": 0.0, "unilateralness": 0.0,
+        "ema_readiness": 1.0, "volume": 2.0, "log_range": 0.0, "unilateralness": 0.0,
     }
     report = explain_config(source, "bot.long.forager.score_weights.volume")
     assert report["value"] == pytest.approx(2 / 3)
@@ -568,8 +568,8 @@ def test_public_examples_keep_effective_policy_in_new_views(path, exporter):
 @pytest.mark.parametrize('transform,target,dependency,value,independent', [
     ('couple_unstuck_ema_spans', "bot.long.unstuck.ema_span_0_minutes",
      "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", 123.5, False),
-    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
-     'bot.long.risk.total_wallet_exposure_limit', 1.25, True),
+    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit_ratio',
+     'bot.long.risk.total_wallet_exposure_limit_ratio', 1.25, True),
     ('lossless_close_trailing', "bot.long.strategy.trailing_martingale.close.threshold_base_fraction",
      "bot.long.strategy.trailing_martingale.close.retracement_base_fraction", 0.02, True),
 ])
@@ -605,8 +605,8 @@ def test_explain_distinguishes_explicit_relationship_from_target_gene(transform,
 @pytest.mark.parametrize('transform,target,dependency,late_coupling', [
     ('couple_unstuck_ema_spans', "bot.long.unstuck.ema_span_0_minutes",
      "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", True),
-    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
-     'bot.long.risk.total_wallet_exposure_limit', False),
+    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit_ratio',
+     'bot.long.risk.total_wallet_exposure_limit_ratio', False),
     ('lossless_close_trailing', "bot.long.strategy.trailing_martingale.close.threshold_base_fraction",
      "bot.long.strategy.trailing_martingale.close.retracement_base_fraction", False),
 ])
@@ -674,9 +674,9 @@ def test_explain_bound_declaration_is_not_normalized_by_a_target_transform():
     source = policy()
     source['optimize']['bounds'] = {}
     source['optimize']['enable_overrides'] = ['mirror_short_from_long']
-    source['bot']['long']['risk']['total_wallet_exposure_limit'] = 1.25
-    source['bot']['short']['risk']['total_wallet_exposure_limit'] = 0.0
-    report = explain_config(source, 'optimize.bounds.short.risk.total_wallet_exposure_limit', optimize=True)
+    source['bot']['long']['risk']['total_wallet_exposure_limit_ratio'] = 1.25
+    source['bot']['short']['risk']['total_wallet_exposure_limit_ratio'] = 0.0
+    report = explain_config(source, 'optimize.bounds.short.risk.total_wallet_exposure_limit_ratio', optimize=True)
     assert report['value'] == [0.0, 0.0]
     assert report['search']['status'] == 'optimizer_transform'
     assert any(event['kind'] == 'optimizer_transform' and event['value'] == 1.25 for event in report['sources'])
@@ -685,7 +685,7 @@ def test_explain_bound_declaration_is_not_normalized_by_a_target_transform():
 
 def test_explain_complete_object_override_projects_value_before_reporting_normalization():
     source = policy()
-    weights = {'volume': 0.5, 'volatility': 0.25, 'ema_readiness': 0.25, 'unilateralness': 0.0}
+    weights = {'volume': 0.5, 'log_range': 0.25, 'ema_readiness': 0.25, 'unilateralness': 0.0}
     source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {'bot.long.forager.score_weights': weights}}]
     report = explain_config(source, 'bot.long.forager.score_weights.volume', scenario='one')
     assert report['value'] == 0.5

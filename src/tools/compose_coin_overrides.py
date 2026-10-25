@@ -644,7 +644,7 @@ def compose_configs(
                 for coin in approved[side]
             )
         )
-        if approved[side] and float(master["bot"][side]["risk"]["total_wallet_exposure_limit"]) > 0:
+        if approved[side] and float(master["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"]) > 0:
             prior_count = float(master["bot"][side]["risk"]["max_positions"])
             composed_count = float(len(approved[side]))
             master["bot"][side]["risk"]["max_positions"] = composed_count

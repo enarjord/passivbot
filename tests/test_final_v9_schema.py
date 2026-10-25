@@ -102,10 +102,10 @@ def test_authored_object_and_descendant_authority_rejects_in_both_orders(owner, 
 def test_authored_patch_accepts_one_object_or_distinct_canonical_siblings(structured):
     config = get_expanded_config_prototype()
     risk = deepcopy(config["bot"]["long"]["risk"])
-    risk.update(max_positions=2, total_wallet_exposure_limit=1.25)
+    risk.update(max_positions=2, total_wallet_exposure_limit_ratio=1.25)
     patch = ({"bot.long.risk": risk} if structured else {
         "bot.long.risk.max_positions": 2,
-        "bot.long.risk.total_wallet_exposure_limit": 1.25,
+        "bot.long.risk.total_wallet_exposure_limit_ratio": 1.25,
     })
     config["backtest"]["scenarios"] = [{"label": "canonical", "overrides": patch}]
     prepared = prepare_config(config, verbose=False)
@@ -126,9 +126,9 @@ def test_coin_hsl_span_and_budget_scaling_override_are_local():
 
 @pytest.mark.parametrize("patch", [
     {"bot": {"long": {"risk": {"max_positions": 2}}}},
-    {"bot": {"long": {"risk": {"total_wallet_exposure_limit": 2.0}}}},
+    {"bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 2.0}}}},
     {"bot": {"portfolio": {'unstuck': {'memory_ema_span_minutes': 1.0}}}},
-    {"bot": {"portfolio": {'loss_gate': {'max_drawdown_ratio': 0.2}}}},
+    {"bot": {"portfolio": {'loss_gate': {'max_drawdown_fraction': 0.2}}}},
 ])
 def test_aggregate_controls_cannot_be_coin_overridden(patch):
     config = get_template_config()
@@ -153,7 +153,7 @@ def test_independent_gate_only_memory_contributes_to_bootstrap():
     config = get_expanded_config_prototype()
     for side in ("long", "short"):
         config["bot"][side]["unstuck"]["enabled"] = False
-    config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_ratio=0.1, memory_ema_span_minutes=17.5)
+    config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_fraction=0.1, memory_ema_span_minutes=17.5)
     config = prepare_config(config, verbose=False)
     assert risk_memory_spans(config) == (17.5,)
     assert risk_bootstrap_horizon_minutes(config) == (87.5, False)
@@ -211,7 +211,7 @@ def test_portfolio_memory_and_smoothing_are_separate_from_scope():
     config = get_expanded_config_prototype()
     policy = deepcopy(config["bot"]["long"]["hsl"])
     policy.update(scope="portfolio", memory_ema_span_minutes=17.5,
-                  drawdown_ratio_ema_span_minutes=9.5, enabled=True)
+                  drawdown_fraction_ema_span_minutes=9.5, enabled=True)
     config["bot"]["portfolio"]["hsl"] = policy
     for side in ("long", "short"):
         config["optimize"]["bounds"][side].pop("hsl")
@@ -242,7 +242,7 @@ def test_scenario_retired_gate_control_is_converted_and_acknowledged():
     result = migrate(source, memory_span_minutes=123.5,
                      acknowledge_realized_loss_gate_memory_change=True)
     assert result.config["backtest"]["scenarios"][0]["overrides"] == {
-        "bot.portfolio.loss_gate.max_drawdown_ratio": 0.1,
+        "bot.portfolio.loss_gate.max_drawdown_fraction": 0.1,
     }
 
 
@@ -288,10 +288,10 @@ def test_coin_only_unstuck_enablement_requires_global_memory_history():
 def test_local_wallet_limit_is_validated_without_inventing_a_global_field(tmp_path):
     config = get_template_config()
     path = tmp_path / "coin.json"
-    path.write_text(json.dumps({"bot": {"long": {"wallet_exposure_limit": 0.12}}}))
+    path.write_text(json.dumps({"bot": {"long": {"wallet_exposure_limit_ratio": 0.12}}}))
     config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
     parsed = parse_overrides(prepare_config(config, verbose=False), verbose=False)
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["wallet_exposure_limit"] == 0.12
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["wallet_exposure_limit_ratio"] == 0.12
     assert "wallet_exposure_limit" not in parsed["bot"]["long"]
 
 
@@ -309,7 +309,7 @@ def test_released_pymoo_fallback_is_explicitly_materialized():
     config["optimize"]["pymoo"]["shared"].pop("crossover_eta")
     config["optimize"]["crossover_eta"] = 31.5
     result = migrate(config, memory_span_minutes=123.5)
-    assert result.config["optimize"]["pymoo"]["shared"]["crossover_eta"] == 31.5
+    assert result.config["optimize"]["pymoo"]["shared"]["crossover_distribution_index"] == 31.5
     assert "crossover_eta" not in result.config["optimize"]
     assert any("effective released pymoo fallback" in item["reason"] for item in result.changes)
 
@@ -401,7 +401,7 @@ def test_clean_export_preserves_explicit_global_portfolio_policy_and_fixed_span(
 
     source = generated_template(get_template_config(), "portfolio")
     source["bot"]["portfolio"]["hsl"].update(enabled=True, memory_ema_span_minutes=123.5,
-                                        drawdown_ratio_ema_span_minutes=7.5)
+                                        drawdown_fraction_ema_span_minutes=7.5)
     prepared = prepare_config(source, verbose=False)
     exported = sanitize_prepared_config_for_dump(prepared)
     assert exported["bot"]["portfolio"]["hsl"] == prepared["bot"]["portfolio"]["hsl"]
@@ -420,11 +420,11 @@ def test_cli_independent_global_risk_controls_use_canonical_paths(command):
     add_config_arguments(parser, project_template_config_for_cli(config, command), command=command)
     args = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5",
                               "--loss-gate-memory-ema-span-minutes", "23.5",
-                              "--loss-gate-max-drawdown-ratio", "0.12", "--hsl-scope", "coin"])
+                              "--loss-gate-max-drawdown-fraction", "0.12", "--hsl-scope", "coin"])
     update_config_with_args(config, args)
     assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 17.5
     assert config["bot"]["portfolio"]["loss_gate"] == {"memory_ema_span_minutes": 23.5,
-                                                 "max_drawdown_ratio": 0.12}
+                                                 "max_drawdown_fraction": 0.12}
     assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
     for retired in ("--lookback-ema-span-minutes", "--hsl-signal-mode", "--max-realized-loss-pct"):
         with pytest.raises(SystemExit):
@@ -594,7 +594,7 @@ def test_best_effort_accepts_changed_never_and_loss_gate_policy(caplog):
     config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
     config["live"]["max_realized_loss_pct"] = 0.05
     result = migrate(config, best_effort=True)
-    assert result.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == 0.05
+    assert result.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 0.05
     assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
     assert "remove permanent stop" in caplog.text
     assert "decaying realized-loss memory" in caplog.text
@@ -607,8 +607,8 @@ def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
     result = migrate(config, best_effort=True)
     assert result.config["optimize"]["backend"] == "pymoo"
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["crossover_eta"] == 31.5
-    assert shared["mutation_prob_per_variable"] == 0.25
+    assert shared["crossover_distribution_index"] == 31.5
+    assert shared["mutation_probability_per_variable"] == 0.25
     assert "approximate DEAP policy" in caplog.text
     assert "start a fresh optimization" in caplog.text
 
@@ -825,11 +825,11 @@ def test_best_effort_deap_preserves_candidate_and_variable_mutation_controls(can
                                               if authored else {})
     result = migrate(config, best_effort=True)
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob"] == (0.12 if authored else candidate)
-    assert shared["mutation_prob_per_variable"] == (0.21 if authored else expected_variable)
+    assert shared["mutation_probability"] == (0.12 if authored else candidate)
+    assert shared["mutation_probability_per_variable"] == (0.21 if authored else expected_variable)
     guesses = [item for item in result.changes if item.get("best_effort")]
-    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob" for item in guesses) is not authored
-    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob_per_variable" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_probability" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_probability_per_variable" for item in guesses) is not authored
 
 
 @pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
@@ -969,14 +969,14 @@ def test_best_effort_normalizes_deap_numeric_strings_before_sentinel_selection(v
     config["optimize"]["pymoo"]["shared"] = {}
     result = migrate(config, best_effort=True)
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob_per_variable"] == expected
-    assert shared["mutation_prob"] == float(candidate)
-    assert shared["crossover_eta"] == 31.5
+    assert shared["mutation_probability_per_variable"] == expected
+    assert shared["mutation_probability"] == float(candidate)
+    assert shared["crossover_distribution_index"] == 31.5
     choices = {item["path"]: item for item in result.changes if item.get("best_effort")}
-    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == expected
-    assert choices["optimize.pymoo.shared.mutation_prob"]["new"] == float(candidate)
-    assert isinstance(choices["optimize.pymoo.shared.mutation_prob"]["new"], float)
-    assert choices["optimize.pymoo.shared.crossover_eta"]["new"] == 31.5
+    assert choices["optimize.pymoo.shared.mutation_probability_per_variable"]["new"] == expected
+    assert choices["optimize.pymoo.shared.mutation_probability"]["new"] == float(candidate)
+    assert isinstance(choices["optimize.pymoo.shared.mutation_probability"]["new"], float)
+    assert choices["optimize.pymoo.shared.crossover_distribution_index"]["new"] == 31.5
 
 
 def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys):
@@ -987,9 +987,9 @@ def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys
     source.write_text(json.dumps(config))
     assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
     shared = json.loads(target.read_text())["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob_per_variable"] == "auto"
-    assert shared["mutation_prob"] == 0.0
+    assert shared["mutation_probability_per_variable"] == "auto"
+    assert shared["mutation_probability"] == 0.0
     choices = {item["path"]: item for item in json.loads(report.read_text())["changes"]
                if item.get("best_effort")}
-    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == "auto"
+    assert choices["optimize.pymoo.shared.mutation_probability_per_variable"]["new"] == "auto"
     capsys.readouterr()

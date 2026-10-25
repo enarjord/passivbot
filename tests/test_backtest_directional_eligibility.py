@@ -39,12 +39,12 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         # Directional masks are independent of age in this synthetic history.
         config["bot"][pside]["universe"]["minimum_coin_age_days"] = 0.0
         config["bot"][pside]["risk"].update(
-            {"max_positions": 1, "total_wallet_exposure_limit": 1.5}
+            {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.5}
         )
         config["bot"][pside]["forager"].update(
             {
                 "volume_ema_span_minutes": 2,
-                "volatility_ema_span_minutes": 2,
+                "log_range_ema_span_minutes": 2,
             }
         )
         config["bot"][pside]["strategy"]["ema_anchor"].update(
@@ -53,24 +53,24 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
                 "ema_span_1_minutes": 3.0,
                 "base_qty_fraction": 0.2,
                 "offset_fraction": 0.001,
-                "offset_psize_weight": 0.0,
-                "entry_double_down_factor": 0.0,
-                "offset_volatility_ema_span_minutes": 2.0,
-                "offset_volatility_ema_span_1h_candles": 2.0,
-                "offset_volatility_1m_weight": 0.0,
-                "offset_volatility_1h_weight": 0.0,
+                "inventory_offset_exposure_coefficient": 0.0,
+                "entry_qty_exposure_coefficient": 0.0,
+                "offset_log_range_ema_span_minutes": 2.0,
+                "offset_log_range_ema_span_1h_candles": 2.0,
+                "offset_log_range_1m_coefficient": 0.0,
+                "offset_log_range_1h_coefficient": 0.0,
             }
         )
     # Without side eligibility, these rankings intentionally prefer the coin
     # approved only for the opposite side and reproduce the regression.
     config["bot"]["long"]["forager"]["score_weights"] = {
         "ema_readiness": 0.0,
-        "volatility": 1.0,
+        "log_range": 1.0,
         "volume": 0.0,
     }
     config["bot"]["short"]["forager"]["score_weights"] = {
         "ema_readiness": 0.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
         "volume": 1.0,
     }
     if not include_dataset:
@@ -147,7 +147,7 @@ def test_ema_anchor_entries_obey_side_specific_approved_coins(hedge_mode):
 def test_zero_wel_coin_override_disables_approved_side_entries():
     config = _ema_anchor_config(hedge_mode=True)
     config["coin_overrides"] = {
-        "SHORTCOIN": {"bot": {"short": {"wallet_exposure_limit": 0.0}}}
+        "SHORTCOIN": {"bot": {"short": {"wallet_exposure_limit_ratio": 0.0}}}
     }
     hlcvs, market_settings, btc_prices, timestamps = _synthetic_inputs()
 
@@ -188,14 +188,14 @@ def test_backtest_accepts_unheld_listing_boundaries_but_rejects_held_missing_tai
     hlcvs[21:, 0, :] = np.nan
     # Keep the other symbol active, proving the whole simulation can continue
     # past this absent symbol's listing window while it has no position.
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     fills, _, _ = run_backtest(
         hlcvs, market_settings, config, "binance", btc_prices, timestamps
     )
     assert len(fills) > 0
     assert all(str(fill[2]) == "SHORTCOIN" for fill in fills)
 
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.5
     # Fill a long entry, but keep highs below its close order until data ends.
     hlcvs[9:21, 0, 0] = 100.0
     with pytest.raises(ValueError, match="missing held-position valuation candle.*candle 21"):

@@ -99,7 +99,7 @@ def test_native_recovery_matches_cpu_on_subhour_replay(cuda_runtime, strategy, s
     config['bot']["portfolio"]['hedge_mode'] = sides == 'both'
     if sides == "both":
         config["bot"]["short"]["risk"].update(
-            n_positions=coins, total_wallet_exposure_limit=float(coins),
+            n_positions=coins, total_wallet_exposure_limit_ratio=float(coins),
         )
     report = run_comparison(
         (config, candles, markets, btc, timestamps), "bybit", METRICS,
@@ -245,8 +245,8 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
             params = inputs[0]["bot"][side]["strategy"][strategy]
             for section in ("entry", "close"):
                 params[section].update(
-                    threshold_base_pct=.9, threshold_we_weight=0.,
-                    threshold_volatility_1m_weight=0., threshold_volatility_1h_weight=0.,
+                    threshold_base_pct=.9, threshold_exposure_ratio_coefficient=0.,
+                    threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
                 )
     base = mps_kernel._MulticoinReplayRunner
     initial, run, concatenate = base.__init__, base.run, cuda_runtime.cat

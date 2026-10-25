@@ -556,12 +556,12 @@ def _build_health_summary_payload(
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
-    mem_pct = _get_process_memory_percent()
-    if mem_pct is not None and math.isfinite(mem_pct):
-        payload["memory_percent"] = float(mem_pct)
-    cpu_pct = _get_process_cpu_percent()
-    if cpu_pct is not None and math.isfinite(cpu_pct):
-        payload["cpu_percent"] = max(0.0, float(cpu_pct))
+    memory_percent = _get_process_memory_percent()
+    if memory_percent is not None and math.isfinite(memory_percent):
+        payload["memory_percent"] = float(memory_percent)
+    cpu_percent = _get_process_cpu_percent()
+    if cpu_percent is not None and math.isfinite(cpu_percent):
+        payload["cpu_percent"] = max(0.0, float(cpu_percent))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)
@@ -1172,7 +1172,7 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
                 self.bot_value(pside, "unstuck_threshold") or 0.0
             ),
         }
-        for key in ("allowance", "peak", "pct_from_peak"):
+        for key in ("allowance", "peak", "change_from_peak_percent"):
             if key in info:
                 side_payload[key] = float(info[key])
         if "loss_allowance_pct" in info:

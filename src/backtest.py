@@ -2823,7 +2823,7 @@ def prep_backtest_args(
                 market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
             if not approved:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
-            elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
+            elif "wallet_exposure_limit_ratio" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
             coin_specific_bot_params[pside]["entry_eligible"] = (
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
@@ -2955,7 +2955,7 @@ def prep_backtest_args(
             ),
             "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
             "max_realized_loss_pct": float(
-                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_ratio")
+                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_fraction")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,

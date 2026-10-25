@@ -51,7 +51,7 @@ def test_schema_defaults_and_live_loading_stay_unchanged():
     assert not any(prepared["bot"][side]["enabled"] for side in ("long", "short"))
 
 
-@pytest.mark.parametrize("field", ["max_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("field", ["max_positions", "total_wallet_exposure_limit_ratio"])
 def test_zero_capacity_reports_capacity_without_empty_approval_claim(field):
     prepared = config()
     apply_bot_config_patch(prepared, {f"bot.long.risk.{field}": 0})
@@ -207,8 +207,8 @@ def test_optimizer_preflight_respects_reachable_capacity_and_fixed_overrides():
     source = get_template_config()
     source["bot"]["long"]["enabled"] = True
     source["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
-    source["bot"]["long"]["risk"] = {"total_wallet_exposure_limit": 0.0}
-    source["optimize"]["bounds"] = {"long": {"risk": {"total_wallet_exposure_limit": [0.0, 1.0]}}}
+    source["bot"]["long"]["risk"] = {"total_wallet_exposure_limit_ratio": 0.0}
+    source["optimize"]["bounds"] = {"long": {"risk": {"total_wallet_exposure_limit_ratio": [0.0, 1.0]}}}
     prepared = prepare_config(source, verbose=False)
     validate_optimizer_simulation_config(prepared, suite_cfg={"enabled": False})
     source["optimize"]["fixed_runtime_overrides"] = {"bot.long.enabled": False}

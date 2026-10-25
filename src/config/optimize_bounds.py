@@ -34,23 +34,23 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "score_weights_unilateralness": "forager_score_weights_unilateralness",
         "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
-        "score_weights_volatility": "forager_score_weights_volatility",
+        "score_weights_log_range": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
-        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "log_range_ema_span_minutes": "forager_volatility_ema_span_1m",
         "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
-        "drawdown_ratio_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
+        "drawdown_fraction_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
-        "drawdown_ratio_threshold": "hsl_red_threshold",
+        "drawdown_threshold_fraction": "hsl_red_threshold",
     },
     "risk": {
         "max_positions": "n_positions",
         "total_exposure_enforcer_threshold_ratio": "risk_twel_enforcer_threshold",
         "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
         "position_exposure_enforcer_threshold_ratio": "risk_wel_enforcer_threshold",
-        "total_wallet_exposure_limit": "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
     },
     "unstuck": {
         "close_fraction": "unstuck_close_pct",
@@ -76,21 +76,21 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "forager": {
             "score_weights": {
                 "ema_readiness": [0, 1, 0.01],
-                "volatility": [0, 1, 0.01],
+                "log_range": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_minutes": [10, 2880, 1],
+            "log_range_ema_span_minutes": [10, 2880, 1],
             "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
             "cooldown_after_red_minutes": [2160, 2160, 10],
-            "drawdown_ratio_ema_span_minutes": [720, 720, 1],
-            "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
+            "drawdown_fraction_ema_span_minutes": [720, 720, 1],
+            "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "max_positions": [7, 7, 1],
-            "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
+            "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
             "we_excess_allowance_fraction": [0, 0.4, 0.01],
             "position_exposure_enforcer": {
                 'threshold_ratio': [1, 1, 0.001],
@@ -112,21 +112,21 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "forager": {
             "score_weights": {
                 "ema_readiness": [0, 1, 0.01],
-                "volatility": [0, 1, 0.01],
+                "log_range": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_minutes": [10, 1440, 1],
+            "log_range_ema_span_minutes": [10, 1440, 1],
             "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
             "cooldown_after_red_minutes": [2160, 4320, 10],
-            "drawdown_ratio_ema_span_minutes": [1, 720, 1],
-            "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
+            "drawdown_fraction_ema_span_minutes": [1, 720, 1],
+            "drawdown_threshold_fraction": [0.01, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "max_positions": [5, 5, 1],
-            "total_wallet_exposure_limit": [0, 0],
+            "total_wallet_exposure_limit_ratio": [0, 0],
             "we_excess_allowance_fraction": [0, 0.5, 0.01],
             "position_exposure_enforcer": {
                 'threshold_ratio': [0.8, 1.01, 0.001],

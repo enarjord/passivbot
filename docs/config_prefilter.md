@@ -13,7 +13,7 @@ For example, explicitly enable a normalized grid-span range of 10% to 35%:
     "prefilter": {
       "checks": [
         {
-          "metric": "grid_span",
+          "metric": "grid_span_fraction",
           "enabled": true,
           "min": 0.10,
           "max": 0.35,
@@ -35,11 +35,11 @@ currently require `bot.portfolio.strategy_kind = "trailing_martingale"`.
 
 | Metric | Measurement |
 |---|---|
-| `entry_close_span` | Entry-to-close landmark distance divided by average position price at each exposure probe. Includes the normalized EMA entry gate; handles partial initial entries and immediate trailing closes separately. |
-| `entry_retracement` | Effective rebound/pullback required to confirm a trailing reentry. Zero for passive or partial initial entries. |
-| `close_retracement` | Effective reversal required to confirm a trailing close. |
+| `entry_close_span_fraction` | Entry-to-close landmark distance divided by average position price at each exposure probe. Includes the normalized EMA entry gate; handles partial initial entries and immediate trailing closes separately. |
+| `entry_retracement_fraction` | Effective rebound/pullback required to confirm a trailing reentry. Zero for passive or partial initial entries. |
+| `close_retracement_fraction` | Effective reversal required to confirm a trailing close. |
 | `entry_cooldown_minutes` | Effective cooldown, including exposure/adverse weights and floor/ceiling. |
-| `grid_span` | Absolute last-entry price / initial-entry price minus one, along the normalized capacity-filling ladder below. |
+| `grid_span_fraction` | Absolute last-entry price / initial-entry price minus one, along the normalized capacity-filling ladder below. |
 
 Percentage measurements use fractions: `0.10` means 10%. Entry/close landmark
 span uses average position price as denominator, not the entry landmark. These
@@ -52,10 +52,10 @@ The policy defaults are:
 ```json
 {
   "checks": [],
-  "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
-  "volatility_ema_1m": 0.0,
-  "volatility_ema_1h": 0.0,
-  "adverse_directionality": 0.0,
+  "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
+  "log_range_ema_1m": 0.0,
+  "log_range_ema_1h": 0.0,
+  "adverse_directionality_score": 0.0,
   "grid_max_entries": 1024,
   "penalty_weight": 1000000.0
 }
@@ -71,7 +71,7 @@ coins and multiple slots have a candle-dependent grow-only tradability count.
 This foundation raises an explicit unsupported-input error for inherited WEL in
 that case rather than guessing a denominator. Fixed WEL mode and explicit coin
 WEL allocations support multiple coins. Disabled filters impose no such limit.
-Volatility inputs are declared log-range EMA values, not estimates derived from
+Log-range inputs are declared EMA values, not estimates derived from
 EMA spans. Adverse directionality is an explicit value in `[0, 1]`.
 
 The grid probe keeps balance and the EMA reference at 1. It asks Rust for each

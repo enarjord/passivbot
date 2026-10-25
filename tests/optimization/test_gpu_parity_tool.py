@@ -35,8 +35,8 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
     for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
             [config["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else []):
-        assert policy["drawdown_ratio_threshold"] == .002
-        assert policy["drawdown_ratio_ema_span_minutes"] == 2.5
+        assert policy["drawdown_threshold_fraction"] == .002
+        assert policy["drawdown_fraction_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
         assert policy["cooldown_after_red_minutes"] == 10000
     expected = original[1].copy()
@@ -102,7 +102,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
-        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == .002
+        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
     assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
@@ -446,10 +446,10 @@ def test_prepared_snapshot_roundtrip_and_coin_order_guard(tmp_path):
     prepared = gpu_parity.prepared_inputs(options)
     np.testing.assert_array_equal(prepared[1], candles)
     assert prepared[0]["backtest"]["coins"] == config["backtest"]["coins"]
-    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit": 0.25}
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit_ratio": 0.25}
     config_file.write_text(json.dumps(config))
     prepared = gpu_parity.prepared_inputs(options)
-    assert prepared[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.25
+    assert prepared[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.25
     np.savez(dataset, hlcvs=candles, timestamps=timestamps, btc=btc, coins=np.array(["COIN01", "COIN00"]))
     with pytest.raises(ValueError, match="coin order"):
         gpu_parity.prepared_inputs(options)
