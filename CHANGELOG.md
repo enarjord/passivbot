@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Automatically stream local integer tick inputs for large Metal trailing-martingale histories.
+  Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
+  without changing their values, and admit the bounded device footprint against the safety budget.
+
 - Fix optimizer coin-override validation when dataset metadata, result paths and other
   runtime bookkeeping are present, while retaining strict rejection of unknown authored fields.
 

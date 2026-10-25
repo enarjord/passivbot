@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import gzip
 from io import BytesIO
+import logging
+import mmap
 from multiprocessing import shared_memory
 import os
 from pathlib import Path
@@ -144,6 +146,32 @@ class SharedArrayManager:
         self._file_preflight = file_preflight
         self._file_backed = file_backed
         self._next_file_id = 0
+
+    @property
+    def file_backed(self):
+        return self._file_backed
+
+    def discard_file_pages(self):
+        """Hint that prepared read-only parent mappings may be reclaimed.
+
+        The GPU owner calls this after packing, while the parent retains file
+        ownership. Views, descriptors and subsequent reads stay valid.
+        """
+        advice = getattr(mmap, "MADV_DONTNEED", None)
+        if advice is None:
+            return 0
+        advised = 0
+        for array in self._file_arrays.values():
+            if array.mode != "r" or array.flags.writeable:
+                continue
+            advise = getattr(array._mmap, "madvise", None)
+            if callable(advise):
+                try:
+                    advise(advice)
+                    advised += 1
+                except OSError:
+                    logging.debug("Could not discard prepared input file pages", exc_info=True)
+        return advised
 
     def _file_root(self):
         if self._file_directory is None:

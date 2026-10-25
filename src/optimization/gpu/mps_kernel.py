@@ -4,6 +4,9 @@ from config.policy import validate_minimum_cost_filters
 from config.activation import validate_side_activation
 from config.forager_hysteresis import validate_forager_score_hysteresis
 from functools import lru_cache
+from contextlib import contextmanager
+from pathlib import Path
+import re
 import time
 import logging
 
@@ -674,6 +677,189 @@ def _with_multicoin_side(source, side):
     return f"#define PASSIVBOT_MULTICOIN_SHORT_SIDE {int(side == 'short')}\n" + source
 
 
+_METAL_WINDOWED_TICKS = (
+    ("fill_ticks", 2),
+    ("touch_ticks", 2),
+    ("touch_nearest_ticks", 1),
+    ("touch_min_qty_bits", 1),
+    ("touch_min_qty_relation", 1),
+)
+
+
+def _with_metal_tick_windows(source):
+    """Bind bounded tick buffers without changing absolute replay indices.
+
+    Only TM's five local tick inputs are transformed. Bars and clamped
+    market-execution ticks remain full resident; hourly transport is separate.
+    Assert the native declaration surface so source drift fails before replay.
+    """
+    declarations = dict(fill_ticks=9, touch_ticks=8, touch_nearest_ticks=7,
+                        touch_min_qty_bits=7, touch_min_qty_relation=7)
+    for name, expected in declarations.items():
+        pattern = rf"\bconstant int\* {name}\b"
+        if len(re.findall(pattern, source)) != expected:
+            raise RuntimeError(f"Metal tick-window declaration contract changed: {name}")
+        source = re.sub(pattern, f"PassivbotTickWindow {name}", source)
+    for kernel_name in ("passivbot_trailing_martingale_multicoin",
+                        "passivbot_trailing_martingale_multicoin_fused",
+                        "passivbot_trailing_martingale_multicoin_long"):
+        pattern = rf"(kernel void {kernel_name}\()(.*?)(\) \{{)"
+        matches = list(re.finditer(pattern, source, flags=re.DOTALL))
+        if len(matches) != 1:
+            raise RuntimeError("Metal tick-window kernel wrapper contract changed")
+        match = matches[0]
+        signature = match.group(2)
+        bindings = []
+        for name, width in _METAL_WINDOWED_TICKS:
+            declaration = f"PassivbotTickWindow {name}"
+            if signature.count(declaration) != 1:
+                raise RuntimeError("Metal tick-window kernel argument contract changed")
+            signature = signature.replace(declaration, f"constant int* window_{name}")
+            bindings.append(
+                f"    const PassivbotTickWindow {name} = {{window_{name}, "
+                f"replay_range[2] * sizes[2] * {width}}};"
+            )
+        replacement = match.group(1) + signature + match.group(3) + "\n" + "\n".join(bindings)
+        source = source[:match.start()] + replacement + source[match.end():]
+    view = """
+struct PassivbotTickWindow {
+    constant int* values;
+    int first_element;
+    int operator[](int absolute_index) const {
+        return values[absolute_index - first_element];
+    }
+};
+"""
+    return view + source
+
+
+def _with_compact_metal_hourly_ranges(source):
+    """Decode exact sparse 1m hour observations at their original absolute indices."""
+    pattern = r"\bconstant float\* hour_log_ranges\b"
+    if len(re.findall(pattern, source)) != 7:
+        raise RuntimeError("Metal compact-hourly declaration contract changed")
+    source = re.sub(pattern, "PassivbotHourlyRangeView hour_log_ranges", source)
+    for kernel_name in ("passivbot_trailing_martingale_multicoin",
+                        "passivbot_trailing_martingale_multicoin_fused",
+                        "passivbot_trailing_martingale_multicoin_long"):
+        wrapper = rf"(kernel void {kernel_name}\()(.*?)(\) \{{)"
+        matches = list(re.finditer(wrapper, source, flags=re.DOTALL))
+        if len(matches) != 1:
+            raise RuntimeError("Metal compact-hourly kernel wrapper contract changed")
+        match = matches[0]
+        signature = match.group(2)
+        declaration = "PassivbotHourlyRangeView hour_log_ranges"
+        if signature.count(declaration) != 1:
+            raise RuntimeError("Metal compact-hourly kernel argument contract changed")
+        signature = signature.replace(declaration, "constant float* compact_hour_log_ranges")
+        replacement = (match.group(1) + signature + match.group(3)
+                       + "\n    const PassivbotHourlyRangeView hour_log_ranges = "
+                       + "{compact_hour_log_ranges, sizes[2], sizes[7]};")
+        source = source[:match.start()] + replacement + source[match.end():]
+    view = """
+struct PassivbotHourlyRangeView {
+    constant float* values;
+    int coin_count;
+    int start_minute_of_hour;
+    float operator[](int absolute_index) const {
+        const int k = absolute_index / coin_count;
+        if (k <= 0 || (start_minute_of_hour + k) % 60 != 0) return -1.0f;
+        const int hour = (start_minute_of_hour + k) / 60 - 1;
+        return values[hour * coin_count + absolute_index % coin_count];
+    }
+};
+"""
+    return view + source
+
+
+def _metal_tick_window_paths(data, *, device, supported, temporal):
+    paths = {name: data[name] for name, _ in _METAL_WINDOWED_TICKS
+             if isinstance(data[name], Path)}
+    if not data.get("stream_tick_inputs", False):
+        if paths:
+            raise ValueError("GPU tick paths require the streamed-input contract")
+        return {}
+    if device != "mps" or not supported or not temporal:
+        raise ValueError("Streamed GPU ticks require temporal Metal Trailing Martingale")
+    if len(paths) != len(_METAL_WINDOWED_TICKS):
+        raise ValueError("Streamed GPU ticks require every tick input to be disk-backed")
+    for name, width in _METAL_WINDOWED_TICKS:
+        array = np.load(paths[name], mmap_mode="r", allow_pickle=False)
+        try:
+            shape = (int(data["n"]), int(data["n_coins"])) + ((2,) if width == 2 else ())
+            if array.shape != shape or array.dtype != np.int32 or not array.flags.c_contiguous:
+                raise ValueError(f"Invalid streamed GPU tick array: {name}")
+        finally:
+            array._mmap.close()
+    return paths
+
+
+def _metal_tick_window_bounds(begin, stop, available):
+    if not 1 <= begin <= stop <= available - 1 or (begin == stop and begin != 1):
+        raise ValueError("Invalid temporal GPU input window")
+    return max(0, begin - 1), min(available, stop + 1)
+
+
+@contextmanager
+def _metal_tick_window_arguments(kernel_args, paths, *, begin, stop, available):
+    """Keep mapped upload sources and device windows alive through the caller's sync."""
+    if not paths:
+        yield kernel_args, 0
+        return
+    from optimization.gpu.residency import (
+        _MpsUploadSource, _close_mps_upload_sources, _discard_completed_upload_pages,
+        _mps_upload_quarantine_snapshot, _quarantine_mps_upload_sources,
+        _release_mps_upload_sources_after_sync, _synchronize_mps_uploads,
+    )
+    import mmap
+    start, end = _metal_tick_window_bounds(begin, stop, available)
+    pending = _mps_upload_quarantine_snapshot()
+    sources = []
+    arguments = list(kernel_args)
+    failed = quarantined = False
+    try:
+        for slot, (name, _width) in enumerate(_METAL_WINDOWED_TICKS, start=2):
+            # Copy-on-write mappings are writable to NumPy/PyTorch but never
+            # modified here. Retain them until the owning queue completes.
+            array = np.load(paths[name], mmap_mode="c", allow_pickle=False)
+            source = _MpsUploadSource(array)
+            sources.append(source)
+            source.destination = torch.as_tensor(array[start:end], device="mps").contiguous()
+            arguments[slot] = source.destination
+        yield tuple(arguments), start
+    except BaseException:
+        # An interrupted upload/dispatch can still own queued copies. Drain the
+        # same device queue before closing their host mappings, preserving the
+        # original failure if device synchronization also fails.
+        failed = True
+        try:
+            _synchronize_mps_uploads(torch)
+        except BaseException:
+            _quarantine_mps_upload_sources(sources)
+            quarantined = True
+            logging.exception("Metal input-window cleanup synchronization failed")
+        raise
+    finally:
+        if not quarantined:
+            try:
+                if not failed:
+                    # The caller's existing successful replay synchronization
+                    # completed these immutable uploads. Advise only consumed
+                    # pages of this window, including already-consumed overlap.
+                    _release_mps_upload_sources_after_sync(pending)
+                    for source in sources:
+                        array = source.mapped
+                        row_bytes = int(np.prod(array.shape[1:])) * array.dtype.itemsize
+                        offset = int(array.offset) % mmap.ALLOCATIONGRANULARITY
+                        first_page = (offset + start * row_bytes) // mmap.PAGESIZE * mmap.PAGESIZE
+                        _discard_completed_upload_pages(array, end * row_bytes, first_page)
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                _close_mps_upload_sources(sources, preserve_error=failed)
+
+
 @lru_cache(maxsize=32)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -779,8 +965,14 @@ def _trailing_martingale_multicoin_shader_library(
     coin_overrides_absent: bool = False,
     hsl_native_coin_cache: bool = False,
     organillo_enabled: bool = False,
+    metal_tick_windows: bool = False,
+    compact_hourly_ranges: bool = False,
 ):
-    gpu_device(torch)
+    device = gpu_device(torch)
+    if metal_tick_windows and (device != "mps" or not temporal_chunking):
+        raise ValueError("Tick-window shaders require temporal Metal replay")
+    if compact_hourly_ranges and not metal_tick_windows:
+        raise ValueError("Compact hourly shaders require Metal tick windows")
     import passivbot_rust
 
     source = _with_hsl_features(
@@ -824,6 +1016,10 @@ def _trailing_martingale_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
         )
+    if metal_tick_windows:
+        source = _with_metal_tick_windows(source)
+    if compact_hourly_ranges:
+        source = _with_compact_metal_hourly_ranges(source)
     if mps_coin_capacity is not None:
         return compile_shader(
             source,
@@ -1324,6 +1520,7 @@ class _MulticoinReplayRunner:
     supports_entry_interval = False
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
+    supports_metal_tick_windows = False
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -1522,7 +1719,23 @@ class _MulticoinReplayRunner:
         self.touch_nearest_ticks = data["touch_nearest_ticks"]
         self.touch_min_qty_bits = data["touch_min_qty_bits"]
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
+        self._streamed_tick_paths = _metal_tick_window_paths(
+            data, device=self.bars.device.type,
+            supported=self.supports_metal_tick_windows,
+            temporal=self._temporal_replay_enabled(),
+        )
         self.hour_log_ranges = data["hour_log_ranges"]
+        self.compact_hourly_ranges = bool(data.get("compact_hourly_ranges", False))
+        if self.compact_hourly_ranges:
+            from optimization.gpu.residency import compact_hourly_rows
+            expected_rows = compact_hourly_rows(
+                self.n, start_minute_of_hour=int(data["start_minute_of_hour"]),
+            )
+            if (not self._streamed_tick_paths or self.interval_minutes != 1.0
+                    or data.get("hourly_range_rows") != expected_rows
+                    or tuple(self.hour_log_ranges.shape) != (expected_rows, self.n_coins)
+                    or self.hour_log_ranges.dtype != torch.float32):
+                raise ValueError("Invalid compact hourly Metal input layout")
         self.coin_settings = data["coin_settings"]
         self._hourly_first_observed = data.get("hourly_first_observed")
         self._hourly_coin_ranges = data.get("hourly_coin_ranges")
@@ -2037,6 +2250,9 @@ class _MulticoinReplayRunner:
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
         self._last_temporal_dispatch = None
+        tick_paths = getattr(self, "_streamed_tick_paths", {})
+        if tick_paths and not self._temporal_replay_enabled():
+            raise ValueError("Streamed Metal inputs require temporal replay")
         # Metal creates the compute pipeline lazily at kernel lookup. Keep its
         # first-use cost separate from device execution, including unchunked replay.
         profile_pipeline = getattr(self, "_profile_pipeline", False)
@@ -2069,6 +2285,9 @@ class _MulticoinReplayRunner:
             if adaptive and getattr(self, "hsl_fact_capacity", 0)
             else self.temporal_chunk_bar_limit
         )
+        if tick_paths:
+            # Match the maximum resident window admitted before preparation.
+            history_limit = min(history_limit, MPS_TM_MULTICOIN_CHUNK_BARS)
         chunk_bars = min(
             history_limit,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
@@ -2112,23 +2331,30 @@ class _MulticoinReplayRunner:
         while True:
             self.interrupt_check()
             dispatch_bars = controller.bars if controller is not None else chunk_bars
-            replay_range = torch.tensor(
-                [begin_k, min(begin_k + dispatch_bars, stop_k)],
-                dtype=torch.int32,
-                device=gpu_device(),
-            )
+            completed_k = min(begin_k + dispatch_bars, stop_k)
             started = time.perf_counter()
-            kernel(
-                *kernel_args,
-                replay_states,
-                replay_range,
-                threads=(batch_size, 1, 1),
-                group_size=(threads_per_threadgroup, 1, 1),
-            )
-            submitted = time.perf_counter() if profile_pipeline else 0.0
-            # Bound queued work as well as each command, and make Ctrl+C visible
-            # between temporal chunks even when profiling is disabled.
-            synchronize()
+            with _metal_tick_window_arguments(
+                kernel_args, tick_paths, begin=begin_k, stop=completed_k, available=self.n,
+            ) as (dispatch_args, input_start):
+                replay_range = torch.tensor(
+                    [begin_k, completed_k, input_start] if tick_paths else [begin_k, completed_k],
+                    dtype=torch.int32,
+                    device=gpu_device(),
+                )
+                kernel(
+                    *dispatch_args,
+                    replay_states,
+                    replay_range,
+                    threads=(batch_size, 1, 1),
+                    group_size=(threads_per_threadgroup, 1, 1),
+                )
+                submitted = time.perf_counter() if profile_pipeline else 0.0
+                # The existing boundary also owns the lifetime of streamed
+                # input mappings and tensors; no extra normal-path wait.
+                synchronize()
+            # Drop this dispatch's window before allocating the next one.
+            # Keeping the with-target alive would transiently double residency.
+            del dispatch_args
             dispatch_count += 1
             completed = time.perf_counter()
             dispatch_seconds = completed - started
@@ -2177,6 +2403,11 @@ class _MulticoinReplayRunner:
             "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
             "replay_state_bytes_per_candidate": self._replay_state_bytes,
         }
+        if tick_paths:
+            self._last_temporal_dispatch.update(
+                streamed_tick_inputs=True,
+                tick_window_bytes=min(self.n, chunk_bars + 2) * self.n_coins * 28,
+            )
         if profile_pipeline:
             launch_profile["dispatch_count"] = dispatch_count
             self._last_temporal_dispatch["dispatch_host_timings_seconds"] = {
@@ -2787,6 +3018,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
     hsl_native_coin_cache_enabled = False
+    supports_metal_tick_windows = True
 
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
@@ -2939,6 +3171,8 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "coin_overrides_absent", False),
             bool(self._hsl_native_cache_capacity() and self._hsl_native_coin_cache_selected()),
             self.organillo_enabled,
+            bool(getattr(self, "_streamed_tick_paths", {})),
+            bool(getattr(self, "compact_hourly_ranges", False)),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

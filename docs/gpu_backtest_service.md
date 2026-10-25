@@ -178,7 +178,20 @@ For ordinary unsliced one-minute caches, GPU memory admission checks the NumPy h
 decoding the payload. Suites, explicit dataset slices and aggregated histories are checked after
 their effective dimensions are known, before price packing. These checks retain the device's
 existing invariant safety budget; they do not guarantee sufficient system RAM or include all
-candidate/driver scratch. Validation uses bounded conversion and mask buffers without changing
+candidate/driver scratch. Metal trailing-martingale replay keeps five strict integer tick arrays
+on disk and uploads only each temporal replay range plus previous/next-candle context. The
+admitted footprint includes its maximum window. One-minute hourly ranges use lossless compact
+boundary rows with virtual access at their original indices; full bars and clamped
+market-execution prices remain resident for historical access. Other candle intervals retain
+dense hourly ranges. Smaller histories retain resident
+inputs when they fit the initial device and host memory budgets. The run captures its preference
+before reading cache pages and passes it to the owner thread. After packing, clean read-only
+raw file pages receive an optional OS reclaim hint in both parent and worker mappings;
+future reads remain valid. Large Metal device uploads copy bounded contiguous slices and
+release completed source pages, avoiding an additional active copy of the packed history.
+Startup upload waits bound source lifetime; normal replay synchronization is unchanged. This preserves
+the existing 45% safety budget and does not alter CUDA or other strategy layouts.
+Validation uses bounded conversion and mask buffers without changing
 accepted candle values or the first reported invalid location.
 
 ## Canonical prepared-data binding
