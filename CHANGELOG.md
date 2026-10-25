@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Give native price helpers explicit fraction names, distinguish absolute relative differences
+  from position-side adverse changes and order-side gaps, and use one canonical adverse-change
+  helper instead of three native aliases. Calculations and invalid-input behavior are unchanged.
+
 - Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
   explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
   stay unchanged; retired native names are not accepted as aliases.

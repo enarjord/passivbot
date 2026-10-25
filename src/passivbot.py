@@ -267,7 +267,7 @@ round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
-calc_order_price_diff = pbr.calc_order_price_diff
+calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL = 20_000
 PARTIAL_FILL_MERGE_MAX_DELAY_MS = 60_000
@@ -455,7 +455,7 @@ def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
 
 def order_market_diff(side: str, order_price: float, market_price: float) -> float:
     """Return side-aware relative price diff between order and market."""
-    return float(calc_order_price_diff(side, float(order_price), float(market_price)))
+    return float(calc_order_price_gap_fraction(side, float(order_price), float(market_price)))
 
 
 from pure_funcs import (
@@ -14096,7 +14096,7 @@ class Passivbot:
             last_price = last_prices[symbol]
             try:
                 pprice_diff = (
-                    pbr.calc_pprice_diff_int(
+                    pbr.calc_pside_adverse_price_change_fraction(
                         self.pside_int_map[pside], new["price"], last_price
                     )
                     if last_price

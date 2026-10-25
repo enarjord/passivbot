@@ -57,8 +57,8 @@ def _install_passivbot_rust_stub():
             return value
         return math.floor(value / step) * step
 
-    stub.calc_diff = lambda price, reference: price - reference
-    stub.calc_order_price_diff = lambda side, price, market: (
+    stub.calc_abs_relative_difference_fraction = lambda price, reference: price - reference
+    stub.calc_order_price_gap_fraction = lambda side, price, market: (
         (0.0 if not market else (1 - price / market))
         if str(side).lower() in ("buy", "long")
         else (0.0 if not market else (price / market - 1))
@@ -80,7 +80,7 @@ def _install_passivbot_rust_stub():
         lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price)
         * qty
     )
-    stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
+    stub.calc_pside_adverse_price_change_fraction = lambda *args, **kwargs: 0
 
     def _calc_auto_unstuck_allowance_v9(balance, loss_pct, twel, drawdown):
         from v9_risk_reference import allowance, f32, mul

@@ -31,7 +31,7 @@ sys.modules.setdefault(
     types.SimpleNamespace(
         qty_to_cost=lambda *args, **kwargs: 0.0,
         round_dynamic=lambda x, y=None: x,
-        calc_order_price_diff=lambda *args, **kwargs: 0.0,
+        calc_order_price_gap_fraction=lambda *args, **kwargs: 0.0,
         hysteresis=lambda x, y, z: x,
     ),
 )
@@ -1375,7 +1375,7 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
     )
     monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
     )
 
     await bot.log_position_changes(
@@ -1461,7 +1461,7 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
     )
     monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
     )
 
     with caplog.at_level(logging.INFO):
@@ -1543,7 +1543,7 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
     )
     monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
     )
 
     with caplog.at_level(logging.INFO):

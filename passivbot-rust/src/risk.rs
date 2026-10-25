@@ -2,8 +2,8 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
-    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
-    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pside_adverse_price_change_fraction,
+    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
     round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     RoundingMode,
 };
@@ -141,7 +141,7 @@ pub fn gate_entries_by_twel(
         } else {
             continue;
         };
-        let distance = calc_pside_price_diff_int(pside, entry.market_price, entry.price);
+        let distance = calc_pside_adverse_price_change_fraction(pside, entry.market_price, entry.price);
         candidates.push(CandidateInternal {
             data: GateEntriesCandidate {
                 qty: entry.qty.abs(),
@@ -481,7 +481,7 @@ where
         }
 
         let pprice_diff =
-            calc_pprice_diff_int(input.side, input.position_price, input.current_price);
+            calc_pside_adverse_price_change_fraction(input.side, input.position_price, input.current_price);
         if !pprice_diff.is_finite() {
             continue;
         }
@@ -925,7 +925,7 @@ pub fn calc_twel_enforcer_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::calc_pprice_diff_int;
+    use crate::utils::calc_pside_adverse_price_change_fraction;
 
     fn pos(
         idx: usize,
@@ -1202,7 +1202,7 @@ mod tests {
         // The action with the smallest price diff should target idx 1
         let price_diff = |idx: usize| -> f64 {
             let pos = positions.iter().find(|p| p.idx == idx).unwrap();
-            calc_pprice_diff_int(LONG, pos.position_price, pos.market_price)
+            calc_pside_adverse_price_change_fraction(LONG, pos.position_price, pos.market_price)
         };
         let best_idx = actions
             .iter()

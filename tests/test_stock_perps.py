@@ -29,7 +29,7 @@ def stubbed_modules(monkeypatch):
     pr_module.round_dynamic = lambda x, y=None: x
     pr_module.round_dynamic_up = lambda x, y=None: x
     pr_module.round_dynamic_dn = lambda x, y=None: x
-    pr_module.calc_order_price_diff = lambda *args, **kwargs: 0.0
+    pr_module.calc_order_price_gap_fraction = lambda *args, **kwargs: 0.0
     pr_module.hysteresis = lambda x, y, z: x
     pr_module.trailing_bundle_default_py = lambda: (0, 0, 0, 0)
     pr_module.update_trailing_bundle_py = lambda *args, **kwargs: (0, 0, 0, 0)
