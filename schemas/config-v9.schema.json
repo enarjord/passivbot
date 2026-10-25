@@ -26,20 +26,12 @@
                 "optimize"
               ]
             },
-            "btc_collateral_cap": {
+            "btc_collateral_target_ratio": {
               "type": "number",
               "default": 0.0,
-              "x-passivbot-consumers": [
-                "backtest",
-                "optimize"
-              ]
-            },
-            "btc_collateral_ltv_cap": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "default": null,
+              "description": "Target BTC collateral value / equity; values above one retain leveraged BTC collateral and negative USD balances.",
+              "x-passivbot-unit": "ratio",
+              "x-passivbot-denominator": "account equity",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -96,9 +88,14 @@
                 "optimize"
               ]
             },
-            "equity_floor_ratio": {
+            "equity_floor_fraction": {
               "type": "number",
               "default": 0.05,
+              "description": "Early-stop floor: equity at or below this fraction of starting balance ends replay.",
+              "minimum": 0.0,
+              "exclusiveMaximum": 1.0,
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "starting balance",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -185,12 +182,15 @@
                 "optimize"
               ]
             },
-            "maker_fee_override": {
+            "maker_fee_override_fraction": {
               "type": [
                 "number",
                 "null"
               ],
               "default": 0.0004,
+              "description": "Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.",
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "absolute fill quote notional",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -334,6 +334,20 @@
                   "optimize"
                 ]
               }
+            },
+            "max_usd_debt_to_equity_ratio": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Optional USD debt / equity ceiling when topping up BTC collateral; Null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.",
+              "x-passivbot-unit": "ratio",
+              "x-passivbot-denominator": "account equity",
+              "x-passivbot-consumers": [
+                "backtest",
+                "optimize"
+              ]
             },
             "offline": {
               "type": "boolean",
@@ -744,12 +758,15 @@
                 "optimize"
               ]
             },
-            "taker_fee_override": {
+            "taker_fee_override_fraction": {
               "type": [
                 "number",
                 "null"
               ],
               "default": 0.00055,
+              "description": "Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.",
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "absolute fill quote notional",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -4101,15 +4118,13 @@
                 "warmup": {
                   "type": "object",
                   "properties": {
-                    "max_minutes": {
-                      "type": [
-                        "number",
-                        "null"
-                      ],
-                      "default": null,
-                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
-                      "exclusiveMinimum": 0.0,
-                      "x-passivbot-unit": "minutes",
+                    "activation_span_fraction": {
+                      "type": "number",
+                      "default": 0.3,
+                      "description": "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "indicator span",
                       "x-passivbot-scope": "portfolio",
                       "x-passivbot-consumers": [
                         "live",
@@ -4119,12 +4134,15 @@
                       "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "span_multiplier": {
-                      "type": "number",
-                      "default": 0.3,
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "multiplier",
-                      "x-passivbot-denominator": "indicator span",
+                    "max_minutes": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "default": null,
+                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "portfolio",
                       "x-passivbot-consumers": [
                         "live",
@@ -17907,11 +17925,8 @@
         "backtest.base_dir": {
           "$ref": "#/$defs/config/properties/backtest/properties/base_dir"
         },
-        "backtest.btc_collateral_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_cap"
-        },
-        "backtest.btc_collateral_ltv_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_ltv_cap"
+        "backtest.btc_collateral_target_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_target_ratio"
         },
         "backtest.candle_interval_minutes": {
           "$ref": "#/$defs/config/properties/backtest/properties/candle_interval_minutes"
@@ -17928,8 +17943,8 @@
         "backtest.end_date": {
           "$ref": "#/$defs/config/properties/backtest/properties/end_date"
         },
-        "backtest.equity_floor_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_ratio"
+        "backtest.equity_floor_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_fraction"
         },
         "backtest.ew_half_life_days": {
           "$ref": "#/$defs/config/properties/backtest/properties/ew_half_life_days"
@@ -17955,8 +17970,8 @@
         "backtest.limit_order_fill_buffer_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/limit_order_fill_buffer_fraction"
         },
-        "backtest.maker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override"
+        "backtest.maker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override_fraction"
         },
         "backtest.market_order_slippage_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_order_slippage_fraction"
@@ -17972,6 +17987,9 @@
         },
         "backtest.market_settings_sources": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_settings_sources"
+        },
+        "backtest.max_usd_debt_to_equity_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_equity_ratio"
         },
         "backtest.offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"
@@ -18000,8 +18018,8 @@
         "backtest.suite_enabled": {
           "$ref": "#/$defs/config/properties/backtest/properties/suite_enabled"
         },
-        "backtest.taker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override"
+        "backtest.taker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override_fraction"
         },
         "backtest.visible_metrics": {
           "$ref": "#/$defs/config/properties/backtest/properties/visible_metrics"
@@ -18624,11 +18642,11 @@
         "bot.portfolio.warmup": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
         },
+        "bot.portfolio.warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "bot.portfolio.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "bot.portfolio.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "bot.short": {
           "$ref": "#/$defs/config/properties/bot/properties/short"
@@ -20465,11 +20483,8 @@
         "base_dir": {
           "$ref": "#/$defs/config/properties/backtest/properties/base_dir"
         },
-        "btc_collateral_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_cap"
-        },
-        "btc_collateral_ltv_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_ltv_cap"
+        "btc_collateral_target_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_target_ratio"
         },
         "candle_interval_minutes": {
           "$ref": "#/$defs/config/properties/backtest/properties/candle_interval_minutes"
@@ -20486,8 +20501,8 @@
         "end_date": {
           "$ref": "#/$defs/config/properties/backtest/properties/end_date"
         },
-        "equity_floor_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_ratio"
+        "equity_floor_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_fraction"
         },
         "ew_half_life_days": {
           "$ref": "#/$defs/config/properties/backtest/properties/ew_half_life_days"
@@ -20513,8 +20528,8 @@
         "limit_order_fill_buffer_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/limit_order_fill_buffer_fraction"
         },
-        "maker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override"
+        "maker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override_fraction"
         },
         "market_order_slippage_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_order_slippage_fraction"
@@ -20530,6 +20545,9 @@
         },
         "market_settings_sources": {
           "$ref": "#/$defs/scenarioPatch:backtest.market_settings_sources"
+        },
+        "max_usd_debt_to_equity_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_equity_ratio"
         },
         "offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"
@@ -20558,8 +20576,8 @@
         "suite_enabled": {
           "$ref": "#/$defs/config/properties/backtest/properties/suite_enabled"
         },
-        "taker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override"
+        "taker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override_fraction"
         },
         "visible_metrics": {
           "$ref": "#/$defs/config/properties/backtest/properties/visible_metrics"
@@ -21229,11 +21247,11 @@
         "portfolio.warmup": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
         },
+        "portfolio.warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "portfolio.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "portfolio.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "short": {
           "$ref": "#/$defs/scenarioPatch:bot.short"
@@ -23257,11 +23275,11 @@
         "warmup": {
           "$ref": "#/$defs/scenarioPatch:bot.portfolio.warmup"
         },
+        "warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -23337,11 +23355,11 @@
     "scenarioPatch:bot.portfolio.warmup": {
       "type": "object",
       "properties": {
+        "activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},

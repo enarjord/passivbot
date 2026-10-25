@@ -28,7 +28,9 @@ before backtesting a proposed replacement.
 | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
-| `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
+| `backtest.btc_collateral_cap`, `backtest.btc_collateral_ltv_cap` | `backtest.btc_collateral_target_ratio`, `backtest.max_usd_debt_to_equity_ratio`; the same target and USD-debt/equity limit |
+| `backtest.maker_fee_override`, `backtest.taker_fee_override` | `backtest.maker_fee_override_fraction`, `backtest.taker_fee_override_fraction`; signed values and `null` are unchanged |
+| `backtest.liquidation_threshold` | `backtest.equity_floor_fraction` |
 | `live.auto_gs` | `live.modes.disapproved_position`: `graceful_stop` or `manual` |
 | `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.portfolio` |
 | `live.approved_coins` | Common inline approvals become `bot.global.universe.approved_coins`; directional approvals and file bindings remain explicit `bot.<side>.universe.approved_coins` sources |
@@ -36,7 +38,7 @@ before backtesting a proposed replacement.
 | Shared minimum age | Copy `live.minimum_coin_age_days` to `bot.long.universe.minimum_coin_age_days` and `bot.short.universe.minimum_coin_age_days`; report consistent all-mode initial-entry admission |
 | Shared minimum-cost filter | Copy to both `bot.<side>.universe.filter_by_min_effective_cost` leaves; simulation override remains nullable |
 | Shared market-order policy | `bot.portfolio.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
-| `live.warmup_ratio` | `bot.portfolio.warmup.span_multiplier`, with the same value |
+| `live.warmup_ratio` | `bot.portfolio.warmup.activation_span_fraction`, with the same value |
 | Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |
 | `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.portfolio.warmup` |
 | Scale-one sizing, allowance, fee, fill and execution `_pct` fields | Public `_fraction` names; values are unchanged |

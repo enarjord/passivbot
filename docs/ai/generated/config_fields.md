@@ -16,15 +16,14 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `backtest.balance_sample_divider` | integer | `60` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.base_dir` | string | `"backtests"` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.btc_collateral_cap` | float | `0.0` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.btc_collateral_ltv_cap` | float \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.btc_collateral_target_ratio` | float | `0.0` | ratio / account equity | —; backtest, optimize | — | — | — | python |
 | `backtest.candle_interval_minutes` | integer | `1` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.coin_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.coin_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
 | `backtest.compress_cache` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.dynamic_wel_by_tradability` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.end_date` | string | `"now"` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.equity_floor_ratio` | float | `0.05` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.equity_floor_fraction` | float | `0.05` | fraction / starting balance | —; backtest, optimize | — | — | >= 0.0; < 1.0; finite | python |
 | `backtest.ew_half_life_days` | float \| null | `null` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.exchanges` | array | 2 items (see template) | — | —; backtest, optimize | — | — | — | python |
 | `backtest.filter_by_min_effective_cost` | boolean \| null | `null` | — | —; backtest, optimize | — | — | — | python |
@@ -33,7 +32,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.hlcvs_data_override_mode` | string | `"intersection"` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.hsl_detailed_report` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.limit_order_fill_buffer_fraction` | float | `0.0` | fraction / limit order price | —; backtest, optimize | — | — | — | python |
-| `backtest.maker_fee_override` | float \| null | `0.0004` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.maker_fee_override_fraction` | float \| null | `0.0004` | fraction / absolute fill quote notional | —; backtest, optimize | — | — | finite | python |
 | `backtest.market_order_slippage_fraction` | float | `0.0005` | fraction / candle close price | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings.overrides` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings.overrides.*.c_mult` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
@@ -49,6 +48,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.market_settings.overrides_by_exchange.*.*.qty_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.max_usd_debt_to_equity_ratio` | float \| null | `null` | ratio / account equity | —; backtest, optimize | — | — | — | python |
 | `backtest.offline` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.ohlcv_source_dir` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.organillo_csv` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
@@ -67,7 +67,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.start_date` | string | `"2021-04-20"` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.starting_balance` | float | `100000.0` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.suite_enabled` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.taker_fee_override` | float \| null | `0.00055` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.taker_fee_override_fraction` | float \| null | `0.00055` | fraction / absolute fill quote notional | —; backtest, optimize | — | — | finite | python |
 | `backtest.visible_metrics` | array \| null | 13 items (see template) | — | —; backtest, optimize | — | — | — | python |
 | `backtest.volume_normalization` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 
@@ -243,8 +243,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.portfolio.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | portfolio; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.portfolio.strategy_kind` | string | `"trailing_martingale"` | — | portfolio; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
 | `bot.portfolio.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | portfolio; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
+| `bot.portfolio.warmup.activation_span_fraction` | float | `0.3` | fraction / indicator span | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.portfolio.warmup.max_minutes` | float \| null | `null` | minutes | portfolio; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
-| `bot.portfolio.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.short.enabled` | boolean | `false` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | short; live, backtest, optimize | Eligible (`short_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |

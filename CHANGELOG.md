@@ -21,6 +21,12 @@ since the latest release tag; these features may already be available when insta
   remain unchanged. Released-v8 migration reports the final names; unpublished v9 spellings
   are rejected instead of silently aliased.
 
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
+  signed fee override fractions, and the starting-balance equity floor fraction. Warmup
+  now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
+  backtest/activation still uses `span * r`, with fractional-minute caps preserved.
+  Released-v8 migration emits the final names without rescaling values.
+
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.

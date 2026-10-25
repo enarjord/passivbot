@@ -1038,7 +1038,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
     def _make_config(self, loss_gate_max_drawdown_fraction=None):
         config = get_expanded_config_prototype()
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
-                                  btc_collateral_cap=.5)
+                                  btc_collateral_target_ratio=.5)
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)

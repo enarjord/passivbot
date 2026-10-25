@@ -363,7 +363,7 @@ def test_unsupported_weight_values_retain_exact_legacy_validation(value):
 
 
 @pytest.mark.parametrize("path,value", [
-    (("backtest", "btc_collateral_cap"), -0.0),
+    (("backtest", "btc_collateral_target_ratio"), -0.0),
     (("backtest", "starting_balance"), 1000),
     (("backtest", "filter_by_min_effective_cost"), 0),
 ])
