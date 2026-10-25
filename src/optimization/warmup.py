@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Sequence
 
 from backtest_universe import backtest_side_enabled
+from config.shared_bot import native_forager_weight_name
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path, resolve_optimizer_key_path
@@ -358,10 +359,10 @@ def optimizer_dead_param_values(
             "retracement_volatility_1h_weight",
             "retracement_volatility_1m_weight",
         ):
-            path = (*close_root, field)
-            if _try_get_path(config, path) is None:
-                continue
             bound_key = f"{pside}_close_{field}"
+            path = resolve_optimizer_key_path(config, bound_key)
+            if path is None or _try_get_path(config, path) is None:
+                continue
             result[bound_key] = float(
                 _canonical_dead_value(flat_bounds, bound_key, 0.0)
             )
@@ -438,7 +439,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
                 and origin.source in fixed_value_paths)
             or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
             for name in weights
-            if (key := f"{source_side}_forager_score_weights_{name}") in flat_bounds
+            if (key := f"{source_side}_forager_score_weights_{native_forager_weight_name(name)}") in flat_bounds
         ):
             continue
         forager_cfg["score_weights"] = normalize_forager_score_weights(

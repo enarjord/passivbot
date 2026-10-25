@@ -130,10 +130,10 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
             ema_span_0=2,
             ema_span_1=3,
             offset=0.01,
-            offset_psize_weight=0,
-            entry_double_down_factor=0.1,
-            offset_volatility_1h_weight=0,
-            offset_volatility_1m_weight=0,
+            inventory_offset_exposure_coefficient=0,
+            entry_qty_exposure_coefficient=0.1,
+            offset_log_range_1h_coefficient=0,
+            offset_log_range_1m_coefficient=0,
         )
     count = 301
     t = np.arange(count)
@@ -192,7 +192,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
         bot["forager"].update(
             unilateralness_ema_span_1m=3.25,
             score_weights=dict(
-                volume=0, volatility=0, ema_readiness=0, unilateralness=1
+                volume=0, log_range=0, ema_readiness=0, unilateralness=1
             ),
         )
         if strategy == "ema_anchor":
@@ -201,7 +201,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
                 offset=0,
                 ema_span_0=2,
                 ema_span_1=3,
-                entry_double_down_factor=0,
+                entry_qty_exposure_coefficient=0,
             )
     cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in ("BTC", "ETH"):
@@ -435,12 +435,12 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["forager"].update(
             unilateralness_ema_span_1m=1.0,
-            score_weights=dict(volume=1, volatility=0, ema_readiness=0, unilateralness=1),
+            score_weights=dict(volume=1, log_range=0, ema_readiness=0, unilateralness=1),
         )
         if strategy == "ema_anchor":
             bot["strategy"][strategy].update(
                 base_qty_pct=0.1, offset=0.05, ema_span_0=2, ema_span_1=3,
-                entry_double_down_factor=0,
+                entry_qty_exposure_coefficient=0,
             )
         else:
             bot["strategy"][strategy]["entry"].update(
@@ -473,7 +473,7 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["bot"][side]["forager"].update(
         unilateralness_ema_span_1m=100000,
-        score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=1),
+        score_weights=dict(volume=0, log_range=0, ema_readiness=0, unilateralness=1),
     )
     active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0
@@ -560,8 +560,8 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
     candles[:, :, 0] = candles[:, :, 2] * 1.001
     candles[:, :, 1] = candles[:, :, 2] * 0.999
     cfg["bot"][side]["strategy"]["ema_anchor"].update(
-        ema_span_0=2, ema_span_1=3, offset=0.01, offset_psize_weight=0,
-        offset_volatility_1h_weight=0, offset_volatility_1m_weight=0,
+        ema_span_0=2, ema_span_1=3, offset=0.01, inventory_offset_exposure_coefficient=0,
+        offset_log_range_1h_coefficient=0, offset_log_range_1m_coefficient=0,
     )
     cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
         "min_duration_minutes": 10.0, "max_duration_minutes": 10.0,

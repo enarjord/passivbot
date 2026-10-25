@@ -48,11 +48,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     # This persistence fixture searches two coordinates among many fixed leaves.
     # Use explicit mutation rates so its four-member cohorts remain populated.
     config["optimize"]["pymoo"]["shared"].update(
-        mutation_prob=1.0, mutation_prob_per_variable=0.5,
+        mutation_probability=1.0, mutation_probability_per_variable=0.5,
     )
     if prefilter:
         config["optimize"]["prefilter"] = {"checks": [
-            {"metric": "entry_close_span", "enabled": True, "max": 100},
+            {"metric": "entry_close_span_fraction", "enabled": True, "max": 100},
         ]}
     if generated_seed:
         import session_artifacts

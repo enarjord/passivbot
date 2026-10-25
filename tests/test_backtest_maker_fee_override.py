@@ -23,8 +23,8 @@ def _base_config():
     set_side_universe_sources(cfg, 'approved_coins', {
         "long": ["BTC", "ETH"], "short": ["BTC", "ETH"],
     })
-    cfg["backtest"]["maker_fee_override"] = None
-    cfg["backtest"]["taker_fee_override"] = None
+    cfg["backtest"]["maker_fee_override_fraction"] = None
+    cfg["backtest"]["taker_fee_override_fraction"] = None
     return cfg
 
 
@@ -72,17 +72,17 @@ def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     assert exchange_params[0]["taker_fee"] == 0.0005
 
 
-def test_prep_backtest_args_uses_maker_fee_override_when_set():
+def test_prep_backtest_args_uses_maker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["maker_fee_override"] = 0.0002
+    config["backtest"]["maker_fee_override_fraction"] = 0.0002
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
 
 
-def test_prep_backtest_args_uses_taker_fee_override_when_set():
+def test_prep_backtest_args_uses_taker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["taker_fee_override"] = 0.0008
+    config["backtest"]["taker_fee_override_fraction"] = 0.0008
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["taker_fee"] == 0.0008
@@ -119,8 +119,8 @@ def test_prep_backtest_args_rejects_missing_taker_fee_without_override():
 
 def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
     config = _multi_coin_config()
-    config["backtest"]["maker_fee_override"] = 0.0003
-    config["backtest"]["taker_fee_override"] = 0.0009
+    config["backtest"]["maker_fee_override_fraction"] = 0.0003
+    config["backtest"]["taker_fee_override_fraction"] = 0.0009
     mss = _multi_coin_mss(eth_maker=0.0002, eth_taker=0.0007)
 
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
@@ -179,9 +179,9 @@ def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_transports_equity_floor_ratio():
+def test_prep_backtest_args_transports_equity_floor_fraction():
     config = _base_config()
-    config["backtest"]["equity_floor_ratio"] = 0.07
+    config["backtest"]["equity_floor_fraction"] = 0.07
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["liquidation_threshold"] == 0.07
@@ -371,25 +371,25 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
         "base_qty_fraction": 0.02,
         "ema_span_0_minutes": 55.0,
         "ema_span_1_minutes": 144.0,
-        "entry_double_down_factor": 0.8,
+        "entry_qty_exposure_coefficient": 0.8,
         "offset_fraction": 0.003,
-        "offset_volatility_ema_span_minutes": 30.0,
-        "offset_volatility_1m_weight": 2.5,
-        "offset_volatility_ema_span_1h_candles": 12.0,
-        "offset_volatility_1h_weight": 1.75,
-        "offset_psize_weight": 0.2,
+        "offset_log_range_ema_span_minutes": 30.0,
+        "offset_log_range_1m_coefficient": 2.5,
+        "offset_log_range_ema_span_1h_candles": 12.0,
+        "offset_log_range_1h_coefficient": 1.75,
+        "inventory_offset_exposure_coefficient": 0.2,
     }
     config["bot"]["short"]["strategy"]["ema_anchor"] = {
         "base_qty_fraction": 0.03,
         "ema_span_0_minutes": 34.0,
         "ema_span_1_minutes": 89.0,
-        "entry_double_down_factor": 0.5,
+        "entry_qty_exposure_coefficient": 0.5,
         "offset_fraction": 0.004,
-        "offset_volatility_ema_span_minutes": 45.0,
-        "offset_volatility_1m_weight": 3.5,
-        "offset_volatility_ema_span_1h_candles": 18.0,
-        "offset_volatility_1h_weight": 0.5,
-        "offset_psize_weight": 0.1,
+        "offset_log_range_ema_span_minutes": 45.0,
+        "offset_log_range_1m_coefficient": 3.5,
+        "offset_log_range_ema_span_1h_candles": 18.0,
+        "offset_log_range_1h_coefficient": 0.5,
+        "inventory_offset_exposure_coefficient": 0.1,
     }
     mss = _base_mss()
 

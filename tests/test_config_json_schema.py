@@ -293,7 +293,7 @@ def test_schema_cli_is_offline_and_registered():
     "bot.portfolio.strategy_kind", "bot.portfolio.hedge_mode",
     "bot.long.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
     "bot.portfolio.execution.market_orders_allowed", "bot.portfolio.execution.market_order_near_touch_fraction",
-    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.span_multiplier", "bot.portfolio.warmup.max_minutes",
+    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.activation_span_fraction", "bot.portfolio.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])
@@ -328,7 +328,7 @@ def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions()
     for field, path in LIVE_OPERATIONAL_PATHS.items():
         metadata = describe_field(path)
         assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
-    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+    for field in ('fallback_fee_fraction', 'max_abs_fee_fraction'):
         metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
         assert metadata['consumers'] == ['live', 'backtest', 'optimize']
     sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))

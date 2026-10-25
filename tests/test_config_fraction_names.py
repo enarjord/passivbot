@@ -88,11 +88,11 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
     source["bot"]["global"]["forager"]["score_hysteresis_margin"] = 0.037
     original = deepcopy(source)
     policy = fee_policy_kwargs_from_config(source)
-    assert policy["fee_pct_fallback"] == 0.00037
-    assert policy["fee_pct_sanity_abs_max"] == 0.0013
+    assert policy["fallback_fee_fraction"] == 0.00037
+    assert policy["max_abs_fee_fraction"] == 0.0013
     fee, _ = _normalize_fee_paid_from_payload(
-        {"qty": 2.0, "price": 123.0}, fee_pct_fallback=policy["fee_pct_fallback"],
-        fee_pct_sanity_abs_max=policy["fee_pct_sanity_abs_max"],
+        {"qty": 2.0, "price": 123.0}, fallback_fee_fraction=policy["fallback_fee_fraction"],
+        max_abs_fee_fraction=policy["max_abs_fee_fraction"],
     )
     assert fee == pytest.approx(-246.0 * 0.00037)
     config = prepare_config(source, verbose=False)

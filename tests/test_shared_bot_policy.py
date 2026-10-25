@@ -243,7 +243,7 @@ def test_v8_root_scenario_fixed_sources_and_coin_normal_selection_move_together(
     patch = result["backtest"]["scenarios"][0]["overrides"]
     assert patch["bot.long.universe.approved_coins"] == ["ETH"]
     assert patch["bot.short.universe.approved_coins"] == []
-    assert patch["bot.portfolio.warmup.span_multiplier"] == 0.5
+    assert patch["bot.portfolio.warmup.activation_span_fraction"] == 0.5
     assert patch["bot.long.forager.always_include"] == ["ETH"]
     assert patch["bot.short.forager.always_include"] == []
 
@@ -466,7 +466,7 @@ def test_optimizer_mirror_preserves_directional_selection_and_mirrors_numeric_fo
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     for side, coin in (("long", "BTC"), ("short", "ETH")):
         config["bot"][side]["forager"]["always_include"] = [coin]
-    weights = {"volume": 0.7, "volatility": 0.3, "unilateralness": 0.0, "ema_readiness": 0.0}
+    weights = {"volume": 0.7, "log_range": 0.3, "unilateralness": 0.0, "ema_readiness": 0.0}
     config["bot"]["long"]["forager"]["score_weights"] = weights
     config = prepare_config(config, verbose=False)
     mirrored = optimizer_overrides(

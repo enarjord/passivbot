@@ -47,11 +47,11 @@ from optimization.pymoo_checkpoint import load_checkpoint, save_checkpoint
 
 DEFAULT_PYMOO_ALGORITHM = "auto"
 DEFAULT_PYMOO_SHARED = {
-    "crossover_eta": 20.0,
-    "crossover_prob_var": 0.5,
-    "mutation_eta": 20.0,
-    "mutation_prob": "auto",
-    "mutation_prob_per_variable": "auto",
+    "crossover_distribution_index": 20.0,
+    "crossover_probability_per_variable": 0.5,
+    "mutation_distribution_index": 20.0,
+    "mutation_probability": "auto",
+    "mutation_probability_per_variable": "auto",
     "eliminate_duplicates": True,
 }
 DEFAULT_PYMOO_REF_DIRS = {
@@ -294,15 +294,15 @@ def _resolve_pymoo_shared(config: dict[str, Any]) -> dict[str, Any]:
     return {name: shared.get(name, default) for name, default in DEFAULT_PYMOO_SHARED.items()}
 
 
-def _resolve_mutation_prob(shared: dict[str, Any], n_params: int) -> float:
-    raw = shared.get("mutation_prob", DEFAULT_PYMOO_SHARED["mutation_prob"])
+def _resolve_mutation_probability(shared: dict[str, Any], n_params: int) -> float:
+    raw = shared.get("mutation_probability", DEFAULT_PYMOO_SHARED["mutation_probability"])
     if isinstance(raw, str) and raw.strip().lower() == "auto":
         return 1.0 / max(1, int(n_params))
     return max(0.0, min(1.0, float(raw)))
 
 
-def _resolve_mutation_prob_per_variable(shared: dict[str, Any], n_params: int) -> float:
-    raw = shared.get("mutation_prob_per_variable", "auto")
+def _resolve_mutation_probability_per_variable(shared: dict[str, Any], n_params: int) -> float:
+    raw = shared.get("mutation_probability_per_variable", "auto")
     if isinstance(raw, str) and raw.strip().lower() == "auto":
         # Match pymoo Mutation.get_prob_var, including one-dimensional problems.
         return min(0.5, 1.0 / max(1, int(n_params)))
@@ -456,13 +456,13 @@ def _build_algorithm(
     shared = _resolve_pymoo_shared(config)
     repair = BoundsRepair(bounds, sig_digits)
     crossover = SBX(
-        prob_var=float(shared["crossover_prob_var"]),
-        eta=float(shared["crossover_eta"]),
+        prob_var=float(shared["crossover_probability_per_variable"]),
+        eta=float(shared["crossover_distribution_index"]),
     )
     mutation = PM(
-        prob=_resolve_mutation_prob(shared, len(bounds)),
-        prob_var=_resolve_mutation_prob_per_variable(shared, len(bounds)),
-        eta=float(shared["mutation_eta"]),
+        prob=_resolve_mutation_probability(shared, len(bounds)),
+        prob_var=_resolve_mutation_probability_per_variable(shared, len(bounds)),
+        eta=float(shared["mutation_distribution_index"]),
     )
     eliminate_duplicates = bool(shared["eliminate_duplicates"])
 

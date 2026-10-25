@@ -10,6 +10,18 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 
 PUBLIC_PATH_RENAMES = {
+    ("backtest", "btc_collateral_cap"): ("backtest", "btc_collateral_target_ratio"),
+    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_equity_ratio"),
+    ("backtest", "maker_fee_override"): ("backtest", "maker_fee_override_fraction"),
+    ("backtest", "taker_fee_override"): ("backtest", "taker_fee_override_fraction"),
+    ("backtest", "equity_floor_ratio"): ("backtest", "equity_floor_fraction"),
+    ("bot", "portfolio", "warmup", "span_multiplier"): ("bot", "portfolio", "warmup", "activation_span_fraction"),
+
+    ("optimize", "pymoo", "shared", "crossover_eta"): ("optimize", "pymoo", "shared", "crossover_distribution_index"),
+    ("optimize", "pymoo", "shared", "crossover_prob_var"): ("optimize", "pymoo", "shared", "crossover_probability_per_variable"),
+    ("optimize", "pymoo", "shared", "mutation_eta"): ("optimize", "pymoo", "shared", "mutation_distribution_index"),
+    ("optimize", "pymoo", "shared", "mutation_prob"): ("optimize", "pymoo", "shared", "mutation_probability"),
+    ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),
@@ -30,8 +42,9 @@ PUBLIC_PATH_RENAMES = {
 }
 
 SHARED_SIDE_PATH_RENAMES = {
+    ("forager", "score_weights", "volatility"): ("forager", "score_weights", "log_range"),
     ("forager", "volume_ema_span_1m"): ("forager", "volume_ema_span_minutes"),
-    ("forager", "volatility_ema_span_1m"): ("forager", "volatility_ema_span_minutes"),
+    ("forager", "volatility_ema_span_1m"): ("forager", "log_range_ema_span_minutes"),
     ("forager", "unilateralness_ema_span_1m"): ("forager", "unilateralness_ema_span_minutes"),
     ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
     ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
@@ -60,6 +73,8 @@ def _public_path_renames():
             for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items():
                 for old, new in fields.items():
                     mappings[(*root, "strategy", kind, *old)] = (*root, "strategy", kind, *new)
+        root = ("optimize", "bounds", side, "forager")
+        mappings[(*root, "score_weights_volatility")] = (*root, "score_weights_log_range")
     return mappings
 
 

@@ -3647,7 +3647,7 @@ def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3691,7 +3691,7 @@ def test_nonzero_position_keeps_churn_history_after_symbol_rotation(monkeypatch)
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3736,7 +3736,7 @@ def test_stable_switching_boundary_is_emitted_as_history_reset(monkeypatch):
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3774,7 +3774,7 @@ def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 

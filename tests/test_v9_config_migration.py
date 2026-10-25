@@ -92,8 +92,13 @@ def test_v8_conversion_preserves_authored_dates_fees_exchanges_and_scenarios():
                     "overrides": {"backtest.maker_fee_override": 0.000789}}])
     before = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5)
-    for key in ("start_date", "end_date", "maker_fee_override", "taker_fee_override", "exchanges", "scenarios"):
+    for key in ("start_date", "end_date", "exchanges"):
         assert result.config["backtest"][key] == before["backtest"][key]
+    for kind in ("maker", "taker"):
+        assert result.config["backtest"][f"{kind}_fee_override_fraction"] == before["backtest"][f"{kind}_fee_override"]
+    expected_scenarios = deepcopy(before["backtest"]["scenarios"])
+    expected_scenarios[0]["overrides"] = {"backtest.maker_fee_override_fraction": 0.000789}
+    assert result.config["backtest"]["scenarios"] == expected_scenarios
     assert source == before
     assert migrate(result.config).config == result.config
     assert migrate(result.config).changes == []

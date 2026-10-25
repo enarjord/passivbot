@@ -1127,7 +1127,7 @@ def test_tolerance_reconciliation_maximizes_one_to_one_matches():
     class Bot:
         @staticmethod
         def live_value(key):
-            assert key == "order_match_tolerance_pct"
+            assert key == "order_match_tolerance_fraction"
             return 0.0002
 
     # The first current order can match either actual; the second can match only
@@ -1149,7 +1149,7 @@ def test_tolerance_reconciliation_maps_sorted_matches_back_to_source_orders():
     class Bot:
         @staticmethod
         def live_value(key):
-            assert key == "order_match_tolerance_pct"
+            assert key == "order_match_tolerance_fraction"
             return 0.0002
 
     unmatched_actual = _normalized_order(200.0)
@@ -1172,7 +1172,7 @@ def test_churn_evidence_never_preserves_a_stale_actual_order():
     class Bot:
         @staticmethod
         def live_value(key):
-            assert key == "order_match_tolerance_pct"
+            assert key == "order_match_tolerance_fraction"
             return 0.0002
 
     actual = _normalized_order(100.0)
@@ -1268,7 +1268,7 @@ def test_unsupported_generic_connector_preserves_legacy_tolerance_matching():
 
         @staticmethod
         def live_value(key):
-            assert key == "order_match_tolerance_pct"
+            assert key == "order_match_tolerance_fraction"
             return 0.0002
 
     actual = {

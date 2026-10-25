@@ -563,7 +563,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     set_side_universe_sources(config, 'approved_coins', "btc,eth")
     set_side_universe_sources(config, 'ignored_coins', {"long": ["eth"], "short": []})
     config["backtest"]["end_date"] = "2023-01-01"
-    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["backtest"]["btc_collateral_target_ratio"] = 0.0
     config["optimize"]["scoring"] = ["btc_adg", "adg"]
     config["optimize"][
         "limits"
@@ -1230,7 +1230,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
+        == config["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert (
         _strategy_side(compiled, "long")["entry"]["ema_span_0_minutes"]
@@ -1548,14 +1548,14 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
 
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     ] = -0.012
 
     update_config_with_args(source_config, args, verbose=False)
 
     assert (
         source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )
@@ -1564,7 +1564,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     diff = entry["details"]["diffs"][0]
     assert (
         diff["path"]
-        == "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        == "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     )
     assert diff["old"] is None
     assert diff["new"] == -0.012
@@ -1577,7 +1577,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     )
     assert (
         prepared["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )
@@ -1589,7 +1589,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
     )
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"
+        "bot.long.strategy.trailing_martingale.entry.threshold_log_range_1h_coefficient"
     ] = 3.5
 
     update_config_with_args(source_config, args, verbose=False)
@@ -1601,7 +1601,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
         raw_snapshot=raw_snapshot,
     )
     assert prepared["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_volatility_1h_weight"
+        "threshold_log_range_1h_coefficient"
     ] == pytest.approx(3.5)
 
 
@@ -2280,8 +2280,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-fraction", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
     parsed_fee_sanity = parser.parse_args(["--max-abs-fee-fraction", "0.002"])
-    parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
-    parsed_taker_fee = parser.parse_args(["--taker-fee-override", "0.00055"])
+    parsed_maker_fee = parser.parse_args(["--maker-fee-override-fraction", "0.0002"])
+    parsed_taker_fee = parser.parse_args(["--taker-fee-override-fraction", "0.00055"])
 
     assert getattr(parsed_market, 'bot.portfolio.execution.market_orders_allowed') is True
     assert getattr(parsed_hedge, 'bot.portfolio.hedge_mode') is False
@@ -2298,10 +2298,10 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(
         parsed_fee_sanity, "live.fills.max_abs_fee_fraction"
     ) == pytest.approx(0.002)
-    assert getattr(parsed_maker_fee, "backtest.maker_fee_override") == pytest.approx(
+    assert getattr(parsed_maker_fee, "backtest.maker_fee_override_fraction") == pytest.approx(
         0.0002
     )
-    assert getattr(parsed_taker_fee, "backtest.taker_fee_override") == pytest.approx(
+    assert getattr(parsed_taker_fee, "backtest.taker_fee_override_fraction") == pytest.approx(
         0.00055
     )
 
@@ -2313,8 +2313,8 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--maker-fee-override FLOAT" in help_text
-    assert "--taker-fee-override FLOAT" in help_text
+    assert "--maker-fee-override-fraction FLOAT" in help_text
+    assert "--taker-fee-override-fraction FLOAT" in help_text
 
 
 def test_runtime_registry_reserved_help_metadata_stays_in_sync():

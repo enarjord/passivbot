@@ -14,15 +14,15 @@ from numbers import Integral, Real
 
 
 DAY_MS = 86_400_000
-METRIC_DEFINITION = "ordinary_account_v1"
+METRIC_DEFINITION = "ordinary_account_v2"
 # These account economics/activity fields may be used by a frozen discovery
 # protocol. Clocks, series metadata and model-dependent HSL metrics may not.
 SCORABLE_METRICS = frozenset({
-    "net_return", "log_growth_per_day", "geometric_growth_per_day",
-    "account_max_drawdown", "underwater_fraction", "recovery_duration_max_ms_lower_bound",
-    "gross_exposure_ratio_mean", "gross_exposure_ratio_max", "gross_exposure_ratio_terminal", "exposed_fraction",
+    "net_return_fraction", "log_return_per_day", "geometric_return_per_day_fraction",
+    "account_drawdown_max_fraction", "underwater_time_fraction", "recovery_duration_max_lower_bound_ms",
+    "gross_exposure_mean_ratio", "gross_exposure_max_ratio", "gross_exposure_terminal_ratio", "exposed_time_fraction",
     "fees_paid", "rebates_received", "net_fees", "net_realized_pnl", "traded_notional",
-    "fill_count", "close_fill_count", "active_days",
+    "fill_count", "close_fill_count", "active_day_count",
 })
 
 
@@ -127,7 +127,7 @@ def extract_account_metrics(*, start_ms, expected_end_ms, initial_equity,
                            "censored": True})
 
     fees, rebates, pnl, notional = [], [], [], []
-    identities, active_days = set(), set()
+    identities, active_day_buckets = set(), set()
     close_count = 0
     previous_fill = start
     fill_count = 0
@@ -158,7 +158,7 @@ def extract_account_metrics(*, start_ms, expected_end_ms, initial_equity,
         notional.append(traded)
         close_count += int(fill["is_close"])
         fill_count += 1
-        active_days.add(timestamp // DAY_MS)
+        active_day_buckets.add(timestamp // DAY_MS)
 
     final = values[-1]
     log_growth = (math.log(final) - math.log(initial)) / (duration / DAY_MS) if final > 0 else None
@@ -169,23 +169,23 @@ def extract_account_metrics(*, start_ms, expected_end_ms, initial_equity,
     result = dict(
         metric_definition=METRIC_DEFINITION, start_ms=start, observed_end_ms=times[-1],
         expected_end_ms=expected_end, duration_days=duration / DAY_MS,
-        initial_equity=initial, final_equity=final, net_return=final / initial - 1.0,
-        log_growth_per_day=log_growth, geometric_growth_per_day=growth,
+        initial_equity=initial, final_equity=final, net_return_fraction=final / initial - 1.0,
+        log_return_per_day=log_growth, geometric_return_per_day_fraction=growth,
         growth_unavailable_reason=None if final > 0 else "nonpositive_terminal_equity",
-        account_max_drawdown=maximum_dd, underwater_fraction=underwater_ms / duration,
+        account_drawdown_max_fraction=maximum_dd, underwater_time_fraction=underwater_ms / duration,
         recovery_episodes=recoveries,
-        recovery_duration_max_ms_lower_bound=max((row["duration_ms"] for row in recoveries), default=0),
+        recovery_duration_max_lower_bound_ms=max((row["duration_ms"] for row in recoveries), default=0),
         terminal_underwater_censored=bool(recoveries and recoveries[-1]["censored"]),
-        gross_exposure_ratio_mean=weighted_exposure / duration,
-        gross_exposure_ratio_max=max(exposures), exposed_fraction=exposed_ms / duration,
-        gross_exposure_ratio_terminal=exposures[-1],
+        gross_exposure_mean_ratio=weighted_exposure / duration,
+        gross_exposure_max_ratio=max(exposures), exposed_time_fraction=exposed_ms / duration,
+        gross_exposure_terminal_ratio=exposures[-1],
         fees_paid=math.fsum(fees), rebates_received=math.fsum(rebates),
         net_fees=math.fsum(fees) - math.fsum(rebates), net_realized_pnl=math.fsum(pnl),
         traded_notional=math.fsum(notional), fill_count=fill_count,
-        close_fill_count=close_count, active_days=len(active_days),
+        close_fill_count=close_count, active_day_count=len(active_day_buckets),
         completed=completed, liquidated=liquidated,
         nonpositive_equity_observed=any(value <= 0 for value in values),
-        completion_ratio=duration / (expected_end - start), sample_count=len(times),
+        completion_fraction=duration / (expected_end - start), sample_count=len(times),
         sample_interval_ms=sample_interval_ms,
     )
     for key, value in result.items():

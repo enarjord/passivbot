@@ -561,7 +561,7 @@ def ensure_optimize_bounds_for_bot(
             weights = {
                 "volume": 0.0,
                 "ema_readiness": 0.0,
-                "volatility": 1.0,
+                "log_range": 1.0,
                 "unilateralness": 0.0,
             }
             forager_cfg["score_weights"] = weights
@@ -570,7 +570,7 @@ def ensure_optimize_bounds_for_bot(
 
 
 def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
-    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
     if not isinstance(weights, dict):
         raise TypeError(f"{path} must be a dict")
     missing = sorted(required_weight_keys - set(weights))
@@ -582,7 +582,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
 
     normalized = {}
     total = 0.0
-    for key in ("volume", "ema_readiness", "volatility", "unilateralness"):
+    for key in ("volume", "ema_readiness", "log_range", "unilateralness"):
         try:
             value = float(weights[key])
         except (TypeError, ValueError) as exc:
@@ -593,11 +593,11 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}
+        return {"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0}
 
     return {
         key: normalized[key] / total
-        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
     }
 
 
@@ -610,7 +610,7 @@ def forager_score_weights_are_normalized(
     normalized = normalize_forager_score_weights(weights, path=path)
     return all(
         math.isclose(normalized[key], weights[key], rel_tol=0.0, abs_tol=abs_tol)
-        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
     )
 
 
@@ -636,7 +636,7 @@ def normalize_bot_forager_config(
         policy = reconciled_bot_policy(result)
     logical = replace(policy, _normalized=()).effective_view() if policy is not None else None
     aliases = result["bot"]._runtime_aliases if policy is not None else frozenset()
-    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         weights = (deepcopy(logical[pside]["forager"]["score_weights"])
@@ -843,7 +843,7 @@ def validate_forager_config(
         )
         raw_weight_total = sum(
             float(forager_cfg["score_weights"][key])
-            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+            for key in ("volume", "ema_readiness", "log_range", "unilateralness")
         )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],
@@ -861,12 +861,12 @@ def validate_forager_config(
                     "forager volume ranking or volume pruning is enabled"
                 )
 
-        if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(forager_cfg["volatility_ema_span_minutes"])
-            if not math.isfinite(volatility_span) or volatility_span <= 0.0:
+        if pside_enabled and normalized["log_range"] > 0.0:
+            log_range_span = float(forager_cfg["log_range_ema_span_minutes"])
+            if not math.isfinite(log_range_span) or log_range_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volatility_ema_span_minutes must be > 0 when "
-                    "forager volatility ranking is enabled"
+                    f"bot.{pside}.forager.log_range_ema_span_minutes must be > 0 when "
+                    "forager log-range ranking is enabled"
                 )
 
 

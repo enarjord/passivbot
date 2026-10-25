@@ -24,7 +24,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = True
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0
     config["backtest"].update(hsl_detailed_report=False, market_order_slippage_pct=0.,
-                              maker_fee_override=0., taker_fee_override=0.)
+                              maker_fee_override_fraction=0., taker_fee_override_fraction=0.)
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
@@ -37,7 +37,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
         strategy["close"].update(threshold_base_pct=.5, retracement_base_pct=0.)
         config["bot"][direction]["strategy"]["ema_anchor"].update(
             base_qty_pct=.5, ema_span_0=2., ema_span_1=3., offset=.01,
-            offset_psize_weight=0., entry_double_down_factor=0.,
+            inventory_offset_exposure_coefficient=0., entry_qty_exposure_coefficient=0.,
         )
     if mode == "portfolio":
         config["bot"]["hsl"] = deepcopy(config["bot"][side]["hsl"])
