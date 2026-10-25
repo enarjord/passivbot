@@ -1,4 +1,4 @@
-"""Public prefilter quantities retain the unchanged Rust probe measurement ABI."""
+"""Prefilter quantities preserve native measurements under current field names."""
 
 from copy import deepcopy
 import json
@@ -23,6 +23,14 @@ KNOBS = [
     ("volatility_ema_1h", "log_range_ema_1h", 0.017),
     ("adverse_directionality", "adverse_directionality_score", 0.375),
 ]
+# Authored rejection spellings above are frozen separately from the current
+# native probe contract; the log-range fields now use their canonical names.
+NATIVE_KNOBS = {
+    "exposure_probe_fractions": "exposure_ratios",
+    "log_range_ema_1m": "log_range_ema_1m",
+    "log_range_ema_1h": "log_range_ema_1h",
+    "adverse_directionality_score": "adverse_directionality",
+}
 METRICS = [
     ("entry_close_span", "entry_close_span_fraction"),
     ("entry_retracement", "entry_retracement_fraction"),
@@ -109,8 +117,19 @@ def test_new_probe_and_metric_names_preserve_actual_native_measurements(monkeypa
     assert config == before and captured and findings
     for probe in captured:
         for old, new, value in KNOBS:
-            assert probe[old] == value
-            assert new not in probe
+            native_key = NATIVE_KNOBS[new]
+            assert probe[native_key] == value
+            if new != native_key:
+                assert new not in probe
+            if old != native_key:
+                assert old not in probe
+                for keep_current in (False, True):
+                    retired = deepcopy(probe)
+                    retired[old] = deepcopy(value)
+                    if not keep_current:
+                        retired.pop(native_key)
+                    with pytest.raises(ValueError, match=old):
+                        native(json.dumps(retired))
     assert {row["metric"] for row in findings} == {public_metric}
     expected = (min(value["grid_span"] for value in measurements) if native_metric == "grid_span" else
                 min(row[native_metric] for value in measurements for row in value["observations"]))
