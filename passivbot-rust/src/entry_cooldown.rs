@@ -92,7 +92,7 @@ pub(crate) fn validate(params: &crate::types::BotParams) -> Result<(), String> {
         }
         _ => {}
     }
-    if !params.unilateralness_ema_span_1m.is_finite() || params.unilateralness_ema_span_1m < 1.0 {
+    if !params.unilateralness_ema_span_minutes.is_finite() || params.unilateralness_ema_span_minutes < 1.0 {
         return Err("unilateralness EMA span must be finite and >= 1".into());
     }
     Ok(())

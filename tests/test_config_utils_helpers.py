@@ -433,7 +433,7 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
     assert "backtest" not in prepared
     assert prepared["live"]["account"]["user"] == "test_user"
-    assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == pytest.approx(
+    assert prepared["bot"]["long"]["forager_volume_ema_span_minutes"] == pytest.approx(
         prepared["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert prepared["_raw"] == raw_snapshot
@@ -463,7 +463,7 @@ def test_rename_config_keys_moves_legacy_fields():
             "minimum_market_age_days": 12,
             "noisiness_rolling_mean_window_size": 34,
         },
-        "backtest": {"exchange": "binance", "panic_market_slippage_fraction": 0.0015},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
 
     _rename_config_keys(config, verbose=False)
@@ -472,15 +472,15 @@ def test_rename_config_keys_moves_legacy_fields():
     assert config["live"]["minimum_coin_age_days"] == 12
     assert config["live"]["ohlcv_rolling_window"] == 34
     assert config["backtest"]["exchanges"] == ["binance"]
-    assert config["backtest"]["market_order_slippage_fraction"] == pytest.approx(0.0015)
+    assert config["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
     assert "exchange" not in config["backtest"]
-    assert "panic_market_slippage_fraction" not in config["backtest"]
+    assert "panic_market_slippage_pct" not in config["backtest"]
 
 
 def test_rename_config_keys_records_tracker_events():
     config = {
         "live": {"minimum_market_age_days": 5},
-        "backtest": {"exchange": "binance", "panic_market_slippage_fraction": 0.0015},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
     tracker = ConfigTransformTracker()
 
@@ -501,16 +501,16 @@ def test_rename_config_keys_records_tracker_events():
     )
     assert any(
         event["action"] == "rename"
-        and event["from"] == "backtest.panic_market_slippage_fraction"
-        and event["to"] == "backtest.market_order_slippage_fraction"
+        and event["from"] == "backtest.panic_market_slippage_pct"
+        and event["to"] == "backtest.market_order_slippage_pct"
         for event in summary
     )
 
 
-def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_fraction(tmp_path):
+def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_pct(tmp_path):
     raw = {
         "config_version": "v8.6.0",
-        "backtest": {"panic_market_slippage_fraction": 0.0015},
+        "backtest": {"panic_market_slippage_pct": 0.0015},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
         "live": {},
@@ -524,7 +524,7 @@ def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_fraction(tm
     loaded = load_config(str(path), verbose=False)
 
     assert loaded["backtest"]["market_order_slippage_fraction"] == pytest.approx(0.0015)
-    assert "panic_market_slippage_fraction" not in loaded["backtest"]
+    assert "panic_market_slippage_pct" not in loaded["backtest"]
 
 
 def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
@@ -1195,12 +1195,12 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     config = format_config(get_template_config(), verbose=False)
 
     assert "n_positions" not in config["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in config["bot"]["long"]
     assert "unstuck_exposure_trigger_ratio" not in config["bot"]["long"]
     assert "hsl_drawdown_threshold_fraction" not in config["bot"]["long"]
-    assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
-    assert "filter_volume_ema_span_1m" not in config["bot"]["long"]
-    assert "long_filter_volume_ema_span_1m" not in config["optimize"]["bounds"]
+    assert "forager_volume_ema_span_minutes" not in config["bot"]["long"]
+    assert "forager_volume_ema_span_minutes" not in config["bot"]["long"]
+    assert "long_forager_volume_ema_span_minutes" not in config["optimize"]["bounds"]
 
     compiled = compile_runtime_config(config, runtime="live")
 
@@ -1209,7 +1209,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == config['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
@@ -1221,16 +1221,16 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["forager_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
+        compiled["bot"]["long"]["forager_log_range_ema_span_minutes"]
+        == config["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert (
         _strategy_side(compiled, "long")["entry"]["ema_span_0_minutes"]
@@ -1541,21 +1541,21 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
         "configs/examples/default_trailing_martingale_long.json", log_info=False
     )
-    assert "threshold_we_weight" not in (
+    assert "threshold_exposure_ratio_coefficient" not in (
         source_config["bot"]["long"].get("strategy", {})
         .get("trailing_martingale", {}).get("close", {})
     )
 
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     ] = -0.012
 
     update_config_with_args(source_config, args, verbose=False)
 
     assert (
         source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )
@@ -1564,7 +1564,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     diff = entry["details"]["diffs"][0]
     assert (
         diff["path"]
-        == "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        == "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     )
     assert diff["old"] is None
     assert diff["new"] == -0.012
@@ -1577,7 +1577,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     )
     assert (
         prepared["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )
@@ -1589,7 +1589,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
     )
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"
+        "bot.long.strategy.trailing_martingale.entry.threshold_log_range_1h_coefficient"
     ] = 3.5
 
     update_config_with_args(source_config, args, verbose=False)
@@ -1601,7 +1601,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
         raw_snapshot=raw_snapshot,
     )
     assert prepared["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_volatility_1h_weight"
+        "threshold_log_range_1h_coefficient"
     ] == pytest.approx(3.5)
 
 

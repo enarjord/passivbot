@@ -18,7 +18,7 @@ from optimizer_overrides import optimizer_overrides
 from tools.gpu_parity import build_parser, fixture_inputs
 
 
-ZERO_WEIGHTS = dict(volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0)
+ZERO_WEIGHTS = dict(volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0)
 FALLBACK_WEIGHTS = {**ZERO_WEIGHTS, "ema_readiness": 1.0}
 
 
@@ -31,7 +31,9 @@ def _assert_native_inputs_equal(left, right):
         assert left.keys() == right.keys()
         for key in left:
             if key == "forager_score_weights":
-                assert normalize_forager_score_weights(left[key], path=key) == normalize_forager_score_weights(right[key], path=key)
+                public_left = {("log_range" if name == "volatility" else name): value for name, value in left[key].items()}
+                public_right = {("log_range" if name == "volatility" else name): value for name, value in right[key].items()}
+                assert normalize_forager_score_weights(public_left, path=key) == normalize_forager_score_weights(public_right, path=key)
             else:
                 _assert_native_inputs_equal(left[key], right[key])
     elif isinstance(left, (list, tuple)):

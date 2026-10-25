@@ -23,15 +23,15 @@ def backtest_side_enabled(config: dict, pside: str) -> bool:
     if not side_enabled(config, pside):
         return False
     bot_cfg = require_config_value(config, f"bot.{pside}")
-    total_wallet_exposure_limit = float(
-        _required_side_value(bot_cfg, pside, "total_wallet_exposure_limit")
+    total_wallet_exposure_limit_ratio = float(
+        _required_side_value(bot_cfg, pside, "total_wallet_exposure_limit_ratio")
     )
     n_positions = int(
         round(float(_required_side_value(bot_cfg, pside, "n_positions")))
     )
     return (
-        math.isfinite(total_wallet_exposure_limit)
-        and total_wallet_exposure_limit > 0.0
+        math.isfinite(total_wallet_exposure_limit_ratio)
+        and total_wallet_exposure_limit_ratio > 0.0
         and n_positions > 0
     )
 

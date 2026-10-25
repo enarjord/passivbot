@@ -404,8 +404,8 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         "bot": {
             "long": {
                 "n_positions": 3,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0 / 3.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 1.0 / 3.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": coins},
             },
             "short": {

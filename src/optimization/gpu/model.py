@@ -62,7 +62,7 @@ ADAPTIVE_PARAM_KEYS = (
     "entry_cooldown_max_duration_minutes",
     "entry_cooldown_exposure_weight",
     "entry_cooldown_adverse_weight",
-    "unilateralness_ema_span_1m",
+    "unilateralness_ema_span_minutes",
     "forager_score_weights_unilateralness",
     "unilateralness_window",
 )
@@ -74,7 +74,7 @@ def adaptive_params(bot: dict) -> dict:
     from math import ceil
 
     weights = bot.get("entry_cooldown_weights_minutes", {})
-    span = float(bot.get("unilateralness_ema_span_1m", 60.0))
+    span = float(bot.get("unilateralness_ema_span_minutes", 60.0))
     maximum = bot.get("entry_cooldown_max_duration_minutes")
     return dict(
         zip(
@@ -93,30 +93,30 @@ def adaptive_params(bot: dict) -> dict:
 
 
 EMA_ANCHOR_PARAM_KEYS = (
-    "base_qty_pct",
-    "ema_span_0",
-    "ema_span_1",
-    "entry_double_down_factor",
-    "offset",
-    "offset_psize_weight",
-    "offset_volatility_1h_weight",
-    "offset_volatility_1m_weight",
-    "offset_volatility_ema_span_1h",
-    "offset_volatility_ema_span_1m",
+    "base_qty_fraction",
+    "ema_span_0_minutes",
+    "ema_span_1_minutes",
+    "entry_qty_exposure_coefficient",
+    "offset_fraction",
+    "inventory_offset_exposure_coefficient",
+    "offset_log_range_1h_coefficient",
+    "offset_log_range_1m_coefficient",
+    "offset_log_range_ema_span_1h_candles",
+    "offset_log_range_ema_span_minutes",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
 )
 
 EXPOSURE_PARAM_KEYS = (
-    "we_excess_allowance_pct",
+    "we_excess_allowance_fraction",
     "hsl_scale_budget_with_excess_allowance",
     "twel_entry_gate_enabled",
-    "twel_enforcer_threshold",
+    "twel_enforcer_threshold_ratio",
 )
 
 POSITION_EXPOSURE_ENFORCER_PARAM_KEYS = (
     "wel_enforcer_enabled",
-    "wel_enforcer_threshold",
+    "wel_enforcer_threshold_ratio",
 )
 
 TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
@@ -131,10 +131,18 @@ UNSTUCK_PARAM_KEYS = (
 )
 
 UNSTUCK_EMA_PARAM_KEYS = ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
+# Coupling binds each destination to the active strategy's canonical source ID.
 COUPLED_UNSTUCK_EMA_SOURCE_KEYS = {
-    "unstuck_ema_span_0_minutes": "ema_span_0",
-    "unstuck_ema_span_1_minutes": "ema_span_1",
+    "trailing_martingale": {
+        "unstuck_ema_span_0_minutes": "entry_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes": "entry_ema_span_1_minutes",
+    },
+    "ema_anchor": {
+        "unstuck_ema_span_0_minutes": "ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes": "ema_span_1_minutes",
+    },
 }
+
 
 GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes")
 
@@ -161,10 +169,10 @@ HSL_COIN_OVERRIDE_PATHS = (
 
 EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
 EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN = len(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS)
-EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 2
 )
 EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
@@ -206,11 +214,11 @@ MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
@@ -222,31 +230,31 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
-    "ema_span_0",
-    "ema_span_1",
-    "volatility_ema_span_1h",
-    "volatility_ema_span_1m",
-    "entry_double_down_factor",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_threshold_base_pct",
-    "entry_threshold_we_weight",
-    "entry_threshold_volatility_1h_weight",
-    "entry_threshold_volatility_1m_weight",
-    "entry_retracement_base_pct",
-    "entry_retracement_we_weight",
-    "entry_retracement_volatility_1h_weight",
-    "entry_retracement_volatility_1m_weight",
-    "close_qty_pct",
-    "close_threshold_base_pct",
-    "close_threshold_we_weight",
-    "close_threshold_volatility_1h_weight",
-    "close_threshold_volatility_1m_weight",
-    "close_retracement_base_pct",
-    "close_retracement_volatility_1h_weight",
-    "close_retracement_volatility_1m_weight",
+    "entry_ema_span_0_minutes",
+    "entry_ema_span_1_minutes",
+    "log_range_ema_span_1h_candles",
+    "log_range_ema_span_minutes",
+    "entry_reentry_qty_multiplier",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_threshold_base_fraction",
+    "entry_threshold_exposure_ratio_coefficient",
+    "entry_threshold_log_range_1h_coefficient",
+    "entry_threshold_log_range_1m_coefficient",
+    "entry_retracement_base_fraction",
+    "entry_retracement_exposure_ratio_coefficient",
+    "entry_retracement_log_range_1h_coefficient",
+    "entry_retracement_log_range_1m_coefficient",
+    "close_qty_fraction",
+    "close_threshold_base_fraction",
+    "close_threshold_exposure_ratio_coefficient",
+    "close_threshold_log_range_1h_coefficient",
+    "close_threshold_log_range_1m_coefficient",
+    "close_retracement_base_fraction",
+    "close_retracement_log_range_1h_coefficient",
+    "close_retracement_log_range_1m_coefficient",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
     "gate_initial",
     "gate_reentry",
 )
@@ -254,11 +262,11 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *TRAILING_MARTINGALE_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
@@ -271,52 +279,52 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
-    ("ema_span_0", ("entry", "ema_span_0")),
-    ("ema_span_1", ("entry", "ema_span_1")),
-    ("volatility_ema_span_1h", ("volatility_ema_span_1h",)),
-    ("volatility_ema_span_1m", ("volatility_ema_span_1m",)),
-    ("entry_double_down_factor", ("entry", "double_down_factor")),
-    ("entry_initial_ema_dist", ("entry", "initial_ema_dist")),
-    ("entry_initial_qty_pct", ("entry", "initial_qty_pct")),
-    ("entry_threshold_base_pct", ("entry", "threshold_base_pct")),
-    ("entry_threshold_we_weight", ("entry", "threshold_we_weight")),
+    ("entry_ema_span_0_minutes", ("entry", "ema_span_0_minutes")),
+    ("entry_ema_span_1_minutes", ("entry", "ema_span_1_minutes")),
+    ("log_range_ema_span_1h_candles", ("log_range_ema_span_1h_candles",)),
+    ("log_range_ema_span_minutes", ("log_range_ema_span_minutes",)),
+    ("entry_reentry_qty_multiplier", ("entry", "reentry_qty_multiplier")),
+    ("entry_initial_ema_distance_fraction", ("entry", "initial_ema_distance_fraction")),
+    ("entry_initial_qty_fraction", ("entry", "initial_qty_fraction")),
+    ("entry_threshold_base_fraction", ("entry", "threshold_base_fraction")),
+    ("entry_threshold_exposure_ratio_coefficient", ("entry", "threshold_exposure_ratio_coefficient")),
     (
-        "entry_threshold_volatility_1h_weight",
-        ("entry", "threshold_volatility_1h_weight"),
+        "entry_threshold_log_range_1h_coefficient",
+        ("entry", "threshold_log_range_1h_coefficient"),
     ),
     (
-        "entry_threshold_volatility_1m_weight",
-        ("entry", "threshold_volatility_1m_weight"),
+        "entry_threshold_log_range_1m_coefficient",
+        ("entry", "threshold_log_range_1m_coefficient"),
     ),
-    ("entry_retracement_base_pct", ("entry", "retracement_base_pct")),
-    ("entry_retracement_we_weight", ("entry", "retracement_we_weight")),
+    ("entry_retracement_base_fraction", ("entry", "retracement_base_fraction")),
+    ("entry_retracement_exposure_ratio_coefficient", ("entry", "retracement_exposure_ratio_coefficient")),
     (
-        "entry_retracement_volatility_1h_weight",
-        ("entry", "retracement_volatility_1h_weight"),
-    ),
-    (
-        "entry_retracement_volatility_1m_weight",
-        ("entry", "retracement_volatility_1m_weight"),
-    ),
-    ("close_qty_pct", ("close", "qty_pct")),
-    ("close_threshold_base_pct", ("close", "threshold_base_pct")),
-    ("close_threshold_we_weight", ("close", "threshold_we_weight")),
-    (
-        "close_threshold_volatility_1h_weight",
-        ("close", "threshold_volatility_1h_weight"),
+        "entry_retracement_log_range_1h_coefficient",
+        ("entry", "retracement_log_range_1h_coefficient"),
     ),
     (
-        "close_threshold_volatility_1m_weight",
-        ("close", "threshold_volatility_1m_weight"),
+        "entry_retracement_log_range_1m_coefficient",
+        ("entry", "retracement_log_range_1m_coefficient"),
     ),
-    ("close_retracement_base_pct", ("close", "retracement_base_pct")),
+    ("close_qty_fraction", ("close", "qty_fraction")),
+    ("close_threshold_base_fraction", ("close", "threshold_base_fraction")),
+    ("close_threshold_exposure_ratio_coefficient", ("close", "threshold_exposure_ratio_coefficient")),
     (
-        "close_retracement_volatility_1h_weight",
-        ("close", "retracement_volatility_1h_weight"),
+        "close_threshold_log_range_1h_coefficient",
+        ("close", "threshold_log_range_1h_coefficient"),
     ),
     (
-        "close_retracement_volatility_1m_weight",
-        ("close", "retracement_volatility_1m_weight"),
+        "close_threshold_log_range_1m_coefficient",
+        ("close", "threshold_log_range_1m_coefficient"),
+    ),
+    ("close_retracement_base_fraction", ("close", "retracement_base_fraction")),
+    (
+        "close_retracement_log_range_1h_coefficient",
+        ("close", "retracement_log_range_1h_coefficient"),
+    ),
+    (
+        "close_retracement_log_range_1m_coefficient",
+        ("close", "retracement_log_range_1m_coefficient"),
     ),
 )
 
@@ -324,20 +332,20 @@ TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH = ("entry", "ema_gate_mode")
 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN = len(
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN + 1
+TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN + 6
@@ -363,13 +371,13 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_COLS = (
 )
 
 
-def encode_tm_retracement_base_pct(value) -> np.float32:
+def encode_tm_retracement_base_fraction(value) -> np.float32:
     """Pack a TM retracement base without losing its recursive/trailing mode."""
 
     value = float(value)
     if not math.isfinite(value) or abs(value) > float(np.finfo(np.float32).max):
         raise ValueError(
-            "Trailing Martingale retracement_base_pct must be finite and "
+            "Trailing Martingale retracement_base_fraction must be finite and "
             "representable as float32"
         )
     encoded = np.float32(value)
@@ -395,10 +403,10 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             f"unsupported trailing_martingale entry.ema_gate_mode={mode!r}"
         )
     flattened = {
-        "ema_span_0": entry.get("ema_span_0"),
-        "ema_span_1": entry.get("ema_span_1"),
-        "volatility_ema_span_1h": strategy.get("volatility_ema_span_1h"),
-        "volatility_ema_span_1m": strategy.get("volatility_ema_span_1m"),
+        "entry_ema_span_0_minutes": entry.get("ema_span_0_minutes"),
+        "entry_ema_span_1_minutes": entry.get("ema_span_1_minutes"),
+        "log_range_ema_span_1h_candles": strategy.get("log_range_ema_span_1h_candles"),
+        "log_range_ema_span_minutes": strategy.get("log_range_ema_span_minutes"),
         "entry_cooldown_minutes": float(
             risk.get(
                 "risk_entry_cooldown_minutes",
@@ -406,7 +414,7 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             )
             or 0.0
         ),
-        "total_wallet_exposure_limit": float(risk["total_wallet_exposure_limit"]),
+        "total_wallet_exposure_limit_ratio": float(risk["total_wallet_exposure_limit_ratio"]),
         "gate_initial": float(mode in {"all", "initial"}),
         "gate_reentry": float(mode in {"all", "reentry"}),
     }
@@ -415,31 +423,31 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             "entry",
             entry,
             (
-                "double_down_factor",
-                "initial_ema_dist",
-                "initial_qty_pct",
-                "threshold_base_pct",
-                "threshold_we_weight",
-                "threshold_volatility_1h_weight",
-                "threshold_volatility_1m_weight",
-                "retracement_base_pct",
-                "retracement_we_weight",
-                "retracement_volatility_1h_weight",
-                "retracement_volatility_1m_weight",
+                "reentry_qty_multiplier",
+                "initial_ema_distance_fraction",
+                "initial_qty_fraction",
+                "threshold_base_fraction",
+                "threshold_exposure_ratio_coefficient",
+                "threshold_log_range_1h_coefficient",
+                "threshold_log_range_1m_coefficient",
+                "retracement_base_fraction",
+                "retracement_exposure_ratio_coefficient",
+                "retracement_log_range_1h_coefficient",
+                "retracement_log_range_1m_coefficient",
             ),
         ),
         (
             "close",
             close,
             (
-                "qty_pct",
-                "threshold_base_pct",
-                "threshold_we_weight",
-                "threshold_volatility_1h_weight",
-                "threshold_volatility_1m_weight",
-                "retracement_base_pct",
-                "retracement_volatility_1h_weight",
-                "retracement_volatility_1m_weight",
+                "qty_fraction",
+                "threshold_base_fraction",
+                "threshold_exposure_ratio_coefficient",
+                "threshold_log_range_1h_coefficient",
+                "threshold_log_range_1m_coefficient",
+                "retracement_base_fraction",
+                "retracement_log_range_1h_coefficient",
+                "retracement_log_range_1m_coefficient",
             ),
         ),
     ):
@@ -477,8 +485,8 @@ class ProxyMarket:
     min_qty: float
     min_cost: float
     c_mult: float
-    maker_fee: float
-    taker_fee: float = 0.0
+    maker_fee_fraction: float
+    taker_fee_fraction: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1118,13 +1126,13 @@ def build_mps_multicoin_data(
             market.min_qty,
             market.min_cost,
             market.c_mult,
-            market.maker_fee,
+            market.maker_fee_fraction,
             run.first_valid_idx,
             run.last_valid_idx,
             run.trade_start_idx,
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
-            market.taker_fee,
+            market.taker_fee_fraction,
             max_effective_min_cost,
             *run.age_eligible_indices,
         )

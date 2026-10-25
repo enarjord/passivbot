@@ -45,7 +45,9 @@ def test_released_root_bounds_fixed_scenario_and_millisecond_values_keep_their_u
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5)
     config = prepare_config(result.config, verbose=False)
-    target = resolve_optimizer_key_path(config, "long_ema_span_0")
+    target = resolve_optimizer_key_path(
+        config, "long_entry_ema_span_0_minutes" if kind == "trailing_martingale" else "long_ema_span_0_minutes",
+    )
     selector = ".".join(target)
     assert read_path(config, target) == 123.75
     assert config["optimize"]["fixed_runtime_overrides"] == {selector: 234.5}
@@ -89,7 +91,9 @@ def test_released_coin_file_and_inline_span_names_convert_before_their_merge(tmp
         config = prepare_config(config, verbose=False)
         _set_patch(config, config["backtest"]["scenarios"][0]["overrides"], scenario=True)
     config = prepare_config(config, base_config_path=str(tmp_path / "relocated.json"), verbose=False)
-    target = resolve_optimizer_key_path(config, "long_ema_span_0")
+    target = resolve_optimizer_key_path(
+        config, "long_entry_ema_span_0_minutes" if kind == "trailing_martingale" else "long_ema_span_0_minutes",
+    )
     assert read_path(config["coin_overrides"]["TEST"], target) == 222.5
     assert "override_config_path" not in config["coin_overrides"]["TEST"]
     assert any("override_config_path::" in item["path"] and item["path"].endswith("ema_span_0")
@@ -108,7 +112,8 @@ def test_released_span_selector_suffixes_preserve_native_gene_membership(prefix)
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = ["long"] if "long" in prefix else ["long", "short"]
     assert set(selected) == {f"{side}_forager_volume_ema_span_1m" for side in sides}
-    assert config["optimize"]["fixed_params"] == [f"{prefix}volume_ema_span_minutes"]
+    expected_prefix = "bot." + prefix if prefix.startswith("long.") else prefix
+    assert config["optimize"]["fixed_params"] == [f"{expected_prefix}volume_ema_span_minutes"]
     assert any(item["path"].startswith("optimize.fixed_params") for item in result.changes)
 
 

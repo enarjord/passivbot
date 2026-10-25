@@ -31,7 +31,7 @@ def scoring_enabled(bot, side, symbols):
     markets = getattr(bot, "markets_dict", {})
     return any(
         symbol not in approved
-        or bot.bp(side, "wallet_exposure_limit", symbol) == 0.0
+        or bot.bp(side, "wallet_exposure_limit_ratio", symbol) == 0.0
         or not markets.get(symbol, {}).get("active", True)
         or symbol in unavailable
         for symbol in held
@@ -82,7 +82,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         for side in ("long", "short"):
             if not bot.is_pside_enabled(side):
                 continue
-            span = float(bot.bot_value(side, "unilateralness_ema_span_1m"))
+            span = float(bot.bot_value(side, "unilateralness_ema_span_minutes"))
             if adverse_enabled(bot, side, symbol):
                 current_spans.add(span)
             if side in scoring_sides:

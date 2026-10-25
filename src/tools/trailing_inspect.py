@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 
 STRATEGY_KIND = "trailing_martingale"
 
-DEFAULT_VOLATILITY_SCENARIOS = (
+DEFAULT_LOG_RANGE_SCENARIOS = (
     ("quiet", 0.001, 0.0005),
     ("normal", 0.005, 0.0025),
     ("high", 0.015, 0.0075),
@@ -26,44 +26,44 @@ class _HelpFormatter(
     pass
 
 PARAMETER_FLAGS = {
-    "entry_threshold_base_pct": ("entry", "threshold_base_pct"),
-    "entry_threshold_we_weight": ("entry", "threshold_we_weight"),
-    "entry_threshold_volatility_1h_weight": (
+    "entry_threshold_base_fraction": ("entry", "threshold_base_fraction"),
+    "entry_threshold_exposure_ratio_coefficient": ("entry", "threshold_exposure_ratio_coefficient"),
+    "entry_threshold_log_range_1h_coefficient": (
         "entry",
-        "threshold_volatility_1h_weight",
+        "threshold_log_range_1h_coefficient",
     ),
-    "entry_threshold_volatility_1m_weight": (
+    "entry_threshold_log_range_1m_coefficient": (
         "entry",
-        "threshold_volatility_1m_weight",
+        "threshold_log_range_1m_coefficient",
     ),
-    "entry_retracement_base_pct": ("entry", "retracement_base_pct"),
-    "entry_retracement_we_weight": ("entry", "retracement_we_weight"),
-    "entry_retracement_volatility_1h_weight": (
+    "entry_retracement_base_fraction": ("entry", "retracement_base_fraction"),
+    "entry_retracement_exposure_ratio_coefficient": ("entry", "retracement_exposure_ratio_coefficient"),
+    "entry_retracement_log_range_1h_coefficient": (
         "entry",
-        "retracement_volatility_1h_weight",
+        "retracement_log_range_1h_coefficient",
     ),
-    "entry_retracement_volatility_1m_weight": (
+    "entry_retracement_log_range_1m_coefficient": (
         "entry",
-        "retracement_volatility_1m_weight",
+        "retracement_log_range_1m_coefficient",
     ),
-    "close_threshold_base_pct": ("close", "threshold_base_pct"),
-    "close_threshold_we_weight": ("close", "threshold_we_weight"),
-    "close_threshold_volatility_1h_weight": (
+    "close_threshold_base_fraction": ("close", "threshold_base_fraction"),
+    "close_threshold_exposure_ratio_coefficient": ("close", "threshold_exposure_ratio_coefficient"),
+    "close_threshold_log_range_1h_coefficient": (
         "close",
-        "threshold_volatility_1h_weight",
+        "threshold_log_range_1h_coefficient",
     ),
-    "close_threshold_volatility_1m_weight": (
+    "close_threshold_log_range_1m_coefficient": (
         "close",
-        "threshold_volatility_1m_weight",
+        "threshold_log_range_1m_coefficient",
     ),
-    "close_retracement_base_pct": ("close", "retracement_base_pct"),
-    "close_retracement_volatility_1h_weight": (
+    "close_retracement_base_fraction": ("close", "retracement_base_fraction"),
+    "close_retracement_log_range_1h_coefficient": (
         "close",
-        "retracement_volatility_1h_weight",
+        "retracement_log_range_1h_coefficient",
     ),
-    "close_retracement_volatility_1m_weight": (
+    "close_retracement_log_range_1m_coefficient": (
         "close",
-        "retracement_volatility_1m_weight",
+        "retracement_log_range_1m_coefficient",
     ),
 }
 
@@ -114,11 +114,7 @@ def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str,
     )
     entry = _require_mapping(params.get("entry"), f"bot.{pside}.strategy.{STRATEGY_KIND}.entry")
     close = _require_mapping(params.get("close"), f"bot.{pside}.strategy.{STRATEGY_KIND}.close")
-    from config.strategy_paths import lower_runtime_strategy_side
-
-    return lower_runtime_strategy_side(
-        STRATEGY_KIND, {"entry": dict(entry), "close": dict(close)}
-    )
+    return deepcopy({"entry": dict(entry), "close": dict(close)})
 
 
 def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str, Any], str]:
@@ -168,12 +164,10 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         strategies.get(STRATEGY_KIND),
         f"bot.{pside}.strategy.{STRATEGY_KIND}",
     )
-    from config.strategy_paths import lower_runtime_strategy_side
-
-    strategy = lower_runtime_strategy_side(STRATEGY_KIND, strategy)
+    strategy = deepcopy(strategy)
     entry = _require_mapping(strategy.get("entry"), "strategy.entry")
     close = _require_mapping(strategy.get("close"), "strategy.close")
-    total_wallet_exposure_limit = _finite_float(
+    total_wallet_exposure_limit_ratio = _finite_float(
         risk.get("total_wallet_exposure_limit_ratio"),
         f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
     )
@@ -236,8 +230,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ceiling is None or clamped_base < ceiling
     )
     return {
-        "active": total_wallet_exposure_limit > 0.0 and max_positions > 0,
-        "total_wallet_exposure_limit": total_wallet_exposure_limit,
+        "active": total_wallet_exposure_limit_ratio > 0.0 and max_positions > 0,
+        "total_wallet_exposure_limit_ratio": total_wallet_exposure_limit_ratio,
         "max_positions": max_positions,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled_global or bool(hsl_enabled_override_symbols),
@@ -285,22 +279,22 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "entry_cooldown": deepcopy(cooldown),
         "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
         "entry_initial_ema_distance_fraction": _finite_float(
-            entry.get("initial_ema_dist", 0.0), "entry.initial_ema_dist"
+            entry.get("initial_ema_distance_fraction", 0.0), "entry.initial_ema_distance_fraction"
         ),
         "entry_initial_qty_fraction": _finite_float(
-            entry.get("initial_qty_pct", 0.0), "entry.initial_qty_pct"
+            entry.get("initial_qty_fraction", 0.0), "entry.initial_qty_fraction"
         ),
-        "entry_double_down_factor": _finite_float(
-            entry.get("double_down_factor", 0.0), "entry.double_down_factor"
+        "entry_reentry_qty_multiplier": _finite_float(
+            entry.get("reentry_qty_multiplier", 0.0), "entry.reentry_qty_multiplier"
         ),
-        "close_qty_fraction": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
-        "volatility_ema_span_minutes": _finite_float(
-            strategy.get("volatility_ema_span_1m", 0.0),
-            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_minutes"
+        "close_qty_fraction": _finite_float(close.get("qty_fraction", 0.0), "close.qty_fraction"),
+        "log_range_ema_span_minutes": _finite_float(
+            strategy.get("log_range_ema_span_minutes", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.log_range_ema_span_minutes"
         ),
-        "volatility_ema_span_1h_candles": _finite_float(
-            strategy.get("volatility_ema_span_1h", 0.0),
-            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_1h_candles"
+        "log_range_ema_span_1h_candles": _finite_float(
+            strategy.get("log_range_ema_span_1h_candles", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.log_range_ema_span_1h_candles"
         ),
     }
 
@@ -347,21 +341,21 @@ def apply_parameter_overrides(params: dict[str, Any], args: argparse.Namespace) 
 
 def _dynamic_multiplier(
     *,
-    volatility_ema_1m: float,
-    volatility_ema_1h: float,
-    weight_volatility_1m: float,
-    weight_volatility_1h: float,
+    log_range_ema_1m: float,
+    log_range_ema_1h: float,
+    log_range_1m_coefficient: float,
+    log_range_1h_coefficient: float,
     wallet_exposure_ratio: float | None,
     weight_wallet_exposure: float,
 ) -> dict[str, float]:
-    volatility_1h_term = volatility_ema_1h * weight_volatility_1h
-    volatility_1m_term = volatility_ema_1m * weight_volatility_1m
+    log_range_1h_term = log_range_ema_1h * log_range_1h_coefficient
+    log_range_1m_term = log_range_ema_1m * log_range_1m_coefficient
     wallet_exposure_term = (wallet_exposure_ratio or 0.0) * weight_wallet_exposure
-    raw = 1.0 + volatility_1h_term + volatility_1m_term + wallet_exposure_term
+    raw = 1.0 + log_range_1h_term + log_range_1m_term + wallet_exposure_term
     return {
         "base": 1.0,
-        "volatility_1h_term": volatility_1h_term,
-        "volatility_1m_term": volatility_1m_term,
+        "log_range_1h_term": log_range_1h_term,
+        "log_range_1m_term": log_range_1m_term,
         "wallet_exposure_term": wallet_exposure_term,
         "raw": raw,
         "effective": max(1.0, raw),
@@ -373,25 +367,25 @@ def _geometry(
     kind: str,
     pside: str,
     position_price: float,
-    threshold_pct: float,
-    retracement_pct: float,
+    threshold_fraction: float,
+    retracement_fraction: float,
 ) -> dict[str, Any]:
     threshold_direction = -1.0 if (kind, pside) in {("entry", "long"), ("close", "short")} else 1.0
     retracement_direction = -threshold_direction
-    threshold_gate_active = threshold_pct > 0.0
-    passive_reference_price = position_price * (1.0 + threshold_direction * threshold_pct)
+    threshold_gate_active = threshold_fraction > 0.0
+    passive_reference_price = position_price * (1.0 + threshold_direction * threshold_fraction)
     threshold_price = (
         passive_reference_price if threshold_gate_active else None
     )
     nominal_confirmation_price = (
-        threshold_price * (1.0 + retracement_direction * retracement_pct)
-        if threshold_price is not None and retracement_pct > 0.0
+        threshold_price * (1.0 + retracement_direction * retracement_fraction)
+        if threshold_price is not None and retracement_fraction > 0.0
         else None
     )
     order_reference_price = (
         position_price
-        * (1.0 + threshold_direction * threshold_pct + retracement_direction * retracement_pct)
-        if threshold_gate_active and retracement_pct > 0.0
+        * (1.0 + threshold_direction * threshold_fraction + retracement_direction * retracement_fraction)
+        if threshold_gate_active and retracement_fraction > 0.0
         else None
     )
     return {
@@ -422,9 +416,9 @@ def inspect_trailing(
     position_price: float,
     position_size: float | None,
     wallet_exposure: float,
-    effective_wallet_exposure_limit: float,
-    volatility_ema_1m: float,
-    volatility_ema_1h: float,
+    effective_wallet_exposure_limit_ratio: float,
+    log_range_ema_1m: float,
+    log_range_ema_1h: float,
     params: Mapping[str, Any],
     parameter_source: str,
     overridden_parameters: Sequence[str] = (),
@@ -435,66 +429,66 @@ def inspect_trailing(
     if position_size is not None:
         position_size = _finite_float(position_size, "position_size")
     wallet_exposure = _finite_float(wallet_exposure, "wallet_exposure")
-    effective_wallet_exposure_limit = _finite_float(
-        effective_wallet_exposure_limit,
-        "effective_wallet_exposure_limit",
+    effective_wallet_exposure_limit_ratio = _finite_float(
+        effective_wallet_exposure_limit_ratio,
+        "effective_wallet_exposure_limit_ratio",
     )
-    volatility_ema_1m = _finite_float(volatility_ema_1m, "volatility_ema_1m")
-    volatility_ema_1h = _finite_float(volatility_ema_1h, "volatility_ema_1h")
+    log_range_ema_1m = _finite_float(log_range_ema_1m, "log_range_ema_1m")
+    log_range_ema_1h = _finite_float(log_range_ema_1h, "log_range_ema_1h")
     if position_price <= 0.0:
         raise ValueError("position_price must be greater than zero")
     if wallet_exposure < 0.0:
         raise ValueError("wallet_exposure must not be negative")
-    if effective_wallet_exposure_limit <= 0.0:
-        raise ValueError("effective_wallet_exposure_limit must be greater than zero")
-    if volatility_ema_1m < 0.0 or volatility_ema_1h < 0.0:
-        raise ValueError("volatility EMAs must not be negative")
+    if effective_wallet_exposure_limit_ratio <= 0.0:
+        raise ValueError("effective_wallet_exposure_limit_ratio must be greater than zero")
+    if log_range_ema_1m < 0.0 or log_range_ema_1h < 0.0:
+        raise ValueError("log-range EMAs must not be negative")
 
     entry = _require_mapping(params.get("entry"), "params.entry")
     close = _require_mapping(params.get("close"), "params.close")
-    wallet_exposure_ratio = wallet_exposure / effective_wallet_exposure_limit
+    wallet_exposure_ratio = wallet_exposure / effective_wallet_exposure_limit_ratio
 
     entry_threshold_multiplier = _dynamic_multiplier(
-        volatility_ema_1m=volatility_ema_1m,
-        volatility_ema_1h=volatility_ema_1h,
-        weight_volatility_1m=_finite_float(
-            entry.get("threshold_volatility_1m_weight", 0.0),
-            "entry.threshold_volatility_1m_weight",
+        log_range_ema_1m=log_range_ema_1m,
+        log_range_ema_1h=log_range_ema_1h,
+        log_range_1m_coefficient=_finite_float(
+            entry.get("threshold_log_range_1m_coefficient", 0.0),
+            "entry.threshold_log_range_1m_coefficient",
         ),
-        weight_volatility_1h=_finite_float(
-            entry.get("threshold_volatility_1h_weight", 0.0),
-            "entry.threshold_volatility_1h_weight",
+        log_range_1h_coefficient=_finite_float(
+            entry.get("threshold_log_range_1h_coefficient", 0.0),
+            "entry.threshold_log_range_1h_coefficient",
         ),
         wallet_exposure_ratio=wallet_exposure_ratio,
         weight_wallet_exposure=_finite_float(
-            entry.get("threshold_we_weight", 0.0),
-            "entry.threshold_we_weight",
+            entry.get("threshold_exposure_ratio_coefficient", 0.0),
+            "entry.threshold_exposure_ratio_coefficient",
         ),
     )
     entry_retracement_multiplier = _dynamic_multiplier(
-        volatility_ema_1m=volatility_ema_1m,
-        volatility_ema_1h=volatility_ema_1h,
-        weight_volatility_1m=_finite_float(
-            entry.get("retracement_volatility_1m_weight", 0.0),
-            "entry.retracement_volatility_1m_weight",
+        log_range_ema_1m=log_range_ema_1m,
+        log_range_ema_1h=log_range_ema_1h,
+        log_range_1m_coefficient=_finite_float(
+            entry.get("retracement_log_range_1m_coefficient", 0.0),
+            "entry.retracement_log_range_1m_coefficient",
         ),
-        weight_volatility_1h=_finite_float(
-            entry.get("retracement_volatility_1h_weight", 0.0),
-            "entry.retracement_volatility_1h_weight",
+        log_range_1h_coefficient=_finite_float(
+            entry.get("retracement_log_range_1h_coefficient", 0.0),
+            "entry.retracement_log_range_1h_coefficient",
         ),
         wallet_exposure_ratio=wallet_exposure_ratio,
         weight_wallet_exposure=_finite_float(
-            entry.get("retracement_we_weight", 0.0),
-            "entry.retracement_we_weight",
+            entry.get("retracement_exposure_ratio_coefficient", 0.0),
+            "entry.retracement_exposure_ratio_coefficient",
         ),
     )
     entry_threshold_base_configured = _finite_float(
-        entry.get("threshold_base_pct", 0.0),
-        "entry.threshold_base_pct",
+        entry.get("threshold_base_fraction", 0.0),
+        "entry.threshold_base_fraction",
     )
     entry_retracement_base = _finite_float(
-        entry.get("retracement_base_pct", 0.0),
-        "entry.retracement_base_pct",
+        entry.get("retracement_base_fraction", 0.0),
+        "entry.retracement_base_fraction",
     )
     entry_trailing_enabled = entry_retracement_base > 0.0
     # Rust clamps the threshold only in calc_trailing_entry_{long,short}. Passive
@@ -504,50 +498,50 @@ def inspect_trailing(
         if entry_trailing_enabled
         else entry_threshold_base_configured
     )
-    entry_threshold_pct = entry_threshold_base * entry_threshold_multiplier["effective"]
-    entry_retracement_pct = max(0.0, entry_retracement_base) * entry_retracement_multiplier[
+    entry_threshold_fraction = entry_threshold_base * entry_threshold_multiplier["effective"]
+    entry_retracement_fraction = max(0.0, entry_retracement_base) * entry_retracement_multiplier[
         "effective"
     ]
 
     close_threshold_base = _finite_float(
-        close.get("threshold_base_pct", 0.0),
-        "close.threshold_base_pct",
+        close.get("threshold_base_fraction", 0.0),
+        "close.threshold_base_fraction",
     )
     close_threshold_terms = {
         "base": close_threshold_base,
         "wallet_exposure_term": wallet_exposure_ratio
-        * _finite_float(close.get("threshold_we_weight", 0.0), "close.threshold_we_weight"),
-        "volatility_1h_term": volatility_ema_1h
+        * _finite_float(close.get("threshold_exposure_ratio_coefficient", 0.0), "close.threshold_exposure_ratio_coefficient"),
+        "log_range_1h_term": log_range_ema_1h
         * _finite_float(
-            close.get("threshold_volatility_1h_weight", 0.0),
-            "close.threshold_volatility_1h_weight",
+            close.get("threshold_log_range_1h_coefficient", 0.0),
+            "close.threshold_log_range_1h_coefficient",
         ),
-        "volatility_1m_term": volatility_ema_1m
+        "log_range_1m_term": log_range_ema_1m
         * _finite_float(
-            close.get("threshold_volatility_1m_weight", 0.0),
-            "close.threshold_volatility_1m_weight",
+            close.get("threshold_log_range_1m_coefficient", 0.0),
+            "close.threshold_log_range_1m_coefficient",
         ),
     }
-    close_threshold_pct = sum(close_threshold_terms.values())
+    close_threshold_fraction = sum(close_threshold_terms.values())
     close_retracement_multiplier = _dynamic_multiplier(
-        volatility_ema_1m=volatility_ema_1m,
-        volatility_ema_1h=volatility_ema_1h,
-        weight_volatility_1m=_finite_float(
-            close.get("retracement_volatility_1m_weight", 0.0),
-            "close.retracement_volatility_1m_weight",
+        log_range_ema_1m=log_range_ema_1m,
+        log_range_ema_1h=log_range_ema_1h,
+        log_range_1m_coefficient=_finite_float(
+            close.get("retracement_log_range_1m_coefficient", 0.0),
+            "close.retracement_log_range_1m_coefficient",
         ),
-        weight_volatility_1h=_finite_float(
-            close.get("retracement_volatility_1h_weight", 0.0),
-            "close.retracement_volatility_1h_weight",
+        log_range_1h_coefficient=_finite_float(
+            close.get("retracement_log_range_1h_coefficient", 0.0),
+            "close.retracement_log_range_1h_coefficient",
         ),
         wallet_exposure_ratio=None,
         weight_wallet_exposure=0.0,
     )
     close_retracement_base = _finite_float(
-        close.get("retracement_base_pct", 0.0),
-        "close.retracement_base_pct",
+        close.get("retracement_base_fraction", 0.0),
+        "close.retracement_base_fraction",
     )
-    close_retracement_pct = max(0.0, close_retracement_base) * close_retracement_multiplier[
+    close_retracement_fraction = max(0.0, close_retracement_base) * close_retracement_multiplier[
         "effective"
     ]
 
@@ -556,41 +550,41 @@ def inspect_trailing(
         "pside": pside,
         "position": {"size": position_size, "price": position_price},
         "wallet_exposure": wallet_exposure,
-        "effective_wallet_exposure_limit": effective_wallet_exposure_limit,
+        "effective_wallet_exposure_limit_ratio": effective_wallet_exposure_limit_ratio,
         "wallet_exposure_ratio": wallet_exposure_ratio,
-        "volatility_ema_1m": volatility_ema_1m,
-        "volatility_ema_1h": volatility_ema_1h,
+        "log_range_ema_1m": log_range_ema_1m,
+        "log_range_ema_1h": log_range_ema_1h,
         "parameter_source": parameter_source,
         "overridden_parameters": list(overridden_parameters),
         "entry": {
             "trailing_enabled": entry_trailing_enabled,
-            "threshold_base_pct": entry_threshold_base,
+            "threshold_base_fraction": entry_threshold_base,
             "threshold_multiplier": entry_threshold_multiplier,
-            "threshold_pct": entry_threshold_pct,
-            "retracement_base_pct": max(0.0, entry_retracement_base),
+            "threshold_fraction": entry_threshold_fraction,
+            "retracement_base_fraction": max(0.0, entry_retracement_base),
             "retracement_multiplier": entry_retracement_multiplier,
-            "retracement_pct": entry_retracement_pct,
+            "retracement_fraction": entry_retracement_fraction,
             "geometry": _geometry(
                 kind="entry",
                 pside=pside,
                 position_price=position_price,
-                threshold_pct=entry_threshold_pct,
-                retracement_pct=entry_retracement_pct,
+                threshold_fraction=entry_threshold_fraction,
+                retracement_fraction=entry_retracement_fraction,
             ),
         },
         "close": {
             "trailing_enabled": close_retracement_base > 0.0,
             "threshold_terms": close_threshold_terms,
-            "threshold_pct": close_threshold_pct,
-            "retracement_base_pct": max(0.0, close_retracement_base),
+            "threshold_fraction": close_threshold_fraction,
+            "retracement_base_fraction": max(0.0, close_retracement_base),
             "retracement_multiplier": close_retracement_multiplier,
-            "retracement_pct": close_retracement_pct,
+            "retracement_fraction": close_retracement_fraction,
             "geometry": _geometry(
                 kind="close",
                 pside=pside,
                 position_price=position_price,
-                threshold_pct=close_threshold_pct,
-                retracement_pct=close_retracement_pct,
+                threshold_fraction=close_threshold_fraction,
+                retracement_fraction=close_retracement_fraction,
             ),
         },
     }
@@ -598,12 +592,12 @@ def inspect_trailing(
     return result
 
 
-def _threshold_style(kind: str, threshold_pct: float, *, trailing_enabled: bool) -> str:
+def _threshold_style(kind: str, threshold_fraction: float, *, trailing_enabled: bool) -> str:
     if not trailing_enabled:
-        if threshold_pct == 0.0:
+        if threshold_fraction == 0.0:
             return "passive at-position"
-        return f"passive {_threshold_style(kind, abs(threshold_pct), trailing_enabled=True)}"
-    if threshold_pct <= 0.0:
+        return f"passive {_threshold_style(kind, abs(threshold_fraction), trailing_enabled=True)}"
+    if threshold_fraction <= 0.0:
         return "immediate (no threshold gate)"
     cutoffs = (
         ((0.005 if kind == "entry" else 0.003), "aggressive/near"),
@@ -611,19 +605,19 @@ def _threshold_style(kind: str, threshold_pct: float, *, trailing_enabled: bool)
         ((0.05 if kind == "entry" else 0.03), "patient/deep"),
     )
     for cutoff, label in cutoffs:
-        if threshold_pct <= cutoff:
+        if threshold_fraction <= cutoff:
             return label
     return "very deep"
 
 
-def _retracement_style(retracement_pct: float) -> str:
-    if retracement_pct <= 0.0:
+def _retracement_style(retracement_fraction: float) -> str:
+    if retracement_fraction <= 0.0:
         return "disabled"
-    if retracement_pct <= 0.001:
+    if retracement_fraction <= 0.001:
         return "tight"
-    if retracement_pct <= 0.005:
+    if retracement_fraction <= 0.005:
         return "modest"
-    if retracement_pct <= 0.015:
+    if retracement_fraction <= 0.015:
         return "selective"
     return "deep"
 
@@ -635,12 +629,12 @@ def _sensitivity_style(scenario_values: Sequence[Sequence[float]]) -> str:
         for component_values in zip(*scenario_values, strict=True)
     )
     if relative_change < 0.1:
-        return "low effective volatility sensitivity"
+        return "low effective log-range sensitivity"
     if relative_change < 0.35:
-        return "light volatility sensitivity"
+        return "light log-range sensitivity"
     if relative_change < 0.75:
-        return "strong volatility sensitivity"
-    return "very strong volatility sensitivity"
+        return "strong log-range sensitivity"
+    return "very strong log-range sensitivity"
 
 
 def _movement_description(
@@ -649,7 +643,7 @@ def _movement_description(
     subject: str,
     low_exposure_ratio: float,
     high_exposure_ratio: float,
-    volatility_label: str,
+    log_range_label: str,
     *,
     compare_absolute_distance: bool = False,
 ) -> str:
@@ -677,7 +671,7 @@ def _movement_description(
         f"Moving from {low_exposure_ratio * 100.0:g}% to {high_exposure_ratio * 100.0:g}% "
         f"of the exposure limit {verb} the {distance_qualifier}{subject} distance{endpoints} by "
         f"{abs(delta) * 100.0:.4f} percentage points in the "
-        f"{volatility_label!r} volatility example."
+        f"{log_range_label!r} log-range example."
     )
 
 
@@ -698,7 +692,7 @@ def _classify_side(
     representative: Mapping[str, Any],
 ) -> dict[str, Any]:
     normal = representative["normal"]
-    volatility_results = representative["volatility_results"]
+    log_range_results = representative["log_range_results"]
     exposure_low = representative["exposure_low"]
     exposure_high = representative["exposure_high"]
     entry = normal["entry"]
@@ -706,37 +700,37 @@ def _classify_side(
     entry_trailing = entry["trailing_enabled"]
     close_trailing = close["trailing_enabled"]
 
-    volatility_style = (
-        "one volatility scenario shown"
-        if representative["volatility_scenario_count"] == 1
+    log_range_style = (
+        "one log-range scenario shown"
+        if representative["log_range_scenario_count"] == 1
         else _sensitivity_style(
             tuple(
-                (result["entry"]["threshold_pct"], result["entry"]["retracement_pct"])
-                for result in volatility_results
+                (result["entry"]["threshold_fraction"], result["entry"]["retracement_fraction"])
+                for result in log_range_results
             )
         )
     )
-    close_volatility_style = (
-        "one volatility scenario shown"
-        if representative["volatility_scenario_count"] == 1
+    close_log_range_style = (
+        "one log-range scenario shown"
+        if representative["log_range_scenario_count"] == 1
         else _sensitivity_style(
             tuple(
-                (result["close"]["threshold_pct"], result["close"]["retracement_pct"])
-                for result in volatility_results
+                (result["close"]["threshold_fraction"], result["close"]["retracement_fraction"])
+                for result in log_range_results
             )
         )
     )
     entry_headline = (
-        f"{volatility_style}; "
-        f"{_threshold_style('entry', entry['threshold_pct'], trailing_enabled=entry_trailing)} "
+        f"{log_range_style}; "
+        f"{_threshold_style('entry', entry['threshold_fraction'], trailing_enabled=entry_trailing)} "
         "entry threshold with "
-        f"{_retracement_style(entry['retracement_pct'])} retracement"
+        f"{_retracement_style(entry['retracement_fraction'])} retracement"
     )
     close_headline = (
-        f"{close_volatility_style}; "
-        f"{_threshold_style('close', close['threshold_pct'], trailing_enabled=close_trailing)} "
+        f"{close_log_range_style}; "
+        f"{_threshold_style('close', close['threshold_fraction'], trailing_enabled=close_trailing)} "
         "close threshold with "
-        f"{_retracement_style(close['retracement_pct'])} retracement"
+        f"{_retracement_style(close['retracement_fraction'])} retracement"
     )
 
     entry_comments: list[str] = []
@@ -744,7 +738,7 @@ def _classify_side(
     cooldown = context["entry_cooldown_minutes"] if context else None
     if not entry_trailing:
         if cooldown == 0.0:
-            if entry["threshold_pct"] == 0.0:
+            if entry["threshold_fraction"] == 0.0:
                 entry_comments.append(
                     "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
                     "is zero. Rust clamps the first add to bid/ask when market touch is more adverse "
@@ -753,7 +747,7 @@ def _classify_side(
                     "rung is emitted. The overview has no current market or EMA state, so its exact price "
                     "cannot be inferred."
                 )
-            elif entry["threshold_pct"] < 0.0:
+            elif entry["threshold_fraction"] < 0.0:
                 entry_comments.append(
                     "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
                     "is negative. Rust emits only one market-touch rung when min(reference, bid) for a "
@@ -801,14 +795,14 @@ def _classify_side(
             "duration stages only the next add and delays it relative to the latest entry fill; "
             "a zero effective duration permits the passive recursive ladder when trailing is disabled."
         )
-    if entry["threshold_pct"] <= 0.0 and entry_trailing:
+    if entry["threshold_fraction"] <= 0.0 and entry_trailing:
         entry_comments.append(
             "The threshold gate is immediate, so reversal tracking begins as soon as the position changes."
         )
     entry_comments.append(
         _movement_description(
-            exposure_low["entry"]["threshold_pct"],
-            exposure_high["entry"]["threshold_pct"],
+            exposure_low["entry"]["threshold_fraction"],
+            exposure_high["entry"]["threshold_fraction"],
             "entry threshold",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
@@ -818,8 +812,8 @@ def _classify_side(
     )
     entry_comments.append(
         _movement_description(
-            exposure_low["entry"]["retracement_pct"],
-            exposure_high["entry"]["retracement_pct"],
+            exposure_low["entry"]["retracement_fraction"],
+            exposure_high["entry"]["retracement_fraction"],
             "entry retracement",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
@@ -829,7 +823,7 @@ def _classify_side(
 
     close_params = representative["params"]["close"]
     if not close_trailing:
-        if _finite_float(close_params.get("threshold_we_weight", 0.0), "threshold_we_weight") == 0.0:
+        if _finite_float(close_params.get("threshold_exposure_ratio_coefficient", 0.0), "threshold_exposure_ratio_coefficient") == 0.0:
             close_comments.append(
                 "Trailing closes are disabled and the threshold has no exposure weight: Rust emits "
                 "one full-position passive close instead of duplicate same-price slices."
@@ -844,15 +838,15 @@ def _classify_side(
             "The close arms after favorable movement reaches the threshold, then confirms only "
             "after price reverses from the running favorable extreme."
         )
-    if close["threshold_pct"] <= 0.0 and close_trailing:
+    if close["threshold_fraction"] <= 0.0 and close_trailing:
         close_comments.append(
             "At this scenario the close threshold is non-positive, so the close behaves like an "
             "immediately armed trailing stop rather than waiting for profit first."
         )
     close_comments.append(
         _movement_description(
-            exposure_low["close"]["threshold_pct"],
-            exposure_high["close"]["threshold_pct"],
+            exposure_low["close"]["threshold_fraction"],
+            exposure_high["close"]["threshold_fraction"],
             "close threshold",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
@@ -861,7 +855,7 @@ def _classify_side(
         )
     )
     close_comments.append(
-        "Close retracement has no exposure term in Rust; only volatility changes it."
+        "Close retracement has no exposure term in Rust; only log-range changes it."
     )
 
     overall: list[str] = []
@@ -881,7 +875,7 @@ def _classify_side(
         elif forced_mode == "normal":
             overall.append(
                 f"{pside.capitalize()} is enabled: total exposure limit "
-                f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
+                f"{context['total_wallet_exposure_limit_ratio'] * 100.0:.2f}% across "
                 f"{context['max_positions']} configured position slot(s)."
             )
         elif context.get("hsl_enabled", False):
@@ -932,7 +926,7 @@ def _classify_side(
             )
         overall.append(
             "Each add starts from the greater of current absolute position size × "
-            f"{context['entry_double_down_factor']:.4g} or the configured initial exposure slice "
+            f"{context['entry_reentry_qty_multiplier']:.4g} or the configured initial exposure slice "
             "converted to quantity at the re-entry order price, before minimum-quantity, rounding, "
             "and exposure-cropping rules. A lower re-entry price therefore produces a larger quantity "
             "floor for the same exposure slice."
@@ -940,7 +934,7 @@ def _classify_side(
         passive_full_close = (
             not close_trailing
             and _finite_float(
-                close_params.get("threshold_we_weight", 0.0), "threshold_we_weight"
+                close_params.get("threshold_exposure_ratio_coefficient", 0.0), "threshold_exposure_ratio_coefficient"
             )
             == 0.0
         )
@@ -1088,16 +1082,16 @@ def _classify_side(
             "mode, cooldowns, risk enforcement, auto-unstuck, and realized-PnL gates are unknown; "
             "runtime-path labels are intentionally marked 'context unknown'."
         )
-    if representative["volatility_scenario_count"] == 1:
+    if representative["log_range_scenario_count"] == 1:
         basis = (
-            f"Headlines use {representative['normal_label']!r} volatility at "
+            f"Headlines use {representative['normal_label']!r} log-range at "
             f"{representative['middle_ratio'] * 100.0:g}% WE/WEL."
         )
     else:
         basis = (
-            f"Threshold/retracement style uses {representative['normal_label']!r} volatility at "
-            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL; volatility sensitivity spans "
-            f"all {representative['volatility_scenario_count']} displayed scenarios at that exposure."
+            f"Threshold/retracement style uses {representative['normal_label']!r} log-range at "
+            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL; log-range sensitivity spans "
+            f"all {representative['log_range_scenario_count']} displayed scenarios at that exposure."
         )
     return {
         "entry_headline": entry_headline,
@@ -1114,23 +1108,23 @@ def build_overview(
     sources: Mapping[str, Mapping[str, Any]],
     parameter_source: str,
     price_anchor: float,
-    volatility_scenarios: Sequence[tuple[str, float, float]] = DEFAULT_VOLATILITY_SCENARIOS,
+    log_range_scenarios: Sequence[tuple[str, float, float]] = DEFAULT_LOG_RANGE_SCENARIOS,
     exposure_ratios: Sequence[float] = DEFAULT_EXPOSURE_RATIOS,
     overridden_parameters: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     price_anchor = _finite_float(price_anchor, "price_anchor")
     if price_anchor <= 0.0:
         raise ValueError("price_anchor must be greater than zero")
-    if not volatility_scenarios:
-        raise ValueError("at least one volatility scenario is required")
+    if not log_range_scenarios:
+        raise ValueError("at least one log-range scenario is required")
     if not exposure_ratios:
         raise ValueError("at least one exposure ratio is required")
     checked_scenarios = []
-    for label, volatility_ema_1m, volatility_ema_1h in volatility_scenarios:
-        vol_1m = _finite_float(volatility_ema_1m, f"{label} volatility_ema_1m")
-        vol_1h = _finite_float(volatility_ema_1h, f"{label} volatility_ema_1h")
+    for label, log_range_ema_1m, log_range_ema_1h in log_range_scenarios:
+        vol_1m = _finite_float(log_range_ema_1m, f"{label} log_range_ema_1m")
+        vol_1h = _finite_float(log_range_ema_1h, f"{label} log_range_ema_1h")
         if vol_1m < 0.0 or vol_1h < 0.0:
-            raise ValueError("volatility scenario values must not be negative")
+            raise ValueError("log-range scenario values must not be negative")
         checked_scenarios.append((str(label), vol_1m, vol_1h))
     scenario_labels = [item[0] for item in checked_scenarios]
     duplicate_labels = sorted(
@@ -1138,7 +1132,7 @@ def build_overview(
     )
     if duplicate_labels:
         raise ValueError(
-            "duplicate volatility scenario label(s): " + ", ".join(duplicate_labels)
+            "duplicate log-range scenario label(s): " + ", ".join(duplicate_labels)
         )
     checked_ratios = [_finite_float(value, "exposure_ratio") for value in exposure_ratios]
     if any(value < 0.0 for value in checked_ratios):
@@ -1150,7 +1144,7 @@ def build_overview(
         context = source.get("context")
         rows = []
         scenario_results: dict[tuple[str, float], Mapping[str, Any]] = {}
-        for label, volatility_ema_1m, volatility_ema_1h in checked_scenarios:
+        for label, log_range_ema_1m, log_range_ema_1h in checked_scenarios:
             for exposure_ratio in checked_ratios:
                 result = inspect_trailing(
                     symbol="ANCHOR",
@@ -1158,9 +1152,9 @@ def build_overview(
                     position_price=price_anchor,
                     position_size=None,
                     wallet_exposure=exposure_ratio,
-                    effective_wallet_exposure_limit=1.0,
-                    volatility_ema_1m=volatility_ema_1m,
-                    volatility_ema_1h=volatility_ema_1h,
+                    effective_wallet_exposure_limit_ratio=1.0,
+                    log_range_ema_1m=log_range_ema_1m,
+                    log_range_ema_1h=log_range_ema_1h,
                     params=params,
                     parameter_source=parameter_source,
                     overridden_parameters=(overridden_parameters or {}).get(pside, ()),
@@ -1175,10 +1169,10 @@ def build_overview(
                 )
                 entry_payload["inactive_reason"] = (
                     "unreachable_long_threshold"
-                    if pside == "long" and entry_payload["threshold_pct"] >= 1.0
+                    if pside == "long" and entry_payload["threshold_fraction"] >= 1.0
                     else (
                         "unreachable_short_retracement"
-                        if pside == "short" and entry_payload["retracement_pct"] >= 1.0
+                        if pside == "short" and entry_payload["retracement_fraction"] >= 1.0
                         else ("exposure_cap" if entry_exposure_capped else None)
                     )
                 )
@@ -1206,10 +1200,10 @@ def build_overview(
                 )
                 close_payload["inactive_reason"] = (
                     "unreachable_short_threshold"
-                    if pside == "short" and close_payload["threshold_pct"] >= 1.0
+                    if pside == "short" and close_payload["threshold_fraction"] >= 1.0
                     else (
                         "unreachable_long_retracement"
-                        if pside == "long" and close_payload["retracement_pct"] >= 1.0
+                        if pside == "long" and close_payload["retracement_fraction"] >= 1.0
                         else None
                     )
                 )
@@ -1220,9 +1214,9 @@ def build_overview(
                 )
                 rows.append(
                     {
-                        "volatility_label": label,
-                        "volatility_ema_1m": volatility_ema_1m,
-                        "volatility_ema_1h": volatility_ema_1h,
+                        "log_range_label": label,
+                        "log_range_ema_1m": log_range_ema_1m,
+                        "log_range_ema_1h": log_range_ema_1h,
                         "exposure_ratio": exposure_ratio,
                         "entry": entry_payload,
                         "close": close_payload,
@@ -1238,9 +1232,9 @@ def build_overview(
         high_ratio = max(checked_ratios)
         representative = {
             "normal": scenario_results[(normal_label, middle_ratio)],
-            "volatility_results": [
+            "log_range_results": [
                 scenario_results[(label, middle_ratio)]
-                for label, _volatility_ema_1m, _volatility_ema_1h in checked_scenarios
+                for label, _log_range_ema_1m, _log_range_ema_1h in checked_scenarios
             ],
             "exposure_low": scenario_results[(normal_label, low_ratio)],
             "exposure_high": scenario_results[(normal_label, high_ratio)],
@@ -1248,7 +1242,7 @@ def build_overview(
             "exposure_high_ratio": high_ratio,
             "middle_ratio": middle_ratio,
             "normal_label": normal_label,
-            "volatility_scenario_count": len(checked_scenarios),
+            "log_range_scenario_count": len(checked_scenarios),
             "params": params,
         }
         sides[pside] = {
@@ -1266,8 +1260,8 @@ def build_overview(
         "mode": "overview",
         "parameter_source": parameter_source,
         "price_anchor": price_anchor,
-        "volatility_scenarios": [
-            {"label": label, "volatility_ema_1m": vol_1m, "volatility_ema_1h": vol_1h}
+        "log_range_scenarios": [
+            {"label": label, "log_range_ema_1m": vol_1m, "log_range_ema_1h": vol_1h}
             for label, vol_1m, vol_1h in checked_scenarios
         ],
         "exposure_ratios": checked_ratios,
@@ -1288,8 +1282,8 @@ def _fmt_pct(value: float, *, signed: bool = False) -> str:
 
 def _format_multiplier(label: str, multiplier: Mapping[str, float]) -> list[str]:
     named_terms = [
-        ("1h", multiplier["volatility_1h_term"]),
-        ("1m", multiplier["volatility_1m_term"]),
+        ("1h", multiplier["log_range_1h_term"]),
+        ("1m", multiplier["log_range_1m_term"]),
     ]
     if multiplier["wallet_exposure_term"] != 0.0:
         named_terms.append(("WE", multiplier["wallet_exposure_term"]))
@@ -1307,20 +1301,20 @@ def _format_geometry(kind: str, payload: Mapping[str, Any]) -> list[str]:
     geometry = payload["geometry"]
     lines: list[str] = []
     if not payload["trailing_enabled"]:
-        lines.append("  Mode: trailing disabled (retracement_base_pct <= 0); passive recursive orders")
+        lines.append("  Mode: trailing disabled (retracement_base_fraction <= 0); passive recursive orders")
         lines.append(
             "  Passive analytical reference from position price and signed threshold "
-            f"{_fmt_pct(payload['threshold_pct'], signed=True)} -> "
+            f"{_fmt_pct(payload['threshold_fraction'], signed=True)} -> "
             f"{_fmt_number(geometry['passive_reference_price'])}"
         )
         lines.append("  Rust then clamps this reference against the current bid/ask before rounding.")
     elif geometry["threshold_gate_active"]:
         lines.append(
-            f"  Threshold: {_fmt_pct(payload['threshold_pct'])} {geometry['threshold_direction']} "
+            f"  Threshold: {_fmt_pct(payload['threshold_fraction'])} {geometry['threshold_direction']} "
             f"position price -> {_fmt_number(geometry['threshold_price'])}"
         )
         lines.append(
-            f"  Retracement: {_fmt_pct(payload['retracement_pct'])} "
+            f"  Retracement: {_fmt_pct(payload['retracement_fraction'])} "
             f"{geometry['retracement_direction']} the running extreme"
         )
         lines.append(
@@ -1335,10 +1329,10 @@ def _format_geometry(kind: str, payload: Mapping[str, Any]) -> list[str]:
         )
     else:
         lines.append(
-            f"  Threshold: {_fmt_pct(payload['threshold_pct'], signed=True)}; gate is active immediately"
+            f"  Threshold: {_fmt_pct(payload['threshold_fraction'], signed=True)}; gate is active immediately"
         )
         lines.append(
-            f"  Retracement: {_fmt_pct(payload['retracement_pct'])} "
+            f"  Retracement: {_fmt_pct(payload['retracement_fraction'])} "
             f"{geometry['retracement_direction']} the running extreme; no fixed target price"
         )
     if payload["trailing_enabled"]:
@@ -1354,12 +1348,12 @@ def render_report(result: Mapping[str, Any]) -> str:
         f"Position: {size_text}{_fmt_number(position['price'])}",
         (
             f"Wallet exposure: {_fmt_pct(result['wallet_exposure'])} / effective limit "
-            f"{_fmt_pct(result['effective_wallet_exposure_limit'])} "
+            f"{_fmt_pct(result['effective_wallet_exposure_limit_ratio'])} "
             f"(ratio {_fmt_pct(result['wallet_exposure_ratio'])})"
         ),
         (
-            f"Volatility EMA: 1m {_fmt_pct(result['volatility_ema_1m'])}, "
-            f"1h {_fmt_pct(result['volatility_ema_1h'])}"
+            f"Log-range EMA: 1m {_fmt_pct(result['log_range_ema_1m'])}, "
+            f"1h {_fmt_pct(result['log_range_ema_1h'])}"
         ),
         f"Parameters: {result['parameter_source']}",
     ]
@@ -1377,13 +1371,13 @@ def render_report(result: Mapping[str, Any]) -> str:
     lines.extend(["", "ENTRY"])
     lines.extend(_format_multiplier("Threshold", entry["threshold_multiplier"]))
     lines.append(
-        f"  Effective threshold: {_fmt_pct(entry['threshold_base_pct'])} × "
-        f"{entry['threshold_multiplier']['effective']:.6f} = {_fmt_pct(entry['threshold_pct'])}"
+        f"  Effective threshold: {_fmt_pct(entry['threshold_base_fraction'])} × "
+        f"{entry['threshold_multiplier']['effective']:.6f} = {_fmt_pct(entry['threshold_fraction'])}"
     )
     lines.extend(_format_multiplier("Retracement", entry["retracement_multiplier"]))
     lines.append(
-        f"  Effective retracement: {_fmt_pct(entry['retracement_base_pct'])} × "
-        f"{entry['retracement_multiplier']['effective']:.6f} = {_fmt_pct(entry['retracement_pct'])}"
+        f"  Effective retracement: {_fmt_pct(entry['retracement_base_fraction'])} × "
+        f"{entry['retracement_multiplier']['effective']:.6f} = {_fmt_pct(entry['retracement_fraction'])}"
     )
     lines.extend(_format_geometry("entry", entry))
 
@@ -1394,14 +1388,14 @@ def render_report(result: Mapping[str, Any]) -> str:
         "  Threshold (additive): "
         f"base {_fmt_pct(close_terms['base'], signed=True)} "
         f"+ WE {_fmt_pct(close_terms['wallet_exposure_term'], signed=True)} "
-        f"+ 1h {_fmt_pct(close_terms['volatility_1h_term'], signed=True)} "
-        f"+ 1m {_fmt_pct(close_terms['volatility_1m_term'], signed=True)} "
-        f"= {_fmt_pct(close['threshold_pct'], signed=True)}"
+        f"+ 1h {_fmt_pct(close_terms['log_range_1h_term'], signed=True)} "
+        f"+ 1m {_fmt_pct(close_terms['log_range_1m_term'], signed=True)} "
+        f"= {_fmt_pct(close['threshold_fraction'], signed=True)}"
     )
     lines.extend(_format_multiplier("Retracement", close["retracement_multiplier"]))
     lines.append(
-        f"  Effective retracement: {_fmt_pct(close['retracement_base_pct'])} × "
-        f"{close['retracement_multiplier']['effective']:.6f} = {_fmt_pct(close['retracement_pct'])}"
+        f"  Effective retracement: {_fmt_pct(close['retracement_base_fraction'])} × "
+        f"{close['retracement_multiplier']['effective']:.6f} = {_fmt_pct(close['retracement_fraction'])}"
     )
     lines.extend(_format_geometry("close", close))
     lines.extend(
@@ -1547,13 +1541,13 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
             order_reference = _scenario_price(geometry["order_reference_price"])
         rows.append(
             [
-                scenario["volatility_label"],
-                f"{_scenario_input_pct(scenario['volatility_ema_1m'])}/"
-                f"{_scenario_input_pct(scenario['volatility_ema_1h'])}%",
+                scenario["log_range_label"],
+                f"{_scenario_input_pct(scenario['log_range_ema_1m'])}/"
+                f"{_scenario_input_pct(scenario['log_range_ema_1h'])}%",
                 f"{_scenario_input_pct(scenario['exposure_ratio'])}%",
-                _fmt_pct(payload["threshold_pct"], signed=kind == "close"),
+                _fmt_pct(payload["threshold_fraction"], signed=kind == "close"),
                 threshold_price,
-                _fmt_pct(payload["retracement_pct"]),
+                _fmt_pct(payload["retracement_fraction"]),
                 confirmation,
                 order_reference,
                 runtime_path,
@@ -1565,22 +1559,22 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
 def _parameter_summary(side: Mapping[str, Any], kind: str) -> list[str]:
     params = side["parameters"][kind]
     threshold = (
-        f"base {_fmt_pct(_finite_float(params.get('threshold_base_pct', 0.0), 'threshold base'), signed=kind == 'close')}, "
-        f"weights WE {_finite_float(params.get('threshold_we_weight', 0.0), 'threshold WE'):g}, "
-        f"1m {_finite_float(params.get('threshold_volatility_1m_weight', 0.0), 'threshold 1m'):g}, "
-        f"1h {_finite_float(params.get('threshold_volatility_1h_weight', 0.0), 'threshold 1h'):g}"
+        f"base {_fmt_pct(_finite_float(params.get('threshold_base_fraction', 0.0), 'threshold base'), signed=kind == 'close')}, "
+        f"weights WE {_finite_float(params.get('threshold_exposure_ratio_coefficient', 0.0), 'threshold WE'):g}, "
+        f"1m {_finite_float(params.get('threshold_log_range_1m_coefficient', 0.0), 'threshold 1m'):g}, "
+        f"1h {_finite_float(params.get('threshold_log_range_1h_coefficient', 0.0), 'threshold 1h'):g}"
     )
     retracement_parts = [
-        f"base {_fmt_pct(_finite_float(params.get('retracement_base_pct', 0.0), 'retracement base'))}"
+        f"base {_fmt_pct(_finite_float(params.get('retracement_base_fraction', 0.0), 'retracement base'))}"
     ]
     if kind == "entry":
         retracement_parts.append(
-            f"WE {_finite_float(params.get('retracement_we_weight', 0.0), 'retracement WE'):g}"
+            f"WE {_finite_float(params.get('retracement_exposure_ratio_coefficient', 0.0), 'retracement WE'):g}"
         )
     retracement_parts.extend(
         [
-            f"1m {_finite_float(params.get('retracement_volatility_1m_weight', 0.0), 'retracement 1m'):g}",
-            f"1h {_finite_float(params.get('retracement_volatility_1h_weight', 0.0), 'retracement 1h'):g}",
+            f"1m {_finite_float(params.get('retracement_log_range_1m_coefficient', 0.0), 'retracement 1m'):g}",
+            f"1h {_finite_float(params.get('retracement_log_range_1h_coefficient', 0.0), 'retracement 1h'):g}",
         ]
     )
     return [f"  Threshold params: {threshold}", f"  Retracement params: {', '.join(retracement_parts)}"]
@@ -1591,7 +1585,7 @@ def render_overview(result: Mapping[str, Any]) -> str:
         "Trailing behavior overview",
         f"Parameters: {result['parameter_source']}",
         f"Price anchor (average position price): {_fmt_number(result['price_anchor'])}",
-        "Scenario cells use volatility EMA values as 1m/1h percentages and exposure as WE / effective WEL.",
+        "Scenario cells use log-range EMA values as 1m/1h percentages and exposure as WE / effective WEL.",
         "Entry distance = base × max(1, 1 + 1m term + 1h term + exposure term).",
         "Close threshold = base + 1m term + 1h term + exposure term; close retracement has no exposure term.",
     ]
@@ -1614,9 +1608,9 @@ def render_overview(result: Mapping[str, Any]) -> str:
         lines.extend(f"  {comment}" for comment in classification["overall_comments"])
         if context:
             lines.append(
-                "  Volatility EMA spans: "
-                f"{context['volatility_ema_span_minutes']:g} minutes, "
-                f"{context['volatility_ema_span_1h_candles']:g} one-hour candles."
+                "  Log-range EMA spans: "
+                f"{context['log_range_ema_span_minutes']:g} minutes, "
+                f"{context['log_range_ema_span_1h_candles']:g} one-hour candles."
             )
         if side["overridden_parameters"]:
             lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))
@@ -1695,7 +1689,7 @@ def _parse_exposure_ratios(value: str) -> tuple[float, ...]:
     return ratios
 
 
-def _parse_volatility_scenarios(value: str) -> tuple[tuple[str, float, float], ...]:
+def _parse_log_range_scenarios(value: str) -> tuple[tuple[str, float, float], ...]:
     scenarios = []
     try:
         for raw_scenario in value.split(","):
@@ -1711,13 +1705,14 @@ def _parse_volatility_scenarios(value: str) -> tuple[tuple[str, float, float], .
             "expected label:1m:1h scenarios, e.g. quiet:0.001:0.0005,high:0.015:0.0075"
         ) from exc
     if not scenarios:
-        raise argparse.ArgumentTypeError("at least one volatility scenario is required")
+        raise argparse.ArgumentTypeError("at least one log-range scenario is required")
     return tuple(scenarios)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool trailing-inspect",
+        allow_abbrev=False,
         description=(
             "Inspect trailing_martingale entry and close thresholds without starting a bot. "
             "Percent inputs use config ratios (0.01 = 1%)."
@@ -1730,8 +1725,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Detailed single-scenario mode (backward compatible):\n"
             "  passivbot tool trailing-inspect --symbol COIN --side long "
             "--position-size 150 --position-price 20 --wallet-exposure 0.6 "
-            "--effective-wallet-exposure-limit 0.9 --volatility-ema-1m 0.007 "
-            "--volatility-ema-1h 0.0033\n\n"
+            "--effective-wallet-exposure-limit-ratio 0.9 --log-range-ema-1m 0.007 "
+            "--log-range-ema-1h 0.0033\n\n"
             "A positional config path is preferred; --config remains available for compatibility. "
             "Any parameter flag below overrides the config/default value."
         ),
@@ -1760,13 +1755,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     state.add_argument("--wallet-exposure", type=float, default=None, help="Current WE ratio")
     state.add_argument(
-        "--effective-wallet-exposure-limit",
+        "--effective-wallet-exposure-limit-ratio",
         type=float,
         default=None,
         help="Effective per-position WEL used by the strategy",
     )
-    state.add_argument("--volatility-ema-1m", type=float, default=None)
-    state.add_argument("--volatility-ema-1h", type=float, default=None)
+    state.add_argument("--log-range-ema-1m", type=float, default=None)
+    state.add_argument("--log-range-ema-1h", type=float, default=None)
     state.add_argument(
         "--config",
         default=None,
@@ -1779,32 +1774,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overview WE/WEL examples as comma-separated ratios",
     )
     state.add_argument(
-        "--volatility-scenarios",
-        type=_parse_volatility_scenarios,
-        default=DEFAULT_VOLATILITY_SCENARIOS,
+        "--log-range-scenarios",
+        type=_parse_log_range_scenarios,
+        default=DEFAULT_LOG_RANGE_SCENARIOS,
         help="Overview examples as comma-separated label:1m:1h triples",
     )
     state.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     entry_threshold = parser.add_argument_group("entry threshold overrides")
-    entry_threshold.add_argument("--entry-threshold-base-fraction", dest="entry_threshold_base_pct", type=float)
-    entry_threshold.add_argument("--entry-threshold-we-weight", type=float)
-    entry_threshold.add_argument("--entry-threshold-volatility-1h-weight", type=float)
-    entry_threshold.add_argument("--entry-threshold-volatility-1m-weight", type=float)
+    entry_threshold.add_argument("--entry-threshold-base-fraction", dest="entry_threshold_base_fraction", type=float)
+    entry_threshold.add_argument("--entry-threshold-exposure-ratio-coefficient", type=float)
+    entry_threshold.add_argument("--entry-threshold-log-range-1h-coefficient", type=float)
+    entry_threshold.add_argument("--entry-threshold-log-range-1m-coefficient", type=float)
     entry_retracement = parser.add_argument_group("entry retracement overrides")
-    entry_retracement.add_argument("--entry-retracement-base-fraction", dest="entry_retracement_base_pct", type=float)
-    entry_retracement.add_argument("--entry-retracement-we-weight", type=float)
-    entry_retracement.add_argument("--entry-retracement-volatility-1h-weight", type=float)
-    entry_retracement.add_argument("--entry-retracement-volatility-1m-weight", type=float)
+    entry_retracement.add_argument("--entry-retracement-base-fraction", dest="entry_retracement_base_fraction", type=float)
+    entry_retracement.add_argument("--entry-retracement-exposure-ratio-coefficient", type=float)
+    entry_retracement.add_argument("--entry-retracement-log-range-1h-coefficient", type=float)
+    entry_retracement.add_argument("--entry-retracement-log-range-1m-coefficient", type=float)
     close_threshold = parser.add_argument_group("close threshold overrides")
-    close_threshold.add_argument("--close-threshold-base-fraction", dest="close_threshold_base_pct", type=float)
-    close_threshold.add_argument("--close-threshold-we-weight", type=float)
-    close_threshold.add_argument("--close-threshold-volatility-1h-weight", type=float)
-    close_threshold.add_argument("--close-threshold-volatility-1m-weight", type=float)
+    close_threshold.add_argument("--close-threshold-base-fraction", dest="close_threshold_base_fraction", type=float)
+    close_threshold.add_argument("--close-threshold-exposure-ratio-coefficient", type=float)
+    close_threshold.add_argument("--close-threshold-log-range-1h-coefficient", type=float)
+    close_threshold.add_argument("--close-threshold-log-range-1m-coefficient", type=float)
     close_retracement = parser.add_argument_group("close retracement overrides")
-    close_retracement.add_argument("--close-retracement-base-fraction", dest="close_retracement_base_pct", type=float)
-    close_retracement.add_argument("--close-retracement-volatility-1h-weight", type=float)
-    close_retracement.add_argument("--close-retracement-volatility-1m-weight", type=float)
+    close_retracement.add_argument("--close-retracement-base-fraction", dest="close_retracement_base_fraction", type=float)
+    close_retracement.add_argument("--close-retracement-log-range-1h-coefficient", type=float)
+    close_retracement.add_argument("--close-retracement-log-range-1m-coefficient", type=float)
     return parser
 
 
@@ -1820,9 +1815,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             for value in (
                 args.position_size,
                 args.wallet_exposure,
-                args.effective_wallet_exposure_limit,
-                args.volatility_ema_1m,
-                args.volatility_ema_1h,
+                args.effective_wallet_exposure_limit_ratio,
+                args.log_range_ema_1m,
+                args.log_range_ema_1h,
             )
         )
         if detailed_mode:
@@ -1830,11 +1825,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("detailed single-scenario mode requires --side long or --side short")
             if (
                 args.wallet_exposure is None
-                or args.effective_wallet_exposure_limit is None
+                or args.effective_wallet_exposure_limit_ratio is None
             ):
                 raise ValueError(
                     "detailed single-scenario mode requires both --wallet-exposure and "
-                    "--effective-wallet-exposure-limit"
+                    "--effective-wallet-exposure-limit-ratio"
                 )
             if args.price_anchor is None:
                 raise ValueError(
@@ -1849,12 +1844,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 position_price=args.price_anchor,
                 position_size=args.position_size,
                 wallet_exposure=args.wallet_exposure,
-                effective_wallet_exposure_limit=args.effective_wallet_exposure_limit,
-                volatility_ema_1m=(
-                    args.volatility_ema_1m if args.volatility_ema_1m is not None else 0.0
+                effective_wallet_exposure_limit_ratio=args.effective_wallet_exposure_limit_ratio,
+                log_range_ema_1m=(
+                    args.log_range_ema_1m if args.log_range_ema_1m is not None else 0.0
                 ),
-                volatility_ema_1h=(
-                    args.volatility_ema_1h if args.volatility_ema_1h is not None else 0.0
+                log_range_ema_1h=(
+                    args.log_range_ema_1h if args.log_range_ema_1h is not None else 0.0
                 ),
                 params=params,
                 parameter_source=source,
@@ -1872,7 +1867,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sources=sources,
                 parameter_source=source,
                 price_anchor=args.price_anchor if args.price_anchor is not None else 100.0,
-                volatility_scenarios=args.volatility_scenarios,
+                log_range_scenarios=args.log_range_scenarios,
                 exposure_ratios=args.exposure_ratios,
                 overridden_parameters=overridden_by_side,
             )

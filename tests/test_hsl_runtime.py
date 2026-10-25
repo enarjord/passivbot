@@ -1622,8 +1622,8 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     )
     assert not unavailable
     native_budget = json.loads(requests[0].payload)["exposure_budget"]
-    assert native_budget["we_excess_allowance_pct"] == 0.44
-    assert "we_excess_allowance_fraction" not in native_budget
+    assert native_budget["we_excess_allowance_fraction"] == 0.44
+    assert "we_excess_allowance_pct" not in native_budget
     scaled, unavailable = run(value, marks=marks)
     assert not unavailable and scaled[0].action == "normal"
     assert run(value, marks=marks)[0] == scaled

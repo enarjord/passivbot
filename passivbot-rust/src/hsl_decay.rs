@@ -401,11 +401,11 @@ pub fn allowance(balance: f64, effective_fraction: f64, drawdown: f64) -> Result
 pub fn allowance_for(
     balance: f64,
     loss_allowance_fraction: f64,
-    total_wallet_exposure_limit: f64,
+    total_wallet_exposure_limit_ratio: f64,
     drawdown: f64,
 ) -> Result<f64, String> {
     let loss_fraction = number(loss_allowance_fraction, "unstuck loss allowance fraction")?;
-    let twel = number(total_wallet_exposure_limit, "unstuck total exposure limit")?;
+    let twel = number(total_wallet_exposure_limit_ratio, "unstuck total exposure limit")?;
     if loss_fraction < 0.0 || twel < 0.0 {
         return Err("negative v9 unstuck allowance fraction or exposure limit".into());
     }

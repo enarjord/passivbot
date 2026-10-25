@@ -79,8 +79,8 @@ def test_native_transport_keeps_leverage_signed_fees_and_debt_sentinels(debt_cap
     _, _, exchange_params, native = prep_backtest_args(config, markets, "binance")
     assert native["btc_collateral_target_ratio"] == 2.375
     assert native["max_usd_debt_to_wallet_value_ratio"] == debt_cap
-    assert native["maker_fee"] == exchange_params[0]["maker_fee"] == -0.000125
-    assert native["taker_fee"] == exchange_params[0]["taker_fee"] == 0.000375
+    assert native["maker_fee_fraction"] == exchange_params[0]["maker_fee_fraction"] == -0.000125
+    assert native["taker_fee_fraction"] == exchange_params[0]["taker_fee_fraction"] == 0.000375
     assert native["equity_floor_fraction"] == 0.07125
     assert not {"btc_collateral_cap", "btc_collateral_ltv_cap",
                 "maker_fee_override_fraction", "taker_fee_override_fraction"}.intersection(native)
@@ -135,7 +135,7 @@ def test_native_topup_limit_divides_usd_debt_by_wallet_value():
     assert close[5] == pytest.approx(wallet_value_before_conversion - topup * 0.001)
 
 
-def test_native_negative_maker_fee_remains_a_rebate():
+def test_native_negative_maker_fee_fraction_remains_a_rebate():
     config, markets = _inputs()
     config["backtest"]["maker_fee_override_fraction"] = -0.0002
     fills, _, *_ = _run(config, markets, [[[120.0, 80.0, 100.0, 1.0]]] * 10,
@@ -148,8 +148,8 @@ def test_null_fee_overrides_retain_exchange_rebates():
     config, markets = _inputs()
     config["backtest"].update(maker_fee_override_fraction=None, taker_fee_override_fraction=None)
     _, _, exchange_params, native = prep_backtest_args(config, markets, "binance")
-    assert native["maker_fee"] == exchange_params[0]["maker_fee"] == -0.0001
-    assert native["taker_fee"] == exchange_params[0]["taker_fee"] == 0.0005
+    assert native["maker_fee_fraction"] == exchange_params[0]["maker_fee_fraction"] == -0.0001
+    assert native["taker_fee_fraction"] == exchange_params[0]["taker_fee_fraction"] == 0.0005
 
 
 def test_live_acquisition_and_backtest_activation_keep_their_distinct_baselines():
@@ -157,10 +157,10 @@ def test_live_acquisition_and_backtest_activation_keep_their_distinct_baselines(
         "activation_span_fraction": 0.2, "max_minutes": None,
     }}, "long": {"strategy": {"trailing_martingale": {
         "entry": {"ema_span_0_minutes": 100.0, "ema_span_1_minutes": 100.0},
-        "volatility_ema_span_minutes": 0.0, "volatility_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 0.0, "log_range_ema_span_1h_candles": 0.0,
     }}}, "short": {}}, "optimize": {"bounds": {}}}
     windows, _, _ = compute_live_warmup_windows(
-        {"long": {"BTC"}}, lambda _side, key, _coin: 100.0 if key in {"ema_span_0", "ema_span_1"} else 0.0,
+        {"long": {"BTC"}}, lambda _side, key, _coin: 100.0 if key in {"ema_span_0_minutes", "ema_span_1_minutes"} else 0.0,
         activation_span_fraction=0.2,
     )
     assert windows == {"BTC": 120}

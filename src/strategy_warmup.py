@@ -8,58 +8,62 @@ from typing import Any
 MISSING = object()
 
 STRATEGY_WARMUP_1M_PROBE_KEYS = (
-    "ema_span_0",
-    "ema_span_1",
-    "volatility_ema_span_1m",
-    "offset_volatility_ema_span_1m",
-    "entry_volatility_ema_span_1m",
+    "ema_span_0_minutes",
+    "ema_span_1_minutes",
+    "log_range_ema_span_minutes",
+    "offset_log_range_ema_span_minutes",
+    "entry_log_range_ema_span_minutes",
 )
 
 STRATEGY_WARMUP_M1_LOG_RANGE_PROBE_KEYS = (
-    "volatility_ema_span_1m",
-    "offset_volatility_ema_span_1m",
-    "entry_volatility_ema_span_1m",
+    "log_range_ema_span_minutes",
+    "offset_log_range_ema_span_minutes",
+    "entry_log_range_ema_span_minutes",
 )
 
 STRATEGY_WARMUP_H1_PROBE_KEYS = (
-    "volatility_ema_span_1h",
-    "entry_volatility_ema_span_1h",
-    "offset_volatility_ema_span_1h",
+    "log_range_ema_span_1h_candles",
+    "entry_log_range_ema_span_1h_candles",
+    "offset_log_range_ema_span_1h_candles",
 )
 
-STRATEGY_WARMUP_1M_BOUND_LOCAL_KEYS = STRATEGY_WARMUP_1M_PROBE_KEYS
+STRATEGY_WARMUP_1M_BOUND_LOCAL_KEYS = (
+    *STRATEGY_WARMUP_1M_PROBE_KEYS,
+    "entry_ema_span_0_minutes",
+    "entry_ema_span_1_minutes",
+)
 STRATEGY_WARMUP_H1_BOUND_LOCAL_KEYS = (
-    "volatility_ema_span_1h",
-    "entry_volatility_ema_span_1h",
+    "log_range_ema_span_1h_candles",
+    "entry_log_range_ema_span_1h_candles",
     "entry_volatility_ema_span_hours",
-    "offset_volatility_ema_span_1h",
+    "offset_log_range_ema_span_1h_candles",
 )
 
 STRATEGY_WARMUP_PROBE_PATHS = {
-    "ema_span_0": (("entry", "ema_span_0"), ("ema_span_0",)),
-    "ema_span_1": (("entry", "ema_span_1"), ("ema_span_1",)),
-    "volatility_ema_span_1m": (
-        ("volatility_ema_span_1m",),
-        ("entry_volatility_ema_span_1m",),
-        ("offset_volatility_ema_span_1m",),
+    "ema_span_0_minutes": (("entry", "ema_span_0_minutes"), ("ema_span_0_minutes",)),
+    "ema_span_1_minutes": (("entry", "ema_span_1_minutes"), ("ema_span_1_minutes",)),
+    "log_range_ema_span_minutes": (
+        ("log_range_ema_span_minutes",),
+        ("entry_log_range_ema_span_minutes",),
+        ("offset_log_range_ema_span_minutes",),
     ),
-    "entry_volatility_ema_span_1m": (
-        ("entry_volatility_ema_span_1m",),
-        ("volatility_ema_span_1m",),
+    "entry_log_range_ema_span_minutes": (
+        ("entry_log_range_ema_span_minutes",),
+        ("log_range_ema_span_minutes",),
     ),
-    "offset_volatility_ema_span_1m": (("offset_volatility_ema_span_1m",),),
-    "volatility_ema_span_1h": (
-        ("volatility_ema_span_1h",),
-        ("offset_volatility_ema_span_1h",),
-        ("entry_volatility_ema_span_1h",),
+    "offset_log_range_ema_span_minutes": (("offset_log_range_ema_span_minutes",),),
+    "log_range_ema_span_1h_candles": (
+        ("log_range_ema_span_1h_candles",),
+        ("offset_log_range_ema_span_1h_candles",),
+        ("entry_log_range_ema_span_1h_candles",),
         ("entry", "volatility_ema_span_hours"),
     ),
-    "entry_volatility_ema_span_1h": (
+    "entry_log_range_ema_span_1h_candles": (
         ("entry", "volatility_ema_span_hours"),
-        ("entry_volatility_ema_span_1h",),
-        ("volatility_ema_span_1h",),
+        ("entry_log_range_ema_span_1h_candles",),
+        ("log_range_ema_span_1h_candles",),
     ),
-    "offset_volatility_ema_span_1h": (("offset_volatility_ema_span_1h",),),
+    "offset_log_range_ema_span_1h_candles": (("offset_log_range_ema_span_1h_candles",),),
 }
 
 

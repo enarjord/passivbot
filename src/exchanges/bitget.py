@@ -16,7 +16,7 @@ from config.access import require_live_value
 from passivbot_exceptions import FatalBotException
 import passivbot_rust as pbr
 
-calc_order_price_diff = pbr.calc_order_price_diff
+calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 _CLASSIC_ACCOUNT_MODE_CODES = {"40084", "25245"}
 
@@ -854,7 +854,7 @@ class BitgetBot(CCXTBot):
             for x in ideal_orders[s]:
                 ideal_orders_tmp.append(
                     (
-                        calc_order_price_diff(
+                        calc_order_price_gap_fraction(
                             x["side"],
                             x["price"],
                             market_prices[s],

@@ -252,7 +252,7 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
                     rolling_count=0,
                     activation_count=activation_count,
                     market_distance_threshold=float(
-                        bot.live_value("order_replacement_churn_gate_market_dist_pct")
+                        bot.live_value("order_replacement_churn_gate_market_distance_fraction")
                     ),
                     wave=getattr(bot, "_order_wave_in_progress", None),
                 )
@@ -269,7 +269,7 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
     projected_usage = state.action_attempt_count(
         now_monotonic=now_monotonic, window_seconds=window_seconds
     )
-    threshold = float(bot.live_value("order_replacement_churn_gate_market_dist_pct"))
+    threshold = float(bot.live_value("order_replacement_churn_gate_market_distance_fraction"))
     admission: dict[int, tuple[str, bool]] = {}
     for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
@@ -377,7 +377,7 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
                         now_monotonic=now_monotonic, window_seconds=window_seconds
                     ),
                     "activation_count": activation_count,
-                    "market_distance_threshold_pct": threshold * 100.0,
+                    "market_distance_threshold_percent": threshold * 100.0,
                 },
             )
     admission_summary = state.record_admission_reasons(

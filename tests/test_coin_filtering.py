@@ -41,7 +41,7 @@ def _min_effective_cost_out(count=1):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -276,7 +276,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
+        if key in ("forager_log_range_ema_span_minutes", "forager_volume_ema_span_minutes")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
@@ -299,7 +299,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
+        if key in ("forager_log_range_ema_span_minutes", "forager_volume_ema_span_minutes")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
@@ -359,7 +359,7 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -396,7 +396,7 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -444,7 +444,7 @@ def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -474,7 +474,7 @@ def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
     assert event.data["effective_min_cost"] == pytest.approx(10.1)
     assert event.data["balance"] == pytest.approx(51.154957)
     assert event.data["effective_limit"] == pytest.approx(1.5)
-    assert event.data["entry_initial_qty_pct"] == pytest.approx(0.0192)
+    assert event.data["entry_initial_qty_fraction"] == pytest.approx(0.0192)
     assert event.data["action"] == "skip_create"
 
 
@@ -646,7 +646,7 @@ def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -680,7 +680,7 @@ def test_log_min_effective_cost_blocks_throttles_symbol_across_set_changes(monke
             "pside": "long",
             "balance": 51.154957,
             "effective_limit": 1.5,
-            "entry_initial_qty_pct": 0.0192,
+            "entry_initial_qty_fraction": 0.0192,
             "projected_initial_cost": 1.4732627616,
             "effective_min_cost": 10.1,
         }
@@ -714,7 +714,7 @@ async def test_live_selection_uses_each_side_flag_even_with_simulation_override(
     )
     from types import MethodType
     bot.effective_min_cost_is_low_enough = MethodType(Passivbot.effective_min_cost_is_low_enough, bot)
-    bot.get_wallet_exposure_limit = lambda *args: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda *args: 1.0
     bot.bp = lambda *args: 0.0
     bot._strategy_initial_sizing_fraction = lambda *args: 0.001
     bot.get_hysteresis_snapped_balance = lambda: 1000.0

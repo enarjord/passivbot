@@ -253,7 +253,7 @@ def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
     }
     assert report["issues"] == [
         {
-            "code": "balance_hysteresis_snap_pct_high",
+            "code": "balance_hysteresis_snap_fraction_high",
             "message": (
                 "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
             ),
@@ -485,7 +485,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
     assert report["forager"]["sides"]["long"]["settings"] == {
-        "volume_ema_span_minutes": 120.0, "volatility_ema_span_minutes": 2274.0,
+        "volume_ema_span_minutes": 120.0, "log_range_ema_span_minutes": 2274.0,
         "score_hysteresis_margin": 0.02,
     }
 

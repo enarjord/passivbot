@@ -309,7 +309,7 @@ def test_released_pymoo_fallback_is_explicitly_materialized():
     config["optimize"]["pymoo"]["shared"].pop("crossover_eta")
     config["optimize"]["crossover_eta"] = 31.5
     result = migrate(config, memory_span_minutes=123.5)
-    assert result.config["optimize"]["pymoo"]["shared"]["crossover_eta"] == 31.5
+    assert result.config["optimize"]["pymoo"]["shared"]["crossover_distribution_index"] == 31.5
     assert "crossover_eta" not in result.config["optimize"]
     assert any("effective released pymoo fallback" in item["reason"] for item in result.changes)
 
@@ -368,7 +368,7 @@ def test_v8_legacy_limits_are_explicitly_converted_and_reported():
 
 def test_inactive_retired_strategy_subtree_is_reported_without_substitution():
     config = v8_config()
-    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0_minutes": 17.5}
     result = migrate(config, memory_span_minutes=123.5)
     assert "trailing_grid_v7" not in result.config["bot"]["long"]["strategy"]
     assert any("inactive retired strategy" in item["reason"] for item in result.changes)
@@ -377,7 +377,7 @@ def test_inactive_retired_strategy_subtree_is_reported_without_substitution():
 def test_active_retired_strategy_requires_explicit_replacement():
     config = v8_config()
     config["live"]["strategy_kind"] = "trailing_grid_v7"
-    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0_minutes": 17.5}
     with pytest.raises(ValueError, match="choose a retained strategy explicitly"):
         migrate(config, memory_span_minutes=123.5)
 
@@ -607,8 +607,8 @@ def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
     result = migrate(config, best_effort=True)
     assert result.config["optimize"]["backend"] == "pymoo"
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["crossover_eta"] == 31.5
-    assert shared["mutation_prob_per_variable"] == 0.25
+    assert shared["crossover_distribution_index"] == 31.5
+    assert shared["mutation_probability_per_variable"] == 0.25
     assert "approximate DEAP policy" in caplog.text
     assert "start a fresh optimization" in caplog.text
 
@@ -825,11 +825,11 @@ def test_best_effort_deap_preserves_candidate_and_variable_mutation_controls(can
                                               if authored else {})
     result = migrate(config, best_effort=True)
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob"] == (0.12 if authored else candidate)
-    assert shared["mutation_prob_per_variable"] == (0.21 if authored else expected_variable)
+    assert shared["mutation_probability"] == (0.12 if authored else candidate)
+    assert shared["mutation_probability_per_variable"] == (0.21 if authored else expected_variable)
     guesses = [item for item in result.changes if item.get("best_effort")]
-    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob" for item in guesses) is not authored
-    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob_per_variable" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_probability" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_probability_per_variable" for item in guesses) is not authored
 
 
 @pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
@@ -969,14 +969,14 @@ def test_best_effort_normalizes_deap_numeric_strings_before_sentinel_selection(v
     config["optimize"]["pymoo"]["shared"] = {}
     result = migrate(config, best_effort=True)
     shared = result.config["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob_per_variable"] == expected
-    assert shared["mutation_prob"] == float(candidate)
-    assert shared["crossover_eta"] == 31.5
+    assert shared["mutation_probability_per_variable"] == expected
+    assert shared["mutation_probability"] == float(candidate)
+    assert shared["crossover_distribution_index"] == 31.5
     choices = {item["path"]: item for item in result.changes if item.get("best_effort")}
-    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == expected
-    assert choices["optimize.pymoo.shared.mutation_prob"]["new"] == float(candidate)
-    assert isinstance(choices["optimize.pymoo.shared.mutation_prob"]["new"], float)
-    assert choices["optimize.pymoo.shared.crossover_eta"]["new"] == 31.5
+    assert choices["optimize.pymoo.shared.mutation_probability_per_variable"]["new"] == expected
+    assert choices["optimize.pymoo.shared.mutation_probability"]["new"] == float(candidate)
+    assert isinstance(choices["optimize.pymoo.shared.mutation_probability"]["new"], float)
+    assert choices["optimize.pymoo.shared.crossover_distribution_index"]["new"] == 31.5
 
 
 def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys):
@@ -987,9 +987,9 @@ def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys
     source.write_text(json.dumps(config))
     assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
     shared = json.loads(target.read_text())["optimize"]["pymoo"]["shared"]
-    assert shared["mutation_prob_per_variable"] == "auto"
-    assert shared["mutation_prob"] == 0.0
+    assert shared["mutation_probability_per_variable"] == "auto"
+    assert shared["mutation_probability"] == 0.0
     choices = {item["path"]: item for item in json.loads(report.read_text())["changes"]
                if item.get("best_effort")}
-    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == "auto"
+    assert choices["optimize.pymoo.shared.mutation_probability_per_variable"]["new"] == "auto"
     capsys.readouterr()

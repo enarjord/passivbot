@@ -16,7 +16,7 @@ from config.risk_memory import (
 from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
-HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
+HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION = 0.05
 DEFAULT_HSL_SIGNAL_MODE = "coin"
 HSL_RISKS_DOC = "docs/equity_hard_stop_loss.md"
 SIDES = ("long", "short")
@@ -367,8 +367,8 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
         for key, flat_key in (
-            ("volatility_ema_span_minutes", "forager_volatility_ema_span_1m"),
-            ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
+            ("log_range_ema_span_minutes", "forager_log_range_ema_span_minutes"),
+            ("volume_ema_span_minutes", "forager_volume_ema_span_minutes"),
         )
     }
     forager_values["score_hysteresis_margin"] = side_config.get("forager", {}).get("score_hysteresis_margin")
@@ -529,7 +529,7 @@ def _balance_hysteresis_report(
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
-        "warning_threshold": HIGH_BALANCE_HYSTERESIS_WARNING_PCT,
+        "warning_threshold": HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION,
         "basis": (
             "snapped balance is used for sizing/gating surfaces where hysteresis "
             "is intentional; raw balance remains the basis for exact exposure repair"
@@ -545,7 +545,7 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid_bool",
+                "balance_hysteresis_snap_fraction_invalid_bool",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative number, not a boolean",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
@@ -559,7 +559,7 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid",
+                "balance_hysteresis_snap_fraction_invalid",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
@@ -571,18 +571,18 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid",
+                "balance_hysteresis_snap_fraction_invalid",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
-    if value > HIGH_BALANCE_HYSTERESIS_WARNING_PCT:
+    if value > HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION:
         report["status"] = "high"
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_high",
+                "balance_hysteresis_snap_fraction_high",
                 (
                     "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),

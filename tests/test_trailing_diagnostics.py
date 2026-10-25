@@ -33,23 +33,23 @@ def require_real_passivbot_rust_module():
 
 def _sample_config():
     params = {
-        "entry_grid_double_down_factor": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.01,
-        "entry_initial_ema_dist": 0.01,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 1.0,
-        "entry_trailing_retracement_pct": 0.01,
-        "entry_trailing_threshold_pct": 0.01,
-        "risk_we_excess_allowance_pct": 0.0,
-        "close_grid_qty_pct": 1.0,
-        "close_trailing_qty_pct": 1.0,
-        "close_trailing_retracement_pct": 0.01,
-        "close_trailing_threshold_pct": 0.01,
-        "risk_wel_enforcer_threshold": 0.0,
-        "total_wallet_exposure_limit": 2.0,
+        "entry_grid_reentry_qty_multiplier": 1.0,
+        "entry_log_range_1h_coefficient": 0.0,
+        "entry_log_range_1m_coefficient": 0.0,
+        "entry_exposure_ratio_coefficient": 0.0,
+        "entry_grid_threshold_base_fraction": 0.01,
+        "entry_initial_ema_distance_fraction": 0.01,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_trailing_reentry_qty_multiplier": 1.0,
+        "entry_trailing_retracement_base_fraction": 0.01,
+        "entry_trailing_threshold_base_fraction": 0.01,
+        "risk_we_excess_allowance_fraction": 0.0,
+        "close_grid_qty_fraction": 1.0,
+        "close_trailing_qty_fraction": 1.0,
+        "close_trailing_retracement_base_fraction": 0.01,
+        "close_trailing_threshold_base_fraction": 0.01,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "total_wallet_exposure_limit_ratio": 2.0,
         "n_positions": 10,
     }
     return {"bot": {"long": dict(params), "short": dict(params)}}
@@ -188,34 +188,34 @@ def _hype_trailing_martingale_close_inputs():
             "min_qty": 0.1,
             "min_cost": 1.0,
             "c_mult": 1.0,
-            "maker_fee": 0.0002,
-            "taker_fee": 0.00055,
+            "maker_fee_fraction": 0.0002,
+            "taker_fee_fraction": 0.00055,
         },
         "state": {
             "balance": 99.88140021,
             "order_book": {"bid": 60.6695, "ask": 60.6695},
             "ema_bands": {"upper": 60.6695, "lower": 60.6695},
-            "volatility_ema_1m": 0.0014553489538740175,
-            "volatility_ema_1h": 0.013108943219306139,
+            "log_range_ema_1m": 0.0014553489538740175,
+            "log_range_ema_1h": 0.013108943219306139,
         },
         "bot_params": {
-            "wallet_exposure_limit": 0.5,
-            "total_wallet_exposure_limit": 1.5,
+            "wallet_exposure_limit_ratio": 0.5,
+            "total_wallet_exposure_limit_ratio": 1.5,
             "n_positions": 3,
-            "risk_we_excess_allowance_pct": 0.66,
+            "risk_we_excess_allowance_fraction": 0.66,
             "risk_wel_enforcer_enabled": False,
-            "risk_wel_enforcer_threshold": 1.0,
+            "risk_wel_enforcer_threshold_ratio": 1.0,
         },
-        "runtime": {"effective_wallet_exposure_limit": 0.5},
+        "runtime": {"effective_wallet_exposure_limit_ratio": 0.5},
         "close_params": {
-            "qty_pct": 0.23,
-            "threshold_base_pct": -0.0143,
-            "threshold_we_weight": -0.0278,
-            "threshold_volatility_1h_weight": 0.19,
-            "threshold_volatility_1m_weight": 7.93,
-            "retracement_base_pct": 0.0001,
-            "retracement_volatility_1h_weight": 12.11,
-            "retracement_volatility_1m_weight": 4.49,
+            "qty_fraction": 0.23,
+            "threshold_base_fraction": -0.0143,
+            "threshold_exposure_ratio_coefficient": -0.0278,
+            "threshold_log_range_1h_coefficient": 0.19,
+            "threshold_log_range_1m_coefficient": 7.93,
+            "retracement_base_fraction": 0.0001,
+            "retracement_log_range_1h_coefficient": 12.11,
+            "retracement_log_range_1m_coefficient": 4.49,
         },
         "position": {"size": 0.1, "price": 60.675},
         "trailing": {
@@ -240,28 +240,28 @@ def test_trailing_martingale_close_diagnostic_uses_rust_dynamic_terms(
     expected_threshold = (
         -0.0143
         + wallet_exposure_ratio * -0.0278
-        + inputs["state"]["volatility_ema_1m"] * 7.93
-        + inputs["state"]["volatility_ema_1h"] * 0.19
+        + inputs["state"]["log_range_ema_1m"] * 7.93
+        + inputs["state"]["log_range_ema_1h"] * 0.19
     )
     expected_retracement = 0.0001 * (
         1.0
-        + inputs["state"]["volatility_ema_1m"] * 4.49
-        + inputs["state"]["volatility_ema_1h"] * 12.11
+        + inputs["state"]["log_range_ema_1m"] * 4.49
+        + inputs["state"]["log_range_ema_1h"] * 12.11
     )
 
     assert diagnostic is not None
-    assert diagnostic["threshold_pct"] == pytest.approx(expected_threshold)
-    assert diagnostic["retracement_pct"] == pytest.approx(expected_retracement)
+    assert diagnostic["threshold_fraction"] == pytest.approx(expected_threshold)
+    assert diagnostic["retracement_fraction"] == pytest.approx(expected_retracement)
     assert sum(diagnostic["threshold_terms"].values()) == pytest.approx(expected_threshold)
-    assert diagnostic["effective_wallet_exposure_limit"] == pytest.approx(effective_wel)
+    assert diagnostic["effective_wallet_exposure_limit_ratio"] == pytest.approx(effective_wel)
     assert diagnostic["wallet_exposure_ratio"] == pytest.approx(wallet_exposure_ratio)
-    assert diagnostic["volatility_ema_1m"] == pytest.approx(
-        inputs["state"]["volatility_ema_1m"]
+    assert diagnostic["log_range_ema_1m"] == pytest.approx(
+        inputs["state"]["log_range_ema_1m"]
     )
-    assert diagnostic["volatility_ema_1h"] == pytest.approx(
-        inputs["state"]["volatility_ema_1h"]
+    assert diagnostic["log_range_ema_1h"] == pytest.approx(
+        inputs["state"]["log_range_ema_1h"]
     )
-    assert diagnostic["threshold_pct"] != pytest.approx(-0.014500652114747214)
+    assert diagnostic["threshold_fraction"] != pytest.approx(-0.014500652114747214)
 
 
 def test_trailing_martingale_reset_extrema_cannot_emit_ordinary_trailing_close(
@@ -303,23 +303,23 @@ def test_build_trailing_inputs_from_snapshot_extracts_required_fields():
     assert inputs["balance_raw"] == pytest.approx(1000.0)
     assert inputs["current_price"] == pytest.approx(100500.0)
     assert inputs["c_mult"] == pytest.approx(1.0)
-    assert inputs["wallet_exposure_limit"] == pytest.approx(0.2)
-    assert inputs["total_wallet_exposure_limit"] == pytest.approx(2.0)
+    assert inputs["wallet_exposure_limit_ratio"] == pytest.approx(0.2)
+    assert inputs["total_wallet_exposure_limit_ratio"] == pytest.approx(2.0)
     assert inputs["h1_log_range_ema"] == pytest.approx(0.0)
     assert inputs["ema_lower"] == pytest.approx(100200.0)
     assert inputs["min_since_open"] == pytest.approx(99500.0)
 
 
-def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit():
+def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit_ratio():
     config = _sample_config()
     side_cfg = config["bot"]["long"]
-    side_cfg.pop("total_wallet_exposure_limit")
+    side_cfg.pop("total_wallet_exposure_limit_ratio")
     side_cfg.pop("n_positions")
-    side_cfg.pop("risk_we_excess_allowance_pct")
+    side_cfg.pop("risk_we_excess_allowance_fraction")
     side_cfg["risk"] = {
         "total_wallet_exposure_limit_ratio": 0.2,
         "max_positions": 1,
-        "we_excess_allowance_pct": 0.5,
+        "we_excess_allowance_fraction": 0.5,
     }
     inputs = build_trailing_inputs_from_snapshot(
         config,
@@ -330,22 +330,22 @@ def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit
 
     diagnostic = build_trailing_diagnostic(inputs)
 
-    assert inputs["wallet_exposure_limit"] == pytest.approx(0.2)
-    assert inputs["total_wallet_exposure_limit"] == pytest.approx(0.2)
-    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.2)
+    assert inputs["wallet_exposure_limit_ratio"] == pytest.approx(0.2)
+    assert inputs["total_wallet_exposure_limit_ratio"] == pytest.approx(0.2)
+    assert diagnostic["allowed_wallet_exposure_limit_ratio"] == pytest.approx(0.2)
     assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
 
 
 def test_snapshot_trailing_diagnostic_excess_is_always_bounded():
     config = _sample_config()
     side_cfg = config["bot"]["long"]
-    side_cfg.pop("total_wallet_exposure_limit")
+    side_cfg.pop("total_wallet_exposure_limit_ratio")
     side_cfg.pop("n_positions")
-    side_cfg.pop("risk_we_excess_allowance_pct")
+    side_cfg.pop("risk_we_excess_allowance_fraction")
     side_cfg["risk"] = {
         "total_wallet_exposure_limit_ratio": 0.2,
         "max_positions": 1,
-        "we_excess_allowance_pct": 0.5,
+        "we_excess_allowance_fraction": 0.5,
     }
     inputs = build_trailing_inputs_from_snapshot(
         config,
@@ -357,7 +357,7 @@ def test_snapshot_trailing_diagnostic_excess_is_always_bounded():
     diagnostic = build_trailing_diagnostic(inputs)
 
     assert "risk_we_excess_allowance_mode" not in inputs
-    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.2)
+    assert diagnostic["allowed_wallet_exposure_limit_ratio"] == pytest.approx(0.2)
     assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
 
 
@@ -381,7 +381,7 @@ def test_build_trailing_diagnostic_matches_monitor_slice():
 
 def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
     config = _sample_config()
-    config["bot"]["long"]["close_trailing_retracement_pct"] = 0.0
+    config["bot"]["long"]["close_trailing_retracement_base_fraction"] = 0.0
     inputs = build_trailing_inputs_from_snapshot(
         config,
         _sample_snapshot(),
@@ -398,7 +398,7 @@ def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
     assert diagnostic["close"]["status"] == "waiting_threshold"
     assert diagnostic["close"]["threshold_met"] is False
     assert diagnostic["close"]["threshold_price"] == pytest.approx(101000.0)
-    assert diagnostic["close"]["retracement_pct"] == pytest.approx(0.0)
+    assert diagnostic["close"]["retracement_fraction"] == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(
@@ -437,7 +437,7 @@ def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monk
     assert "Entry" in rendered
     assert "Close" in rendered
     assert "Config Inputs" in rendered
-    assert "total_wallet_exposure_limit=2" in rendered
+    assert "total_wallet_exposure_limit_ratio=2" in rendered
     assert "set <key> <value>" in rendered
 
     assert execute_command(state, "set current_price 99999") is False
@@ -455,8 +455,8 @@ def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monk
 
 
 def test_wizard_core_keys_do_not_repeat_shared_params():
-    assert WIZARD_CORE_KEYS.count("wallet_exposure_limit") == 1
-    assert WIZARD_CORE_KEYS.count("risk_we_excess_allowance_pct") == 1
+    assert WIZARD_CORE_KEYS.count("wallet_exposure_limit_ratio") == 1
+    assert WIZARD_CORE_KEYS.count("risk_we_excess_allowance_fraction") == 1
 
 
 def test_trailing_diagnostics_tool_help_runs_without_import_errors():

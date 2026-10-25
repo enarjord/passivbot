@@ -280,12 +280,12 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 } else {
                     &self.bot_params_original[c].short
                 };
-                let base = if authored.wallet_exposure_limit < 0.0 {
-                    authored.total_wallet_exposure_limit / slots as f64
+                let base = if authored.wallet_exposure_limit_ratio < 0.0 {
+                    authored.total_wallet_exposure_limit_ratio / slots as f64
                 } else {
-                    authored.wallet_exposure_limit
+                    authored.wallet_exposure_limit_ratio
                 };
-                budget *= 1.0 + effective_we_excess_allowance_pct(authored, base);
+                budget *= 1.0 + effective_we_excess_allowance_fraction(authored, base);
             }
         }
         Ok((budget, upnl, exposed))
@@ -602,8 +602,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.001,
-            taker_fee: 0.002,
+            maker_fee_fraction: 0.001,
+            taker_fee_fraction: 0.002,
             coins: (0..coins).map(|i| format!("COIN{i}")).collect(),
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -642,12 +642,12 @@ mod tests {
                 let mut pair = BotParamsPair::default();
                 for side in [&mut pair.long, &mut pair.short] {
                     side.n_positions = coins;
-                    side.total_wallet_exposure_limit = 1.0;
+                    side.total_wallet_exposure_limit_ratio = 1.0;
                     side.unstuck_loss_allowance_fraction = 0.01;
                     side.unstuck_close_fraction = 0.1;
                     side.unstuck_exposure_trigger_ratio = 0.95;
-                    side.ema_span_0 = 1.0;
-                    side.ema_span_1 = 2.0;
+                    side.ema_span_0_minutes = 1.0;
+                    side.ema_span_1_minutes = 2.0;
                 }
                 pair
             })
@@ -665,7 +665,7 @@ mod tests {
         OrderFillExecution {
             at_bar_close: false,
             price,
-            fee_rate: 0.001,
+            fee_fraction: 0.001,
             liquidity: "maker",
         }
     }
@@ -1062,7 +1062,7 @@ mod tests {
         // A signed entry rebate reduces the same D, without resetting a flat
         // account or a newly opened position to zero.
         let mut rebate = execution(100.0);
-        rebate.fee_rate = -0.001;
+        rebate.fee_fraction = -0.001;
         bt.process_entry_fill_long(1, 0, &order(1.0, OrderType::EntryInitialNormalLong), rebate)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
@@ -1083,7 +1083,7 @@ mod tests {
         long.unstuck_loss_allowance_fraction = 0.02;
         long.unstuck_close_fraction = 0.5;
         long.unstuck_exposure_trigger_ratio = 0.5;
-        long.wallet_exposure_limit = 0.5;
+        long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
         long.risk_twel_enforcer_enabled = false;
         let mut bt = Backtest::new(
@@ -1094,11 +1094,11 @@ mod tests {
             &p,
         );
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
@@ -1152,11 +1152,11 @@ mod tests {
                 &p,
             );
             let mut entry = execution(100.0);
-            entry.fee_rate = 0.0;
+            entry.fee_fraction = 0.0;
             bt.process_entry_fill_long(0, 0, &order(1.0, OrderType::EntryInitialNormalLong), entry)
                 .unwrap();
             let mut exit = execution(36.0);
-            exit.fee_rate = 0.0;
+            exit.fee_fraction = 0.0;
             bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
                 .unwrap();
             assert_eq!(bt.loss_gate_memory.drawdown(), 64.0);
@@ -1235,11 +1235,11 @@ mod tests {
         );
         assert!(bt.unstuck_memory_enabled && bt.loss_gate_memory_enabled);
         let mut entry = execution(100.0);
-        entry.fee_rate = 0.0;
+        entry.fee_fraction = 0.0;
         bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
             .unwrap();
         let mut exit = execution(50.0);
-        exit.fee_rate = 0.0;
+        exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
         // The ordinary ledger has one loss, while each filter remembers all of it.
@@ -1255,7 +1255,7 @@ mod tests {
         assert_eq!(input.global.loss_gate_realized_pnl_drawdown, 37.5);
         // A later actual profit repays each existing memory independently.
         let mut profit = execution(110.0);
-        profit.fee_rate = 0.0;
+        profit.fee_fraction = 0.0;
         bt.process_close_fill_long(1, 0, &order(-1.0, OrderType::CloseGridLong), profit)
             .unwrap();
         assert_eq!(bt.unstuck_memory.drawdown(), 15.0);

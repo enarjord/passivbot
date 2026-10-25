@@ -19,12 +19,12 @@ from optimizer_overrides import apply_coupled_unstuck_ema_spans
 @pytest.mark.parametrize("derived", [False, True])
 def test_forager_formatter_repeats_from_raw_input_without_changing_source_or_origins(derived):
     raw = get_template_config()
-    weights = {"volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    weights = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
     raw["bot"]["global"]["forager"]["score_weights"] = deepcopy(weights)
     raw["bot"]["long"] = {"forager": {"score_weights": deepcopy(weights)}}
     config = prepare_config(raw, verbose=False)
     source = bot_policy_source_view(config)
-    short_input = {"volume": 0.9, "volatility": 0.2, "ema_readiness": 0.3, "unilateralness": 0.0}
+    short_input = {"volume": 0.9, "log_range": 0.2, "ema_readiness": 0.3, "unilateralness": 0.0}
     if derived:
         install_bot_policy(config, apply_bot_policy_patch(get_bot_policy(config), {
             f"bot.short.forager.score_weights.{name}": value for name, value in short_input.items()
@@ -51,7 +51,7 @@ def test_forager_formatter_repeats_from_raw_input_without_changing_source_or_ori
 @pytest.mark.parametrize("scope", ["global", "long"])
 def test_normalized_only_policy_keeps_untouched_weights_and_recomputes_changed_group(scope):
     raw = get_template_config()
-    weights = {"volume": 2.0, "volatility": 3.0, "ema_readiness": 5.0, "unilateralness": 0.0}
+    weights = {"volume": 2.0, "log_range": 3.0, "ema_readiness": 5.0, "unilateralness": 0.0}
     raw["bot"]["global"]["forager"]["score_weights"] = deepcopy(weights)
     raw["bot"]["long"] = {"forager": {"score_weights": deepcopy(weights)}}
     config = prepare_config(raw, verbose=False)
@@ -65,7 +65,7 @@ def test_normalized_only_policy_keeps_untouched_weights_and_recomputes_changed_g
     assert source["bot"]["global"]["forager"]["score_weights"] == weights
     assert source["bot"]["long"]["forager"]["score_weights"] == weights
     _apply_config_overrides(config, {f"bot.{scope}.forager.score_weights.volume": 9.0})
-    updated = {"volume": 9.0 / 17, "volatility": 3.0 / 17,
+    updated = {"volume": 9.0 / 17, "log_range": 3.0 / 17,
                "ema_readiness": 5.0 / 17, "unilateralness": 0.0}
     assert config["bot"]["long"]["forager"]["score_weights"] == (
         updated if scope == "long" else normalized)
@@ -77,7 +77,7 @@ def test_normalized_only_policy_keeps_untouched_weights_and_recomputes_changed_g
 def test_scenario_patch_preserves_derived_spans_and_unrelated_normalized_pins(kind):
     raw = get_template_config()
     raw["bot"]["portfolio"]["strategy_kind"] = kind
-    weights = {"volume": 2.0, "volatility": 3.0, "ema_readiness": 5.0, "unilateralness": 0.0}
+    weights = {"volume": 2.0, "log_range": 3.0, "ema_readiness": 5.0, "unilateralness": 0.0}
     raw["bot"]["global"]["forager"]["score_weights"] = deepcopy(weights)
     raw["bot"]["long"] = {"forager": {"score_weights": deepcopy(weights)}}
     spans = {"ema_span_0_minutes": [2.0, 20.0]}
@@ -117,7 +117,7 @@ def test_scenario_patch_preserves_derived_spans_and_unrelated_normalized_pins(ki
         )
         assert not any(entry.path == ("bot", "long", "unstuck", "ema_span_0_minutes")
                        for entry in policy._normalized)
-        updated = {"volume": 9.0 / 17, "volatility": 3.0 / 17,
+        updated = {"volume": 9.0 / 17, "log_range": 3.0 / 17,
                    "ema_readiness": 5.0 / 17, "unilateralness": 0.0}
         for scope in ("global", "long"):
             changed = deepcopy(candidate)

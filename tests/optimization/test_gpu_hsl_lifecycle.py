@@ -80,8 +80,8 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
         bot["risk"].update(n_positions=2 if enabled else 0,
                            total_wallet_exposure_limit_ratio=(5.0 if side == "long" else .001) if enabled else 0)
         bot["hsl"].update(enabled=enabled, **policy)
-        bot["strategy"]["ema_anchor"]["base_qty_pct"] = .8
-        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = .8
+        bot["strategy"]["ema_anchor"]["base_qty_fraction"] = .8
+        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = .8
     if mode == "portfolio":
         config["bot"]["hsl"].update(enabled=True, **policy)
     # Entry at 3; RED is observed at the close of 4. The limit panic cannot

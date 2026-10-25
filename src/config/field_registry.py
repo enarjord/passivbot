@@ -72,13 +72,13 @@ def describe_field(path):
                       "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
         "coin_override": field.coin_override.value if field.coin_override else None,
     }
-# One structural definition for operational field identities, current paths and
-# their released-v8 origins. Internal live-value APIs address these identities;
-# authored configuration accepts only the returned canonical paths.
+# Current operational runtime identities and authored paths have one owner.
+# Released-v8 source names live in migrations/operational_live.py; authored
+# configuration accepts only the canonical grouped paths.
 LIVE_OPERATIONAL_PATHS = {
     name: ("live", group, name)
     for group, names in {
-        "account": "user balance_override balance_hysteresis_snap_pct leverage margin_mode_preference",
+        "account": "user balance_override balance_hysteresis_snap_fraction leverage margin_mode_preference",
         "api": "custom_endpoints_path recv_window_ms max_concurrent_api_requests market_snapshot_ticker_strategy",
         "candles": """
             candle_lock_timeout_seconds enable_archive_candle_fetch enable_forager_ws_candles
@@ -92,13 +92,13 @@ LIVE_OPERATIONAL_PATHS = {
             startup_phase_budgets warmup_concurrency warmup_jitter_seconds
         """,
         "fills": """
-            fee_conversion_max_age_ms fee_pct_fallback fee_pct_sanity_abs_max
+            fee_conversion_max_age_ms fallback_fee_fraction max_abs_fee_fraction
             fills_confirmation_overlap_minutes fills_recent_overlap_minutes
         """,
         "execution": """
-            execution_delay_seconds limit_order_create_max_market_dist_pct
-            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_pct
-            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_dist_pct
+            execution_delay_seconds limit_order_create_max_market_distance_fraction
+            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_fraction
+            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_distance_fraction
             order_replacement_churn_gate_stability_minutes order_replacement_churn_gate_window_minutes
             time_in_force
         """,
@@ -115,15 +115,6 @@ LIVE_OPERATIONAL_PATHS.update(
         "fee_conversion_max_age_ms": ("live", "fills", "fee_conversion_max_age_milliseconds"),
     }
 )
-for _field_id, _public_name in {
-    "balance_hysteresis_snap_pct": "balance_hysteresis_snap_fraction",
-    "fee_pct_fallback": "fallback_fee_fraction",
-    "fee_pct_sanity_abs_max": "max_abs_fee_fraction",
-    "limit_order_create_max_market_dist_pct": "limit_order_create_max_market_distance_fraction",
-    "order_match_tolerance_pct": "order_match_tolerance_fraction",
-    "order_replacement_churn_gate_market_dist_pct": "order_replacement_churn_gate_market_distance_fraction",
-}.items():
-    LIVE_OPERATIONAL_PATHS[_field_id] = (*LIVE_OPERATIONAL_PATHS[_field_id][:-1], _public_name)
 
 
 def live_field_path(field_id: str) -> str:
@@ -159,14 +150,14 @@ _FIELDS_BY_TYPE = {
             starting_balance taker_fee_override_fraction
         """,
         "live": """
-            balance_hysteresis_snap_pct candle_lock_timeout_seconds execution_delay_seconds
-            exchange_symbol_unavailable_cooldown_hours fee_pct_fallback fee_pct_sanity_abs_max
+            balance_hysteresis_snap_fraction candle_lock_timeout_seconds execution_delay_seconds
+            exchange_symbol_unavailable_cooldown_hours fallback_fee_fraction max_abs_fee_fraction
             fills_confirmation_overlap_minutes fills_recent_overlap_minutes
             forager_ws_candle_rest_audit_minutes
-            inactive_coin_candle_ttl_minutes limit_order_create_max_market_dist_pct
+            inactive_coin_candle_ttl_minutes limit_order_create_max_market_distance_fraction
             max_active_candle_tail_gap_minutes
-            max_forager_candle_refresh_seconds order_match_tolerance_pct
-            order_replacement_churn_gate_market_dist_pct
+            max_forager_candle_refresh_seconds order_match_tolerance_fraction
+            order_replacement_churn_gate_market_distance_fraction
             order_replacement_churn_gate_stability_minutes
             order_replacement_churn_gate_window_minutes risk_bootstrap_max_lookback_minutes
             warmup_jitter_seconds
@@ -176,10 +167,10 @@ _FIELDS_BY_TYPE = {
             checkpoint_interval_minutes event_rotation_mb event_rotation_minutes
             retain_days snapshot_interval_seconds
         """,
-        "optimize.prefilter": "adverse_directionality volatility_ema_1m volatility_ema_1h penalty_weight",
+        "optimize.prefilter": "adverse_directionality_score log_range_ema_1m log_range_ema_1h penalty_weight",
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
-        "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
+        "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
         "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
@@ -225,7 +216,7 @@ _FIELDS_BY_TYPE = {
         "backtest": "exchanges scenarios visible_metrics",
         "logging": "live_event_debug_profiles",
         "optimize": "enable_overrides fixed_params limits scoring",
-        "optimize.prefilter": "checks exposure_ratios",
+        "optimize.prefilter": "checks exposure_probe_fractions",
         "optimize.gpu.screening": "scenarios",
     },
     FieldType.OBJECT: {
@@ -260,8 +251,8 @@ _SHARED_SIDE_FIELDS = {
     FieldType.FLOAT: """
         universe.minimum_coin_age_days
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
-        forager.score_weights.volatility forager.score_weights.volume
-        forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
+        forager.score_weights.log_range forager.score_weights.volume
+        forager.unilateralness_ema_span_minutes forager.log_range_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
         hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
@@ -379,7 +370,7 @@ def get_field_registry() -> FieldRegistry:
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
-    for name in ("mutation_prob", "mutation_prob_per_variable"):
+    for name in ("mutation_probability", "mutation_probability_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):
@@ -412,7 +403,7 @@ def get_field_registry() -> FieldRegistry:
     add("backtest.scenarios.*.exchanges", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.scenarios.*.coin_sources", FieldType.OBJECT, nullable=True)
     add("backtest.scenarios.*.overrides", FieldType.OBJECT)
-    add("optimize.prefilter.exposure_ratios.*", FieldType.FLOAT)
+    add("optimize.prefilter.exposure_probe_fractions.*", FieldType.FLOAT)
     add("optimize.prefilter.checks.*.enabled", FieldType.BOOLEAN)
     add("optimize.prefilter.checks.*.metric", FieldType.STRING)
     add("optimize.prefilter.checks.*.sides", FieldType.ARRAY)

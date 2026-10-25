@@ -48,12 +48,12 @@ fn equity_shared_references_match_current_producers() {
     let mut bp_pair = BotParamsPair::default();
     bp_pair.long.n_positions = 1;
     bp_pair.short.n_positions = 1;
-    bp_pair.long.total_wallet_exposure_limit = 1.0;
-    bp_pair.short.total_wallet_exposure_limit = 1.0;
-    bp_pair.long.ema_span_0 = 10.0;
-    bp_pair.long.ema_span_1 = 20.0;
-    bp_pair.short.ema_span_0 = 10.0;
-    bp_pair.short.ema_span_1 = 20.0;
+    bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.long.ema_span_0_minutes = 10.0;
+    bp_pair.long.ema_span_1_minutes = 20.0;
+    bp_pair.short.ema_span_0_minutes = 10.0;
+    bp_pair.short.ema_span_1_minutes = 20.0;
     bp_pair.long.hsl_enabled = true;
     bp_pair.short.hsl_enabled = true;
 
@@ -64,8 +64,8 @@ fn equity_shared_references_match_current_producers() {
         minimum_coin_age_days: [0.0; 2],
         inception_timestamps_ms: vec![],
         starting_balance: 100.0,
-        maker_fee: 0.0,
-        taker_fee: 0.0,
+        maker_fee_fraction: 0.0,
+        taker_fee_fraction: 0.0,
         coins: vec!["TEST".to_string()],
         active_coin_indices: None,
         first_timestamp_ms: 0,

@@ -37,8 +37,8 @@ def inputs(mode="coin"):
         # exists. Its strategy does not consume hourly volatility.
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         for branch in ("entry", "close"):
-            strategy[branch]["threshold_volatility_1h_weight"] = 0.0
-            strategy[branch]["retracement_volatility_1h_weight"] = 0.0
+            strategy[branch]["threshold_log_range_1h_coefficient"] = 0.0
+            strategy[branch]["retracement_log_range_1h_coefficient"] = 0.0
     active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,
