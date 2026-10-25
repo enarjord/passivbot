@@ -170,7 +170,7 @@ def test_referenced_full_config_discards_only_its_unused_backtest_cap(tmp_path):
 @pytest.mark.parametrize("value", ["0.000375", "-0.0001", " 0 ", None])
 @pytest.mark.parametrize("layer", ["root", "fixed", "scenario"])
 def test_released_fee_strings_keep_actual_fee_values_and_null_inheritance(fee_kind, value, layer):
-    from backtest import _resolve_backtest_fees
+    from backtest import _resolve_backtest_fee_fractions
     from optimization.warmup import _apply_config_overrides
     from suite_runner import apply_scenario_overrides
 
@@ -201,7 +201,7 @@ def test_released_fee_strings_keep_actual_fee_values_and_null_inheritance(fee_ki
     else:
         assert type(final) is float and final == float(value)
     settings = dict(coins=["TEST"], mss={"TEST": {"maker": 0.0002, "taker": 0.0005}}, fee_kind=fee_kind)
-    assert _resolve_backtest_fees(**settings, override_value=final) == _resolve_backtest_fees(
+    assert _resolve_backtest_fee_fractions(**settings, override_value=final) == _resolve_backtest_fee_fractions(
         **settings, override_value=value,
     )
     if isinstance(value, str):
