@@ -2569,7 +2569,7 @@ _ADAPTIVE_DISABLED_VALUES = dict(
             "entry_cooldown_max_duration_minutes",
             "entry_cooldown_exposure_weight",
             "entry_cooldown_adverse_weight",
-            "unilateralness_ema_span_1m",
+            "unilateralness_ema_span_minutes",
             "forager_score_weights_unilateralness",
             "unilateralness_window",
         ),

@@ -151,8 +151,8 @@ The optimizer retains these internal sub-weight identifiers; authored bounds use
 - `short_forager_score_weights_log_range`
 - `short_forager_score_weights_unilateralness`
 
-The optional span dimensions retain the internal identifiers `long_unilateralness_ema_span_1m` and
-`short_unilateralness_ema_span_1m`. Missing unilateralness weight and span bounds
+The optional span dimensions retain the internal identifiers `long_unilateralness_ema_span_minutes` and
+`short_unilateralness_ema_span_minutes`. Missing unilateralness weight and span bounds
 are hydrated as `[configured_value, configured_value]`, using the normalized
 Forager weight and the configured floating-point span for each side. New configs
 default to `[0.0, 0.0]` for the weight and `[60.0, 60.0]` for the span. Templates

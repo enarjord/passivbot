@@ -23,7 +23,7 @@ BOT_GROUP_FIELD_MAP = {
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_minutes",
         "volatility_ema_span_minutes": "forager_log_range_ema_span_minutes",
         "volume_ema_span_minutes": "forager_volume_ema_span_minutes",
     },

@@ -24,6 +24,7 @@ def require_real_native_extension():
 @pytest.mark.parametrize("old", [
     "filter_volume_ema_span_1m", "forager_volume_ema_span_1m",
     "filter_volatility_ema_span_1m", "forager_volatility_ema_span_1m",
+    "unilateralness_ema_span_1m",
 ])
 @pytest.mark.parametrize("location", ["global", "symbol"])
 def test_native_forager_packet_rejects_retired_span_aliases(old, location):
@@ -191,3 +192,86 @@ def test_unilateralness_retains_unit_interval_validation_when_weighted(value):
             values, "long", 1,
             dict(volume=0.0, ema_readiness=0.0, log_range=0.0, unilateralness=1.0), True,
         )
+
+
+@pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("shape", ["old_only", "both", "old_none"])
+def test_raw_cpu_rejects_retired_optional_unilateralness_span_even_with_default(kind, shape):
+    from backtest import build_backtest_payload
+    from tools.gpu_parity import build_parser, fixture_inputs
+    import passivbot_rust as native
+
+    args = build_parser().parse_args([
+        "--fixture", kind, "--sides", "both", "--hsl", "disabled",
+        "--coins", "2", "--bars", "65",
+    ])
+    source, candles, markets, btc, timestamps = fixture_inputs(args)
+    payload = build_backtest_payload(candles, markets, source, args.exchange, btc, timestamps)
+    bot = deepcopy(payload.bot_params_list)
+    params = bot[0]["long"]
+    if shape == "old_only":
+        params.pop("unilateralness_ema_span_minutes")
+    params["unilateralness_ema_span_1m"] = None if shape == "old_none" else 3.75
+    with pytest.raises(ValueError, match="unilateralness_ema_span_1m.*retired"):
+        native.run_backtest_bundle(payload.bundle, bot, payload.strategy_params_list,
+                                   payload.exchange_params, payload.backtest_params)
+
+
+@pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
+def test_genuinely_omitted_current_unilateralness_duration_keeps_native_default(kind):
+    import numpy as np
+    import passivbot_rust as native
+    from backtest import build_backtest_payload
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    args = build_parser().parse_args([
+        "--fixture", kind, "--sides", "both", "--hsl", "disabled",
+        "--coins", "2", "--bars", "65",
+    ])
+    source, candles, markets, btc, timestamps = fixture_inputs(args)
+    payload = build_backtest_payload(candles, markets, source, args.exchange, btc, timestamps)
+    explicit = deepcopy(payload.bot_params_list)
+    explicit[0]["long"]["unilateralness_ema_span_minutes"] = 60.0
+    omitted = deepcopy(explicit)
+    omitted[0]["long"].pop("unilateralness_ema_span_minutes")
+    outputs = [native.run_backtest_bundle(payload.bundle, bot, payload.strategy_params_list,
+               payload.exchange_params, payload.backtest_params) for bot in (explicit, omitted)]
+    np.testing.assert_array_equal(outputs[0][0], outputs[1][0])
+    np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
+
+
+@pytest.mark.parametrize("shape", ["grouped", "flat"])
+def test_released_unilateralness_duration_and_bounds_use_frozen_source_names(shape):
+    source = released_v8_policy()
+    if shape == "flat":
+        source["bot"]["long"]["forager"].pop("unilateralness_ema_span_1m")
+        source["bot"]["long"]["unilateralness_ema_span_1m"] = 42.5
+    else:
+        source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
+    source["optimize"]["bounds"]["long_unilateralness_ema_span_1m"] = [20.5, 80.75, 0.25]
+    source["optimize"]["fixed_params"] = ["bot.long.unilateralness_ema_span_1m"]
+    original = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    assert source == original
+    assert result.config["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] == 42.5
+    native = flatten_optimize_bounds(result.config["optimize"]["bounds"],
+                                     strategy_kind="trailing_martingale")
+    assert native["long_unilateralness_ema_span_minutes"] == [20.5, 80.75, 0.25]
+    assert "long_unilateralness_ema_span_1m" not in native
+    assert result.config["optimize"]["fixed_params"] == [
+        "bot.long.forager.unilateralness_ema_span_minutes",
+    ]
+
+
+def test_fractional_unilateralness_span_keeps_derived_window_and_minute_admission():
+    import numpy as np
+    from optimization.gpu.model import adaptive_params, EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+
+    derived = adaptive_params({"unilateralness_ema_span_minutes": 3.75})
+    assert derived["unilateralness_ema_span_minutes"] == 3.75
+    assert derived["unilateralness_window"] == 75
+    keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    values = np.ones((1, len(keys)), dtype=np.float64)
+    with pytest.raises(ValueError, match="1m|one-minute|1-minute"):
+        _scale_directional_minute_parameters(values, keys, sides=1, interval_minutes=2.0)

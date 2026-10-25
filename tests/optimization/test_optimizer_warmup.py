@@ -241,7 +241,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
-    _set_bounds(cfg, {"long_unilateralness_ema_span_1m": [1.0, 60.0]})
+    _set_bounds(cfg, {"long_unilateralness_ema_span_minutes": [1.0, 60.0]})
     if consumer == "forager":
         _set_bounds(cfg, {"long_forager_score_weights_unilateralness": [0.0, 1.0]})
     else:
@@ -318,15 +318,15 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
         _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit_ratio": [float(pside == side)]})
     _set_bounds(cfg, {f"{side}_{weight_key}": [0.1 if consumer == "forager" else 0.0, 1.0]})
-    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0]})
-    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
+    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0]})
+    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_minutes"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
     value = 0.0 if pin == "weight" else 2.5
     expected = 0 if pin == "weight" else 51
     if pin_source == "runtime":
         cfg["optimize"]["fixed_runtime_overrides"] = {".".join(path): value}
     else:
-        other_key = f"{side}_unilateralness_ema_span_1m" if pin == "weight" else f"{side}_{weight_key}"
+        other_key = f"{side}_unilateralness_ema_span_minutes" if pin == "weight" else f"{side}_{weight_key}"
         other_path = ["bot", side, *(span_path if pin == "weight" else weight_path)]
         cfg[ANCHOR_PLAN_KEY] = {
             "anchors": [{"source": "anchor.json", "fixed_values": [{"key": key, "path": path, "value": value}]}],
@@ -520,7 +520,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
             # Keep omitted zero weights zero through normalization, including at
             # the lower corner, while leaving RMS history fully reachable.
             f"{side}_forager_score_weights_unilateralness": [0.1, 1.0],
-            f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
+            f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
         })
     expected = 2000001 if dynamic or slots < 2 else 0

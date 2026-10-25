@@ -32,7 +32,7 @@ def adaptive_input(*, score=-0.75, exposure=0.0, base=0.0):
             "exposure_ratio": exposure,
             "adverse_directionality": 20.0,
         },
-        "unilateralness_ema_span_1m": 60.0,
+        "unilateralness_ema_span_minutes": 60.0,
     }
     inp = make_input(
         balance=1000.0,
@@ -144,7 +144,7 @@ def test_rms_forager_prefers_lower_penalty_and_ignores_direction_sign():
         "n_positions": 1,
         "forager_score_weights": {
             "volume": 0.0,
-            "volatility": 0.0,
+            "log_range": 0.0,
             "ema_readiness": 0.0,
             "unilateralness": 1.0,
         },
@@ -335,7 +335,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     )
     for side in ("long", "short"):
         assert original[f"{side}_forager_score_weights_unilateralness"] == [0.0, 0.0]
-        assert original[f"{side}_unilateralness_ema_span_1m"] == [60.0, 60.0]
+        assert original[f"{side}_unilateralness_ema_span_minutes"] == [60.0, 60.0]
     for side in ("long", "short"):
         assert original[f"{side}_entry_cooldown_weights_minutes_exposure_ratio"] == [0.0, 0.0]
         assert original[f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] == [0.0, 0.0]
@@ -348,7 +348,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
     assert bounds["long_forager_score_weights_unilateralness"] == [0.0, 1.0]
-    assert bounds["long_unilateralness_ema_span_1m"] == [20.0, 80.5]
+    assert bounds["long_unilateralness_ema_span_minutes"] == [20.0, 80.5]
 
 
 def test_forager_can_rank_carried_score_while_current_cooldown_is_unavailable():
@@ -455,7 +455,7 @@ def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pe
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "forager_score_weights": {
-        "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
+        "volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
     }}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, long_bp=bp) for i in range(2)]
     for symbol in symbols:
@@ -888,7 +888,7 @@ def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0, "forager_score_weights": {
-        "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
+        "volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
     }}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(2)]
     for i, symbol in enumerate(symbols):
@@ -1104,9 +1104,9 @@ def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, 
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
           "forager_volume_ema_span_minutes": 10.0,
-          "unilateralness_ema_span_1m": 60.0,
+          "unilateralness_ema_span_minutes": 60.0,
           "forager_score_weights": {
-              "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}}
+              "volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(3)]
     for i, symbol in enumerate(symbols):
         symbol[side]["mode"] = None
@@ -1439,19 +1439,19 @@ async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
 def test_direct_rust_orders_enforce_supported_rms_span(side, consumer):
     import passivbot_rust as pbr
 
-    bp = {"unilateralness_ema_span_1m": 100000.0, "n_positions": 1,
+    bp = {"unilateralness_ema_span_minutes": 100000.0, "n_positions": 1,
           "entry_cooldown_max_duration_minutes": 60.0,
           "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": float(consumer == "adverse")}}
     if consumer == "forager":
-        bp["forager_score_weights"] = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+        bp["forager_score_weights"] = {"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
     inp = make_input(balance=1000.0, global_bp=bot_params_pair(**{f"{side}_overrides": bp}),
                      symbols=[make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(2)])
     for symbol in inp["symbols"]:
         symbol["emas"]["m1"]["signed_unilateralness"] = [[100000.0, 0.5]]
     compute(pbr, inp)
-    inp["global"]["global_bot_params"][side]["unilateralness_ema_span_1m"] = 100000.01
+    inp["global"]["global_bot_params"][side]["unilateralness_ema_span_minutes"] = 100000.01
     for symbol in inp["symbols"]:
-        symbol[side]["bot_params"]["unilateralness_ema_span_1m"] = 100000.01
+        symbol[side]["bot_params"]["unilateralness_ema_span_minutes"] = 100000.01
         symbol["emas"]["m1"]["signed_unilateralness"] = [[100000.01, 0.5]]
     with pytest.raises(ValueError, match="unilateralness.*100000"):
         compute(pbr, inp)
@@ -1616,7 +1616,7 @@ async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(sid
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
           "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
           "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
-          "entry_cooldown_max_duration_minutes": 30.0, "unilateralness_ema_span_1m": 1.0}
+          "entry_cooldown_max_duration_minutes": 30.0, "unilateralness_ema_span_minutes": 1.0}
     position = {"size": 1.0 if side == "long" else -1.0, "price": 100.0}
     bot = SimpleNamespace(
         cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 21 * 60000,

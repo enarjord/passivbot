@@ -15013,7 +15013,7 @@ class Passivbot:
             "entry_cooldown_min_duration_minutes",
             "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes",
-            "unilateralness_ema_span_1m",
+            "unilateralness_ema_span_minutes",
             "n_positions",
             "total_wallet_exposure_limit_ratio",
             "wallet_exposure_limit_ratio",
@@ -17710,7 +17710,7 @@ class Passivbot:
             ("short", vol_span_short, lr_span_short),
         ):
             if pside in directional_scoring_sides:
-                span = float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+                span = float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
                 rank_feature_unavailable_by_side[pside].update(
                     s for s in symbols if span not in ranking_directional.get(s, {})
                 )

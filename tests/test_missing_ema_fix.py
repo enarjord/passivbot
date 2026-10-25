@@ -526,7 +526,7 @@ class _BundleReproBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
         if key in (
             "filter_volume_ema_span",
             "forager_volume_ema_span_minutes",
@@ -925,7 +925,7 @@ async def test_disabled_opposite_side_does_not_block_flat_forager_degradation():
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1104,7 +1104,7 @@ async def test_forager_ranking_degradation_authorizes_only_affected_side():
         if key == "forager_score_weights":
             return {
                 "volume": 1.0 if pside == "long" else 0.0,
-                "volatility": 0.0,
+                "log_range": 0.0,
             }
         if key == "forager_volume_drop_pct":
             return 0.0
@@ -1393,7 +1393,7 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1452,7 +1452,7 @@ async def test_candidate_ema_unavailable_event_console_owns_normal_warning(caplo
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1543,7 +1543,7 @@ def _enable_forager_required_ranking(bot):
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 1.0, "volatility": 1.0}
+            return {"volume": 1.0, "log_range": 1.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -1997,7 +1997,7 @@ async def test_cache_only_optional_metric_gaps_are_candidate_unavailable():
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "volatility": 0.0}
+            return {"volume": 0.0, "log_range": 0.0}
         if key == "forager_volume_drop_pct":
             return 0.0
         return original_bot_value(pside, key)
@@ -3070,7 +3070,7 @@ class _PacingProbeBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
         return 0.0
 
 
@@ -3369,7 +3369,7 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
     bot.is_forager_mode = lambda side=None: side in (None, "long")
     original = bot.bot_value
     bot.bot_value = lambda side, key: (
-        {"volume": 0.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+        {"volume": 0.0, "log_range": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
         if key == "forager_score_weights" else original(side, key)
     )
     missing = {symbol: {"current": [60.0], "forager": []}}
@@ -3410,7 +3410,7 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
     def bot_value(pside, key):
         if key == "forager_score_weights":
             return {**original_bot_value(pside, key), "unilateralness": 1.0}
-        if key == "unilateralness_ema_span_1m":
+        if key == "unilateralness_ema_span_minutes":
             # The opposite side never ranks or consumes adverse RMS. Its huge
             # configured span must not enlarge an active side's candle request.
             return 1.0 if pside == side else 100000.0
@@ -3493,10 +3493,10 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     bot.is_pside_enabled = lambda s: s == side
     bot.get_exchange_time = lambda: 21 * 60000
     original = bot.bot_value
-    weights = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+    weights = {"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
 
     def bot_value(s, key):
-        values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": span,
+        values = {"forager_score_weights": weights, "unilateralness_ema_span_minutes": span,
                   "total_wallet_exposure_limit_ratio": 1.0, "n_positions": slots}
         return values[key] if key in values else original(s, key)
 
@@ -3515,7 +3515,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
     bot.cm.get_candles = candles
     params = {"n_positions": slots, "total_wallet_exposure_limit_ratio": 1.0,
-              "forager_score_weights": weights, "unilateralness_ema_span_1m": span}
+              "forager_score_weights": weights, "unilateralness_ema_span_minutes": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     symbols[0]["tradable"] = held_eligibility in {"approved", "age", "zero_exposure"}
     if held_eligibility == "zero_exposure":

@@ -2820,7 +2820,7 @@ mod core {
         } else {
             &symbol.emas.m1
         };
-        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
+        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_minutes)
             .ok_or_else(|| {
                 let unavailable = if forager {
                     &symbol.unilateralness_unavailable.forager
@@ -2829,8 +2829,8 @@ mod core {
                 };
                 if symbol
                     .unilateralness_warmup_spans
-                    .contains(&bp.unilateralness_ema_span_1m)
-                    || unavailable.contains(&bp.unilateralness_ema_span_1m)
+                    .contains(&bp.unilateralness_ema_span_minutes)
+                    || unavailable.contains(&bp.unilateralness_ema_span_minutes)
                 {
                     OrchestratorError::UnilateralnessUnavailable {
                         symbol_idx: symbol.symbol_idx,
@@ -3076,11 +3076,11 @@ mod core {
         let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
             && (symbol
                 .unilateralness_warmup_spans
-                .contains(&side.bot_params.unilateralness_ema_span_1m)
+                .contains(&side.bot_params.unilateralness_ema_span_minutes)
                 || symbol
                     .unilateralness_unavailable
                     .current
-                    .contains(&side.bot_params.unilateralness_ema_span_1m));
+                    .contains(&side.bot_params.unilateralness_ema_span_minutes));
         let requests =
             if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
                 && wants_entries

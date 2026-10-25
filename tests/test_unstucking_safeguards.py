@@ -444,7 +444,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "exposure_ratio": 0.0,
                     "adverse_directionality": 0.0,
                 },
-                "unilateralness_ema_span_1m": 60.0,
+                "unilateralness_ema_span_minutes": 60.0,
                 "ema_span_0": 1.0,
                 "ema_span_1": 2.0,
                 "entry_volatility_ema_span_1h": 0.0,

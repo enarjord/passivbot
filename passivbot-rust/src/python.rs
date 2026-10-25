@@ -2733,6 +2733,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         "forager_volume_drop_pct",
         "filter_volume_drop_pct",
         "risk_twel_entry_gate_enabled",
+        "unilateralness_ema_span_1m",
     ] {
         if dict.contains(key)? {
             return Err(PyValueError::new_err(format!(
@@ -2845,7 +2846,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             }
             None => Default::default(),
         },
-        unilateralness_ema_span_1m: match dict.get_item("unilateralness_ema_span_1m")? {
+        unilateralness_ema_span_minutes: match dict.get_item("unilateralness_ema_span_minutes")? {
             Some(v) => v.extract()?,
             None => 60.0,
         },
@@ -2877,7 +2878,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
     };
     crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
-    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_1m)
+    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_minutes)
         .map_err(PyValueError::new_err)?;
     Ok(params)
 }
@@ -4421,7 +4422,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     for symbol in &input.symbols {
         for side in [&symbol.long, &symbol.short] {
             crate::entry_cooldown::validate(&side.bot_params).map_err(PyValueError::new_err)?;
-            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_1m)
+            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_minutes)
                 .map_err(PyValueError::new_err)?;
         }
     }

@@ -624,7 +624,7 @@ pub struct BotParams {
     #[serde(default)]
     pub entry_cooldown_weights_minutes: crate::entry_cooldown::CooldownWeights,
     #[serde(default = "default_unilateralness_span")]
-    pub unilateralness_ema_span_1m: f64,
+    pub unilateralness_ema_span_minutes: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
@@ -684,7 +684,7 @@ impl Default for BotParams {
             entry_cooldown_min_duration_minutes: 0.0,
             entry_cooldown_max_duration_minutes: None,
             entry_cooldown_weights_minutes: Default::default(),
-            unilateralness_ema_span_1m: 60.0,
+            unilateralness_ema_span_minutes: 60.0,
             n_positions: 0,
             total_wallet_exposure_limit_ratio: 0.0,
             wallet_exposure_limit_ratio: 0.0,

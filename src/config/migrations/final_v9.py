@@ -20,6 +20,7 @@ _RELEASED_SHARED_FLAT_PATHS = {
     "risk_twel_enforcer_threshold": ("risk", "total_exposure_enforcer", "threshold_ratio"),
     "forager_volume_ema_span_1m": ("forager", "volume_ema_span_minutes"),
     "forager_volatility_ema_span_1m": ("forager", "volatility_ema_span_minutes"),
+    "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_minutes"),
 }
 _RELEASED_SHARED_BOUND_PATHS = {
     **_RELEASED_SHARED_FLAT_PATHS,

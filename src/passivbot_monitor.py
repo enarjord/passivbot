@@ -944,7 +944,7 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             if (
                 hint
                 and hint["weights"] == out[pside]["score_weights"]
-                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
             ):
                 out[pside]["ranking"] = deepcopy(hint["ranking"])
             continue
@@ -1373,7 +1373,7 @@ def _update_monitor_runtime_hints(
         score = float(top["score"])
         self._monitor_runtime_forager_hints[pside] = {
             "weights": weights,
-            "span": float(self.bot_value(pside, "unilateralness_ema_span_1m")),
+            "span": float(self.bot_value(pside, "unilateralness_ema_span_minutes")),
             "ranking": {
                 "source": "rust_orchestrator",
                 "observed_at_ms": int(utc_ms()),

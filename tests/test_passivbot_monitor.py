@@ -7734,7 +7734,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
         "filter_volatility_drop_pct": volatility_drop_pct,
-        "unilateralness_ema_span_1m": 60.0,
+        "unilateralness_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     for symbol, score, volume in zip(symbols, [0.9, -0.1, 0.6], [900.0, 100.0, 600.0]):
@@ -7785,7 +7785,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "unilateralness_ema_span_1m" else volatility_drop_pct)
+            else (60.0 if key == "unilateralness_ema_span_minutes" else volatility_drop_pct)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,
@@ -7811,7 +7811,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     assert calls == []  # Rendering diagnostics performs no feature fetch/recalculation.
     # A config change cannot relabel the previous selection with a new span.
     original = bot.bot_value
-    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_1m" else original(s, key)
+    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_minutes" else original(s, key)
     assert "ranking" not in (await monitor._build_monitor_forager_section(bot))[side]
     bot.bot_value = original
     # No scoring diagnostic means no fabricated or retained legacy total.

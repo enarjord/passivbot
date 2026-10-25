@@ -1984,12 +1984,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         if *enabled
                             && !trackers
                                 .iter()
-                                .any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                                .any(|(span, _)| *span == bp.unilateralness_ema_span_minutes)
                         {
                             trackers.push((
-                                bp.unilateralness_ema_span_1m,
+                                bp.unilateralness_ema_span_minutes,
                                 crate::unilateralness::RollingRms::new(
-                                    bp.unilateralness_ema_span_1m,
+                                    bp.unilateralness_ema_span_minutes,
                                 )
                                 .expect("validated unilateralness span"),
                             ));

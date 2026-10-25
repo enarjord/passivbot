@@ -1406,7 +1406,7 @@ def _candidate_parameter_matrix(
             offset = side_index * len(param_keys)
             matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
                 20.0
-                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_minutes")]
             )
     return matrix
 

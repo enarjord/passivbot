@@ -25,8 +25,10 @@ the unilateralness score retains its existing unit-interval validation.
 Native forager volume and log-range durations use `_ema_span_minutes`. GPU parameter packing
 divides these floating durations by the replay interval exactly once. Decoded shader fields use
 `_ema_span_candles` for the resulting floating candle counts; column positions and EMA arithmetic
-remain unchanged. Released-v8 conversion owns the old span and weight vocabulary independently
-of current native bindings.
+remain unchanged. Native `unilateralness_ema_span_minutes` retains the floating one-minute
+exponential RMS span and its existing 20-span observation window; enabled consumers still require
+completed one-minute candles. Released-v8 conversion owns the old span and weight vocabulary
+independently of current native bindings.
 
 ## Inherited Directional Defaults
 

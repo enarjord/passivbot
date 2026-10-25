@@ -358,7 +358,7 @@ def _scale_directional_minute_parameters(
         raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
-        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        span_col = offset + keys.index("unilateralness_ema_span_minutes")
         adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
         score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
         ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]

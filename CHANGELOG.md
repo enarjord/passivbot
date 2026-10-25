@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
   price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
-  replay spans and monitor fields without changing ranking, normalization, limits or GPU slots.
+  replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing
+  ranking, normalization, limits or GPU slots.
   Released-v8 native span and optimizer identifiers remain confined to explicit conversion.
 
 - Align native exposure budgets, enforcer thresholds and optimizer IDs with explicit `_ratio`

@@ -82,7 +82,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         for side in ("long", "short"):
             if not bot.is_pside_enabled(side):
                 continue
-            span = float(bot.bot_value(side, "unilateralness_ema_span_1m"))
+            span = float(bot.bot_value(side, "unilateralness_ema_span_minutes"))
             if adverse_enabled(bot, side, symbol):
                 current_spans.add(span)
             if side in scoring_sides:
