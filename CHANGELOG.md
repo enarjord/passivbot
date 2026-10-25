@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use explicit `_fraction` names in backtest comparison JSON and plotting range arguments.
+  Comparison values and plot slicing stay unchanged; human summaries still display percentages.
+
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.
