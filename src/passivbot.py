@@ -2684,8 +2684,8 @@ class Passivbot:
                     for key in (
                         "next_symbol",
                         "next_target_price",
-                        "next_target_distance_ratio",
-                        "next_unstuck_trigger_distance_ratio",
+                        "next_target_price_offset_fraction",
+                        "next_unstuck_trigger_price_offset_fraction",
                     ):
                         if hint.get(key) is not None:
                             info[key] = hint[key]
@@ -2745,13 +2745,13 @@ class Passivbot:
                         ),
                         round(
                             self._trailing_status_float(
-                                info.get("next_target_distance_ratio")
+                                info.get("next_target_price_offset_fraction")
                             ),
                             8,
                         ),
                         round(
                             self._trailing_status_float(
-                                info.get("next_unstuck_trigger_distance_ratio")
+                                info.get("next_unstuck_trigger_price_offset_fraction")
                             ),
                             8,
                         ),
@@ -2798,8 +2798,8 @@ class Passivbot:
             tuple(sorted((info.get("override_loss_allowance_pcts") or {}).items())),
             str(info.get("next_symbol") or ""),
             info.get("next_target_price"),
-            info.get("next_target_distance_ratio"),
-            info.get("next_unstuck_trigger_distance_ratio"),
+            info.get("next_target_price_offset_fraction"),
+            info.get("next_unstuck_trigger_price_offset_fraction"),
         )
 
     def _unstuck_status_operator_decision(

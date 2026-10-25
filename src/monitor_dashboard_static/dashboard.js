@@ -717,7 +717,7 @@
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.status === "ok" ? "is-ok" : side.status === "disabled" ? "" : "is-warn"}">${escapeHtml(side.status || "-")}</span></p>
         <p class="subline">allowance ${escapeHtml(fmtCompact(side.allowance_live, 4))} · next ${escapeHtml(side.next_symbol || "-")}</p>
-        <p class="minor">target ${escapeHtml(fmtCompact(side.next_target_price))} · dist ${escapeHtml(fmtPctRatio(side.next_target_distance_ratio))} · ema ${escapeHtml(fmtPctRatio(side.next_unstuck_trigger_distance_ratio))}</p>
+        <p class="minor">target ${escapeHtml(fmtCompact(side.next_target_price))} · dist ${escapeHtml(fmtPctRatio(side.next_target_price_offset_fraction))} · ema ${escapeHtml(fmtPctRatio(side.next_unstuck_trigger_price_offset_fraction))}</p>
       `;
       els.unstuckDetails.appendChild(item);
     }

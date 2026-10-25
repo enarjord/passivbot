@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Identify signed diagnostic price changes and target offsets as scale-one fractions,
+  preserving monitor/trailing values and percentage display.
+
 - Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
   explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
   stay unchanged; retired native names are not accepted as aliases.

@@ -4436,8 +4436,8 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
         "long": {
             "next_symbol": "BTC/USDT:USDT",
             "next_target_price": 101_000.0,
-            "next_target_distance_ratio": 0.005,
-            "next_unstuck_trigger_distance_ratio": 0.0125,
+            "next_target_price_offset_fraction": 0.005,
+            "next_unstuck_trigger_price_offset_fraction": 0.0125,
         }
     }
     captured_events = []
@@ -4471,8 +4471,8 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
         bot._monitor_runtime_unstuck_hints["long"] = {
             "next_symbol": "ETH/USDT:USDT",
             "next_target_price": 2_500.0,
-            "next_target_distance_ratio": -0.01,
-            "next_unstuck_trigger_distance_ratio": 0.02,
+            "next_target_price_offset_fraction": -0.01,
+            "next_unstuck_trigger_price_offset_fraction": 0.02,
         }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
@@ -4505,7 +4505,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     assert captured_events[0]["side_statuses"]["long"]["next_symbol"] == "BTC/USDT:USDT"
     assert captured_events[1]["side_statuses"]["long"]["next_symbol"] == "ETH/USDT:USDT"
     assert captured_events[1]["side_statuses"]["long"][
-        "next_target_distance_ratio"
+        "next_target_price_offset_fraction"
     ] == pytest.approx(-0.01)
     assert captured_events[0]["side_statuses"]["short"]["status"] == "disabled"
 

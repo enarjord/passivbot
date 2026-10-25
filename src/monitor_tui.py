@@ -901,8 +901,8 @@ def _render_unstuck_panel(snapshot: dict[str, Any]) -> list[str]:
                 "allowance_live",
                 "next_symbol",
                 "next_target_price",
-                "next_target_distance_ratio",
-                "next_unstuck_trigger_distance_ratio",
+                "next_target_price_offset_fraction",
+                "next_unstuck_trigger_price_offset_fraction",
             )
         ) or bool(entry.get("ema_bands"))
         if status == "disabled" and not has_details:
@@ -927,9 +927,9 @@ def _render_unstuck_panel(snapshot: dict[str, Any]) -> list[str]:
         lines.append(
             f"      band={ema_text} "
             f"trigger={_fmt_compact_float(ema_bands.get('unstuck_trigger_price'), digits=4)} "
-            f"dist={_fmt_pct_delta(entry.get('next_unstuck_trigger_distance_ratio'))} "
+            f"dist={_fmt_pct_delta(entry.get('next_unstuck_trigger_price_offset_fraction'))} "
             f"target={_fmt_compact_float(entry.get('next_target_price'), digits=4)} "
-            f"target_dist={_fmt_pct_delta(entry.get('next_target_distance_ratio'))}"
+            f"target_dist={_fmt_pct_delta(entry.get('next_target_price_offset_fraction'))}"
         )
     return lines
 

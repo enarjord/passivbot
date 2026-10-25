@@ -339,12 +339,12 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "retracement_pct": float(retracement_pct),
         "retracement_price": float(retracement_price) if retracement_price is not None else None,
         "retracement_met": bool(retracement_met),
-        "current_vs_threshold_ratio": (
+        "current_price_change_from_threshold_fraction": (
             float(current_price / threshold_price - 1.0)
             if threshold_price and threshold_price > 0.0
             else None
         ),
-        "current_vs_retracement_ratio": (
+        "current_price_change_from_retracement_fraction": (
             float(current_price / retracement_price - 1.0)
             if retracement_price and retracement_price > 0.0
             else None
@@ -461,12 +461,12 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "retracement_pct": float(retracement_pct),
         "retracement_price": float(retracement_price) if retracement_price is not None else None,
         "retracement_met": bool(retracement_met),
-        "current_vs_threshold_ratio": (
+        "current_price_change_from_threshold_fraction": (
             float(current_price / threshold_price - 1.0)
             if threshold_price and threshold_price > 0.0
             else None
         ),
-        "current_vs_retracement_ratio": (
+        "current_price_change_from_retracement_fraction": (
             float(current_price / retracement_price - 1.0)
             if retracement_price and retracement_price > 0.0
             else None
@@ -522,12 +522,12 @@ def build_trailing_martingale_close_diagnostic(
             "position_size": position_size,
             "threshold_price": threshold_price,
             "retracement_price": retracement_price,
-            "current_vs_threshold_ratio": (
+            "current_price_change_from_threshold_fraction": (
                 current_price / threshold_price - 1.0
                 if threshold_price is not None and threshold_price > 0.0
                 else None
             ),
-            "current_vs_retracement_ratio": (
+            "current_price_change_from_retracement_fraction": (
                 current_price / retracement_price - 1.0
                 if retracement_price is not None and retracement_price > 0.0
                 else None

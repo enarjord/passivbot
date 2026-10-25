@@ -4287,8 +4287,8 @@ def test_unstuck_status_event_emits_structured_summary():
                 },
                 "next_symbol": "BTC/USDT:USDT",
                 "next_target_price": 101_000.0,
-                "next_target_distance_ratio": 0.005,
-                "next_unstuck_trigger_distance_ratio": 0.0125,
+                "next_target_price_offset_fraction": 0.005,
+                "next_unstuck_trigger_price_offset_fraction": 0.0125,
             },
             "short": {"status": "disabled"},
         },
@@ -4322,8 +4322,8 @@ def test_unstuck_status_event_emits_structured_summary():
     }
     assert long["next_symbol"] == "BTC/USDT:USDT"
     assert long["next_target_price"] == pytest.approx(101_000.0)
-    assert long["next_target_distance_ratio"] == pytest.approx(0.005)
-    assert long["next_unstuck_trigger_distance_ratio"] == pytest.approx(0.0125)
+    assert long["next_target_price_offset_fraction"] == pytest.approx(0.005)
+    assert long["next_unstuck_trigger_price_offset_fraction"] == pytest.approx(0.0125)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -7002,10 +7002,10 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         101000.0
     )
     assert snapshot["unstuck"]["sides"]["long"][
-        "next_target_distance_ratio"
+        "next_target_price_offset_fraction"
     ] == pytest.approx(101000.0 / 100500.0 - 1.0)
     assert snapshot["unstuck"]["sides"]["long"][
-        "next_unstuck_trigger_distance_ratio"
+        "next_unstuck_trigger_price_offset_fraction"
     ] == pytest.approx((100600.0 * 1.02) / 100500.0 - 1.0)
     assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
     assert (

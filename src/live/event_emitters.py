@@ -4854,8 +4854,8 @@ def _unstuck_status_side_summary(
     for key in (
         "next_symbol",
         "next_target_price",
-        "next_target_distance_ratio",
-        "next_unstuck_trigger_distance_ratio",
+        "next_target_price_offset_fraction",
+        "next_unstuck_trigger_price_offset_fraction",
     ):
         value = info.get(key)
         if value is None:
@@ -4925,11 +4925,11 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "current_price": _safe_float(payload.get("current_price")),
         "position_price": _safe_float(payload.get("position_price")),
         "position_size": _safe_float(payload.get("position_size")),
-        "current_vs_threshold_ratio": _safe_float(
-            payload.get("current_vs_threshold_ratio")
+        "current_price_change_from_threshold_fraction": _safe_float(
+            payload.get("current_price_change_from_threshold_fraction")
         ),
-        "current_vs_retracement_ratio": _safe_float(
-            payload.get("current_vs_retracement_ratio")
+        "current_price_change_from_retracement_fraction": _safe_float(
+            payload.get("current_price_change_from_retracement_fraction")
         ),
         "unsupported_reason": str(payload.get("unsupported_reason") or "") or None,
         "changed": bool(payload.get("changed", False)),
