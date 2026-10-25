@@ -17,12 +17,12 @@ def test_flatten_shared_bot_side_prefers_grouped_value_over_stale_runtime_alias(
 def test_require_grouped_bot_value_can_prefer_flat_raw_override():
     side_cfg = {
         "risk": {"total_wallet_exposure_limit_ratio": 1.0},
-        "total_wallet_exposure_limit": 0.0,
+        "total_wallet_exposure_limit_ratio": 0.0,
     }
 
     assert require_grouped_bot_value(
         side_cfg,
         "long",
-        "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio",
         prefer_flat=True,
     ) == pytest.approx(0.0)

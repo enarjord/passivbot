@@ -194,14 +194,14 @@ def test_fixed_runtime_policy_and_exact_last_scenario_override_are_materialized_
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(planner.base, "evaluate", forbidden)
     monkeypatch.setattr(planner.scorer.evaluator, "evaluate", forbidden)
-    first = planner.prepare("first", set_value(planner, vector, "long_entry_initial_qty_pct", 0.01))
-    second = planner.prepare("second", set_value(planner, vector, "long_entry_initial_qty_pct", 0.05))
+    first = planner.prepare("first", set_value(planner, vector, "long_entry_initial_qty_fraction", 0.01))
+    second = planner.prepare("second", set_value(planner, vector, "long_entry_initial_qty_fraction", 0.05))
     assert first.effective_key == second.effective_key
-    assert [row.parameters["long_entry_initial_qty_pct"] for row in first.requests] == [0.025, 0.03]
+    assert [row.parameters["long_entry_initial_qty_fraction"] for row in first.requests] == [0.025, 0.03]
     assert first.stage == "full"
     assert {slot.scenario for slot in first.slots} == {"base", "stress"}
     with pytest.raises(TypeError):
-        first.requests[0].parameters["long_entry_initial_qty_pct"] = 1
+        first.requests[0].parameters["long_entry_initial_qty_fraction"] = 1
 
 
 def test_mirrored_runtime_pins_deduplicate_effectively():
@@ -214,13 +214,13 @@ def test_mirrored_runtime_pins_deduplicate_effectively():
     second = planner.prepare("second", vector)
     assert first.effective_key == second.effective_key
     row = first.requests[0].parameters
-    assert row["long_entry_initial_qty_pct"] == row["short_entry_initial_qty_pct"]
+    assert row["long_entry_initial_qty_fraction"] == row["short_entry_initial_qty_fraction"]
 
 
 def test_screening_identity_includes_unscreened_effective_work():
     planner, vector = inputs(suite=True)
-    first = planner.prepare("first", set_value(planner, vector, "long_entry_initial_qty_pct", 0.01), scenarios=["stress"])
-    second = planner.prepare("second", set_value(planner, vector, "long_entry_initial_qty_pct", 0.05), scenarios=["stress"])
+    first = planner.prepare("first", set_value(planner, vector, "long_entry_initial_qty_fraction", 0.01), scenarios=["stress"])
+    second = planner.prepare("second", set_value(planner, vector, "long_entry_initial_qty_fraction", 0.05), scenarios=["stress"])
     assert first.requests[0].parameters == second.requests[0].parameters
     assert first.effective_key != second.effective_key
     assert first.stage == "screening"

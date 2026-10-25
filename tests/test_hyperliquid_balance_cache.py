@@ -1816,7 +1816,7 @@ def _make_probe_bot(HyperliquidBot):
     bot.quote = "USDC"
     bot.coin_overrides = {}
     bot.balance_override = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.previous_hysteresis_balance = 51.194323
     bot.balance_raw = 51.194323
     bot.balance = 51.194323

@@ -363,11 +363,11 @@ pub fn realized_memories_v9(input_json: &str) -> PyResult<String> {
 #[pyfunction]
 pub fn calc_auto_unstuck_allowance_v9(
     balance: f64,
-    loss_pct: f64,
+    loss_allowance_fraction: f64,
     twel: f64,
     drawdown: f64,
 ) -> PyResult<f64> {
-    hsl_decay::allowance_for(balance, loss_pct, twel, drawdown).map_err(PyValueError::new_err)
+    hsl_decay::allowance_for(balance, loss_allowance_fraction, twel, drawdown).map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]

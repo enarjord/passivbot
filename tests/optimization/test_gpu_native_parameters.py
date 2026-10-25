@@ -30,10 +30,10 @@ def test_effective_disabled_side_and_canonical_adaptive_values_are_explicit(monk
     ]))
     config["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = None
     parameters = prepare_candidate_parameters(config, markets, "binance")
-    assert parameters["short_total_wallet_exposure_limit"] == 0
+    assert parameters["short_total_wallet_exposure_limit_ratio"] == 0
     assert parameters["short_n_positions"] == 0
     assert parameters["long_entry_cooldown_max_duration_minutes"] == -1
-    assert parameters["long_unilateralness_window"] >= parameters["long_unilateralness_ema_span_1m"]
+    assert parameters["long_unilateralness_window"] >= parameters["long_unilateralness_ema_span_minutes"]
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -60,5 +60,5 @@ def test_candidate_parameters_pack_global_scaled_hsl_budget_policy(strategy, sid
     assert before[f"{side}_hsl_scale_budget_with_excess_allowance"] == 0
     assert after[f"{side}_hsl_scale_budget_with_excess_allowance"] == 1
     assert after[f"{other}_hsl_scale_budget_with_excess_allowance"] == 0
-    assert after[f"{side}_we_excess_allowance_pct"] == 0.44
+    assert after[f"{side}_we_excess_allowance_fraction"] == 0.44
     assert not any("legacy_raw" in key for key in after)

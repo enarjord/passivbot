@@ -38,7 +38,7 @@ def test_shape_and_adapter_use_one_common_coordinate_without_losing_side_pins(sh
         assert selected[1][0] == "bot.short.unstuck.close_fraction"
         assert selected[1][2].low == selected[1][2].high == 0.041
     assert shape.key_paths == tuple(get_optimization_key_paths(config))
-    assert resolve_optimization_bound_path(config, "long_unstuck_close_pct") == selected[0][1]
+    assert resolve_optimization_bound_path(config, "long_unstuck_close_fraction") == selected[0][1]
 
 
 def test_adapter_target_fixed_selector_does_not_create_a_directional_axis():
@@ -219,7 +219,7 @@ def test_global_complete_runtime_weight_pin_freezes_the_inherited_group():
     config = weight_search_config()
     config["optimize"]["fixed_runtime_overrides"] = {
         f"bot.global.forager.score_weights.{name}": value for name, value in {
-            "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
+            "volume": 0.2, "log_range": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
         }.items()
     }
     validate_forager_weight_search(config)
@@ -229,7 +229,7 @@ def test_global_fixed_zero_weights_retain_raw_values_through_candidate_finalizat
     from optimization.shape import build_optimization_shape
     from optimization.warmup import build_optimizer_vector_config
     config = real_prepared()
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "unilateralness")
     prepare_bound_plan(config, authored_bounds={"global": {"forager": {
         "score_weights": {name: [0.0, 1.0] for name in names},
     }}})
@@ -247,7 +247,7 @@ def test_global_runtime_pin_cannot_freeze_an_independently_owned_side_weight_dom
     config = weight_search_config(side_domain=True)
     config["optimize"]["fixed_runtime_overrides"] = {
         f"bot.global.forager.score_weights.{name}": value for name, value in {
-            "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
+            "volume": 0.2, "log_range": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
         }.items()
     }
     with pytest.raises(ValueError, match=r"bot.short.forager.score_weights.*partial normalized-weight"):

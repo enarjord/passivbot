@@ -15,7 +15,7 @@ def test_native_ema_minimum_remainder_has_matching_fills_and_practical_metrics()
     config = inputs[0]
     for side in ("long", "short"):
         config["bot"][side]["strategy"]["ema_anchor"].update(
-            base_qty_pct=0.01, ema_span_0=5.0,
+            base_qty_fraction=0.01, ema_span_0_minutes=5.0,
         )
     policies = {
         "adg_strategy_eq": MetricTolerance(1e-7, 0.0),

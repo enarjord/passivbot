@@ -1039,8 +1039,8 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
         "succeeded": 0,
         "failed": 1,
         "throttled": 0,
-        "failure_pct": 100,
-        "throttled_pct": 0,
+        "failure_percent": 100,
+        "throttled_percent": 0,
         "failed_reason_codes": {"request_timeout": 1},
         "failed_error_types": {"RequestTimeout": 1},
         "failed_surfaces": {"balance": 1},
@@ -1054,8 +1054,8 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
                 "succeeded": 0,
                 "failed": 1,
                 "throttled": 0,
-                "failure_pct": 100,
-                "throttled_pct": 0,
+                "failure_percent": 100,
+                "throttled_percent": 0,
                 "statuses": {"failed": 1},
                 "reason_codes": {"request_timeout": 1},
                 "error_types": {"RequestTimeout": 1},
@@ -1185,8 +1185,8 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
         "succeeded": 3,
         "failed": 0,
         "throttled": 0,
-        "failure_pct": 0,
-        "throttled_pct": 0,
+        "failure_percent": 0,
+        "throttled_percent": 0,
         "groups_truncated": False,
         "groups": [
             {
@@ -1198,8 +1198,8 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
                 "succeeded": 1,
                 "failed": 0,
                 "throttled": 0,
-                "failure_pct": 0,
-                "throttled_pct": 0,
+                "failure_percent": 0,
+                "throttled_percent": 0,
                 "statuses": {"succeeded": 1},
                 "reason_codes": {"authoritative_open_orders": 1},
                 "elapsed_ms": {
@@ -1227,8 +1227,8 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
                 "succeeded": 2,
                 "failed": 0,
                 "throttled": 0,
-                "failure_pct": 0,
-                "throttled_pct": 0,
+                "failure_percent": 0,
+                "throttled_percent": 0,
                 "statuses": {"succeeded": 2},
                 "reason_codes": {"authoritative_balance": 2},
                 "elapsed_ms": {
@@ -1393,8 +1393,8 @@ def test_live_smoke_report_remote_call_health_totals_mixed_groups(tmp_path):
     assert health["succeeded"] == 8
     assert health["failed"] == 2
     assert health["throttled"] == 1
-    assert health["failure_pct"] == 18
-    assert health["throttled_pct"] == 9
+    assert health["failure_percent"] == 18
+    assert health["throttled_percent"] == 9
     assert health["failed_reason_codes"] == {"authoritative_balance": 2}
     assert health["failed_error_types"] == {"RequestTimeout": 2}
     assert health["failed_kinds"] == {"authoritative_state_fetch": 2}
@@ -1517,8 +1517,8 @@ def test_live_smoke_report_account_critical_remote_call_health_subset(tmp_path):
     assert account_health["succeeded"] == 2
     assert account_health["failed"] == 1
     assert account_health["throttled"] == 0
-    assert account_health["failure_pct"] == 33
-    assert account_health["throttled_pct"] == 0
+    assert account_health["failure_percent"] == 33
+    assert account_health["throttled_percent"] == 0
     assert account_health["failed_reason_codes"] == {"authoritative_balance": 1}
     assert account_health["failed_error_types"] == {"RequestTimeout": 1}
     assert account_health["failed_kinds"] == {"authoritative_state_fetch": 1}
@@ -2034,7 +2034,7 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "bots": 0,
         "succeeded": 0,
         "failed": 0,
-        "failure_pct": 0,
+        "failure_percent": 0,
         "failed_bots": 0,
         "latest_failed_bots": 0,
         "recovered_bots": 0,
@@ -2175,8 +2175,8 @@ def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
         "succeeded": 0,
         "failed": 0,
         "throttled": 1,
-        "failure_pct": 0,
-        "throttled_pct": 100,
+        "failure_percent": 0,
+        "throttled_percent": 100,
         "groups_truncated": False,
         "groups": [
             {
@@ -2187,8 +2187,8 @@ def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
                 "succeeded": 0,
                 "failed": 0,
                 "throttled": 1,
-                "failure_pct": 0,
-                "throttled_pct": 100,
+                "failure_percent": 0,
+                "throttled_percent": 100,
                 "statuses": {"throttled": 1},
                 "raw_statuses": {"deferred": 1},
                 "reason_codes": {"rate_limited": 1},
@@ -2309,7 +2309,7 @@ def test_live_smoke_report_summarizes_fill_refresh_health(tmp_path):
     assert health["total"] == 3
     assert health["bots"] == 2
     assert health["failed"] == 1
-    assert health["failure_pct"] == 33
+    assert health["failure_percent"] == 33
     assert health["failed_bots"] == 1
     assert health["latest_failed_bots"] == 0
     assert health["recovered_groups"] == 1
@@ -2336,7 +2336,7 @@ def test_live_smoke_report_summarizes_fill_refresh_health(tmp_path):
         "total": 3,
         "bots": 2,
         "failed": 1,
-        "failure_pct": 33,
+        "failure_percent": 33,
         "failed_bots": 1,
         "latest_failed_bots": 0,
         "recovered_groups": 1,
@@ -3104,7 +3104,7 @@ def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
     assert health["total"] == 2
     assert health["succeeded"] == 1
     assert health["failed"] == 1
-    assert health["failure_pct"] == 50.0
+    assert health["failure_percent"] == 50.0
     assert health["bots"] == 1
     assert health["failed_bots"] == 1
     assert health["latest_failed_bots"] == 1
@@ -3135,7 +3135,7 @@ def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
         "bots": 1,
         "succeeded": 1,
         "failed": 1,
-        "failure_pct": 50.0,
+        "failure_percent": 50.0,
         "failed_bots": 1,
         "latest_failed_bots": 1,
         "recovered_bots": 0,
@@ -5467,7 +5467,7 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "latest_ms": 3000,
                         "budget_ms": 2000,
                         "baseline_samples": 1,
-                        "usage_pct": 150,
+                        "usage_percent": 150,
                         "over_budget_by_ms": 1000,
                         "source": "prior_p95_ms",
                     },
@@ -5476,12 +5476,12 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "latest_ms": 3000,
                         "budget_ms": 2000,
                         "baseline_samples": 1,
-                        "usage_pct": 150,
+                        "usage_percent": 150,
                         "over_budget_by_ms": 1000,
                         "source": "prior_p95_ms",
                     },
-                    "latest_elapsed_vs_p95_pct": 100,
-                    "latest_phase_vs_p95_pct": 100,
+                    "latest_elapsed_vs_p95_percent": 100,
+                    "latest_phase_vs_p95_percent": 100,
                     "readiness_scope": "account_critical",
                     "trading_impact": "protective_blocker",
                 },
@@ -5507,7 +5507,7 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "latest_ms": 10000,
                         "budget_ms": 8000,
                         "baseline_samples": 1,
-                        "usage_pct": 125,
+                        "usage_percent": 125,
                         "over_budget_by_ms": 2000,
                         "source": "prior_p95_ms",
                     },
@@ -5516,12 +5516,12 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "latest_ms": 7000,
                         "budget_ms": 6000,
                         "baseline_samples": 1,
-                        "usage_pct": 117,
+                        "usage_percent": 117,
                         "over_budget_by_ms": 1000,
                         "source": "prior_p95_ms",
                     },
-                    "latest_elapsed_vs_p95_pct": 100,
-                    "latest_phase_vs_p95_pct": 100,
+                    "latest_elapsed_vs_p95_percent": 100,
+                    "latest_phase_vs_p95_percent": 100,
                     "readiness_scope": "execution_loop",
                     "trading_impact": "protective_blocker",
                     "latest_details": (
@@ -5593,7 +5593,7 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
         "latest_ms": 2000,
         "budget_ms": None,
         "baseline_samples": 0,
-        "usage_pct": None,
+        "usage_percent": None,
         "over_budget_by_ms": None,
         "source": "prior_p95_ms",
     }
@@ -5651,7 +5651,7 @@ def test_live_smoke_report_prefers_event_configured_startup_budgets(tmp_path):
         "latest_ms": 3_000,
         "budget_ms": 2_500,
         "baseline_samples": 1,
-        "usage_pct": 120,
+        "usage_percent": 120,
         "over_budget_by_ms": 500,
         "source": "config",
     }
@@ -5660,7 +5660,7 @@ def test_live_smoke_report_prefers_event_configured_startup_budgets(tmp_path):
         "latest_ms": 3_000,
         "budget_ms": 5_000,
         "baseline_samples": 1,
-        "usage_pct": 60,
+        "usage_percent": 60,
         "over_budget_by_ms": 0,
         "source": "config",
     }
@@ -5875,7 +5875,7 @@ def test_live_smoke_report_startup_budget_keeps_prior_restart_samples(tmp_path):
         "latest_ms": 2000,
         "budget_ms": 1000,
         "baseline_samples": 1,
-        "usage_pct": 200,
+        "usage_percent": 200,
         "over_budget_by_ms": 1000,
         "source": "prior_p95_ms",
     }
@@ -6377,7 +6377,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 ids={"cycle_id": "cy_risk_5"},
                 data={
                     "allowance": -12.3,
-                    "price_diff_pct": 10.0,
+                    "price_change_percent": 10.0,
                     "changed": True,
                 },
             ),
@@ -6394,7 +6394,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "sides": {
                         "long": {
                             "allowance": -0.6064111797120435,
-                            "loss_allowance_pct": 0.01,
+                            "loss_allowance_fraction": 0.01,
                             "over_budget": True,
                         },
                     },
@@ -6427,7 +6427,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "total": 1,
             "source_counts": {"current_time_fallback": 1},
             "fallback_used": 1,
-            "fallback_used_pct": 100.0,
+            "fallback_used_percent": 100.0,
             "bots": 1,
             "symbols": {
                 "count": 1,
@@ -6454,7 +6454,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "signal_mode": "coin",
                     "dist_to_red": 0.02,
                     "drawdown_threshold_fraction": 0.1,
-                    "red_proximity_pct": 80.0,
+                    "red_proximity_percent": 80.0,
                     "latest_ts": 3000,
                 },
             ],
@@ -6536,7 +6536,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "latest_ts": 5000,
                 "latest_data": {
                     "changed": True,
-                    "price_diff_pct": 10.0,
+                    "price_change_percent": 10.0,
                 },
                 "latest_ids": {"cycle_id": "cy_risk_5"},
             },
@@ -6615,12 +6615,12 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     summary = summarize_live_smoke_report(report)
     summary_risk_json = json.dumps(summary["risk_events"], sort_keys=True)
     assert "drawdown_raw" not in summary_risk_json
-    assert "price_diff_pct" not in summary_risk_json
+    assert "price_change_percent" not in summary_risk_json
     assert summary["risk_events"]["hsl_flat_finalization_anchors"] == {
         "total": 1,
         "source_counts": {"current_time_fallback": 1},
         "fallback_used": 1,
-        "fallback_used_pct": 100.0,
+        "fallback_used_percent": 100.0,
         "bots": 1,
         "symbols": {
             "count": 1,
@@ -6635,7 +6635,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "pside": "long",
             "tier": "yellow",
             "signal_mode": "coin",
-            "red_proximity_pct": 80.0,
+            "red_proximity_percent": 80.0,
             "latest_ts": 3000,
         }
     ]
@@ -6644,7 +6644,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
         "total": 1,
         "source_counts": {"current_time_fallback": 1},
         "fallback_used": 1,
-        "fallback_used_pct": 100.0,
+        "fallback_used_percent": 100.0,
         "bots": 1,
         "symbols": {
             "count": 1,
@@ -6669,7 +6669,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "pside": "long",
                 "tier": "yellow",
                 "signal_mode": "coin",
-                "red_proximity_pct": 80.0,
+                "red_proximity_percent": 80.0,
                 "latest_ts": 3000,
             }
         ],
@@ -6811,7 +6811,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
         },
     ]
     assert brief["risk_events"]["attention_groups_truncated"] is False
-    assert "red_proximity_pct" in json.dumps(summary["risk_events"]["hsl_status"])
+    assert "red_proximity_percent" in json.dumps(summary["risk_events"]["hsl_status"])
     assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
     assert "drawdown_threshold_fraction" not in json.dumps(brief["risk_events"]["hsl_status"])
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
@@ -6819,7 +6819,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "latest_data" in brief_risk_json
     assert "allowance" not in brief_risk_json
     assert '"sides":' not in brief_risk_json
-    assert "price_diff_pct" not in brief_risk_json
+    assert "price_change_percent" not in brief_risk_json
     assert "drawdown_raw" not in brief_risk_json
     assert "drawdown_threshold_fraction" not in brief_risk_json
     assert "balance" not in brief_risk_json
@@ -7009,8 +7009,8 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
                 "pside": "long",
                 "tier": "red",
                 "signal_mode": "coin",
-                "red_proximity_pct": 95.0,
-                "ema_gap_to_red_pct": 5.0,
+                "red_proximity_percent": 95.0,
+                "ema_gap_to_red_percent": 5.0,
                 "elapsed_minutes": 8,
                 "latest_ts": 2000,
             }
@@ -7034,8 +7034,8 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
                 "pside": "long",
                 "tier": "red",
                 "signal_mode": "coin",
-                "red_proximity_pct": 95.0,
-                "ema_gap_to_red_pct": 5.0,
+                "red_proximity_percent": 95.0,
+                "ema_gap_to_red_percent": 5.0,
                 "elapsed_minutes": 8,
                 "latest_ts": 2000,
             }
@@ -7663,8 +7663,8 @@ def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_pat
         "succeeded": 0,
         "failed": 0,
         "throttled": 0,
-        "failure_pct": None,
-        "throttled_pct": None,
+        "failure_percent": None,
+        "throttled_percent": None,
         "groups_truncated": False,
         "groups": [],
     }
@@ -8991,11 +8991,11 @@ def test_live_smoke_report_summarizes_current_process_pressure(
         "rss_kb_total": 225000,
         "rss_kb_max": 150000,
         "rss_reporting_processes": 3,
-        "cpu_pct_total": 19.75,
-        "cpu_pct_max": 10.25,
+        "cpu_total_percent": 19.75,
+        "cpu_max_percent": 10.25,
         "cpu_reporting_processes": 2,
-        "mem_pct_total": 20.5,
-        "mem_pct_max": 15.0,
+        "memory_total_percent": 20.5,
+        "memory_max_percent": 15.0,
         "mem_reporting_processes": 2,
     }
 
@@ -9252,8 +9252,8 @@ def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_proc
             "ppid": 1,
             "age_s": 46,
             "stat": "S",
-            "cpu_pct": 0.1,
-            "mem_pct": 1.0,
+            "cpu_percent": 0.1,
+            "memory_percent": 1.0,
             "rss_kb": 70000,
             "account": "okx_old",
             "config_path": "configs/old.json",

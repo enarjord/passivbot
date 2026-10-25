@@ -27,7 +27,7 @@ def test_startup_banner_reports_explicit_activation(
         config={"bot": {"long": {"enabled": long_enabled},
                         "short": {"enabled": short_enabled}}},
         bot_value=lambda side, key: {
-            "total_wallet_exposure_limit": twel, "n_positions": 2,
+            "total_wallet_exposure_limit_ratio": twel, "n_positions": 2,
         }[key],
         _live_market_orders_allowed=lambda: False,
         runtime_identity=SimpleNamespace(

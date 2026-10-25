@@ -44,7 +44,7 @@ def _compare_replay(monkeypatch, mode, sides, *, enabled, factual_hsl):
             "hsl_drawdown_threshold_fraction": 0.03, "entry_cooldown_min_duration_minutes": 3.,
             "entry_cooldown_max_duration_minutes": 60.,
             "entry_cooldown_exposure_weight": 20., "entry_cooldown_adverse_weight": 30.,
-            "unilateralness_ema_span_1m": 15., "forager_score_weights_unilateralness": .5,
+            "unilateralness_ema_span_minutes": 15., "forager_score_weights_unilateralness": .5,
         }.items()},
         {},
     ]

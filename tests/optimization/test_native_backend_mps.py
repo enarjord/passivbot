@@ -7,6 +7,13 @@ from test_native_backend_cuda import test_native_optimizer_cli_runs_cuda_and_res
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suite", [False, True])
+async def test_metal_optimizer_coupled_unstuck_spans_resume(monkeypatch, tmp_path, suite):
+    await cli_smoke(monkeypatch, tmp_path, suite, True, False,
+                    coupled=True, device="mps")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite", [False, True])
 async def test_metal_cli_with_enabled_passing_prefilter(monkeypatch, tmp_path, suite):
     await cli_smoke(monkeypatch, tmp_path, suite, False, False, screening=suite,
                     device="mps", prefilter=True)

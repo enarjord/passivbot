@@ -15,7 +15,7 @@ def prepared():
     config["backtest"].update(
         start_date="2026-01-01", end_date="2026-01-02", coins={}, cache_dir={}
     )
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     coins = ["BTC", "XMR"]
     dataset = suite.ExchangeDataset(

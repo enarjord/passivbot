@@ -65,7 +65,7 @@ def test_public_bounds_use_canonical_hsl_optimizer_ids_and_roundtrip_through_the
     owner = "portfolio" if scope == "portfolio" else "long"
     assert key in flat
     assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_threshold_fraction")
-    assert resolve_optimizer_key_path(config, "long_unstuck_ema_dist") == (
+    assert resolve_optimizer_key_path(config, "long_unstuck_ema_distance_fraction") == (
         "bot", "long", "unstuck", "ema_distance_fraction",
     )
     result = {}
@@ -79,10 +79,10 @@ def test_public_bounds_use_canonical_hsl_optimizer_ids_and_roundtrip_through_the
     ("hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction", "short_hsl_drawdown_threshold_fraction"}),
     ("long.hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction"}),
     ("bot.*.hsl.red_threshold", {"long_hsl_drawdown_threshold_fraction", "short_hsl_drawdown_threshold_fraction"}),
-    ("ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
-    ("unstuck.ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
-    ("short.unstuck.ema_dist", {"short_unstuck_ema_dist"}),
-    ("bot.*.unstuck.ema_dist", {"long_unstuck_ema_dist", "short_unstuck_ema_dist"}),
+    ("ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
+    ("unstuck.ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
+    ("short.unstuck.ema_dist", {"short_unstuck_ema_distance_fraction"}),
+    ("bot.*.unstuck.ema_dist", {"long_unstuck_ema_distance_fraction", "short_unstuck_ema_distance_fraction"}),
 ])
 def test_released_quantity_selector_suffixes_preserve_exact_gene_authority(selector, keys):
     source = released_v8_policy()

@@ -38,7 +38,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
         _ => panic!("trailing_martingale strategy received non-trailing_martingale params"),
     };
     let runtime_context = RuntimeOrderContext {
-        effective_wallet_exposure_limit: request.runtime_budget.effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: request.runtime_budget.effective_wallet_exposure_limit_ratio,
     };
     let entry_params = params.entry_params();
     let close_params = params.close_params();
@@ -387,8 +387,8 @@ mod tests {
             bot_params: bot,
             strategy_params: params,
             runtime_budget: RuntimeBudgetState {
-                configured_wallet_exposure_limit: 1.0,
-                effective_wallet_exposure_limit: 1.0,
+                configured_wallet_exposure_limit_ratio: 1.0,
+                effective_wallet_exposure_limit_ratio: 1.0,
                 configured_n_positions: 1,
                 effective_n_positions: 1,
             },
@@ -423,18 +423,18 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             ..Default::default()
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -482,18 +482,18 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             ..Default::default()
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -540,13 +540,13 @@ mod tests {
                 ..Default::default()
             };
             let bot = BotParams {
-                wallet_exposure_limit: 1.0, total_wallet_exposure_limit: 1.0,
+                wallet_exposure_limit_ratio: 1.0, total_wallet_exposure_limit_ratio: 1.0,
                 risk_wel_enforcer_enabled: false, ..Default::default()
             };
             let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
                 close: TrailingMartingaleCloseParams {
-                    qty_pct: 1.0, threshold_base_pct: 0.001,
-                    retracement_base_pct: 0.001, ..Default::default()
+                    qty_fraction: 1.0, threshold_base_fraction: 0.001,
+                    retracement_base_fraction: 0.001, ..Default::default()
                 },
                 ..Default::default()
             });

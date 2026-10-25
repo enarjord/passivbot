@@ -80,7 +80,7 @@ def test_effective_backtest_data_coins_supports_canonical_grouped_bot_config():
         runtime=None,
     )
 
-    assert "total_wallet_exposure_limit" not in cfg["bot"]["long"]
+    assert "total_wallet_exposure_limit_ratio" not in cfg["bot"]["long"]
     assert "n_positions" not in cfg["bot"]["short"]
     assert cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     assert cfg["bot"]["short"]["risk"]["max_positions"] == 1

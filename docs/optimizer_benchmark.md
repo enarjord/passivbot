@@ -297,3 +297,26 @@ readiness claim follows from these APIs alone.
 Current workload manifests use version 2 and finite v9 HSL policy. Older manifests
 and retired permanent/threshold restart feature requests require a fresh workload;
 their saved fitness is not comparable under the changed risk model.
+
+
+### Ordinary-account quantity names
+
+The account metric schema is `ordinary_account_v2` and discovery protocols use version `2`.
+This revision changes names and identity, preserving numeric definitions. Recreate frozen discovery
+protocols with the current names; earlier result/protocol identities are not translated.
+
+| Output | Quantity |
+| --- | --- |
+| `net_return_fraction` | Final equity divided by pre-fill initial equity, minus one. |
+| `log_return_per_day` | Natural-log equity growth divided by observed elapsed days. |
+| `geometric_return_per_day_fraction` | `expm1(log_return_per_day)`; unavailable for nonpositive terminal equity. |
+| `account_drawdown_max_fraction` | Maximum decline from the running account-equity peak, including the initial baseline. |
+| `underwater_time_fraction`, `exposed_time_fraction` | Observed duration below peak or with positive gross exposure, divided by observed duration. |
+| `gross_exposure_mean_ratio` | Duration-weighted mean of the supplied gross exposure ratios. Native replay supplies gross notional / initial capital. |
+| `gross_exposure_max_ratio`, `gross_exposure_terminal_ratio` | Maximum observed or final supplied gross exposure ratio. |
+| `recovery_duration_max_lower_bound_ms` | Longest observed recovery episode; a terminal censored episode remains a lower bound. |
+| `active_day_count` | Number of UTC calendar days containing a fill. |
+| `completion_fraction` | Observed duration divided by the requested duration. |
+
+Fractions use scale one and preserve values above one or below zero where the existing definition
+permits them. Values are held until the next observation; incomplete runs invent no tail duration.
