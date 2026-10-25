@@ -172,7 +172,7 @@ def _install_passivbot_rust_stub():
         for pside in ("long", "short"):
             side_params = global_bot_params.get(pside, {})
             global_side_enabled = (
-                float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                float(side_params.get("total_wallet_exposure_limit_ratio", 0.0)) > 0.0
                 and int(side_params.get("n_positions", 0)) > 0
             )
             eligible_indices = [
@@ -182,7 +182,7 @@ def _install_passivbot_rust_stub():
                 and float(
                     symbol[pside]
                     .get("bot_params", {})
-                    .get("wallet_exposure_limit", 0.0)
+                    .get("wallet_exposure_limit_ratio", 0.0)
                 )
                 != 0.0
             ]
@@ -237,18 +237,18 @@ def _install_passivbot_rust_stub():
                     or (input_mode == "graceful_stop" and has_position)
                     else input_mode
                 )
-                wallet_exposure_limit = float(
+                wallet_exposure_limit_ratio = float(
                     symbol[pside]
                     .get("bot_params", {})
-                    .get("wallet_exposure_limit", 0.0)
+                    .get("wallet_exposure_limit_ratio", 0.0)
                 )
                 side_params = global_bot_params.get(pside, {})
                 global_side_enabled = (
-                    float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                    float(side_params.get("total_wallet_exposure_limit_ratio", 0.0)) > 0.0
                     and int(side_params.get("n_positions", 0)) > 0
                 )
                 symbol_side_eligible = (
-                    bool(symbol.get("tradable", False)) and wallet_exposure_limit != 0.0
+                    bool(symbol.get("tradable", False)) and wallet_exposure_limit_ratio != 0.0
                 )
                 active = (
                     symbol_side_eligible

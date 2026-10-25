@@ -66,7 +66,7 @@ class _FakeBot:
     def refresh_approved_ignored_coins_lists(self):
         return None
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limit_ratios(self):
         return None
 
     async def refresh_authoritative_state(self):
@@ -141,7 +141,7 @@ class _InitMarketsSizingBot(CCXTBot):
     def refresh_approved_ignored_coins_lists(self):
         self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limit_ratios(self):
         return None
 
     async def refresh_authoritative_state(self):

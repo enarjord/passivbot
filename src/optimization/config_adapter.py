@@ -342,7 +342,7 @@ def _validate_inherited_forager_weight_context(
                 raise ValueError(f"{context}{exc}") from exc
             raise
 
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "unilateralness")
     plan = get_bound_plan(config)
     bindings = {binding.authoring_path: binding for binding in plan.bindings}
     values = {}
@@ -441,7 +441,9 @@ def _validate_forager_weight_context(
             )
         return configured, pinned
 
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    from config.shared_bot import native_forager_weight_name
+
+    names = ("volume", "log_range", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
         weight_source = optimizer_numeric_group_source_side(config, side, "forager")
         bot = config.get("bot", {}).get(weight_source, {})
@@ -458,7 +460,7 @@ def _validate_forager_weight_context(
         risk_source = optimizer_numeric_group_source_side(config, side, "risk")
         risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
         for field, key in (("max_positions", "n_positions"),
-                           ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit")):
+                           ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit_ratio")):
             bound_key = f"{risk_source}_{key}"
             value, runtime_pinned = pinned_value(
                 ("bot", risk_source, "risk", field), risk.get(field, 0.0), runtime_pins
@@ -476,7 +478,7 @@ def _validate_forager_weight_context(
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
         for name in names:
-            key = f"{weight_source}_forager_score_weights_{name}"
+            key = f"{weight_source}_forager_score_weights_{native_forager_weight_name(name)}"
             configured, runtime_pinned = pinned_value(
                 ("bot", weight_source, "forager", "score_weights", name),
                 weights[name], runtime_pins,
@@ -612,7 +614,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
              else float(bot_config[pside]["risk"][field])) > 0.0
             for key, field in ((f"{pside}_n_positions", "max_positions"),
-                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit_ratio"))
+                               (f"{pside}_total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit_ratio"))
         )
 
     for bound_key, path in key_paths:

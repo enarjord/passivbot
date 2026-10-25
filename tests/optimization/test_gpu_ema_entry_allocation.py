@@ -26,7 +26,7 @@ kernel void ema_entry_allocation_probe(
 ) {
     bool short_side = cases[b * 4] > 0.5f;
     EmaMulticoinSideConfig config = {};
-    config.base_qty_pct = 0.02f;
+    config.base_qty_fraction = 0.02f;
     config.twel = 1.0f;
     config.n_positions = 2;
     config.twel_entry_gate_enabled = cases[b * 4 + 2] > 0.5f;

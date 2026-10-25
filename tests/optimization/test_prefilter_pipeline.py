@@ -16,7 +16,7 @@ def rejecting_policy():
     return {
         "checks": [
             {
-                "metric": "entry_retracement",
+                "metric": "entry_retracement_fraction",
                 "enabled": True,
                 "min": 100,
                 "sides": ["long"],
@@ -66,7 +66,7 @@ def test_passing_cpu_prefilter_continues_into_existing_payload_path(monkeypatch)
         base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.config["optimize"]["prefilter"] = {
             "checks": [
-                {"metric": "entry_retracement", "enabled": True, "max": 100},
+                {"metric": "entry_retracement_fraction", "enabled": True, "max": 100},
             ]
         }
         base.use_duplicate_guard = False
@@ -89,7 +89,7 @@ def test_duplicate_rejection_keeps_its_non_replay_provenance(monkeypatch):
         base.config["optimize"]["prefilter"] = rejecting_policy()
         base.duplicate_counter = defaultdict(int)
         for name in (
-            "perturb_x_pct",
+            "perturb_relative_fraction",
             "perturb_step_digits",
             "perturb_gaussian",
             "perturb_random_subset",
@@ -183,6 +183,6 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
         ]
         assert rejected and replayed
         assert all(
-            row["long_entry_initial_qty_pct"] >= 0.03 for row in FakeService.rows
+            row["long_entry_initial_qty_fraction"] >= 0.03 for row in FakeService.rows
         )
         assert load_checkpoint(path, base.config)["phase"] == "idle"

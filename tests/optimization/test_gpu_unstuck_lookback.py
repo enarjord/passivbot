@@ -54,7 +54,7 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
         else:
             bot["strategy"][strategy].update(
                 base_qty_fraction=0.5, ema_span_0_minutes=1000.0, ema_span_1_minutes=1000.0,
-                offset_fraction=0.0, offset_psize_weight=0.0, entry_double_down_factor=0.0,
+                offset_fraction=0.0, inventory_offset_exposure_coefficient=0.0, entry_qty_exposure_coefficient=0.0,
             )
     candles = np.full((count, coins, 4), 100.4)
     candles[:, :, 3] = 1.0

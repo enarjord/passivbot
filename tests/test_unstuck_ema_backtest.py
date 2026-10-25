@@ -64,18 +64,18 @@ def _legacy_replay_config():
             volatility_ema_span_1h=1,
         )
         t["entry"].update(
-            initial_qty_pct=0.25,
-            initial_ema_dist=-0.001,
-            double_down_factor=1,
+            initial_qty_fraction=0.25,
+            initial_ema_distance_fraction=-0.001,
+            reentry_qty_multiplier=1,
             ema_gate_mode="all",
-            threshold_base_pct=0.015,
-            retracement_base_pct=0,
+            threshold_base_fraction=0.015,
+            retracement_base_fraction=0,
         )
         t["close"].update(
-            qty_pct=0.2,
-            threshold_base_pct=0.01,
-            retracement_base_pct=0,
-            threshold_we_weight=0,
+            qty_fraction=0.2,
+            threshold_base_fraction=0.01,
+            retracement_base_fraction=0,
+            threshold_exposure_ratio_coefficient=0,
         )
         for group in ("entry", "close"):
             for key in t[group]:

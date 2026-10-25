@@ -11,7 +11,7 @@ from config.param_paths import resolve_optimizer_key_path
 from config.schema import get_expanded_config_prototype
 from config.shared_bot import get_grouped_bot_value
 from config.strategy import build_runtime_strategy_side
-from config.strategy_paths import native_strategy_path_to_public
+
 
 
 def set_value(mapping, path, value):
@@ -35,8 +35,8 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
         set_value(expected_native, native, parameter["default"])
         if "ema_span" not in native[-1]:
             continue
-        public = native_strategy_path_to_public(kind, native)
-        unit = "one-hour candles" if native[-1].endswith("_1h") else "minutes"
+        public = tuple(native)
+        unit = "one-hour candles" if native[-1].endswith("_1h_candles") else "minutes"
         assert public[-1].endswith("_1h_candles" if unit == "one-hour candles" else "_minutes")
         value = 4.5 if unit == "one-hour candles" else 123.75
         set_value(source["bot"][side]["strategy"][kind], public, value)
@@ -55,7 +55,7 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("native,group,public", [
     ("forager_volume_ema_span_1m", "forager", "volume_ema_span_minutes"),
-    ("forager_volatility_ema_span_1m", "forager", "volatility_ema_span_minutes"),
+    ("forager_volatility_ema_span_1m", "forager", "log_range_ema_span_minutes"),
     ("unilateralness_ema_span_1m", "forager", "unilateralness_ema_span_minutes"),
     ("unstuck_ema_span_0_minutes", "unstuck", "ema_span_0_minutes"),
     ("unstuck_ema_span_1_minutes", "unstuck", "ema_span_1_minutes"),
@@ -75,9 +75,8 @@ def test_unreleased_strategy_span_spellings_are_not_runtime_aliases(kind):
 
     source = get_expanded_config_prototype()
     source["bot"]["portfolio"]["strategy_kind"] = kind
-    native = next(parameter for parameter in pbr.get_strategy_spec(kind)["parameters"]
-                  if parameter["side"] == "long" and parameter["name"] == "ema_span_0")
-    set_value(source["bot"]["long"]["strategy"][kind], native["config_path"][2:], 123.75)
+    retired_path = ("entry", "ema_span_0") if kind == "trailing_martingale" else ("ema_span_0",)
+    set_value(source["bot"]["long"]["strategy"][kind], retired_path, 123.75)
     with pytest.raises((KeyError, TypeError, ValueError), match="unknown|Unknown|retired|unexpected"):
         prepare_config(source, verbose=False)
     with pytest.raises((KeyError, TypeError, ValueError), match="unknown|Unknown|retired|unexpected"):

@@ -1357,7 +1357,7 @@ def test_fee_policy_falls_back_when_mixed_fee_has_unresolved_non_quote():
                 {"currency": "BNB", "cost": 0.0001},
             ],
         },
-        fee_pct_fallback=0.0002,
+        fallback_fee_fraction=0.0002,
     )
 
     assert fee_paid == pytest.approx(-0.2)
@@ -1375,7 +1375,7 @@ def test_fee_policy_falls_back_to_configured_pct_with_contract_multiplier():
             "c_mult": 10.0,
             "fees": {"currency": "BNB", "cost": 0.0001},
         },
-        fee_pct_fallback=0.0002,
+        fallback_fee_fraction=0.0002,
     )
 
     assert fee_paid == pytest.approx(-0.4)
@@ -1391,7 +1391,7 @@ def test_fee_policy_zero_fallback_means_net_equals_gross_when_fee_unresolved():
             "price": 1000.0,
             "fees": {"currency": "BNB", "cost": 0.0001},
         },
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     assert fee_paid == pytest.approx(0.0)
@@ -1406,8 +1406,8 @@ def test_fee_policy_sanity_replaces_absurd_reported_fee_with_fallback():
             "price": 1000.0,
             "fees": {"currency": "USDT", "cost": 10.0},
         },
-        fee_pct_fallback=0.0002,
-        fee_pct_sanity_abs_max=0.001,
+        fallback_fee_fraction=0.0002,
+        max_abs_fee_fraction=0.001,
     )
 
     assert fee_paid == pytest.approx(-0.2)
@@ -1461,8 +1461,8 @@ def test_fee_policy_sums_coalesced_raw_bybit_notional_before_sanity_check():
 
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         payload,
-        fee_pct_fallback=0.0002,
-        fee_pct_sanity_abs_max=0.001,
+        fallback_fee_fraction=0.0002,
+        max_abs_fee_fraction=0.001,
     )
 
     assert fee_paid == pytest.approx(-0.44935346)
@@ -1550,8 +1550,8 @@ async def test_fee_policy_warning_dedupes_and_logs_original_sanity_ratio(
         user="fee_user",
         fetcher=_StaticFetcher([]),
         cache_path=tmp_path / "fills",
-        fee_pct_fallback=0.0002,
-        fee_pct_sanity_abs_max=0.001,
+        fallback_fee_fraction=0.0002,
+        max_abs_fee_fraction=0.001,
     )
     raw = {
         "id": "duplicate-fee-event",
@@ -1592,7 +1592,7 @@ def test_fee_policy_does_not_trust_fee_source_none_over_fee_entries():
             "fee_source": fem.FEE_SOURCE_NONE,
             "fees": {"currency": "USDT", "cost": 0.25},
         },
-        fee_pct_fallback=0.0002,
+        fallback_fee_fraction=0.0002,
     )
 
     assert fee_paid == pytest.approx(-0.25)
@@ -2023,7 +2023,7 @@ async def test_fill_event_cache_rejects_legacy_missing_pnl_contract(tmp_path: Pa
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     with pytest.raises(FillEventCacheContractError, match="legacy or missing pnl_contract"):
@@ -2057,7 +2057,7 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     report = await manager.run_doctor(auto_repair=True)
@@ -2400,7 +2400,7 @@ async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path)
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     report = await manager.run_doctor(auto_repair=True)
@@ -2480,7 +2480,7 @@ async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     report = await manager.run_doctor(auto_repair=True)
@@ -4313,7 +4313,7 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -4626,7 +4626,7 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -4722,7 +4722,7 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -4849,7 +4849,7 @@ async def test_manager_reconciles_multiple_closed_cycles_from_observations(
         user="default",
         fetcher=_StaticFetcher(events, observations=observations),
         cache_path=cache_dir,
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -5129,7 +5129,7 @@ async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -5341,7 +5341,7 @@ async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
         user="default",
         fetcher=_StaticFetcher(events),
         cache_path=tmp_path / "fills_synthetic_exact",
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     with caplog.at_level(logging.WARNING, logger=fem.logger.name):
@@ -6831,8 +6831,8 @@ async def test_okx_fetcher_uses_market_contract_size_for_fee_notional(monkeypatc
     assert events[0]["c_mult"] == pytest.approx(100.0)
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         events[0],
-        fee_pct_fallback=0.0002,
-        fee_pct_sanity_abs_max=0.001,
+        fallback_fee_fraction=0.0002,
+        max_abs_fee_fraction=0.001,
     )
     assert fee_paid == pytest.approx(-0.004)
     assert meta["fee_notional"] == pytest.approx(20.0)
@@ -7282,7 +7282,7 @@ async def test_manager_reconciles_rapid_lifecycles_by_observation_close_time(
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "rapid_cycles",
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -7323,7 +7323,7 @@ async def test_manager_reconciles_kucoin_net_cycle_pnl_to_gross_close_pnl(tmp_pa
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "net_to_gross_cycle",
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     await manager.refresh()
@@ -7380,7 +7380,7 @@ async def test_manager_distributes_kucoin_gross_cycle_delta_across_multiple_clos
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "multi_close_net_to_gross",
-        fee_pct_sanity_abs_max=1.0,
+        max_abs_fee_fraction=1.0,
     )
 
     await manager.refresh()
@@ -7424,7 +7424,7 @@ async def test_manager_reconciles_out_of_order_delayed_rows_by_close_time(
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "out_of_order_delayed",
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
 
     await manager.refresh()
@@ -7615,7 +7615,7 @@ async def test_refresh_latest_does_not_extend_to_old_synthetic_pnl(tmp_path: Pat
         user="default",
         fetcher=fetcher,
         cache_path=tmp_path / "refresh_latest_synthetic_bound",
-        fee_pct_fallback=0.0,
+        fallback_fee_fraction=0.0,
     )
     manager._events = [FillEvent.from_dict(ev) for ev in events]
     manager._loaded = True
@@ -8116,8 +8116,8 @@ async def test_gateio_fetcher_uses_market_contract_size_for_fee_notional(monkeyp
     assert events[0]["c_mult"] == pytest.approx(100.0)
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         events[0],
-        fee_pct_fallback=0.0002,
-        fee_pct_sanity_abs_max=0.001,
+        fallback_fee_fraction=0.0002,
+        max_abs_fee_fraction=0.001,
     )
     assert fee_paid == pytest.approx(-0.004)
     assert meta["fee_notional"] == pytest.approx(20.0)
@@ -9256,14 +9256,14 @@ async def test_cold_cache_normalization_classifies_invalid_metadata(tmp_path, sa
     cache_path = tmp_path / 'normalization'
     manager = FillEventsManager(exchange='bitget', user='default',
                                 fetcher=_StaticFetcher(sample_events), cache_path=cache_path,
-                                fee_pct_fallback=0.0)
+                                fallback_fee_fraction=0.0)
     await manager.refresh()
     metadata = manager.cache.load_metadata()
     metadata[field] = value
     manager.cache.save_metadata(metadata)
     cold = FillEventsManager(exchange='bitget', user='default',
                              fetcher=_StaticFetcher([]), cache_path=cache_path,
-                             fee_pct_fallback=0.0)
+                             fallback_fee_fraction=0.0)
     with pytest.raises(fem.FillEventCacheContractError, match=field):
         await cold.ensure_loaded()
     assert not cold._loaded

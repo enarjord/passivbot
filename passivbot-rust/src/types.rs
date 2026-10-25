@@ -443,8 +443,8 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -457,8 +457,8 @@ pub struct BotParamsPair {
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBudgetState {
-    pub configured_wallet_exposure_limit: f64,
-    pub effective_wallet_exposure_limit: f64,
+    pub configured_wallet_exposure_limit_ratio: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
     pub configured_n_positions: usize,
     pub effective_n_positions: usize,
 }
@@ -557,41 +557,41 @@ impl ForagerScoreWeights {
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
     #[serde(default)]
-    pub close_grid_qty_pct: f64,
+    pub close_grid_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_retracement_pct: f64,
+    pub close_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub close_trailing_qty_pct: f64,
+    pub close_trailing_qty_fraction: f64,
     #[serde(default)]
-    pub close_trailing_threshold_pct: f64,
+    pub close_trailing_threshold_base_fraction: f64,
     #[serde(default)]
-    pub close_weight_volatility_1h: f64,
+    pub close_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub close_weight_volatility_1m: f64,
+    pub close_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_grid_double_down_factor: f64,
+    pub entry_grid_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_grid_spacing_pct: f64,
+    pub entry_grid_threshold_base_fraction: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1h: f64,
+    pub entry_log_range_ema_span_1h_candles: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_1m: f64,
+    pub entry_log_range_ema_span_minutes: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1h: f64,
+    pub entry_log_range_1h_coefficient: f64,
     #[serde(default)]
-    pub entry_weight_volatility_1m: f64,
+    pub entry_log_range_1m_coefficient: f64,
     #[serde(default)]
-    pub entry_we_weight: f64,
+    pub entry_exposure_ratio_coefficient: f64,
     #[serde(default)]
-    pub entry_initial_ema_dist: f64,
+    pub entry_initial_ema_distance_fraction: f64,
     #[serde(default)]
-    pub entry_initial_qty_pct: f64,
+    pub entry_initial_qty_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_double_down_factor: f64,
+    pub entry_trailing_reentry_qty_multiplier: f64,
     #[serde(default)]
-    pub entry_trailing_retracement_pct: f64,
+    pub entry_trailing_retracement_base_fraction: f64,
     #[serde(default)]
-    pub entry_trailing_threshold_pct: f64,
+    pub entry_trailing_threshold_base_fraction: f64,
     pub filter_volatility_ema_span_1m: f64,
     pub filter_volume_ema_span_1m: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
@@ -608,9 +608,9 @@ pub struct BotParams {
     #[serde(default = "default_true")]
     pub entry_eligible: bool,
     #[serde(default)]
-    pub ema_span_0: f64,
+    pub ema_span_0_minutes: f64,
     #[serde(default)]
-    pub ema_span_1: f64,
+    pub ema_span_1_minutes: f64,
     #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
     #[serde(default = "default_hsl_panic_close_order_type")]
@@ -626,17 +626,17 @@ pub struct BotParams {
     #[serde(default = "default_unilateralness_span")]
     pub unilateralness_ema_span_1m: f64,
     pub n_positions: usize,
-    pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    pub total_wallet_exposure_limit_ratio: f64,
+    pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
     #[serde(default = "default_true")]
     pub risk_wel_enforcer_enabled: bool,
-    pub risk_wel_enforcer_threshold: f64,
+    pub risk_wel_enforcer_threshold_ratio: f64,
     #[serde(default = "default_true")]
     pub risk_twel_enforcer_enabled: bool,
     #[serde(default)]
     pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
-    pub risk_twel_enforcer_threshold: f64,
-    pub risk_we_excess_allowance_pct: f64,
+    pub risk_twel_enforcer_threshold_ratio: f64,
+    pub risk_we_excess_allowance_fraction: f64,
     #[serde(default = "default_true")]
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
@@ -652,32 +652,32 @@ pub struct BotParams {
 impl Default for BotParams {
     fn default() -> Self {
         Self {
-            close_grid_qty_pct: 0.0,
-            close_trailing_retracement_pct: 0.0,
-            close_trailing_qty_pct: 0.0,
-            close_trailing_threshold_pct: 0.0,
-            close_weight_volatility_1h: 0.0,
-            close_weight_volatility_1m: 0.0,
-            entry_grid_double_down_factor: 0.0,
-            entry_grid_spacing_pct: 0.0,
-            entry_volatility_ema_span_1h: 0.0,
-            entry_volatility_ema_span_1m: 0.0,
-            entry_weight_volatility_1h: 0.0,
-            entry_weight_volatility_1m: 0.0,
-            entry_we_weight: 0.0,
-            entry_initial_ema_dist: 0.0,
-            entry_initial_qty_pct: 0.0,
-            entry_trailing_double_down_factor: 0.0,
-            entry_trailing_retracement_pct: 0.0,
-            entry_trailing_threshold_pct: 0.0,
+            close_grid_qty_fraction: 0.0,
+            close_trailing_retracement_base_fraction: 0.0,
+            close_trailing_qty_fraction: 0.0,
+            close_trailing_threshold_base_fraction: 0.0,
+            close_log_range_1h_coefficient: 0.0,
+            close_log_range_1m_coefficient: 0.0,
+            entry_grid_reentry_qty_multiplier: 0.0,
+            entry_grid_threshold_base_fraction: 0.0,
+            entry_log_range_ema_span_1h_candles: 0.0,
+            entry_log_range_ema_span_minutes: 0.0,
+            entry_log_range_1h_coefficient: 0.0,
+            entry_log_range_1m_coefficient: 0.0,
+            entry_exposure_ratio_coefficient: 0.0,
+            entry_initial_ema_distance_fraction: 0.0,
+            entry_initial_qty_fraction: 0.0,
+            entry_trailing_reentry_qty_multiplier: 0.0,
+            entry_trailing_retracement_base_fraction: 0.0,
+            entry_trailing_threshold_base_fraction: 0.0,
             filter_volatility_ema_span_1m: 0.0,
             filter_volume_ema_span_1m: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
             entry_eligible: true,
-            ema_span_0: 0.0,
-            ema_span_1: 0.0,
+            ema_span_0_minutes: 0.0,
+            ema_span_1_minutes: 0.0,
             hsl_enabled: default_hsl_enabled(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
             risk_entry_cooldown_minutes: 0.0,
@@ -686,14 +686,14 @@ impl Default for BotParams {
             entry_cooldown_weights_minutes: Default::default(),
             unilateralness_ema_span_1m: 60.0,
             n_positions: 0,
-            total_wallet_exposure_limit: 0.0,
-            wallet_exposure_limit: 0.0,
+            total_wallet_exposure_limit_ratio: 0.0,
+            wallet_exposure_limit_ratio: 0.0,
             risk_wel_enforcer_enabled: true,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             risk_twel_enforcer_enabled: true,
             risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
-            risk_twel_enforcer_threshold: 0.0,
-            risk_we_excess_allowance_pct: 0.0,
+            risk_twel_enforcer_threshold_ratio: 0.0,
+            risk_we_excess_allowance_fraction: 0.0,
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
             unstuck_close_fraction: 0.0,
@@ -708,7 +708,7 @@ impl Default for BotParams {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeOrderContext {
-    pub effective_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

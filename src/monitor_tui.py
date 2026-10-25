@@ -762,10 +762,10 @@ def _render_positions_twe_summary(rows: list[dict[str, Any]]) -> list[str]:
             try:
                 if (
                     total_limit is None
-                    and float(pos.get("total_wallet_exposure_limit", 0.0) or 0.0) > 0.0
+                    and float(pos.get("total_wallet_exposure_limit_ratio", 0.0) or 0.0) > 0.0
                 ):
                     total_limit = float(
-                        pos.get("total_wallet_exposure_limit", 0.0) or 0.0
+                        pos.get("total_wallet_exposure_limit_ratio", 0.0) or 0.0
                     )
             except (TypeError, ValueError):
                 pass

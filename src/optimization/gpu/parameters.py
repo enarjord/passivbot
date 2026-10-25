@@ -16,12 +16,12 @@ def _single_coin_exposure_params(
     risk: dict, *, side: str, scale_hsl_budget: bool = False
 ) -> dict[str, float]:
     return {
-        "we_excess_allowance_pct": float(
+        "we_excess_allowance_fraction": float(
             risk.get("we_excess_allowance_fraction", 0.0) or 0.0
         ),
         "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": float(
+        "twel_enforcer_threshold_ratio": float(
             risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 1.0) or 0.0
         ),
     }
@@ -32,7 +32,7 @@ def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, fl
         risk.get('position_exposure_enforcer', {}).get('enabled', risk.get('risk_wel_enforcer_enabled', False))
     )
     threshold = float(
-        risk.get('position_exposure_enforcer', {}).get('threshold_ratio', risk.get('risk_wel_enforcer_threshold', 0.0))
+        risk.get('position_exposure_enforcer', {}).get('threshold_ratio', risk.get('risk_wel_enforcer_threshold_ratio', 0.0))
         or 0.0
     )
     if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
@@ -43,7 +43,7 @@ def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, fl
         )
     return {
         "wel_enforcer_enabled": float(enabled),
-        "wel_enforcer_threshold": threshold,
+        "wel_enforcer_threshold_ratio": threshold,
     }
 
 
@@ -106,7 +106,7 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
         weights = bot.get("forager_score_weights", {}) or {}
         strategy.update({
             "entry_cooldown_minutes": float(bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0),
-            "total_wallet_exposure_limit": float(bot["total_wallet_exposure_limit"]),
+            "total_wallet_exposure_limit_ratio": float(bot["total_wallet_exposure_limit_ratio"]),
             "forager_volume_ema_span_1m": float(bot.get("filter_volume_ema_span_1m", 0.0) or 0.0),
             "forager_volatility_ema_span_1m": float(bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0),
             "forager_score_weights_volume": float(weights.get("volume", 0.0)),

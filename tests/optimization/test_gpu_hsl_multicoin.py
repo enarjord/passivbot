@@ -41,7 +41,7 @@ def make_proxy(
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     config["backtest"].update(
-        starting_balance=1000.0, btc_collateral_cap=0.0
+        starting_balance=1000.0, btc_collateral_target_ratio=0.0
     )
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = side in sides

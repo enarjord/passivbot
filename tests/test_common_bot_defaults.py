@@ -51,8 +51,8 @@ def test_common_shared_profile_retains_former_long_values_and_separate_permissio
 
 def test_frozen_v8_defaults_keep_their_original_asymmetric_policy_and_ranges():
     v8 = get_released_v8_defaults(strategy_kind="trailing_martingale")
-    assert v8["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 790.0
-    assert v8["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 60.0
+    assert v8["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 790.0
+    assert v8["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 60.0
     assert v8["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
     assert v8["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.5
     assert v8["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"] != (

@@ -107,8 +107,8 @@ def test_compact_retains_side_presence_and_explicit_disable(side):
 
 
 @pytest.mark.parametrize("weights", [
-    {"volume": 2.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0},
-    {"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0},
+    {"volume": 2.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0},
+    {"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
 ])
 def test_compact_preserves_effective_normalized_weights(weights):
     source = policy()
@@ -502,7 +502,7 @@ def test_explain_default_activation_and_normalized_weights_are_visible():
     }
     source = policy()
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "ema_readiness": 1.0, "volume": 2.0, "volatility": 0.0, "unilateralness": 0.0,
+        "ema_readiness": 1.0, "volume": 2.0, "log_range": 0.0, "unilateralness": 0.0,
     }
     report = explain_config(source, "bot.long.forager.score_weights.volume")
     assert report["value"] == pytest.approx(2 / 3)
@@ -540,7 +540,7 @@ def test_authoring_tools_never_connect_to_network(monkeypatch):
 def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
     path = write_json(tmp_path / "input.json", policy())
     before = path.read_bytes()
-    assert cli_main(["tool", "config-explain", str(path), "bot.portfolio.warmup.span_multiplier", "--json"]) == 0
+    assert cli_main(["tool", "config-explain", str(path), "bot.portfolio.warmup.activation_span_fraction", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["value"] == 0.3
     assert report["context"]["scope"] == "offline_policy"
@@ -685,7 +685,7 @@ def test_explain_bound_declaration_is_not_normalized_by_a_target_transform():
 
 def test_explain_complete_object_override_projects_value_before_reporting_normalization():
     source = policy()
-    weights = {'volume': 0.5, 'volatility': 0.25, 'ema_readiness': 0.25, 'unilateralness': 0.0}
+    weights = {'volume': 0.5, 'log_range': 0.25, 'ema_readiness': 0.25, 'unilateralness': 0.0}
     source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {'bot.long.forager.score_weights': weights}}]
     report = explain_config(source, 'bot.long.forager.score_weights.volume', scenario='one')
     assert report['value'] == 0.5

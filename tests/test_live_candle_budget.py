@@ -878,9 +878,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -1008,9 +1008,9 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -1111,17 +1111,17 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {
-                "volatility_ema_span_1m": 5.0,
-                "volatility_ema_span_1h": 0.0,
+                "log_range_ema_span_minutes": 5.0,
+                "log_range_ema_span_1h_candles": 0.0,
                 "entry": {
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "threshold_volatility_1m_weight": 0.0,
-                    "retracement_volatility_1m_weight": 0.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "threshold_log_range_1m_coefficient": 0.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
                 },
                 "close": {
-                    "threshold_volatility_1m_weight": 0.0,
-                    "retracement_volatility_1m_weight": 0.0,
+                    "threshold_log_range_1m_coefficient": 0.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
                 },
             }
 
@@ -1259,21 +1259,21 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {
-                "volatility_ema_span_1m": 5.0,
-                "volatility_ema_span_1h": 0.0,
+                "log_range_ema_span_minutes": 5.0,
+                "log_range_ema_span_1h_candles": 0.0,
                 "entry": {
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "threshold_volatility_1m_weight": 1.0,
-                    "retracement_volatility_1m_weight": 0.0,
-                    "threshold_volatility_1h_weight": 0.0,
-                    "retracement_volatility_1h_weight": 0.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "threshold_log_range_1m_coefficient": 1.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
+                    "threshold_log_range_1h_coefficient": 0.0,
+                    "retracement_log_range_1h_coefficient": 0.0,
                 },
                 "close": {
-                    "threshold_volatility_1m_weight": 0.0,
-                    "retracement_volatility_1m_weight": 0.0,
-                    "threshold_volatility_1h_weight": 0.0,
-                    "retracement_volatility_1h_weight": 0.0,
+                    "threshold_log_range_1m_coefficient": 0.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
+                    "threshold_log_range_1h_coefficient": 0.0,
+                    "retracement_log_range_1h_coefficient": 0.0,
                 },
             }
 
@@ -1469,21 +1469,21 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {
-                "volatility_ema_span_1m": 5.0,
-                "volatility_ema_span_1h": 0.0,
+                "log_range_ema_span_minutes": 5.0,
+                "log_range_ema_span_1h_candles": 0.0,
                 "entry": {
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
-                    "threshold_volatility_1m_weight": 1.0,
-                    "retracement_volatility_1m_weight": 0.0,
-                    "threshold_volatility_1h_weight": 0.0,
-                    "retracement_volatility_1h_weight": 0.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
+                    "threshold_log_range_1m_coefficient": 1.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
+                    "threshold_log_range_1h_coefficient": 0.0,
+                    "retracement_log_range_1h_coefficient": 0.0,
                 },
                 "close": {
-                    "threshold_volatility_1m_weight": 0.0,
-                    "retracement_volatility_1m_weight": 0.0,
-                    "threshold_volatility_1h_weight": 0.0,
-                    "retracement_volatility_1h_weight": 0.0,
+                    "threshold_log_range_1m_coefficient": 0.0,
+                    "retracement_log_range_1m_coefficient": 0.0,
+                    "threshold_log_range_1h_coefficient": 0.0,
+                    "retracement_log_range_1h_coefficient": 0.0,
                 },
             }
 
@@ -1663,9 +1663,9 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -1850,9 +1850,9 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -1967,9 +1967,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -2085,9 +2085,9 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -2194,9 +2194,9 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
         def bp(self, pside, key, symbol):
             if key == "entry_cooldown_weights_minutes":
                 return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
-            if key == "ema_span_0":
+            if key == "ema_span_0_minutes":
                 return 10.0
-            if key == "ema_span_1":
+            if key == "ema_span_1_minutes":
                 return 20.0
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
@@ -2260,7 +2260,7 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
     class FakeBot:
         config = {
             "live": {},
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
         }
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
@@ -2285,8 +2285,8 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
 
         def bp(self, pside, key, symbol):
             values = {
-                "ema_span_0": 10.0,
-                "ema_span_1": 25.0,
+                "ema_span_0_minutes": 10.0,
+                "ema_span_1_minutes": 25.0,
                 "forager_volume_ema_span_1m": 7.0,
                 "forager_volatility_ema_span_1m": 11.0,
                 "entry_volatility_ema_span_hours": 3.0,
@@ -2634,7 +2634,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
 
     class FakeBot:
         config = {
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
             "live": {"startup": {"force_cold_startup": False}},
         }
         exchange = "bybit"
@@ -2695,7 +2695,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     assert all(record.levelno == logging.DEBUG for record in warmup_records)
     assert any("trading-ready warmup" in record.message for record in warmup_records)
     target = next(record.message for record in warmup_records if "target" in record.message)
-    assert "span_multiplier=" in target and "max_minutes=" in target
+    assert "activation_span_fraction=" in target and "max_minutes=" in target
     assert "warmup_ratio=" not in target and "max_warmup_minutes=" not in target
     assert any("slot view" in record.message for record in warmup_records)
     assert any("windows" in record.message for record in warmup_records)
@@ -2837,7 +2837,7 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(
 
     class FakeBot:
         config = {
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
             "live": {
                 "startup": {"force_cold_startup": True, "warmup_jitter_seconds": 30.0}
             }
@@ -3128,13 +3128,13 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return 784.0
-            if key == "entry_weight_volatility_1h":
+            if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {
-                "ema_span_0",
-                "ema_span_1",
+                "ema_span_0_minutes",
+                "ema_span_1_minutes",
                 "forager_volume_ema_span_1m",
                 "forager_volatility_ema_span_1m",
             }:
@@ -3439,7 +3439,7 @@ async def test_forager_candidate_refresh_skips_unused_native_h1_surface(monkeypa
             return 1 if pside == "long" else 0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return 100.0
             if key in {
                 "forager_volume_ema_span_1m",
@@ -3778,8 +3778,8 @@ async def test_forager_candidate_staleness_counts_only_refreshable_surfaces(monk
             return 1 if pside == "long" else 0
 
         def bp(self, _pside, key, _symbol):
-            if key in {"volatility_ema_span_1h", "entry_weight_volatility_1h"}:
-                return 10.0 if key == "volatility_ema_span_1h" else 1.0
+            if key in {"log_range_ema_span_1h_candles", "entry_log_range_1h_coefficient"}:
+                return 10.0 if key == "log_range_ema_span_1h_candles" else 1.0
             return 0.0
 
         def _forager_refresh_budget(self, *args, **kwargs):
@@ -3857,9 +3857,9 @@ async def test_forager_candidate_refresh_prioritizes_cold_1m_before_1h(monkeypat
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return 784.0
-            if key == "entry_weight_volatility_1h":
+            if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
                 return 10.0
@@ -3953,9 +3953,9 @@ async def test_forager_candidate_refresh_interleaves_h1_health_scans(monkeypatch
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return 10.0
-            if key == "entry_weight_volatility_1h":
+            if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
                 return 10.0
@@ -4080,9 +4080,9 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return self.h1_required
-            if key == "entry_weight_volatility_1h":
+            if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
                 return 10.0
@@ -4209,9 +4209,9 @@ async def test_forager_candidate_refresh_does_not_back_off_empty_h1_result(monke
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key == "volatility_ema_span_1h":
+            if key == "log_range_ema_span_1h_candles":
                 return 10.0
-            if key == "entry_weight_volatility_1h":
+            if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {
                 "forager_volume_ema_span_1m",

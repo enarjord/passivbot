@@ -55,11 +55,11 @@ mod tests {
             }
         }
         let tm = strategy_spec(StrategyKind::TrailingMartingale);
-        assert_eq!(tm.defaults["long"]["ema_span_0"], 790.0);
-        assert_eq!(tm.defaults["short"]["ema_span_0"], 790.0);
+        assert_eq!(tm.defaults["long"]["entry_ema_span_0_minutes"], 790.0);
+        assert_eq!(tm.defaults["short"]["entry_ema_span_0_minutes"], 790.0);
         assert_ne!(
-            tm.optimize_bounds["long_ema_span_0"],
-            tm.optimize_bounds["short_ema_span_0"]
+            tm.optimize_bounds["long_entry_ema_span_0_minutes"],
+            tm.optimize_bounds["short_entry_ema_span_0_minutes"]
         );
     }
 }

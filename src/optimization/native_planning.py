@@ -50,8 +50,8 @@ def _request_owned_paths(config):
         for key in get_strategy_param_keys(kind):
             yield ("bot", side, "strategy", kind, *key.split("."))
         dynamic_keys = (
-            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
-            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
+            "n_positions", "total_wallet_exposure_limit_ratio", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_fraction", "risk_twel_enforcer_threshold_ratio", "risk_wel_enforcer_threshold_ratio",
             "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
             "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
@@ -96,8 +96,8 @@ def _static_contract(config):
         for key in get_strategy_param_keys(kind):
             _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))
         dynamic_keys = (
-            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
-            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
+            "n_positions", "total_wallet_exposure_limit_ratio", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_fraction", "risk_twel_enforcer_threshold_ratio", "risk_wel_enforcer_threshold_ratio",
             "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
             "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",

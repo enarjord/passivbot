@@ -128,8 +128,8 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
         bot["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, ema_span_minutes=1,
                           cooldown_minutes_after_red=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
-        bot["strategy"]["ema_anchor"]["base_qty_pct"] = 0.8
-        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.8
+        bot["strategy"]["ema_anchor"]["base_qty_fraction"] = 0.8
+        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.8
     candles = inputs[1]
     # Entry at 3, RED at 4, liquidation at 5. A limit panic cannot fill across
     # the gap; a market panic liquidates at the earlier factual fill boundary.

@@ -27,7 +27,7 @@ def inputs(mode="coin"):
     set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     set_risk_memory_spans(cfg, 1440.0)
     cfg["backtest"]["starting_balance"] = 1000.0
-    cfg["backtest"]["btc_collateral_cap"] = 0.0
+    cfg["backtest"]["btc_collateral_target_ratio"] = 0.0
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
@@ -37,8 +37,8 @@ def inputs(mode="coin"):
         # exists. Its strategy does not consume hourly volatility.
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         for branch in ("entry", "close"):
-            strategy[branch]["threshold_volatility_1h_weight"] = 0.0
-            strategy[branch]["retracement_volatility_1h_weight"] = 0.0
+            strategy[branch]["threshold_log_range_1h_coefficient"] = 0.0
+            strategy[branch]["retracement_log_range_1h_coefficient"] = 0.0
     active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,

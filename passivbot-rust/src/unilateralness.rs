@@ -4,7 +4,7 @@
 /// Backtests start flat, so a side with no entry budget cannot consume RMS.
 pub fn backtest_enabled(params: &crate::types::BotParams, ranking_possible: bool) -> bool {
     params.entry_eligible
-        && params.total_wallet_exposure_limit > 0.0
+        && params.total_wallet_exposure_limit_ratio > 0.0
         && params.n_positions > 0
         && ((ranking_possible && params.forager_score_weights.unilateralness > 0.0)
             || crate::entry_cooldown::uses_adverse_rms(params))
@@ -187,7 +187,7 @@ mod tests {
         for bp in [&mut pair.long, &mut pair.short] {
             bp.entry_eligible = true;
             bp.n_positions = 1;
-            bp.total_wallet_exposure_limit = 1.0;
+            bp.total_wallet_exposure_limit_ratio = 1.0;
             bp.entry_cooldown_weights_minutes.adverse_directionality = 1.0;
         }
         for activation in [
@@ -219,7 +219,7 @@ mod tests {
         for bp in [&mut pair.long, &mut pair.short] {
             bp.entry_eligible = true;
             bp.n_positions = 2;
-            bp.total_wallet_exposure_limit = 1.0;
+            bp.total_wallet_exposure_limit_ratio = 1.0;
             bp.forager_score_weights.unilateralness = 1.0;
         }
         assert_eq!(

@@ -19,7 +19,7 @@ from trailing_diagnostics import (
     normalize_trailing_extrema,
 )
 from risk_limits import (
-    effective_we_excess_allowance_pct,
+    effective_we_excess_allowance_fraction,
 )
 from utils import utc_ms
 
@@ -556,12 +556,12 @@ def _build_health_summary_payload(
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
-    mem_pct = _get_process_memory_percent()
-    if mem_pct is not None and math.isfinite(mem_pct):
-        payload["memory_percent"] = float(mem_pct)
-    cpu_pct = _get_process_cpu_percent()
-    if cpu_pct is not None and math.isfinite(cpu_pct):
-        payload["cpu_percent"] = max(0.0, float(cpu_pct))
+    memory_percent = _get_process_memory_percent()
+    if memory_percent is not None and math.isfinite(memory_percent):
+        payload["memory_percent"] = float(memory_percent)
+    cpu_percent = _get_process_cpu_percent()
+    if cpu_percent is not None and math.isfinite(cpu_percent):
+        payload["cpu_percent"] = max(0.0, float(cpu_percent))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)
@@ -982,20 +982,20 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             ema_readiness_raw = None
             entry_trigger_price = None
             try:
-                entry_initial_ema_dist = float(
-                    candidate.get("entry_initial_ema_dist", 0.0) or 0.0
+                entry_initial_ema_distance_fraction = float(
+                    candidate.get("entry_initial_ema_distance_fraction", 0.0) or 0.0
                 )
                 if pside == "long":
                     ema_lower = float(candidate.get("ema_lower", 0.0) or 0.0)
                     bid = float(candidate.get("bid", 0.0) or 0.0)
                     if ema_lower > 0.0 and bid > 0.0:
-                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_dist)
+                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_distance_fraction)
                         ema_readiness_raw = bid / entry_trigger_price - 1.0
                 else:
                     ema_upper = float(candidate.get("ema_upper", 0.0) or 0.0)
                     ask = float(candidate.get("ask", 0.0) or 0.0)
                     if ema_upper > 0.0 and ask > 0.0:
-                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_dist)
+                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_distance_fraction)
                         ema_readiness_raw = 1.0 - ask / entry_trigger_price
             except Exception:
                 ema_readiness_raw = None
@@ -1172,7 +1172,7 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
                 self.bot_value(pside, "unstuck_exposure_trigger_ratio") or 0.0
             ),
         }
-        for key in ("allowance", "peak", "pct_from_peak"):
+        for key in ("allowance", "peak", "change_from_peak_percent"):
             if key in info:
                 side_payload[key] = float(info[key])
         if "loss_allowance_fraction" in info:
@@ -1229,11 +1229,16 @@ def _build_monitor_runtime_market_hints(
                             and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
                         ):
                             continue
-                        prefix, distance_key = "unstuck_", "unstuck_ema_distance_fraction"
+                        distance_key = "unstuck_ema_distance_fraction"
                     else:
-                        prefix, distance_key = "", "entry_initial_ema_dist"
-                    span0 = float(self.bp(pside, f"{prefix}ema_span_0{'_minutes' if prefix else ''}", symbol))
-                    span1 = float(self.bp(pside, f"{prefix}ema_span_1{'_minutes' if prefix else ''}", symbol))
+                        distance_key = "entry_initial_ema_distance_fraction"
+                    span_keys = (
+                        ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
+                        if family == "unstuck"
+                        else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+                    )
+                    span0 = float(self.bp(pside, span_keys[0], symbol))
+                    span1 = float(self.bp(pside, span_keys[1], symbol))
                     distance = float(self.bp(pside, distance_key, symbol))
                     if (
                         not all(math.isfinite(v) for v in (span0, span1, distance))
@@ -1407,18 +1412,18 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
     }
 
 
-def _monitor_wallet_exposure_limit_with_allowance(
+def _monitor_wallet_exposure_limit_ratio_with_allowance(
     self, pside: str, symbol: str
 ) -> float:
-    wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
-    allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = effective_we_excess_allowance_pct(
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        total_wallet_exposure_limit=twel,
+    wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
+    allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
+    twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+    effective_allowance_fraction = effective_we_excess_allowance_fraction(
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_fraction,
+        total_wallet_exposure_limit_ratio=twel,
     )
-    return wel * (1.0 + effective_allowance_pct)
+    return wel * (1.0 + effective_allowance_fraction)
 
 
 def _monitor_strategy_params(self, pside, symbol, strategy_cache=None):
@@ -1435,24 +1440,24 @@ def _monitor_strategy_value(
     self, pside: str, key: str, symbol: str, *, strategy_cache=None
 ) -> float:
     legacy_map = {
-        "entry_grid_double_down_factor": "entry.double_down_factor",
-        "entry_trailing_double_down_factor": "entry.double_down_factor",
-        "entry_grid_spacing_pct": "entry.threshold_base_pct",
-        "entry_trailing_threshold_pct": "entry.threshold_base_pct",
-        "entry_trailing_retracement_pct": "entry.retracement_base_pct",
-        "entry_initial_ema_dist": "entry.initial_ema_dist",
-        "entry_initial_qty_pct": "entry.initial_qty_pct",
-        "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
-        "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
-        "entry_we_weight": "entry.threshold_we_weight",
-        "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
-        "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
-        "close_grid_qty_pct": "close.qty_pct",
-        "close_trailing_qty_pct": "close.qty_pct",
-        "close_trailing_threshold_pct": "close.threshold_base_pct",
-        "close_trailing_retracement_pct": "close.retracement_base_pct",
-        "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
-        "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
+        "entry_grid_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_trailing_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_retracement_base_fraction": "entry.retracement_base_fraction",
+        "entry_initial_ema_distance_fraction": "entry.initial_ema_distance_fraction",
+        "entry_initial_qty_fraction": "entry.initial_qty_fraction",
+        "entry_log_range_1h_coefficient": "entry.threshold_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient": "entry.threshold_log_range_1m_coefficient",
+        "entry_exposure_ratio_coefficient": "entry.threshold_exposure_ratio_coefficient",
+        "entry_log_range_ema_span_1h_candles": "log_range_ema_span_1h_candles",
+        "entry_log_range_ema_span_minutes": "log_range_ema_span_minutes",
+        "close_grid_qty_fraction": "close.qty_fraction",
+        "close_trailing_qty_fraction": "close.qty_fraction",
+        "close_trailing_threshold_base_fraction": "close.threshold_base_fraction",
+        "close_trailing_retracement_base_fraction": "close.retracement_base_fraction",
+        "close_log_range_1h_coefficient": "close.threshold_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient": "close.threshold_log_range_1m_coefficient",
     }
     strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
     if callable(strategy_getter):
@@ -1476,11 +1481,11 @@ def _monitor_entry_trailing_limit_cap(
     symbol: str,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
-    allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
+    allowed_limit = _monitor_wallet_exposure_limit_ratio_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
     retracement = _monitor_strategy_value(
-        self, pside, "entry.retracement_base_pct", symbol
+        self, pside, "entry.retracement_base_fraction", symbol
     )
     if retracement > 0.0:
         return allowed_limit, "trailing_only"
@@ -1520,7 +1525,7 @@ def _monitor_h1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "offset_volatility_ema_span_1h",
+            "offset_log_range_ema_span_1h_candles",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1529,7 +1534,7 @@ def _monitor_h1_entry_logrange(
             span = _monitor_strategy_value(
                 self,
                 pside,
-                "entry_volatility_ema_span_1h",
+                "entry_log_range_ema_span_1h_candles",
                 symbol,
                 strategy_cache=strategy_cache,
             )
@@ -1545,7 +1550,7 @@ def _monitor_m1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "entry_volatility_ema_span_1m",
+            "entry_log_range_ema_span_minutes",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1624,27 +1629,27 @@ def _build_monitor_trailing_entry_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "entry_grid_double_down_factor",
-        "entry_grid_spacing_pct",
-        "entry_initial_ema_dist",
-        "entry_initial_qty_pct",
-        "entry_trailing_double_down_factor",
-        "entry_trailing_retracement_pct",
-        "entry_trailing_threshold_pct",
-        "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m",
-        "entry_we_weight",
+        "entry_grid_reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction",
+        "entry_initial_ema_distance_fraction",
+        "entry_initial_qty_fraction",
+        "entry_trailing_reentry_qty_multiplier",
+        "entry_trailing_retracement_base_fraction",
+        "entry_trailing_threshold_base_fraction",
+        "entry_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient",
+        "entry_exposure_ratio_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache
         )
     for key in (
-        "wallet_exposure_limit",
-        "risk_we_excess_allowance_pct",
+        "wallet_exposure_limit_ratio",
+        "risk_we_excess_allowance_fraction",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
-    inputs["total_wallet_exposure_limit"] = float(
-        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    inputs["total_wallet_exposure_limit_ratio"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0
     )
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
@@ -1675,8 +1680,8 @@ def _build_monitor_trailing_close_payload(
     )
     if strategy_kind == "trailing_martingale":
         strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
-        volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
-        volatility_ema_span_1h = float(strategy_params["volatility_ema_span_1h"])
+        log_range_ema_span_minutes = float(strategy_params["log_range_ema_span_minutes"])
+        log_range_ema_span_1h_candles = float(strategy_params["log_range_ema_span_1h_candles"])
         inputs = {
             "symbol": symbol,
             "pside": pside,
@@ -1689,17 +1694,17 @@ def _build_monitor_trailing_close_payload(
                     "ask": float(current_price),
                 },
                 "ema_bands": {"upper": 0.0, "lower": 0.0},
-                "volatility_ema_1m": float(
-                    _monitor_m1_logrange_for_span(self, symbol, volatility_ema_span_1m)
+                "log_range_ema_1m": float(
+                    _monitor_m1_logrange_for_span(self, symbol, log_range_ema_span_minutes)
                 ),
-                "volatility_ema_1h": float(
-                    _monitor_h1_logrange_for_span(self, symbol, volatility_ema_span_1h)
+                "log_range_ema_1h": float(
+                    _monitor_h1_logrange_for_span(self, symbol, log_range_ema_span_1h_candles)
                 ),
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
             "runtime": {
-                "effective_wallet_exposure_limit": float(
-                    self.bp(pside, "wallet_exposure_limit", symbol)
+                "effective_wallet_exposure_limit_ratio": float(
+                    self.bp(pside, "wallet_exposure_limit_ratio", symbol)
                 )
             },
             "close_params": dict(strategy_params["close"]),
@@ -1741,24 +1746,24 @@ def _build_monitor_trailing_close_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "close_grid_qty_pct",
-        "close_trailing_qty_pct",
-        "close_trailing_retracement_pct",
-        "close_trailing_threshold_pct",
-        "close_weight_volatility_1h",
-        "close_weight_volatility_1m",
+        "close_grid_qty_fraction",
+        "close_trailing_qty_fraction",
+        "close_trailing_retracement_base_fraction",
+        "close_trailing_threshold_base_fraction",
+        "close_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache
         )
     for key in (
-        "wallet_exposure_limit",
-        "risk_we_excess_allowance_pct",
-        "risk_wel_enforcer_threshold",
+        "wallet_exposure_limit_ratio",
+        "risk_we_excess_allowance_fraction",
+        "risk_wel_enforcer_threshold_ratio",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
-    inputs["total_wallet_exposure_limit"] = float(
-        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    inputs["total_wallet_exposure_limit_ratio"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0
     )
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
@@ -1887,26 +1892,26 @@ def _build_monitor_position_side_payload(
         wallet_exposure = float(
             pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
         )
-    wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
-    allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = effective_we_excess_allowance_pct(
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        total_wallet_exposure_limit=twel,
+    wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
+    allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
+    twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+    effective_allowance_fraction = effective_we_excess_allowance_fraction(
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_fraction,
+        total_wallet_exposure_limit_ratio=twel,
     )
-    effective_wel = wel * (1.0 + effective_allowance_pct)
+    effective_wel = wel * (1.0 + effective_allowance_fraction)
 
     payload: dict[str, Any] = {
         "size": size,
         "price": price,
         "wallet_exposure": wallet_exposure,
-        "wallet_exposure_limit": wel,
-        "effective_wallet_exposure_limit": effective_wel,
+        "wallet_exposure_limit_ratio": wel,
+        "effective_wallet_exposure_limit_ratio": effective_wel,
         "wel_ratio": wallet_exposure / wel if wel > 0.0 else 0.0,
         "wele_ratio": wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0,
         "total_wallet_exposure": float(total_we_by_pside.get(pside, 0.0) or 0.0),
-        "total_wallet_exposure_limit": twel,
+        "total_wallet_exposure_limit_ratio": twel,
         "twel_ratio": (
             float(total_we_by_pside.get(pside, 0.0) or 0.0) / twel
             if twel > 0.0

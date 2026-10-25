@@ -30,8 +30,8 @@ DEFAULT_FORAGER_SCORE_WEIGHTS = {
 }
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
-    "risk_wel_enforcer_threshold",
-    "risk_twel_enforcer_threshold",
+    "risk_wel_enforcer_threshold_ratio",
+    "risk_twel_enforcer_threshold_ratio",
     "unstuck_exposure_trigger_ratio",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
@@ -125,7 +125,7 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_wel_enforcer_threshold"
+                bot_side, "risk_wel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.position_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
@@ -133,14 +133,14 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_twel_enforcer_threshold"
+                bot_side, "risk_twel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
-            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold_ratio"),
             enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
@@ -148,7 +148,7 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
-        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
+        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit_ratio"))
         raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
         try:
             n_positions_value = float(raw_n_positions)
@@ -258,7 +258,7 @@ def _read_legacy_alias(bot_cfg: dict, *keys: str):
     return None
 
 
-def _derive_close_grid_qty_pct(bot_cfg: dict, *, path: str) -> Optional[float]:
+def _derive_close_grid_qty_fraction(bot_cfg: dict, *, path: str) -> Optional[float]:
     raw_n_closes = _read_legacy_alias(bot_cfg, "n_closes", "n_close_orders")
     if raw_n_closes is None:
         return None
@@ -272,16 +272,16 @@ def _derive_close_grid_qty_pct(bot_cfg: dict, *, path: str) -> Optional[float]:
 
 
 def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
-    path = _bot_path(pside, "total_wallet_exposure_limit")
+    path = _bot_path(pside, "total_wallet_exposure_limit_ratio")
     try:
-        total_wallet_exposure_limit = float(bot_cfg["total_wallet_exposure_limit"])
+        total_wallet_exposure_limit_ratio = float(bot_cfg["total_wallet_exposure_limit_ratio"])
     except KeyError:
         return False
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{path} must be numeric") from exc
-    if not math.isfinite(total_wallet_exposure_limit):
+    if not math.isfinite(total_wallet_exposure_limit_ratio):
         raise ValueError(f"{path} must be finite")
-    return total_wallet_exposure_limit > 0.0
+    return total_wallet_exposure_limit_ratio > 0.0
 
 
 def _hydrate_forager_score_weights(
@@ -455,7 +455,7 @@ def normalize_hsl_risk_unstuck_numerics(
             set_grouped_bot_value(bot_side, f"unstuck_{key}_minutes", value)
 
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_fraction"),
             path=f"{risk_path}.we_excess_allowance_fraction",
         )
         _validate_ratio(
@@ -561,7 +561,7 @@ def ensure_optimize_bounds_for_bot(
             weights = {
                 "volume": 0.0,
                 "ema_readiness": 0.0,
-                "volatility": 1.0,
+                "log_range": 1.0,
                 "unilateralness": 0.0,
             }
             forager_cfg["score_weights"] = weights
@@ -570,7 +570,7 @@ def ensure_optimize_bounds_for_bot(
 
 
 def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
-    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
     if not isinstance(weights, dict):
         raise TypeError(f"{path} must be a dict")
     missing = sorted(required_weight_keys - set(weights))
@@ -582,7 +582,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
 
     normalized = {}
     total = 0.0
-    for key in ("volume", "ema_readiness", "volatility", "unilateralness"):
+    for key in ("volume", "ema_readiness", "log_range", "unilateralness"):
         try:
             value = float(weights[key])
         except (TypeError, ValueError) as exc:
@@ -593,11 +593,11 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}
+        return {"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0}
 
     return {
         key: normalized[key] / total
-        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
     }
 
 
@@ -610,7 +610,7 @@ def forager_score_weights_are_normalized(
     normalized = normalize_forager_score_weights(weights, path=path)
     return all(
         math.isclose(normalized[key], weights[key], rel_tol=0.0, abs_tol=abs_tol)
-        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
     )
 
 
@@ -636,7 +636,7 @@ def normalize_bot_forager_config(
         policy = reconciled_bot_policy(result)
     logical = replace(policy, _normalized=()).effective_view() if policy is not None else None
     aliases = result["bot"]._runtime_aliases if policy is not None else frozenset()
-    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         weights = (deepcopy(logical[pside]["forager"]["score_weights"])
@@ -843,7 +843,7 @@ def validate_forager_config(
         )
         raw_weight_total = sum(
             float(forager_cfg["score_weights"][key])
-            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+            for key in ("volume", "ema_readiness", "log_range", "unilateralness")
         )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],
@@ -861,12 +861,12 @@ def validate_forager_config(
                     "forager volume ranking or volume pruning is enabled"
                 )
 
-        if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(forager_cfg["volatility_ema_span_minutes"])
-            if not math.isfinite(volatility_span) or volatility_span <= 0.0:
+        if pside_enabled and normalized["log_range"] > 0.0:
+            log_range_span = float(forager_cfg["log_range_ema_span_minutes"])
+            if not math.isfinite(log_range_span) or log_range_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volatility_ema_span_minutes must be > 0 when "
-                    "forager volatility ranking is enabled"
+                    f"bot.{pside}.forager.log_range_ema_span_minutes must be > 0 when "
+                    "forager log-range ranking is enabled"
                 )
 
 
@@ -896,7 +896,7 @@ def format_bot_config(
             if isinstance(seeded.get("risk"), dict):
                 seeded["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
             else:
-                seeded["total_wallet_exposure_limit"] = 0.0
+                seeded["total_wallet_exposure_limit_ratio"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)

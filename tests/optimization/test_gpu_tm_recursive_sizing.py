@@ -62,19 +62,19 @@ def test_recursive_initial_quantity_reprices_with_simulated_touch(side, anchor, 
     from test_gpu_mps import _multicoin_exposure_fixture
     _, row = _multicoin_exposure_fixture("trailing_martingale", side, count=3)
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
-    values.update(entry_double_down_factor=0.2, entry_initial_qty_pct=quantity_pct,
-                  entry_initial_ema_dist=0., entry_threshold_base_pct=spacing,
-                  entry_threshold_we_weight=0., entry_threshold_volatility_1h_weight=0.,
-                  entry_threshold_volatility_1m_weight=0., gate_initial=1., gate_reentry=0.)
+    values.update(entry_reentry_qty_multiplier=0.2, entry_initial_qty_fraction=quantity_pct,
+                  entry_initial_ema_distance_fraction=0., entry_threshold_base_fraction=spacing,
+                  entry_threshold_exposure_ratio_coefficient=0., entry_threshold_log_range_1h_coefficient=0.,
+                  entry_threshold_log_range_1m_coefficient=0., gate_initial=1., gate_reentry=0.)
     kwargs = dict(qty_step=.001, price_step=.01, min_qty=.001, min_cost=1., c_mult=1.,
-        entry_grid_double_down_factor=.2, entry_grid_spacing_pct=spacing,
-        entry_initial_ema_dist=0., entry_initial_qty_pct=quantity_pct,
-        entry_trailing_double_down_factor=.2, entry_trailing_retracement_pct=0.,
-        entry_trailing_threshold_pct=spacing, entry_weight_volatility_1h=0.,
-        entry_weight_volatility_1m=0., entry_we_weight=0., wallet_exposure_limit=.5,
-        risk_we_excess_allowance_pct=0., balance=1000., position_size=0., position_price=0.,
+        entry_grid_reentry_qty_multiplier=.2, entry_grid_threshold_base_fraction=spacing,
+        entry_initial_ema_distance_fraction=0., entry_initial_qty_fraction=quantity_pct,
+        entry_trailing_reentry_qty_multiplier=.2, entry_trailing_retracement_base_fraction=0.,
+        entry_trailing_threshold_base_fraction=spacing, entry_log_range_1h_coefficient=0.,
+        entry_log_range_1m_coefficient=0., entry_exposure_ratio_coefficient=0., wallet_exposure_limit_ratio=.5,
+        risk_we_excess_allowance_fraction=0., balance=1000., position_size=0., position_price=0.,
         min_since_open=0., max_since_min=0., max_since_open=0., min_since_max=0.,
-        volatility_ema_1h=0., volatility_ema_1m=0.)
+        log_range_ema_1h=0., log_range_ema_1m=0.)
     kwargs['ema_bands_upper' if side=='short' else 'ema_bands_lower'] = anchor
     kwargs['order_book_ask' if side=='short' else 'order_book_bid'] = anchor
     expected = np.asarray(getattr(passivbot_rust, f'calc_entries_{side}_py')(**kwargs)[:16])

@@ -1529,9 +1529,9 @@ def _submitted_rust_input_context(
             raise FatalBotException(
                 f"Rust orchestrator global input has invalid {pside} bot params"
             )
-        total_wallet_exposure_limit = _validated_rust_finite_number(
-            side_params.get("total_wallet_exposure_limit"),
-            f"global input has invalid {pside} total_wallet_exposure_limit",
+        total_wallet_exposure_limit_ratio = _validated_rust_finite_number(
+            side_params.get("total_wallet_exposure_limit_ratio"),
+            f"global input has invalid {pside} total_wallet_exposure_limit_ratio",
         )
         n_positions = side_params.get("n_positions")
         if (
@@ -1541,7 +1541,7 @@ def _submitted_rust_input_context(
         ):
             raise FatalBotException(f"global input has invalid {pside} n_positions")
         global_side_enablement[pside] = (
-            activation[pside] and total_wallet_exposure_limit > 0.0 and n_positions > 0
+            activation[pside] and total_wallet_exposure_limit_ratio > 0.0 and n_positions > 0
         )
         global_side_n_positions[pside] = n_positions
         twel_enabled = side_params.get("risk_twel_enforcer_enabled", True)
@@ -1550,7 +1550,7 @@ def _submitted_rust_input_context(
                 f"Rust orchestrator global input has invalid {pside} TWEL enforcer flag"
             )
         twel_threshold = _validated_rust_finite_number(
-            side_params.get("risk_twel_enforcer_threshold", 0.0),
+            side_params.get("risk_twel_enforcer_threshold_ratio", 0.0),
             f"global input has invalid {pside} TWEL enforcer threshold",
         )
         global_twel_enforcer_enablement[pside] = twel_enabled and twel_threshold > 0.0
@@ -1717,21 +1717,21 @@ def _submitted_rust_input_context(
             ):
                 entry_params = strategy_params.get("entry")
                 if isinstance(entry_params, dict):
-                    retracement_base_pct = _validated_rust_finite_number(
-                        entry_params.get("retracement_base_pct", 0.0),
-                        f"symbol input {input_idx} has invalid {pside} entry retracement_base_pct",
+                    retracement_base_fraction = _validated_rust_finite_number(
+                        entry_params.get("retracement_base_fraction", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} entry retracement_base_fraction",
                     )
                     entry_sequential_staging[(symbol_idx, pside)] = (
-                        retracement_base_pct > 0.0
+                        retracement_base_fraction > 0.0
                     )
                 close_params = strategy_params.get("close")
                 if isinstance(close_params, dict):
-                    close_retracement_base_pct = _validated_rust_finite_number(
-                        close_params.get("retracement_base_pct", 0.0),
-                        f"symbol input {input_idx} has invalid {pside} close retracement_base_pct",
+                    close_retracement_base_fraction = _validated_rust_finite_number(
+                        close_params.get("retracement_base_fraction", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} close retracement_base_fraction",
                     )
                     close_retracement_enabled[(symbol_idx, pside)] = (
-                        close_retracement_base_pct > 0.0
+                        close_retracement_base_fraction > 0.0
                     )
             last_fill_timestamp_ms = side_input.get("last_increase_fill_timestamp_ms")
             if last_fill_timestamp_ms is not None:
@@ -1756,12 +1756,12 @@ def _submitted_rust_input_context(
                 entry_cooldown_active[(symbol_idx, pside)] = False
             if cooldown_unavailable:
                 entry_cooldown_active[(symbol_idx, pside)] = True
-            wallet_exposure_limit = _validated_rust_finite_number(
-                bot_params.get("wallet_exposure_limit"),
-                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
+            wallet_exposure_limit_ratio = _validated_rust_finite_number(
+                bot_params.get("wallet_exposure_limit_ratio"),
+                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit_ratio",
             )
             symbol_side_eligibility[(symbol_idx, pside)] = (
-                tradable and wallet_exposure_limit != 0.0
+                tradable and wallet_exposure_limit_ratio != 0.0
             )
             wel_enabled = bot_params.get("risk_wel_enforcer_enabled", True)
             if not isinstance(wel_enabled, bool):
@@ -1769,7 +1769,7 @@ def _submitted_rust_input_context(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} WEL enforcer flag"
                 )
             wel_threshold = _validated_rust_finite_number(
-                bot_params.get("risk_wel_enforcer_threshold", 0.0),
+                bot_params.get("risk_wel_enforcer_threshold_ratio", 0.0),
                 f"symbol input {input_idx} has invalid {pside} WEL enforcer threshold",
             )
             unstuck_enabled = bot_params.get("unstuck_enabled", True)
@@ -2717,7 +2717,7 @@ def validate_rust_orchestrator_output(
     min_cost_finite_fields = (
         "balance",
         "effective_limit",
-        "entry_initial_qty_pct",
+        "entry_initial_qty_fraction",
         "projected_initial_cost",
         "effective_min_cost",
     )
@@ -3098,7 +3098,7 @@ def prepare_order_churn_evidence(bot, ideal_orders: dict, *, generation: int) ->
     decisions = state.evaluate_and_record(
         complete_ideals,
         now_monotonic=time.monotonic(),
-        tolerance=float(bot.live_value("order_match_tolerance_pct")),
+        tolerance=float(bot.live_value("order_match_tolerance_fraction")),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
         max_sample_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
@@ -3685,7 +3685,7 @@ def annotate_order_deltas(
         cancel_order.setdefault("_context", "retire")
         cancel_order.setdefault("_reason", "retire")
 
-    def pct(a: float, b: float) -> float:
+    def relative_difference_percent(a: float, b: float) -> float:
         if a == 0 and b == 0:
             return 0.0
         if a == 0:
@@ -3708,11 +3708,11 @@ def annotate_order_deltas(
                 float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))
             ),
         )
-        raw_price_diff = pct(
+        raw_price_diff = relative_difference_percent(
             float(cancel_order.get("price", 0.0)),
             float(best_order.get("price", 0.0)),
         )
-        raw_qty_diff = pct(
+        raw_qty_diff = relative_difference_percent(
             float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0))
         )
         price_diff = (
@@ -3732,20 +3732,20 @@ def annotate_order_deltas(
         cancel_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         cancel_order["_context"] = "replace"
         cancel_order["_reason"] = reason
         best_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         best_order["_context"] = "replace"
         best_order["_reason"] = reason
@@ -3764,7 +3764,7 @@ def apply_order_match_tolerance(
 
     Returns (remaining_cancel, remaining_create, skipped_pairs)
     """
-    tolerance = float(bot.live_value("order_match_tolerance_pct"))
+    tolerance = float(bot.live_value("order_match_tolerance_fraction"))
     if tolerance <= 0.0:
         return to_cancel, to_create, 0
 

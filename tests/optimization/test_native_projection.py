@@ -336,10 +336,10 @@ def test_every_permitted_finite_leaf_preserves_the_full_cleaned_static_key(value
 
 
 @pytest.mark.parametrize("weights", [
-    {"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0},
+    {"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
     {"volume": sys.float_info.max, "ema_readiness": sys.float_info.max,
-     "volatility": 0.0, "unilateralness": 0.0},
-    {"volume": 0.1, "ema_readiness": 0.2, "volatility": 0.3, "unilateralness": 0.4},
+     "log_range": 0.0, "unilateralness": 0.0},
+    {"volume": 0.1, "ema_readiness": 0.2, "log_range": 0.3, "unilateralness": 0.4},
 ])
 def test_valid_joint_weight_changes_preserve_the_full_cleaned_static_key(weights):
     planner, vector = projection_inputs()
@@ -363,7 +363,7 @@ def test_unsupported_weight_values_retain_exact_legacy_validation(value):
 
 
 @pytest.mark.parametrize("path,value", [
-    (("backtest", "btc_collateral_cap"), -0.0),
+    (("backtest", "btc_collateral_target_ratio"), -0.0),
     (("backtest", "starting_balance"), 1000),
     (("backtest", "filter_by_min_effective_cost"), 0),
 ])

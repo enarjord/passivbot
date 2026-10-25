@@ -38,7 +38,7 @@ def _runtime_side_membership(config: dict, coins: list[str]) -> dict[str, list[s
         side = bot.get(pside)
         if not isinstance(side, dict):
             return None
-        for field in ("n_positions", "total_wallet_exposure_limit"):
+        for field in ("n_positions", "total_wallet_exposure_limit_ratio"):
             if get_grouped_bot_value(side, field, default=None, prefer_flat=True) is None:
                 return None
     coin_set = set(coins)
