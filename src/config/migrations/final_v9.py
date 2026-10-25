@@ -10,19 +10,24 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
     "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
-_RELEASED_HSL_FLAT_PATHS = {
+_RELEASED_SHARED_FLAT_PATHS = {
     "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
     "hsl_ema_span_minutes": ("hsl", "drawdown_fraction_ema_span_minutes"),
+    "total_wallet_exposure_limit": ("risk", "total_wallet_exposure_limit_ratio"),
+    "wallet_exposure_limit": ("wallet_exposure_limit_ratio",),
+    "risk_we_excess_allowance_pct": ("risk", "we_excess_allowance_fraction"),
+    "risk_wel_enforcer_threshold": ("risk", "position_exposure_enforcer", "threshold_ratio"),
+    "risk_twel_enforcer_threshold": ("risk", "total_exposure_enforcer", "threshold_ratio"),
 }
 
 
 def released_shared_bot_paths():
-    """Keep released flat HSL source keys independent of current native IDs."""
+    """Keep released flat source keys independent of current native IDs."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
     return {
         **FLAT_BOT_KEY_TO_GROUP_PATH,
-        **_RELEASED_HSL_FLAT_PATHS,
+        **_RELEASED_SHARED_FLAT_PATHS,
     }
 
 
@@ -31,7 +36,7 @@ def canonicalize_released_shared_bot_side(values):
     from config.shared_bot import canonicalize_shared_bot_side
 
     if isinstance(values, dict):
-        for flat, path in _RELEASED_HSL_FLAT_PATHS.items():
+        for flat, path in _RELEASED_SHARED_FLAT_PATHS.items():
             if flat not in values:
                 continue
             target = values
@@ -326,8 +331,8 @@ def canonical_released_v8_path(parts):
     if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
         side, separator, flat = parts[-1].partition("_")
         if separator and side in {"long", "short"}:
-            if flat in _RELEASED_HSL_FLAT_PATHS:
-                return (*parts[:-1], side, *_RELEASED_HSL_FLAT_PATHS[flat])
+            if flat in _RELEASED_SHARED_FLAT_PATHS:
+                return (*parts[:-1], side, *_RELEASED_SHARED_FLAT_PATHS[flat])
             for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
                 if flat in mapping:
                     local = mapping[flat]
@@ -337,6 +342,11 @@ def canonical_released_v8_path(parts):
                     break
     if parts[-2:] == ["risk", "entry_cooldown_minutes"]:
         parts[-2:] = ["entry_cooldown", "base_duration_minutes"]
+    for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+        if parts[-2:] == ["risk", f"{owner}_threshold"]:
+            parts[-1:] = [owner, "threshold_ratio"]
+        elif parts[-2:] == [owner, "threshold"]:
+            parts[-1] = "threshold_ratio"
     for group, old, new in (
         ("risk", "n_positions", "max_positions"),
         ("unstuck", "threshold", "exposure_trigger_ratio"),
@@ -481,7 +491,7 @@ def released_runtime_selector(path):
             and parts[-1] == "threshold"):
         native = ("risk_wel_enforcer_threshold" if parts[-2].startswith("position_")
                   else "risk_twel_enforcer_threshold")
-        parts[-1] = FLAT_BOT_KEY_TO_GROUP_PATH[native][-1]
+        parts[-1] = _RELEASED_SHARED_FLAT_PATHS[native][-1]
     for group, old, new in (
         ("hsl", "red_threshold", "drawdown_ratio_threshold"),
         ("unstuck", "ema_dist", "ema_distance_fraction"),
@@ -552,7 +562,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     bound_values = result.get("optimize", {}).get("bounds", {})
     if isinstance(bound_values, dict):
         for side in ("long", "short"):
-            for old, target in _RELEASED_HSL_FLAT_PATHS.items():
+            for old, target in _RELEASED_SHARED_FLAT_PATHS.items():
                 source_key = f"{side}_{old}"
                 if source_key not in bound_values:
                     continue
@@ -560,7 +570,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 put(bound_values, (side, *target), value, f"optimize.bounds.{source_key}")
                 record(f"optimize.bounds.{source_key}", value,
                        {f"optimize.bounds.{side}.{'.'.join(target)}": value},
-                       "explicit released-v8 HSL bound source conversion")
+                       "explicit released-v8 shared bound source conversion")
 
     def policy_scope(node, inherited):
         mode = node.get("live", {}).get("hsl_signal_mode", inherited)

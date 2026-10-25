@@ -13,13 +13,13 @@ BOT_GROUP_FIELD_MAP = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit_ratio",
         "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
+        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold_ratio",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_fraction",
         "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold_ratio",
     },
     "forager": {
         "score_weights": "forager_score_weights",
@@ -53,7 +53,7 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
-STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit": "wallet_exposure_limit_ratio"}
+STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit_ratio": "wallet_exposure_limit_ratio"}
 _MISSING = object()
 
 

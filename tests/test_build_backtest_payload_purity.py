@@ -122,8 +122,8 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
     coin4_idx = payload.backtest_params["coins"].index("COIN4")
 
-    assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit"] == 0.0
-    assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
+    assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit_ratio"] != 0.0
     assert payload.bot_params_list[coin4_idx]["long"]["entry_eligible"] is False
     assert payload.bot_params_list[coin4_idx]["short"]["entry_eligible"] is True
 

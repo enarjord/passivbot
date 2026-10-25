@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native exposure budgets, enforcer thresholds and optimizer IDs with explicit `_ratio`
+  names, and excess allowances with `_fraction`. Update replay packets, GPU parameter labels,
+  diagnostics and monitoring together without changing sizing, bounds or parameter slots.
+  Released-v8 conversion preserves values and reports final paths; retired native names have
+  no aliases.
+
 - Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
   explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
   stay unchanged; retired native names are not accepted as aliases.

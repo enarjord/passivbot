@@ -197,7 +197,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             )
             side_params = global_bot_params[pside]
             global_side_enabled = (
-                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                float(side_params["total_wallet_exposure_limit_ratio"]) > 0.0
                 and int(side_params["n_positions"]) > 0
             )
             effective_mode = (
@@ -205,7 +205,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             )
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
-                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"]) != 0.0
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit_ratio"]) != 0.0
             )
             active = symbol_side_eligible and (
                 (has_position and selection_effective_mode != "manual")
@@ -1355,7 +1355,7 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
     }
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
 
     calls = []
@@ -1432,7 +1432,7 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
     sink = ListEventSink()
     bot.exchange = "binance"
@@ -1513,7 +1513,7 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
     bot.live_event_console_enabled = True
     sink = ListEventSink()
@@ -4580,7 +4580,7 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 0.0}, "loss_gate": None}
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.5 if pside == "long" else 0.0
         if key == "unstuck_loss_allowance_pct":
             return 0.02 if pside == "long" else 0.0
@@ -7720,12 +7720,12 @@ def test_accessor_returns_raw_when_present():
     assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
 
 
-def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
+def test_get_wallet_exposure_limit_ratio_uses_configured_n_positions_only():
     bot = _unit_bot()
     bot.coin_overrides = {}
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.4
         if key == "n_positions":
             return 7
@@ -7735,7 +7735,7 @@ def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
     bot.get_max_n_positions = lambda pside: 1
     bot.get_current_n_positions = lambda pside: 99
 
-    wel = bot.get_wallet_exposure_limit("long")
+    wel = bot.get_wallet_exposure_limit_ratio("long")
     assert wel == pytest.approx(0.2)
 
 
@@ -7764,9 +7764,9 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     bot.balance_raw = 10.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
-    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda pside, symbol=None: 1.0
     bot.bot_value = lambda pside, key: (
-        1.0 if key == "total_wallet_exposure_limit" else 0.0
+        1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot.bp = lambda pside, key, symbol=None: (
         0.5 if key == "entry_initial_qty_pct" else 0.0
@@ -7785,10 +7785,10 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
         {"live": {}, "bot": {"long": {}, "portfolio": {"strategy_kind": "ema_anchor"}}}
     )
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
-    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda pside, symbol=None: 1.0
     bot.bp = lambda pside, key, symbol=None: (
         0.0
-        if key == "risk_we_excess_allowance_pct"
+        if key == "risk_we_excess_allowance_fraction"
         else (
             "bounded"
             if key == "risk_we_excess_allowance_mode"
@@ -7796,7 +7796,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
         )
     )
     bot.bot_value = lambda pside, key: (
-        1.0 if key == "total_wallet_exposure_limit" else 0.0
+        1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
     monkeypatch.setattr(
@@ -8049,7 +8049,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     bot.balance = 100.0  # stale snapped value to simulate hysteresis lag
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.0
         if key == "unstuck_loss_allowance_pct":
             return 0.1
@@ -8084,7 +8084,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
     bot.balance_raw = 1000.0
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.0
         if key == "unstuck_loss_allowance_pct":
             return 0.01

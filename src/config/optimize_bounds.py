@@ -47,10 +47,10 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_exposure_enforcer_threshold_ratio": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
-        "position_exposure_enforcer_threshold_ratio": "risk_wel_enforcer_threshold",
-        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
+        "total_exposure_enforcer_threshold_ratio": "risk_twel_enforcer_threshold_ratio",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_fraction",
+        "position_exposure_enforcer_threshold_ratio": "risk_wel_enforcer_threshold_ratio",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit_ratio",
     },
     "unstuck": {
         "close_fraction": "unstuck_close_pct",

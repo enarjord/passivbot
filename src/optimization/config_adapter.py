@@ -458,7 +458,7 @@ def _validate_forager_weight_context(
         risk_source = optimizer_numeric_group_source_side(config, side, "risk")
         risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
         for field, key in (("max_positions", "n_positions"),
-                           ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit")):
+                           ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit_ratio")):
             bound_key = f"{risk_source}_{key}"
             value, runtime_pinned = pinned_value(
                 ("bot", risk_source, "risk", field), risk.get(field, 0.0), runtime_pins
@@ -612,7 +612,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
              else float(bot_config[pside]["risk"][field])) > 0.0
             for key, field in ((f"{pside}_n_positions", "max_positions"),
-                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit_ratio"))
+                               (f"{pside}_total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit_ratio"))
         )
 
     for bound_key, path in key_paths:

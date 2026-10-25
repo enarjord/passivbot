@@ -2764,7 +2764,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -2820,7 +2820,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -2844,7 +2844,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_total_wallet_exposure_limit",
+                      "x-passivbot-optimizer-key": "long_total_wallet_exposure_limit_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         1.5,
@@ -2865,7 +2865,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -4627,7 +4627,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -4683,7 +4683,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -4707,7 +4707,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_total_wallet_exposure_limit",
+                      "x-passivbot-optimizer-key": "short_total_wallet_exposure_limit_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -4727,7 +4727,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -13838,7 +13838,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -13871,7 +13871,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -14954,7 +14954,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -14987,7 +14987,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -16019,7 +16019,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -16052,7 +16052,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -17012,7 +17012,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -17045,7 +17045,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,

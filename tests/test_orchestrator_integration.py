@@ -153,11 +153,11 @@ def bot_params(**overrides):
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0,
-        "risk_wel_enforcer_threshold": 0.0,
-        "risk_twel_enforcer_threshold": 0.0,
-        "risk_we_excess_allowance_pct": 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "risk_twel_enforcer_threshold_ratio": 0.0,
+        "risk_we_excess_allowance_fraction": 0.0,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
         "unstuck_ema_span_0": 10.0,
@@ -177,7 +177,7 @@ def bot_params_pair(long_overrides=None, short_overrides=None):
             **(
                 {
                     "n_positions": 0,
-                    "total_wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit_ratio": 0.0,
                 }
                 | (short_overrides or {})
             )
@@ -294,7 +294,7 @@ def make_symbol(
                 **(
                     {
                         "n_positions": 0,
-                        "total_wallet_exposure_limit": 0.0,
+                        "total_wallet_exposure_limit_ratio": 0.0,
                     }
                     | short_bot_overrides
                 )
@@ -357,7 +357,7 @@ class TestOrchestratorOrderAccuracy:
                         "entry_initial_ema_dist": -0.01,  # Enter 1% below EMA
                         "entry_grid_spacing_pct": 0.02,  # 2% spacing
                         "entry_initial_qty_pct": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -385,7 +385,7 @@ class TestOrchestratorOrderAccuracy:
             global_bp=bot_params_pair(
                 short_overrides={
                     "n_positions": 1,
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                 }
             ),
             symbols=[
@@ -397,7 +397,7 @@ class TestOrchestratorOrderAccuracy:
                         "entry_initial_ema_dist": 0.01,  # Enter 1% above EMA
                         "entry_grid_spacing_pct": 0.02,  # 2% spacing
                         "entry_initial_qty_pct": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -657,7 +657,7 @@ class TestOrchestratorEdgeCases:
                     long_pos_size=10.0,  # Position worth 1000 (100% exposure)
                     long_pos_price=100.0,
                     long_bp={
-                        "wallet_exposure_limit": 1.0,  # Max 100% WEL
+                        "wallet_exposure_limit_ratio": 1.0,  # Max 100% WEL
                         "entry_initial_ema_dist": -0.01,
                         "entry_initial_qty_pct": 0.1,
                     },
@@ -688,7 +688,7 @@ class TestOrchestratorMultiSymbol:
         inp = make_input(
             balance=10_000.0,
             global_bp=bot_params_pair(
-                long_overrides={"total_wallet_exposure_limit": 2.0}  # 200% TWEL
+                long_overrides={"total_wallet_exposure_limit_ratio": 2.0}  # 200% TWEL
             ),
             symbols=[
                 make_symbol(
@@ -698,7 +698,7 @@ class TestOrchestratorMultiSymbol:
                     long_bp={
                         "entry_initial_ema_dist": -0.01,
                         "entry_initial_qty_pct": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
                 make_symbol(
@@ -708,7 +708,7 @@ class TestOrchestratorMultiSymbol:
                     long_bp={
                         "entry_initial_ema_dist": -0.01,
                         "entry_initial_qty_pct": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
             ],
@@ -896,7 +896,7 @@ class TestSignedQuantitiesConvention:
                         "entry_initial_ema_dist": 0.01,
                         "entry_initial_qty_pct": 0.1,
                         "n_positions": 1,
-                        "total_wallet_exposure_limit": 1.0,
+                        "total_wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],

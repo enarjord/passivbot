@@ -294,12 +294,12 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
 passivbot tool trailing-inspect \
   --symbol COIN --side long \
   --position-size 150 --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
   --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033
 
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --side long --position-price 20 \
-  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit-ratio 0.9 \
   --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
   --entry-threshold-base-fraction 0.02 --json
 ```

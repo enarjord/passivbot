@@ -317,7 +317,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             {
                 side: {
                     "risk_entry_cooldown_minutes": 0,
-                    "total_wallet_exposure_limit": 1,
+                    "total_wallet_exposure_limit_ratio": 1,
                     "n_positions": 1,
                 }
             }

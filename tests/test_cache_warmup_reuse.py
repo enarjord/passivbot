@@ -69,8 +69,8 @@ def _base_config(**overrides):
             "long": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 1.0,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -81,8 +81,8 @@ def _base_config(**overrides):
             "short": {
                 "enabled": False,
                 "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit_ratio": 0.0,
+                "wallet_exposure_limit_ratio": 0.0,
                 "ema_span_0": 100.0,
                 "ema_span_1": 100.0,
                 "forager_volume_ema_span_1m": 360.0,
@@ -207,8 +207,8 @@ class TestCacheHashIndependence:
         cfg_long = _base_config()
         cfg_short = copy.deepcopy(cfg_long)
         cfg_short["bot"]["short"]["enabled"] = True
-        cfg_short["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
-        cfg_short["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+        cfg_short["bot"]["long"]["total_wallet_exposure_limit_ratio"] = 0.0
+        cfg_short["bot"]["short"]["total_wallet_exposure_limit_ratio"] = 1.0
         cfg_short["bot"]["short"]["n_positions"] = 1
         set_side_universe_sources(cfg_short, 'approved_coins', {
             "long": [],

@@ -1989,9 +1989,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -2118,9 +2118,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -2362,9 +2362,9 @@ class TestConfigToIndividual:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -3043,7 +3043,7 @@ class TestApplyFineTuneBounds:
         ) in caplog.text
         assert "  long.risk.we_excess_allowance_fraction" in caplog.text
         assert "  long.risk.total_wallet_exposure_limit_ratio" in caplog.text
-        assert "long_risk_we_excess_allowance_pct" not in caplog.text
+        assert "long_risk_we_excess_allowance_fraction" not in caplog.text
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
@@ -3424,9 +3424,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
                         "long_close_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
                 "fixed_params": ["bot.long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3459,9 +3459,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
                         "long_close_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "fixed_params": ["long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3538,9 +3538,9 @@ class TestApplyFineTuneBounds:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
                         "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3587,9 +3587,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "round_to_n_significant_digits": 6,
@@ -3658,9 +3658,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3723,9 +3723,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3783,9 +3783,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },

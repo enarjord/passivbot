@@ -154,7 +154,7 @@ from config.risk_memory import risk_bootstrap_horizon_minutes
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
-    effective_we_excess_allowance_pct,
+    effective_we_excess_allowance_fraction,
 )
 from logging_setup import (
     configure_logging,
@@ -1865,7 +1865,7 @@ class Passivbot:
         symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
         for pside in ("long", "short"):
             if (
-                float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+                float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
                 <= 0.0
             ):
                 continue
@@ -2475,9 +2475,9 @@ class Passivbot:
         n_pos_short = int(self.bot_value("short", "n_positions") or 0)
         n_pos = f"{n_pos_long}L/{n_pos_short}S"
 
-        twel_long = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
+        twel_long = float(self.bot_value("long", "total_wallet_exposure_limit_ratio") or 0.0)
         twel_short = float(
-            self.bot_value("short", "total_wallet_exposure_limit") or 0.0
+            self.bot_value("short", "total_wallet_exposure_limit_ratio") or 0.0
         )
         twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
 
@@ -2628,7 +2628,7 @@ class Passivbot:
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
-        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
         if twel <= 0.0:
             return {"status": "disabled"}
 
@@ -3732,7 +3732,7 @@ class Passivbot:
         self.set_market_specific_settings()
         self._assert_supported_live_state()
         # self.set_live_configs()
-        self.set_wallet_exposure_limits()
+        self.set_wallet_exposure_limit_ratios()
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -7714,7 +7714,7 @@ class Passivbot:
         """Return True when the configuration allows forager grid deployment for the side."""
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
-        if self.bot_value(pside, "total_wallet_exposure_limit") <= 0.0:
+        if self.bot_value(pside, "total_wallet_exposure_limit_ratio") <= 0.0:
             return False
         if self.live_value(f"forced_mode_{pside}"):
             return False
@@ -9778,7 +9778,7 @@ class Passivbot:
         """Build the final symbol universe before refreshing market data."""
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
-        self.set_wallet_exposure_limits()
+        self.set_wallet_exposure_limit_ratios()
         self._schedule_first_timestamp_refresh()
         self._assert_supported_live_state()
         self.active_symbols = self._build_live_symbol_universe()
@@ -9790,7 +9790,7 @@ class Passivbot:
                 }
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
-        self.set_wallet_exposure_limits()
+        self.set_wallet_exposure_limit_ratios()
 
     async def execution_cycle(self):
         """Compatibility wrapper for callers that prepare and plan in one step."""
@@ -10351,30 +10351,30 @@ class Passivbot:
             return "tp_only"
         return None
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limit_ratios(self):
         """Recalculate wallet exposure limits for both sides and per-symbol overrides."""
         from config.bot_inheritance import reconciled_bot_policy, install_bot_policy
 
         policy = reconciled_bot_policy(self.config)
         aliases = self.config["bot"]._runtime_aliases if policy is not None else frozenset()
         for pside in ["long", "short"]:
-            self.config["bot"][pside]["wallet_exposure_limit"] = (
-                self.get_wallet_exposure_limit(pside)
+            self.config["bot"][pside]["wallet_exposure_limit_ratio"] = (
+                self.get_wallet_exposure_limit_ratio(pside)
             )
             for symbol in self.coin_overrides:
                 ov_conf = self.coin_overrides[symbol].get("bot", {}).get(pside, {})
                 if "wallet_exposure_limit_ratio" in ov_conf:
                     self.coin_overrides[symbol]["bot"][pside][
                         "wallet_exposure_limit_ratio"
-                    ] = self.get_wallet_exposure_limit(pside, symbol)
+                    ] = self.get_wallet_exposure_limit_ratio(pside, symbol)
         if policy is not None:
             # These calculated allocation values serve live consumers, never
             # public policy. Rebaseline only at their actual trusted writer.
-            aliases |= frozenset((side, "wallet_exposure_limit") for side in ("long", "short"))
+            aliases |= frozenset((side, "wallet_exposure_limit_ratio") for side in ("long", "short"))
             install_bot_policy(self.config, policy, effective_bot=self.config["bot"],
                                runtime_aliases=aliases)
 
-    def get_wallet_exposure_limit(self, pside, symbol=None):
+    def get_wallet_exposure_limit_ratio(self, pside, symbol=None):
         """Return side WEL from fixed config denominator, honoring per-symbol overrides."""
         if symbol:
             fwel = (
@@ -10385,7 +10385,7 @@ class Passivbot:
             )
             if fwel is not None:
                 return fwel
-        twel = self.bot_value(pside, "total_wallet_exposure_limit")
+        twel = self.bot_value(pside, "total_wallet_exposure_limit_ratio")
         if twel <= 0.0:
             return 0.0
         n_positions = int(round(self.bot_value(pside, "n_positions")))
@@ -10397,7 +10397,7 @@ class Passivbot:
         """Return whether explicit activation and capacity permit side entries."""
         from config.activation import side_enabled
         return side_enabled(self.config, pside) and (
-            self.bot_value(pside, "total_wallet_exposure_limit") > 0.0
+            self.bot_value(pside, "total_wallet_exposure_limit_ratio") > 0.0
             and self.bot_value(pside, "n_positions") > 0.0
         )
 
@@ -10428,15 +10428,15 @@ class Passivbot:
         """Check whether the symbol meets the effective minimum cost requirement."""
         if not minimum_cost_filter(self.config, pside):
             return True
-        base_limit = self.get_wallet_exposure_limit(pside, symbol)
-        allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-        effective_allowance_pct = effective_we_excess_allowance_pct(
-            wallet_exposure_limit=base_limit,
-            risk_we_excess_allowance_pct=allowance_pct,
-            total_wallet_exposure_limit=twel,
+        base_limit = self.get_wallet_exposure_limit_ratio(pside, symbol)
+        allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+        effective_allowance_fraction = effective_we_excess_allowance_fraction(
+            wallet_exposure_limit_ratio=base_limit,
+            risk_we_excess_allowance_fraction=allowance_fraction,
+            total_wallet_exposure_limit_ratio=twel,
         )
-        allowance_multiplier = 1.0 + effective_allowance_pct
+        allowance_multiplier = 1.0 + effective_allowance_fraction
         effective_limit = base_limit * allowance_multiplier
         initial_sizing_fraction = self._strategy_initial_sizing_fraction(pside, symbol)
         return (
@@ -14078,17 +14078,17 @@ class Passivbot:
                 if new["size"] != 0 and balance_raw > 0
                 else 0.0
             )
-            wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
-            allowance_pct = float(
-                self.bp(pside, "risk_we_excess_allowance_pct", symbol)
+            wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
+            allowance_fraction = float(
+                self.bp(pside, "risk_we_excess_allowance_fraction", symbol)
             )
-            twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-            effective_allowance_pct = effective_we_excess_allowance_pct(
-                wallet_exposure_limit=wel,
-                risk_we_excess_allowance_pct=allowance_pct,
-                total_wallet_exposure_limit=twel,
+            twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+            effective_allowance_fraction = effective_we_excess_allowance_fraction(
+                wallet_exposure_limit_ratio=wel,
+                risk_we_excess_allowance_fraction=allowance_fraction,
+                total_wallet_exposure_limit_ratio=twel,
             )
-            effective_wel = wel * (1.0 + effective_allowance_pct)
+            effective_wel = wel * (1.0 + effective_allowance_fraction)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
@@ -14143,7 +14143,7 @@ class Passivbot:
             wel_pct = round(WEL_ratio * 100)
             wele_pct = round(WELe_ratio * 100)
             # TWEL% = total WE for this side / TWEL
-            twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+            twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
             twel_pct = round(total_we_by_pside[pside] / twel * 100) if twel > 0.0 else 0
             wel_str = f"| {wel_pct:3d}% WEL, {wele_pct:3d}% WELe, {twel_pct:3d}% TWEL |"
             table.add_row(
@@ -14950,10 +14950,10 @@ class Passivbot:
         # Values which are configured globally (not per symbol) live under bot_value.
         global_keys = {
             "n_positions",
-            "total_wallet_exposure_limit",
+            "total_wallet_exposure_limit_ratio",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold",
+            "risk_twel_enforcer_threshold_ratio",
         }
         bool_keys = {
             "risk_wel_enforcer_enabled",
@@ -15015,14 +15015,14 @@ class Passivbot:
             "entry_cooldown_weights_minutes",
             "unilateralness_ema_span_1m",
             "n_positions",
-            "total_wallet_exposure_limit",
-            "wallet_exposure_limit",
+            "total_wallet_exposure_limit_ratio",
+            "wallet_exposure_limit_ratio",
             "risk_wel_enforcer_enabled",
-            "risk_wel_enforcer_threshold",
+            "risk_wel_enforcer_threshold_ratio",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold",
-            "risk_we_excess_allowance_pct",
+            "risk_twel_enforcer_threshold_ratio",
+            "risk_we_excess_allowance_fraction",
             "unstuck_enabled",
             "unstuck_close_pct",
             "unstuck_ema_gating_enabled",
@@ -15115,7 +15115,7 @@ class Passivbot:
                     "unstuck_loss_allowance_pct",
                     "unstuck_close_pct",
                     "unstuck_threshold",
-                    "total_wallet_exposure_limit",
+                    "total_wallet_exposure_limit_ratio",
                 )
             )
             and self.has_position(pside=pside, symbol=symbol)
@@ -15394,7 +15394,7 @@ class Passivbot:
         self, pside: str, symbol: str, realized_memory: dict
     ) -> float:
         pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
-        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
         if pct <= 0.0 or twel <= 0.0:
             return 0.0
         return float(

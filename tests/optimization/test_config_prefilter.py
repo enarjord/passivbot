@@ -243,9 +243,9 @@ def test_zero_global_wel_derives_capacity_but_zero_coin_wel_disables_entry(
     require_real_passivbot_rust_module,
 ):
     candidate = config()
-    candidate["bot"]["long"]["wallet_exposure_limit"] = 0
+    candidate["bot"]["long"]["wallet_exposure_limit_ratio"] = 0
     assert config_prefilter(candidate, policy(max=0.1)) > 0
-    candidate["bot"]["long"]["wallet_exposure_limit"] = 100
+    candidate["bot"]["long"]["wallet_exposure_limit_ratio"] = 100
     assert config_prefilter(candidate, policy(max=0.1)) == pytest.approx(56000)
     candidate["coin_overrides"] = {
         "TEST": {"bot": {"long": {"wallet_exposure_limit_ratio": 0}}}

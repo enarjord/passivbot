@@ -39,7 +39,7 @@ Throughout:
   In live mode this is derived from a fixed denominator (`max_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 * Excess allowance is always bounded:
-  `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
+  `we_excess_effective = min(max(0, risk_we_excess_allowance_fraction),
   max(0, total_wallet_exposure_limit_ratio / wel_base - 1))`.
   If `wel_base` is non-positive/non-finite, Passivbot treats the effective
   allowance and allowed exposure as zero. If `total_wallet_exposure_limit_ratio` is
@@ -227,7 +227,7 @@ boundaries. For each elapsed minute and then each ordered realized event:
 alpha = 2 / (bot.portfolio.unstuck.memory_ema_span_minutes + 1)
 D_realized = (1 - alpha) * D_realized
 D_realized = max(0, D_realized - net_realized_PnL)
-p = unstuck.loss_allowance_fraction * applicable_total_wallet_exposure_limit
+p = unstuck.loss_allowance_fraction * applicable_total_wallet_exposure_limit_ratio
 remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
@@ -246,7 +246,7 @@ With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fractio
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
-effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)
+effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)
 wallet_exposure = abs(position_size) * position_price * c_mult / balance
 eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
 ```
@@ -436,7 +436,7 @@ intervention:
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
-| `position_exposure_enforcer.threshold_ratio`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
+| `position_exposure_enforcer.threshold_ratio`, `risk_we_excess_allowance_fraction` | Per-position exposure cap                                | `target_i`, `qty` |
 | `total_exposure_enforcer.threshold_ratio`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
