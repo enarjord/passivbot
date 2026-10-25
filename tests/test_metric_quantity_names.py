@@ -122,6 +122,7 @@ def test_best_effort_retired_formula_choices_are_reported_as_new_formulas():
 
 
 def test_canonical_recovery_max_preserves_actual_gpu_admission():
+    pytest.importorskip("torch")
     from optimization.gpu.metrics import validate_gpu_metric_names
 
     specs, _ = normalize_scoring_entries(["recovery_max_days_strategy_equity"])

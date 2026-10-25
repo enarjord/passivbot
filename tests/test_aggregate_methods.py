@@ -56,7 +56,7 @@ class TestResolveAggregateMode:
         assert _resolve_reducer_mode("peak_recovery_max_hours_realized_pnl", cfg) == "max"
 
     def test_base_name_fallback_with_suffix(self):
-        cfg = {"default": "mean", "position_held_hours": "min"}
+        cfg = {"default": "mean", "position_held_max": "min"}
         assert _resolve_reducer_mode("position_held_max_hours", cfg) == "min"
 
     def test_default_mean_when_default_absent(self):
@@ -196,9 +196,9 @@ class TestAggregateMetricsConfig:
     def test_base_name_fallback_in_aggregate_metrics(self):
         """aggregate_metrics also uses rsplit('_', 1) base lookup."""
         results = self._make_results("position_held_max_hours", [100.0, 400.0])
-        cfg = {"default": "mean", "position_held_hours": "max"}
+        cfg = {"default": "mean", "position_held_max": "max"}
         summary = reduce_metrics(results, cfg)
-        # "position_held_max_hours" base is "position_held_hours" which maps to "max"
+        # Generic last-segment lookup uses the current prefix "position_held_max".
         assert summary["aggregated"]["position_held_max_hours"] == pytest.approx(400.0)
 
 

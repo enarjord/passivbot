@@ -71,7 +71,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         "hsl_signal_ema_max_fraction_long",
         "hsl_signal_ema_max_fraction_short_max",
         "hsl_signal_ema_worst_1pct_mean_fraction_long",
-        "usd_drawdown_worst_ema_hsl_short",
+        "hsl_signal_ema_max_fraction_short",
     ],
 )
 def test_unified_rejects_inactive_side_signal_objectives(metric):
@@ -272,7 +272,7 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
         "hsl_restart_count_mean",
         "hsl_signal_ema_max_fraction",
         "hsl_signal_ema_worst_1pct_mean_fraction_max",
-        "usd_drawdown_worst_ema_hsl",
+        "hsl_signal_ema_max_fraction_mean",
     ],
 )
 def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
