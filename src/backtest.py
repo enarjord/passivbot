@@ -601,7 +601,7 @@ def _resolve_backtest_fees(
         fee = float(override_value)
         if not math.isfinite(fee):
             raise ValueError(
-                f"backtest.{fee_kind}_fee_override must be finite, got {override_value}"
+                f"backtest.{fee_kind}_fee_override_fraction must be finite, got {override_value}"
             )
         return fee, {coin: fee for coin in coins}
     fees = {coin: _market_fee_for_backtest(mss, coin, fee_kind) for coin in coins}
@@ -1349,7 +1349,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             final_equity_usd,
             float(
                 get_optional_config_value(
-                    config, "backtest.equity_floor_ratio", 0.05
+                    config, "backtest.equity_floor_fraction", 0.05
                 )
                 or 0.0
             ),
@@ -2823,7 +2823,7 @@ def prep_backtest_args(
                 market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
             if not approved:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
-            elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
+            elif "wallet_exposure_limit_ratio" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
             coin_specific_bot_params[pside]["entry_eligible"] = (
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
@@ -2837,23 +2837,23 @@ def prep_backtest_args(
         ]
         bot_params_list.append(coin_specific_bot_params)
         strategy_params_list.append(coin_specific_strategy_params)
-    maker_fee_override = get_optional_config_value(
-        config, "backtest.maker_fee_override", None
+    maker_fee_override_fraction = get_optional_config_value(
+        config, "backtest.maker_fee_override_fraction", None
     )
-    taker_fee_override = get_optional_config_value(
-        config, "backtest.taker_fee_override", None
+    taker_fee_override_fraction = get_optional_config_value(
+        config, "backtest.taker_fee_override_fraction", None
     )
     maker_fee, maker_fees_by_coin = _resolve_backtest_fees(
         coins=coins,
         mss=mss,
         fee_kind="maker",
-        override_value=maker_fee_override,
+        override_value=maker_fee_override_fraction,
     )
     taker_fee, taker_fees_by_coin = _resolve_backtest_fees(
         coins=coins,
         mss=mss,
         fee_kind="taker",
-        override_value=taker_fee_override,
+        override_value=taker_fee_override_fraction,
     )
     effective_mss = _effective_backtest_market_settings(config, mss, exchange, coins)
     missing_c_mult_warnings: set[tuple[str, str, str]] = set()
@@ -2909,21 +2909,21 @@ def prep_backtest_args(
     if backtest_params is None:
         hard_stop_cfg_long = _resolve_backtest_hsl(config, hsl_coin_policies)
         liquidation_threshold = float(
-            get_optional_config_value(config, "backtest.equity_floor_ratio", 0.05)
+            get_optional_config_value(config, "backtest.equity_floor_fraction", 0.05)
             or 0.0
         )
         if not (0.0 <= liquidation_threshold < 1.0):
             raise ValueError(
-                "backtest.equity_floor_ratio must satisfy 0.0 <= x < 1.0"
+                "backtest.equity_floor_fraction must satisfy 0.0 <= x < 1.0"
             )
-        btc_collateral_cap = float(
-            require_config_value(config, "backtest.btc_collateral_cap")
+        btc_collateral_target_ratio = float(
+            require_config_value(config, "backtest.btc_collateral_target_ratio")
         )
-        btc_collateral_ltv_cap = require_config_value(
-            config, "backtest.btc_collateral_ltv_cap"
+        max_usd_debt_to_equity_ratio = require_config_value(
+            config, "backtest.max_usd_debt_to_equity_ratio"
         )
-        if btc_collateral_ltv_cap is not None:
-            btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
+        if max_usd_debt_to_equity_ratio is not None:
+            max_usd_debt_to_equity_ratio = float(max_usd_debt_to_equity_ratio)
         backtest_params = {
             "starting_balance": require_config_value(
                 config, "backtest.starting_balance"
@@ -2932,8 +2932,8 @@ def prep_backtest_args(
             "maker_fee": maker_fee,
             "taker_fee": taker_fee,
             "coins": coins,
-            "btc_collateral_cap": btc_collateral_cap,
-            "btc_collateral_ltv_cap": btc_collateral_ltv_cap,
+            "btc_collateral_cap": btc_collateral_target_ratio,
+            "btc_collateral_ltv_cap": max_usd_debt_to_equity_ratio,
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],
@@ -2955,7 +2955,7 @@ def prep_backtest_args(
             ),
             "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
             "max_realized_loss_pct": float(
-                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_ratio")
+                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_fraction")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,

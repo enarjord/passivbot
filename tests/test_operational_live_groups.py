@@ -13,6 +13,7 @@ from config.field_registry import (
     live_field_path,
 )
 from config.migrations.v9 import migrate_v8_to_v9
+from config.migrations.operational_live import RELEASED_V8_LIVE_OPERATIONAL_PATHS
 from config.schema import get_template_config
 from released_v8_fixtures import released_v8_policy
 
@@ -76,7 +77,7 @@ def test_released_operational_fields_move_with_exact_values_and_reports():
         "forced_mode_long": None,
         "forced_mode_short": None,
     }
-    for old, path in LIVE_OPERATIONAL_PATHS.items():
+    for old, path in RELEASED_V8_LIVE_OPERATIONAL_PATHS.items():
         if old in source["live"]:
             assert (
                 require_config_value(result.config, ".".join(path))
@@ -196,3 +197,26 @@ def test_internal_live_value_calls_use_declared_field_ids():
                     f"{path.relative_to(source_root)}:{node.lineno}: {field_id}"
                 )
     assert missing == []
+
+
+@pytest.mark.parametrize("old,current_id", [
+    ("balance_hysteresis_snap_pct", "balance_hysteresis_snap_fraction"),
+    ("fee_pct_fallback", "fallback_fee_fraction"),
+    ("fee_pct_sanity_abs_max", "max_abs_fee_fraction"),
+    ("limit_order_create_max_market_dist_pct", "limit_order_create_max_market_distance_fraction"),
+    ("order_match_tolerance_pct", "order_match_tolerance_fraction"),
+    ("order_replacement_churn_gate_market_dist_pct", "order_replacement_churn_gate_market_distance_fraction"),
+])
+def test_released_fraction_spelling_is_conversion_only_not_a_runtime_id(old, current_id):
+    template = get_template_config()
+    with pytest.raises(KeyError):
+        require_live_value(template, old)
+    source = released_v8_policy()
+    source["live"][old] = 0.00073
+    source["optimize"]["fixed_runtime_overrides"] = {f"live.{old}": 0.00061}
+    original = deepcopy(source)
+    result = migrate_v8_to_v9(source, memory_span_minutes=100.0)
+    path = live_field_path(current_id)
+    assert require_config_value(result.config, path) == 0.00073
+    assert result.config["optimize"]["fixed_runtime_overrides"] == {path: 0.00061}
+    assert source == original

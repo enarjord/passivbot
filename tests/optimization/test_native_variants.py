@@ -36,16 +36,16 @@ def prepared_config(base, config):
 def variable_base(manager, *, anchor=False, disabled=False, mirror=False):
     original = inputs(manager)
     config = source_config(original)
-    config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0, 1]
+    config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = [0, 1]
     if disabled:
-        config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
+        config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config = prepared_config(original, config)
     if anchor:
         seeds = [deepcopy(config), deepcopy(config)]
-        seeds[0]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
-        seeds[1]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1
+        seeds[0]["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0
+        seeds[1]["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1
         optimize.install_anchored_fine_tune_plan(
             config, ["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"], None, starting_configs_override=seeds,
         )
@@ -55,7 +55,7 @@ def variable_base(manager, *, anchor=False, disabled=False, mirror=False):
 
 def vector(base, *, disabled=False, anchor_id=0):
     config = deepcopy(base.config)
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if disabled else 1
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0 if disabled else 1
     return optimize.config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape,
                                          anchor_id=anchor_id)
 
@@ -85,7 +85,7 @@ def test_exact_last_scenario_policy_deduplicates_fixed_views_and_preserves_slots
     with managed_arrays() as manager:
         base = variable_base(manager)
         prepared = contexts(base, base.timestamps["binance"], lazy=True)
-        prepared[1].overrides = {"bot.short.risk.total_wallet_exposure_limit":0}
+        prepared[1].overrides = {"bot.short.risk.total_wallet_exposure_limit_ratio":0}
         suite = optimize.SuiteEvaluator(base, prepared, {"default":"mean"})
         with NativeDatasetRegistry(suite) as registry:
             assert len(registry.bindings) == 3
@@ -132,7 +132,7 @@ def test_position_rounding_and_stepped_endpoints_determine_finite_views(monkeypa
             assert len({request.dataset_id for request in requests}) == expected
 
 
-@pytest.mark.parametrize("bound", ["total_wallet_exposure_limit", "max_positions"])
+@pytest.mark.parametrize("bound", ["total_wallet_exposure_limit_ratio", "max_positions"])
 def test_zero_side_search_space_is_rejected_before_service_or_evolution(monkeypatch, bound, tmp_path):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
@@ -164,10 +164,10 @@ def test_reachable_ema_side_cannot_silently_enable_unsupported_enforcer(monkeypa
         for side in ("long", "short"):
             config["optimize"]["bounds"][side] = {"risk": {
                 key: [config["bot"][side]["risk"][key]] * 2
-                for key in ("max_positions", "total_wallet_exposure_limit")
+                for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             }}
-        config['bot']['short']['risk'].update({'total_wallet_exposure_limit': 0, 'position_exposure_enforcer': {**config['bot']['short']['risk']['position_exposure_enforcer'], 'enabled': True}})
-        config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0, 1]
+        config['bot']['short']['risk'].update({'total_wallet_exposure_limit_ratio': 0, 'position_exposure_enforcer': {**config['bot']['short']['risk']['position_exposure_enforcer'], 'enabled': True}})
+        config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = [0, 1]
         config = prepared_config(original, config)
         base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                                   config, timestamps=original.timestamps)

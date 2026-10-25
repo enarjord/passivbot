@@ -110,7 +110,7 @@ def test_automatic_cache_rebuild_publishes_recovered_inception(tmp_path, monkeyp
     from optimization.warmup import build_optimizer_data_config
     config = _cache_config(tmp_path, (0.0, 60.0))
     config["optimize"]["bounds"] = {"short": {"risk": {
-        "total_wallet_exposure_limit": [0.0, 1.0], "max_positions": [1, 1],
+        "total_wallet_exposure_limit_ratio": [0.0, 1.0], "max_positions": [1, 1],
     }}}
     config = build_optimizer_data_config(config)
     directory, arrays, original_mss = _save_cache(bt, config, unknown)

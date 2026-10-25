@@ -48,11 +48,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     # This persistence fixture searches two coordinates among many fixed leaves.
     # Use explicit mutation rates so its four-member cohorts remain populated.
     config["optimize"]["pymoo"]["shared"].update(
-        mutation_prob=1.0, mutation_prob_per_variable=0.5,
+        mutation_probability=1.0, mutation_probability_per_variable=0.5,
     )
     if prefilter:
         config["optimize"]["prefilter"] = {"checks": [
-            {"metric": "entry_close_span", "enabled": True, "max": 100},
+            {"metric": "entry_close_span_fraction", "enabled": True, "max": 100},
         ]}
     if generated_seed:
         import session_artifacts
@@ -111,7 +111,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     quantity_key = "base_qty_pct" if strategy_kind == "ema_anchor" else "entry_initial_qty_pct"
     for side in ("long", "short"):
         for key, field in (("n_positions", "max_positions"),
-                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit_ratio")):
             value = config["bot"][side]["risk"][field]
             set_bound(f"{side}_{key}", [value, value])
         set_bound(f"{side}_{quantity_key}", [0.01, 0.05])
@@ -136,7 +136,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {
-                "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
+                "wallet_exposure_limit_ratio": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
             }}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
@@ -153,7 +153,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         else:
             seed_config["bot"][seed_side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = value
         if anchors:
-            seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
+            seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0 if index == 0 else 1
         if coupled:
             seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 2 if index == 0 else 20
         (seeds_path / f"{index}.json").write_text(json.dumps(clean_config(seed_config)))

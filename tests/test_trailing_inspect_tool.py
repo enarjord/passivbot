@@ -92,8 +92,8 @@ def _context(
         "entry_initial_qty_fraction": 0.02,
         "entry_double_down_factor": 1.5,
         "close_qty_fraction": 0.25,
-        "volatility_ema_span_minutes": 100.0,
-        "volatility_ema_span_1h_candles": 200.0,
+        "log_range_ema_span_minutes": 100.0,
+        "log_range_ema_span_1h_candles": 200.0,
     }
 
 
@@ -318,7 +318,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 0.05,
+                    "max_drawdown_fraction": 0.05,
                 }},
             "long": {
                 "entry_cooldown": {
@@ -331,7 +331,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                     "position_exposure_enforcer": {
                         "enabled": True,
@@ -352,8 +352,8 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -381,7 +381,7 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.125
     config["bot"]["long"]["risk"]["max_positions"] = 3.0
     config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
 
@@ -402,7 +402,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "hsl": {
@@ -418,14 +418,14 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -523,18 +523,18 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_minutes": 100.0,
-                        "volatility_ema_span_1h_candles": 200.0,
+                        "log_range_ema_span_minutes": 100.0,
+                        "log_range_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -1416,16 +1416,16 @@ def test_overview_exports_fractional_ema_horizons_with_explicit_units(tmp_path, 
 
     source = get_template_config()
     strategy = source["bot"]["long"].setdefault("strategy", {}).setdefault("trailing_martingale", {})
-    strategy["volatility_ema_span_minutes"] = 31.5
-    strategy["volatility_ema_span_1h_candles"] = 4.25
+    strategy["log_range_ema_span_minutes"] = 31.5
+    strategy["log_range_ema_span_1h_candles"] = 4.25
     path = tmp_path / "config.json"
     path.write_text(json.dumps(source))
     original = path.read_bytes()
     assert trailing_inspect.main([str(path), "--side", "long", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     context = result["sides"]["long"]["context"]
-    assert context["volatility_ema_span_minutes"] == 31.5
-    assert context["volatility_ema_span_1h_candles"] == 4.25
+    assert context["log_range_ema_span_minutes"] == 31.5
+    assert context["log_range_ema_span_1h_candles"] == 4.25
     assert not {"volatility_ema_span_1m", "volatility_ema_span_1h"} & context.keys()
     report = trailing_inspect.render_overview(result)
     assert "31.5 minutes" in report

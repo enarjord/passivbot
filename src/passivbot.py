@@ -770,7 +770,7 @@ def compute_live_warmup_windows(
     strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
-    warmup_ratio: float = 0.0,
+    activation_span_fraction: float = 0.0,
     max_warmup_minutes: Optional[float] = None,
     span_buffer: Optional[float] = None,
     large_span_threshold: int = 2 * 24 * 60,
@@ -794,7 +794,7 @@ def compute_live_warmup_windows(
 
     if span_buffer is None:
         try:
-            ratio = float(warmup_ratio)
+            ratio = float(activation_span_fraction)
         except Exception:
             ratio = 0.0
         span_buffer = 1.0 + max(0.0, ratio)
@@ -1379,8 +1379,8 @@ class Passivbot:
         self.balance = 1e-12
         self.balance_raw = 1e-12
         self.previous_hysteresis_balance = None
-        self.balance_hysteresis_snap_pct = float(
-            get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
+        self.balance_hysteresis_snap_fraction = float(
+            get_optional_live_value(self.config, "balance_hysteresis_snap_fraction", 0.02)
         )
         # hedge_mode controls whether simultaneous long/short on same coin is allowed.
         # This is the config-level setting; exchange-specific bots may override
@@ -1858,7 +1858,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_ratio"))
+        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -2648,7 +2648,7 @@ class Passivbot:
         drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
         balance_peak = balance_raw + drawdown
-        pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
+        change_from_peak_percent = (balance_raw / balance_peak - 1.0) * 100.0
         allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
         override_allowances = {
             symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
@@ -2661,7 +2661,7 @@ class Passivbot:
             # Signed deficit is observability only; execution uses Rust output.
             "raw_allowance": pct * twel * balance_peak - drawdown,
             "peak": balance_peak,
-            "pct_from_peak": pct_from_peak,
+            "change_from_peak_percent": change_from_peak_percent,
             "loss_allowance_pct": pct,
             "override_loss_allowance_pcts": override_pcts,
             "override_allowances": override_allowances,
@@ -2710,23 +2710,23 @@ class Passivbot:
                 )
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        "%s: allowance=%.2f | peak=%.2f | change_from_peak_percent=%.1f%%%s"
                         % (
                             pside,
                             allowance,
                             info["peak"],
-                            info["pct_from_peak"],
+                            info["change_from_peak_percent"],
                             overrides_suffix,
                         )
                     )
@@ -2890,10 +2890,10 @@ class Passivbot:
         ):
             return
         if entry_price > 0 and current_price > 0:
-            price_diff_pct = (current_price / entry_price - 1.0) * 100
-            sign = "+" if price_diff_pct >= 0 else ""
+            price_change_percent = (current_price / entry_price - 1.0) * 100
+            sign = "+" if price_change_percent >= 0 else ""
         else:
-            price_diff_pct = 0.0
+            price_change_percent = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
         if not Passivbot._live_event_console_available(self):
@@ -2904,7 +2904,7 @@ class Passivbot:
                 entry_price,
                 current_price,
                 sign,
-                price_diff_pct,
+                price_change_percent,
                 allowance,
             )
         self._emit_unstuck_selection_event(
@@ -4094,7 +4094,7 @@ class Passivbot:
                 try:
                     emit_memory_snapshot(
                         rss_bytes=rss,
-                        rss_delta_pct=pct_change,
+                        rss_delta_percent=pct_change,
                         cache_bytes=cache_bytes,
                         cache_candles=cache_candles,
                         cache_symbols=cache_symbols,
@@ -4116,7 +4116,7 @@ class Passivbot:
                     format_memory_snapshot_console(
                         {
                             "rss_bytes": rss,
-                            "rss_delta_pct": pct_change,
+                            "rss_delta_percent": pct_change,
                             "cache": {
                                 "bytes": cache_bytes,
                                 "candles": cache_candles,
@@ -4817,14 +4817,14 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         # Determine window per symbol based on actual EMA needs (lazy & frugal).
-        # Fetch max-span * (1 + warmup_ratio) to give EMAs enough runway without overfetching.
+        # Fetch max-span * (1 + activation_span_fraction) to give EMAs enough runway without overfetching.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         large_span_threshold = (
             2 * 24 * 60
@@ -4846,7 +4846,7 @@ class Passivbot:
                     self, pside, key, sym
                 ),
                 window_candles=window_candles,
-                warmup_ratio=warmup_ratio,
+                activation_span_fraction=activation_span_fraction,
                 max_warmup_minutes=max_warmup_minutes,
                 large_span_threshold=large_span_threshold,
             )
@@ -4883,13 +4883,13 @@ class Passivbot:
                 f"[warmup] {context}: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             try:
-                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
+                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + activation_span_fraction))))
             except Exception:
                 longest_span = wmax
             logging.debug(
-                "[warmup] target | longest_span=%dm span_multiplier=%.3g max_minutes=%s",
+                "[warmup] target | longest_span=%dm activation_span_fraction=%.3g max_minutes=%s",
                 int(longest_span),
-                float(warmup_ratio),
+                float(activation_span_fraction),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
             )
             try:
@@ -5475,11 +5475,11 @@ class Passivbot:
         }
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5496,7 +5496,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
 
@@ -5633,11 +5633,11 @@ class Passivbot:
             return {}
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5654,7 +5654,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         windows: Dict[str, Dict[str, int]] = {}
@@ -7415,9 +7415,9 @@ class Passivbot:
             po, pn = delta.get("price_old"), delta.get("price_new")
             qo, qn = delta.get("qty_old"), delta.get("qty_new")
             if po is not None and pn is not None:
-                parts.append(f"price {po} -> {pn} ({delta.get('price_pct_diff','?')}%)")
+                parts.append(f"price {po} -> {pn} ({delta.get('price_difference_percent','?')}%)")
             if qo is not None and qn is not None:
-                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
+                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_difference_percent','?')}%)")
             if parts:
                 extra_parts.append("delta=" + "; ".join(parts))
         msg = (
@@ -7530,8 +7530,8 @@ class Passivbot:
                 if execution_type == "market":
                     extras.append("exec=market")
                 delta = order.get("_delta") or {}
-                price_diff = delta.get("price_pct_diff")
-                qty_diff = delta.get("qty_pct_diff")
+                price_diff = delta.get("price_difference_percent")
+                qty_diff = delta.get("qty_difference_percent")
                 delta_parts = []
                 if isinstance(price_diff, (int, float)) and price_diff:
                     delta_parts.append(f"Δp={price_diff:.3g}%")
@@ -10156,13 +10156,13 @@ class Passivbot:
             context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         max_span = max(span_volume, span_volatility)
         window_candles = (
             max(1, int(math.ceil(max_span * span_buffer))) if max_span > 0 else 1
@@ -10363,9 +10363,9 @@ class Passivbot:
             )
             for symbol in self.coin_overrides:
                 ov_conf = self.coin_overrides[symbol].get("bot", {}).get(pside, {})
-                if "wallet_exposure_limit" in ov_conf:
+                if "wallet_exposure_limit_ratio" in ov_conf:
                     self.coin_overrides[symbol]["bot"][pside][
-                        "wallet_exposure_limit"
+                        "wallet_exposure_limit_ratio"
                     ] = self.get_wallet_exposure_limit(pside, symbol)
         if policy is not None:
             # These calculated allocation values serve live consumers, never
@@ -10381,7 +10381,7 @@ class Passivbot:
                 self.coin_overrides.get(symbol, {})
                 .get("bot", {})
                 .get(pside, {})
-                .get("wallet_exposure_limit")
+                .get("wallet_exposure_limit_ratio")
             )
             if fwel is not None:
                 return fwel
@@ -13403,7 +13403,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust bot.portfolio.loss_gate.max_drawdown_ratio to change behavior",
+                    "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,
@@ -14320,8 +14320,8 @@ class Passivbot:
             self._balance_override_logged = False
         if not hasattr(self, "previous_hysteresis_balance"):
             self.previous_hysteresis_balance = None
-        if not hasattr(self, "balance_hysteresis_snap_pct"):
-            self.balance_hysteresis_snap_pct = 0.02
+        if not hasattr(self, "balance_hysteresis_snap_fraction"):
+            self.balance_hysteresis_snap_fraction = 0.02
         if not hasattr(self, "balance_raw"):
             self.balance_raw = self.get_raw_balance()
         if not hasattr(self, "_exchange_reported_balance_raw"):
@@ -14382,7 +14382,7 @@ class Passivbot:
             balance_snapped = pbr.hysteresis(
                 balance_raw,
                 previous_hysteresis_balance,
-                self.balance_hysteresis_snap_pct,
+                self.balance_hysteresis_snap_fraction,
             )
             return {
                 "balance_raw": balance_raw,
@@ -19034,11 +19034,11 @@ class Passivbot:
             return
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0) or 0.0
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0) or 0.0
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
@@ -19054,7 +19054,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         try:
@@ -19835,13 +19835,13 @@ class Passivbot:
             context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
         if max_warmup_minutes > 0:
             window_candles = min(int(window_candles), int(max_warmup_minutes))

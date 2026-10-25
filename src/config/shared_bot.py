@@ -13,7 +13,7 @@ BOT_GROUP_FIELD_MAP = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_wallet_exposure_limit": "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
         "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
         "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
@@ -24,17 +24,17 @@ BOT_GROUP_FIELD_MAP = {
     "forager": {
         "score_weights": "forager_score_weights",
         "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
-        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "log_range_ema_span_minutes": "forager_volatility_ema_span_1m",
         "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
-        "drawdown_ratio_ema_span_minutes": "hsl_ema_span_minutes",
+        "drawdown_fraction_ema_span_minutes": "hsl_drawdown_fraction_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
-        "drawdown_ratio_threshold": "hsl_red_threshold",
+        "drawdown_threshold_fraction": "hsl_drawdown_threshold_fraction",
     },
     "unstuck": {
         "close_fraction": "unstuck_close_pct",
@@ -53,7 +53,31 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
+STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit": "wallet_exposure_limit_ratio"}
+FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES = {"volatility": "log_range"}
+FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES = {
+    public: native for native, public in FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES.items()
+}
 _MISSING = object()
+
+
+def native_forager_weight_name(public_name: str) -> str:
+    """Bind one authored ranking coordinate to the unchanged native ID."""
+    return FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES.get(public_name, public_name)
+
+
+def _project_shared_value(flat_key, value, *, to_public):
+    if flat_key != "forager_score_weights" or not isinstance(value, dict):
+        return value
+    names = (FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES if to_public
+             else FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES)
+    result = {}
+    for key, child in value.items():
+        key = names.get(key, key)
+        if key in result:
+            raise ValueError(f"conflicting forager score weight {key}")
+        result[key] = deepcopy(child)
+    return result
 
 
 def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
@@ -76,11 +100,14 @@ def get_grouped_bot_value(
         return default
     if prefer_flat and flat_key in bot_side:
         return bot_side[flat_key]
+    public_key = STANDALONE_PUBLIC_BOT_PATHS.get(flat_key)
+    if public_key is not None and public_key in bot_side:
+        return bot_side[public_key]
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is not None:
         value = get_grouped_path(bot_side, group_path, default=_MISSING)
         if value is not _MISSING:
-            return value
+            return _project_shared_value(flat_key, value, to_public=False)
     if flat_key in bot_side:
         return bot_side[flat_key]
     return default
@@ -111,6 +138,9 @@ def flatten_shared_bot_side(bot_side: dict | None) -> dict:
     if not isinstance(bot_side, dict):
         return {}
     result = {}
+    for native_key, public_key in STANDALONE_PUBLIC_BOT_PATHS.items():
+        if public_key in bot_side:
+            result[native_key] = deepcopy(bot_side[public_key])
     for flat_key in FLAT_BOT_KEY_TO_GROUP_PATH:
         value = get_grouped_bot_value(bot_side, flat_key, default=None)
         if (
@@ -123,7 +153,7 @@ def flatten_shared_bot_side(bot_side: dict | None) -> dict:
         ):
             result[flat_key] = deepcopy(value)
     for key, value in bot_side.items():
-        if key in result or key in BOT_SHARED_GROUPS or key in {"strategy", "universe"}:
+        if key in result or key in BOT_SHARED_GROUPS or key in {"strategy", "universe"} or key in STANDALONE_PUBLIC_BOT_PATHS.values():
             continue
         result[key] = deepcopy(value)
     return result
@@ -141,7 +171,8 @@ def canonical_shared_bot_path_for_flat_key(
 ) -> tuple[str, ...] | None:
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is None:
-        return None
+        public_key = STANDALONE_PUBLIC_BOT_PATHS.get(flat_key)
+        return ("bot", pside, public_key) if public_key is not None else None
     return ("bot", pside, *group_path)
 
 
@@ -156,6 +187,10 @@ def get_grouped_path(node: dict, path: tuple[str, ...], *, default=None):
 
 def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
     """Write through a canonical shared-field binding, or a native flat view."""
+    public_key = STANDALONE_PUBLIC_BOT_PATHS.get(flat_key)
+    if public_key is not None and public_key in bot_side:
+        bot_side[public_key] = value
+        return
     path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if path is None or not isinstance(bot_side.get(path[0]), dict):
         bot_side[flat_key] = value
@@ -165,12 +200,15 @@ def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
         target = target.setdefault(part, {})
         if not isinstance(target, dict):
             raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
-    target[path[-1]] = value
+    target[path[-1]] = _project_shared_value(flat_key, value, to_public=True)
 
 
 def resolve_shared_bot_path(
     bot_side: dict | None, pside: str, flat_key: str
 ) -> tuple[str, ...] | None:
+    public_key = STANDALONE_PUBLIC_BOT_PATHS.get(flat_key)
+    if isinstance(bot_side, dict) and public_key is not None and public_key in bot_side:
+        return ("bot", pside, public_key)
     path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if isinstance(bot_side, dict) and path is not None:
         if get_grouped_path(bot_side, path, default=_MISSING) is not _MISSING:
@@ -205,7 +243,7 @@ def canonicalize_shared_bot_side(
     for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in bot_side:
             continue
-        moved_value = bot_side.pop(flat_key)
+        moved_value = _project_shared_value(flat_key, bot_side.pop(flat_key), to_public=True)
         target = bot_side
         for index, part in enumerate(path[:-1]):
             if part not in target:

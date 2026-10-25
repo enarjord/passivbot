@@ -314,7 +314,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=Fal
     for side, eligible in by_side.items():
         eligible_counts[side] = None if eligible is None else sum(
             any(
-                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit") != 0.0
+                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit_ratio") != 0.0
                 for key in _rms_policy_keys(config, {coin}, overrides)
             )
             for coin in eligible
@@ -479,13 +479,13 @@ def compute_backtest_warmup_minutes(
             return 0
         max_minutes = max(max_minutes, extracted * 60.0)
 
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
 
-    warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+    warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
     if limit is not None:
         warmup_minutes = min(warmup_minutes, limit)
     if include_rms:
@@ -512,9 +512,9 @@ def compute_backtest_warmup_minutes(
 def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
-    warmup_ratio = _to_float(
-        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
-        context='bot.portfolio.warmup.span_multiplier',
+    activation_span_fraction = _to_float(
+        require_config_value(config, 'bot.portfolio.warmup.activation_span_fraction'),
+        context='bot.portfolio.warmup.activation_span_fraction',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
@@ -561,7 +561,7 @@ def compute_per_coin_warmup_minutes(
                 requirements.max_1m_span_minutes,
                 requirements.max_h1_span_hours * 60.0,
             )
-        warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+        warmup_minutes = max_minutes * max(0.0, activation_span_fraction)
         if limit is not None:
             warmup_minutes = min(warmup_minutes, limit)
         if include_rms:

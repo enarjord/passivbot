@@ -28,7 +28,7 @@ def _runner_context(strategy, sides, *, chunked=False,
         from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
         keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy == "ema_anchor" else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
         for key, value in {"hsl_enabled": 1, "hsl_signal_mode": 2,
-                           "hsl_red_threshold": .01, "hsl_drawdown_ratio_ema_span_minutes": 2.5,
+                           "hsl_drawdown_threshold_fraction": .01, "hsl_drawdown_fraction_ema_span_minutes": 2.5,
                            "hsl_cooldown_ms_lo": 300000, "hsl_cooldown_ms_hi": 0,
                            "hsl_memory_ema_span_minutes": 1440}.items():
             row[keys.index(key)] = value
@@ -111,8 +111,8 @@ def _base_parameter_values() -> dict[str, float]:
         "unstuck_loss_allowance_pct": 0.1,
         "unstuck_threshold": 0.5,
         "hsl_enabled": 0.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 60.0,
         "hsl_cooldown_ms_lo": 0.0,
         "hsl_cooldown_ms_hi": 0.0,
         "hsl_memory_ema_span_minutes": 1440.0,

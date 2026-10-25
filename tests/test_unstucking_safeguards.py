@@ -497,7 +497,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": False,
-                "order_match_tolerance_pct": 0.0,
+                "order_match_tolerance_fraction": 0.0,
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):
@@ -2450,7 +2450,7 @@ async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     cfg = _dummy_config()
     # PnL enrichment blocks authoritative fills when an enabled risk consumer
     # needs it; trailing confirmation itself can still use the matching fill.
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     old_fill = _DummyFillEvent(

@@ -18,11 +18,11 @@ from warmup_utils import (
 def _config(span, cap):
     return {
         "bot": {
-            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 1.0, "max_minutes": cap}},
+            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 1.0, "max_minutes": cap}},
             "long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": span, "ema_span_1_minutes": span},
-                "volatility_ema_span_minutes": 0.0,
-                "volatility_ema_span_1h_candles": 0.0,
+                "log_range_ema_span_minutes": 0.0,
+                "log_range_ema_span_1h_candles": 0.0,
             }}},
             "short": {},
         },
@@ -176,7 +176,7 @@ async def test_direct_ranking_readers_keep_float_spans_until_acquisition(reader,
             calls.append((symbol, spans, kwargs))
             return {"qv": 100.0, "log_range": 0.25}
 
-    config = {"bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": cap}}}}
+    config = {"bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": cap}}}}
     original = deepcopy(config)
     bot = SimpleNamespace(
         config=config,

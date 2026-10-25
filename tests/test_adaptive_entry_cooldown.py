@@ -578,7 +578,7 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("gate", ["max_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("gate", ["max_positions", "total_wallet_exposure_limit_ratio"])
 @pytest.mark.parametrize("interval", [1, 5])
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer):
@@ -587,7 +587,7 @@ def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer)
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg["bot"][side]["risk"][gate] = 0
-    cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     apply_bot_config_patch(cfg, {f"optimize.bounds.{side}.risk.{gate}": [0, 0]})
     cfg["backtest"]["candle_interval_minutes"] = interval
     cfg = prepare_config(cfg, verbose=False)
@@ -663,8 +663,8 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     other = "short" if side == "long" else "long"
     for pside in (side, other):
         bot.config["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
-        bot.config["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
-    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit"] = 1.0
+        bot.config["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)
+    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     bot.config["bot"][other]["entry_cooldown"]["base_duration_minutes"] = 5.0
     dormant = bot.config["bot"][side]["entry_cooldown"]
     dormant["max_duration_minutes"] = 7 * 24 * 60
@@ -683,10 +683,10 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     assert bot._max_configured_entry_cooldown_minutes() == 5.0
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 6 * 60000)
     # With both sides disabled there is no cooldown-only history requirement.
-    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit"] = 0.0
+    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (False, None)
     # Reactivation restores the configured side/coin horizon.
-    bot.config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 1.0
+    bot.config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     expected = (14 if override else 7) * 24 * 60
     assert bot._max_configured_entry_cooldown_minutes() == expected
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - (expected + 1) * 60000)
@@ -807,7 +807,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
     cfg["bot"][side]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 1.0
@@ -836,7 +836,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -1041,7 +1041,7 @@ def test_direct_rust_zero_warmup_keeps_automatic_non_rms_budget(side, metadata):
     cfg = _ema_anchor_config(True, include_dataset=False)
     for pside in ("long", "short"):
         cfg["bot"][pside]["forager"].update(volume_ema_span_minutes=30.0, unilateralness_ema_span_minutes=1.0)
-        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_volatility_ema_span_1h_candles"] = 0.1
+        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_log_range_ema_span_1h_candles"] = 0.1
         cfg["bot"][pside]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -1147,7 +1147,7 @@ def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(si
     cfg['bot'][side]['universe']['approved_coins'] = coins
     cfg["bot"][side]["risk"]["max_positions"] = 3
     cfg["bot"][side]["forager"].update(unilateralness_ema_span_minutes=1.0,
-        score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
+        score_weights={"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
     cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=1)
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": coins}
@@ -1184,7 +1184,7 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
     cfg = prepare_config(cfg, verbose=False)
     enable_side(cfg, side)
     for pside in ("long", "short"):
-        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
+        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=float(pside == side))
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 5.0
     bot.config = compile_runtime_config(cfg, runtime="live")
     bot.coin_overrides = {"BTC": {"bot": {side: {"entry_cooldown": {
@@ -1466,7 +1466,7 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     cfg = prepare_config(get_template_config(), verbose=False)
     enable_side(cfg, side)
     for pside in ("long", "short"):
-        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
+        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=float(pside == side))
     set_side_universe_sources(cfg, 'approved_coins', {pside: ["BTC", "ETH"] for pside in ("long", "short")})
     cfg.pop("_coins_sources", None)
     cfg["bot"][side]["entry_cooldown"].update(
@@ -1517,7 +1517,7 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
     enable_side(cfg, "long")
     enable_side(cfg, "short")
     for pside in ("long", "short"):
-        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+        cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = (
             14400.0 if pside == side else 5.0
         )

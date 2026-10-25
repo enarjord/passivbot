@@ -2177,9 +2177,9 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
             &[
                 "enabled",
                 "scale_budget_with_excess_allowance",
-                "red_threshold",
+                "drawdown_threshold_fraction",
                 "memory_ema_span_minutes",
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
                 "cooldown_minutes_after_red",
                 "panic_close_order_type",
             ],
@@ -2192,11 +2192,11 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 Some(value) => value.extract::<bool>()?,
                 None => false,
             },
-            red_threshold: extract_value(dict, "red_threshold")?,
+            drawdown_threshold_fraction: extract_value(dict, "drawdown_threshold_fraction")?,
             memory_ema_span_minutes: extract_value(dict, "memory_ema_span_minutes")?,
-            drawdown_ratio_ema_span_minutes: extract_value(
+            drawdown_fraction_ema_span_minutes: extract_value(
                 dict,
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
             )?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
             panic_close_order_type: extract_value(dict, "panic_close_order_type")?,

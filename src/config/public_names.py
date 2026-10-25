@@ -10,6 +10,18 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 
 PUBLIC_PATH_RENAMES = {
+    ("backtest", "btc_collateral_cap"): ("backtest", "btc_collateral_target_ratio"),
+    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_equity_ratio"),
+    ("backtest", "maker_fee_override"): ("backtest", "maker_fee_override_fraction"),
+    ("backtest", "taker_fee_override"): ("backtest", "taker_fee_override_fraction"),
+    ("backtest", "equity_floor_ratio"): ("backtest", "equity_floor_fraction"),
+    ("bot", "portfolio", "warmup", "span_multiplier"): ("bot", "portfolio", "warmup", "activation_span_fraction"),
+
+    ("optimize", "pymoo", "shared", "crossover_eta"): ("optimize", "pymoo", "shared", "crossover_distribution_index"),
+    ("optimize", "pymoo", "shared", "crossover_prob_var"): ("optimize", "pymoo", "shared", "crossover_probability_per_variable"),
+    ("optimize", "pymoo", "shared", "mutation_eta"): ("optimize", "pymoo", "shared", "mutation_distribution_index"),
+    ("optimize", "pymoo", "shared", "mutation_prob"): ("optimize", "pymoo", "shared", "mutation_probability"),
+    ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),
@@ -26,15 +38,21 @@ PUBLIC_PATH_RENAMES = {
     ("live", "execution", "order_match_tolerance_pct"): ("live", "execution", "order_match_tolerance_fraction"),
     ("live", "execution", "order_replacement_churn_gate_market_dist_pct"): ("live", "execution", "order_replacement_churn_gate_market_distance_fraction"),
     ("bot", "global", "forager", "score_hysteresis_pct"): ("bot", "global", "forager", "score_hysteresis_margin"),
+    ("bot", "portfolio", "loss_gate", "max_drawdown_ratio"): ("bot", "portfolio", "loss_gate", "max_drawdown_fraction"),
 }
 
 SHARED_SIDE_PATH_RENAMES = {
+    ("forager", "score_weights", "volatility"): ("forager", "score_weights", "log_range"),
     ("forager", "volume_ema_span_1m"): ("forager", "volume_ema_span_minutes"),
-    ("forager", "volatility_ema_span_1m"): ("forager", "volatility_ema_span_minutes"),
+    ("forager", "volatility_ema_span_1m"): ("forager", "log_range_ema_span_minutes"),
     ("forager", "unilateralness_ema_span_1m"): ("forager", "unilateralness_ema_span_minutes"),
     ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
     ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
     ("hsl", "cooldown_minutes_after_red"): ("hsl", "cooldown_after_red_minutes"),
+    ("hsl", "drawdown_ratio_threshold"): ("hsl", "drawdown_threshold_fraction"),
+    ("hsl", "drawdown_ratio_ema_span_minutes"): ("hsl", "drawdown_fraction_ema_span_minutes"),
+    ("risk", "total_wallet_exposure_limit"): ("risk", "total_wallet_exposure_limit_ratio"),
+    ("wallet_exposure_limit",): ("wallet_exposure_limit_ratio",),
     ("risk", "we_excess_allowance_pct"): ("risk", "we_excess_allowance_fraction"),
     ("unstuck", "close_pct"): ("unstuck", "close_fraction"),
     ("unstuck", "loss_allowance_pct"): ("unstuck", "loss_allowance_fraction"),
@@ -43,6 +61,11 @@ SHARED_SIDE_PATH_RENAMES = {
 
 def _public_path_renames():
     mappings = dict(PUBLIC_PATH_RENAMES)
+    for scope in ("global", "portfolio"):
+        for root in (("bot", scope), ("optimize", "bounds", scope)):
+            for old, new in SHARED_SIDE_PATH_RENAMES.items():
+                if old[0] in {"hsl", "risk"}:
+                    mappings[(*root, *old)] = (*root, *new)
     for side in ("long", "short"):
         for root in (("bot", side), ("optimize", "bounds", side)):
             for old, new in SHARED_SIDE_PATH_RENAMES.items():
@@ -50,6 +73,8 @@ def _public_path_renames():
             for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items():
                 for old, new in fields.items():
                     mappings[(*root, "strategy", kind, *old)] = (*root, "strategy", kind, *new)
+        root = ("optimize", "bounds", side, "forager")
+        mappings[(*root, "score_weights_volatility")] = (*root, "score_weights_log_range")
     return mappings
 
 
@@ -121,7 +146,7 @@ def rewrite_released_public_names(config, *, path_prefix=(), record=None):
             renamed = ".".join(renamed_parts) if selectors else renamed_parts[-1]
             value = node[key]
             if renamed != key:
-                if renamed in node:
+                if renamed in node and node[renamed] != value:
                     raise ValueError(f"{'.'.join(old_path)} conflicts with {'.'.join(new_path)}")
                 del node[key]
                 node[renamed] = value

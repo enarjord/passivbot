@@ -10,6 +10,40 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
     "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
+_RELEASED_HSL_FLAT_PATHS = {
+    "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
+    "hsl_ema_span_minutes": ("hsl", "drawdown_fraction_ema_span_minutes"),
+}
+
+
+def released_shared_bot_paths():
+    """Keep released flat HSL source keys independent of current native IDs."""
+    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+
+    return {
+        **FLAT_BOT_KEY_TO_GROUP_PATH,
+        **_RELEASED_HSL_FLAT_PATHS,
+    }
+
+
+def canonicalize_released_shared_bot_side(values):
+    """Group flat released inputs only inside the explicit v8 converter."""
+    from config.shared_bot import canonicalize_shared_bot_side
+
+    if isinstance(values, dict):
+        for flat, path in _RELEASED_HSL_FLAT_PATHS.items():
+            if flat not in values:
+                continue
+            target = values
+            for part in path[:-1]:
+                target = target.setdefault(part, {})
+                if not isinstance(target, dict):
+                    raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
+            value = values.pop(flat)
+            if path[-1] in target and target[path[-1]] != value:
+                raise ValueError(f"{flat} conflicts with {'.'.join(path)}")
+            target[path[-1]] = value
+    canonicalize_shared_bot_side(values)
 
 
 def _is_retired_metric(name):
@@ -123,6 +157,11 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
 def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
     """Preserve effective pymoo policy; DEAP algorithm changes require consent."""
+    from config.public_names import released_public_path
+
+    def public_shared_target(key):
+        return released_public_path(("optimize", "pymoo", "shared", key))[-1]
+
     optimize = config.get("optimize", {})
     legacy_backend = optimize.get("backend", "pymoo")
     pymoo = optimize.setdefault("pymoo", {})
@@ -133,7 +172,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             raise ValueError("optimize.pymoo.shared.mutation_prob_var conflicts with mutation_prob")
         shared["mutation_prob"] = value
         changes.append(dict(path="optimize.pymoo.shared.mutation_prob_var", old=value,
-                            new={"mutation_prob": value}, reason="explicit released pymoo spelling migration"))
+                            new={public_shared_target("mutation_prob"): value}, reason="explicit released pymoo spelling migration"))
     if legacy_backend == "deap":
         if best_effort:
             from .released_v8 import get_released_v8_defaults
@@ -166,7 +205,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                 if key == "mutation_prob_per_variable" and legacy == "mutation_indpb" and value == 0:
                     value = default
                 shared[key] = deepcopy(value)
-                record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,
+                record_guess(changes, f"optimize.pymoo.shared.{public_shared_target(key)}", None, value,
                              f"approximate DEAP policy using {legacy or 'released pymoo default'}; search evolution differs")
             if not acknowledge:
                 record_guess(changes, "optimize.backend", "deap", "pymoo",
@@ -191,7 +230,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             if key != "mutation_indpb" or (not isinstance(value, bool) and float(value) > 0):
                 shared[target] = deepcopy(value)
                 changes.append(dict(path=f"optimize.{key}", old=value,
-                                    new={f"optimize.pymoo.shared.{target}": value},
+                                    new={f"optimize.pymoo.shared.{public_shared_target(target)}": value},
                                     reason="materialized effective released pymoo fallback without changing its value"))
                 continue
         changes.append(dict(path=f"optimize.{key}", old=value, new=None,
@@ -254,7 +293,7 @@ def reject_retired_gpu_selector(selector, value=None, *, context):
 def canonical_released_v8_path(parts):
     """Identify one released authored leaf before aliases or defaults can erase it."""
     from config.optimize_bounds import SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY
-    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+    FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
     from .renames import (
         LEGACY_BOUNDS_KEYS, LEGACY_ENTRY_GRID_KEYS, LEGACY_FILTER_KEYS, LEGACY_FORAGER_KEYS,
     )
@@ -292,6 +331,8 @@ def canonical_released_v8_path(parts):
     if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
         side, separator, flat = parts[-1].partition("_")
         if separator and side in {"long", "short"}:
+            if flat in _RELEASED_HSL_FLAT_PATHS:
+                return (*parts[:-1], side, *_RELEASED_HSL_FLAT_PATHS[flat])
             for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
                 if flat in mapping:
                     local = mapping[flat]
@@ -414,7 +455,7 @@ def released_runtime_selector(path):
     Ordinary loading never calls this adapter. Referenced coin documents and
     authored override selectors must use the same conversion before lookup.
     """
-    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+    FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
     from config.public_names import released_public_path
     from .operational_live import operational_live_selector
     from .shared_policy import shared_policy_selector
@@ -456,7 +497,7 @@ def released_runtime_selector(path):
     for old, new in (
         ("live.hsl_signal_mode", "bot.portfolio.hsl.scope"),
         ("live.max_realized_loss_pct", "bot.portfolio.loss_gate.max_drawdown_ratio"),
-        ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
+        ("backtest.liquidation_threshold", "backtest.equity_floor_fraction"),
         ("live.auto_gs", "live.disapproved_position_mode"),
         ("bot.hsl.", "bot.portfolio.hsl."),
         (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
@@ -477,7 +518,7 @@ def released_runtime_selector(path):
 def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_change=False,
                        sparse=False, best_effort=False, base_config_path=""):
     """Translate public fields without guessing independent optimizer ranges."""
-    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+    FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
 
     from .shared_policy import (COIN_SOURCE_FIELDS, is_shared_approved_source, normalize_released_coin_source,
                                 minimum_cost_policy_targets, move_shared_policy, preserve_forced_normal_selection,
@@ -512,6 +553,20 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         put(node, (new,), value, f"{path}.{old}")
         record(f"{path}.{old}", value, {new: value}, "canonical v9 field rename")
 
+    # Released flat bounds are source spellings, independent of current optimizer IDs.
+    bound_values = result.get("optimize", {}).get("bounds", {})
+    if isinstance(bound_values, dict):
+        for side in ("long", "short"):
+            for old, target in _RELEASED_HSL_FLAT_PATHS.items():
+                source_key = f"{side}_{old}"
+                if source_key not in bound_values:
+                    continue
+                value = bound_values.pop(source_key)
+                put(bound_values, (side, *target), value, f"optimize.bounds.{source_key}")
+                record(f"optimize.bounds.{source_key}", value,
+                       {f"optimize.bounds.{side}.{'.'.join(target)}": value},
+                       "explicit released-v8 HSL bound source conversion")
+
     def policy_scope(node, inherited):
         mode = node.get("live", {}).get("hsl_signal_mode", inherited)
         mode = node.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", mode)
@@ -531,7 +586,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 reject_retired_gpu_selector(path, context="optimizer selector")
                 return path
             path = converted
-        return released_runtime_selector(path)
+        converted = released_runtime_selector(path)
+        if parameter_selector:
+            from config.public_names import released_fixed_selector
+
+            converted = released_fixed_selector(converted)
+        return converted
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -661,7 +721,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         for key, value in old.items():
             put(result, ("bot", "portfolio", "hsl", key), value, f"bot.hsl.{key}")
         record("bot.hsl", old, {"bot.portfolio.hsl": old}, "portfolio HSL authority")
-    rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_ratio", "backtest")
+    rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_fraction", "backtest")
 
     def visit(node, path=""):
         if isinstance(node, list):
@@ -729,7 +789,6 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     if sparse:
         from .entry_cooldown import migrate_entry_cooldown_tree
         from .entry_ema import migrate_entry_ema_tree
-        from config.shared_bot import canonicalize_shared_bot_side
 
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
@@ -739,7 +798,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
         migrate_control_sentinels(result, record=record)
         for side in ("long", "short"):
-            canonicalize_shared_bot_side(result.get("bot", {}).get(side))
+            canonicalize_released_shared_bot_side(result.get("bot", {}).get(side))
         rewrite_released_public_names(result, record=record)
         return result
     # All released-layout structural transforms run only inside this converter.
@@ -747,7 +806,6 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from .entry_cooldown import migrate_entry_cooldown
     from .entry_ema import migrate_entry_ema_spans
     from .unstuck_ema import migrate_unstuck_ema_spans
-    from config.shared_bot import canonicalize_shared_bot_side
     from config.strategy import sync_canonical_strategy_config
 
     for side in ("long", "short"):
@@ -783,7 +841,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     migrate_control_sentinels(result, record=record)
     preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
-        canonicalize_shared_bot_side(result.get("bot", {}).get(side))
+        canonicalize_released_shared_bot_side(result.get("bot", {}).get(side))
 
     def canonicalize_coin_patches(node, path=()):
         if isinstance(node, list):
@@ -791,7 +849,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 canonicalize_coin_patches(child, path)
         elif isinstance(node, dict):
             if len(path) > 2 and path[-2] == "bot" and path[-1] in ("long", "short"):
-                canonicalize_shared_bot_side(node)
+                canonicalize_released_shared_bot_side(node)
             for key, child in node.items():
                 canonicalize_coin_patches(child, (*path, key))
 

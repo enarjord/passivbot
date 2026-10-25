@@ -80,7 +80,7 @@ def _gate_history_config(patch, *, memory_span_minutes=None):
     """Exercise explicit independent memories with auto-unstuck disabled."""
     patch = deepcopy(patch)
     policy = patch.setdefault("bot", {}).setdefault("portfolio", {})
-    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_ratio", 0.5)
+    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_fraction", 0.5)
     if memory_span_minutes is not None:
         policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
         policy.setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
@@ -925,7 +925,7 @@ def _counted_staged_account_refresh_bot(
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = balance
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = balance
     bot.balance = balance
     bot._exchange_reported_balance_raw = balance
@@ -4450,7 +4450,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         },
         "short": {"status": "disabled"},
     }
@@ -4466,7 +4466,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.03,
             "peak": 16550.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         bot._monitor_runtime_unstuck_hints["long"] = {
             "next_symbol": "ETH/USDT:USDT",
@@ -4480,7 +4480,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.20,
             "peak": 16580.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
@@ -4530,7 +4530,7 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         }
         if pside == "long"
         else {"status": "disabled"}
@@ -6627,7 +6627,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6827,7 +6827,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6974,7 +6974,7 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -7336,7 +7336,7 @@ async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raise
     bot.balance_raw = 50.0
     bot.balance_override = None
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._exchange_reported_balance_raw = 50.0
     bot._apply_open_orders_snapshot = AsyncMock()
     bot._apply_positions_snapshot = MagicMock()
@@ -7378,7 +7378,7 @@ async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_i
     bot.balance = 50.0
     bot.balance_raw = 50.0
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_override = "invalid"
     bot._balance_override_logged = False
     bot._exchange_reported_balance_raw = 50.0
@@ -7636,7 +7636,7 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     ok = await bot.update_balance()
     assert ok is True
@@ -7655,7 +7655,7 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     with caplog.at_level(logging.INFO):
         ok = bot._apply_balance_snapshot(123.45)
@@ -8022,10 +8022,10 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
     assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
-    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.0
+    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.0
     assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
-    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"]
-    with pytest.raises(KeyError, match="max_drawdown_ratio"):
+    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"]
+    with pytest.raises(KeyError, match="max_drawdown_fraction"):
         bot._live_max_realized_loss_pct()
 
 
@@ -8098,7 +8098,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
 
     assert info["status"] == "ok"
     assert info["peak"] == 1005.0
-    assert info["pct_from_peak"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
+    assert info["change_from_peak_percent"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
     assert info["allowance"] == allowance(1000.0, mul(f32(0.01), f32(1.0)), 5.0)
 
 
@@ -10234,7 +10234,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
         return {symbol: 100.0 for symbol in symbols}
 
     bot._get_live_last_prices = fake_get_live_last_prices
-    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_fraction" else 0.0
 
     secret = "open-order-secret https://example.invalid/open-order"
     unsafe_order_id = "token=order-id-secret https://example.invalid/order-id"
@@ -11593,7 +11593,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -11869,7 +11869,7 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 100.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._balance_composition = composition
 
     assert bot._apply_balance_snapshot(100.0) is True
@@ -12042,7 +12042,7 @@ def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(
 
     bot = make_bot()
     bot.get_raw_balance = lambda: balance
-    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_ratio_threshold=0.99)
+    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_threshold_fraction=0.99)
     decisions, unavailable = run(bot)
     assert not unavailable
     assert decisions[0].action == "panic"

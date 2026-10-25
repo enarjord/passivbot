@@ -13,6 +13,14 @@ VERSION = 2
 CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "backtest_completion_ratio"]
 
 
+def _is_distance_sensitivity(key):
+    return "weight" in key or ("log_range" in key and key.endswith("_coefficient")) or key in {
+        "threshold_exposure_ratio_coefficient",
+        "retracement_exposure_ratio_coefficient",
+        "inventory_offset_exposure_coefficient",
+    }
+
+
 def harness_digest():
     result = hashlib.sha256()
     for path in sorted(Path(__file__).parent.glob("*.py")):
@@ -58,7 +66,7 @@ def apply_features(config, case, coins, markets, bars):
     config["backtest"].update(offline=True, dynamic_wel_by_tradability="dynamic_wel_off" not in flags)
     config['bot']["portfolio"]['hedge_mode'] = case.sides == "both" and "one_way" not in flags
     if "loss_gate" in flags:
-        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.001
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.001
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
     if "fill_buffer" in flags:
@@ -66,14 +74,14 @@ def apply_features(config, case, coins, markets, bars):
     if "slippage" in flags:
         config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
-        config["backtest"]["btc_collateral_cap"] = 0.25
+        config["backtest"]["btc_collateral_target_ratio"] = 0.25
     if "eligibility" in flags and len(coins) > 1:
         markets[coins[-1]]["first_valid_index"] = bars // 2
         markets[coins[0]]["last_valid_index"] = bars - bars // 4 - 1
     for side in ("long", "short"):
         bot = config["bot"][side]
         slots = 1 if case.topology == "single" else max(1, len(coins) // 2) if case.topology == "forager" else len(coins)
-        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
+        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
         bot["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
                               ema_gating_enabled="unstuck_no_ema" not in flags)
         bot["entry_cooldown"].update(base_duration_minutes=5.0 if flags & {"cooldown", "adaptive_cooldown"} else 0.0)
@@ -81,7 +89,7 @@ def apply_features(config, case, coins, markets, bars):
             bot["entry_cooldown"].update(min_duration_minutes=1.0, max_duration_minutes=60.0,
                                           weights_minutes=dict(exposure_ratio=10.0, adverse_directionality=5.0))
         weights = bot["forager"]["score_weights"]
-        weights.update(volume=0.3, volatility=0.3, ema_readiness=0.4, unilateralness=0.2 if "forager_unilateral" in flags else 0.0)
+        weights.update(volume=0.3, log_range=0.3, ema_readiness=0.4, unilateralness=0.2 if "forager_unilateral" in flags else 0.0)
         if case.topology != "forager":
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
@@ -97,7 +105,7 @@ def apply_features(config, case, coins, markets, bars):
         if case.strategy == "trailing_martingale":
             for leg in ("entry", "close"):
                 for key in list(strategy[leg]):
-                    if "weight" in key:
+                    if _is_distance_sensitivity(key):
                         strategy[leg][key] = 0.0
                 strategy[leg]["retracement_base_fraction"] = 0.001 if f"{leg}_trailing" in flags else 0.0
             for flag, mode in (("gate_disabled", "disabled"), ("gate_all", "all"), ("gate_reentry", "reentry")):
@@ -106,14 +114,14 @@ def apply_features(config, case, coins, markets, bars):
             if "volatility" in flags:
                 for leg in ("entry", "close"):
                     for key in strategy[leg]:
-                        if "volatility" in key and "weight" in key:
+                        if "log_range" in key and _is_distance_sensitivity(key):
                             strategy[leg][key] = 0.1
             if "exposure_weight" in flags:
-                strategy["entry"]["threshold_we_weight"] = 0.01
-                strategy["close"]["threshold_we_weight"] = -0.01
+                strategy["entry"]["threshold_exposure_ratio_coefficient"] = 0.01
+                strategy["close"]["threshold_exposure_ratio_coefficient"] = -0.01
         elif case.strategy == "ema_anchor":
             for key in strategy:
-                if "weight" in key:
+                if _is_distance_sensitivity(key):
                     strategy[key] = 0.1 if "volatility" in flags else 0.0
     if "overrides" in flags:
         config["coin_overrides"] = {coins[0]: {"bot": {side: {"entry_cooldown": {"base_duration_minutes": 3.0},
@@ -159,23 +167,23 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
         # Preserve the class: policies are fixed; zero weights/retracements stay zero.
         if value is None or isinstance(value, bool):
             continue
-        if path[-1] == "max_positions" or value == 0.0 and ("weight" in path[-1] or "retracement" in path[-1]):
+        if path[-1] == "max_positions" or value == 0.0 and (_is_distance_sensitivity(path[-1]) or "retracement" in path[-1]):
             enabled = False
         if path[-1] == "memory_ema_span_minutes" and bounds_config is None:
             enabled = False
         if path[-1] == "we_excess_allowance_fraction" and "excess" not in flags:
             enabled = False
-        if path[2] == "risk" and path[-1] == "total_wallet_exposure_limit" and path[1] in active:
+        if path[2] == "risk" and path[-1] == "total_wallet_exposure_limit_ratio" and path[1] in active:
             # The public short template pins TWEL=0. The short class needs positive bounds.
             bound = Bound(0.5, 1.5, 0.01) if bounds_config is None else bound
             if bound.low <= 0:
                 raise ValueError("active-side exposure bounds must stay positive")
         if path[2] == "hsl" and enabled and bounds_config is None:
-            bound = {"drawdown_ratio_threshold": Bound(.002, .01, .001), "drawdown_ratio_ema_span_minutes": Bound(2, 20, 1),
+            bound = {"drawdown_threshold_fraction": Bound(.002, .01, .001), "drawdown_fraction_ema_span_minutes": Bound(2, 20, 1),
                      "cooldown_after_red_minutes": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))
-        elif value != 0 and ("weight" in path[-1] or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:
+        elif value != 0 and (_is_distance_sensitivity(path[-1]) or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:
             bound = Bound(float(value), float(value))
         specs.append((key, path, bound))
     bounds = [item[2] for item in specs]
@@ -226,7 +234,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             options = ["--fixture", case.strategy,
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),
                        "--bars", str(bars), "--seed", str(seed), "--hsl", hsl,
-                       "--hsl-red-threshold", "0.005", "--hsl-drawdown-ratio-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
+                       "--hsl-drawdown-threshold-fraction", "0.005", "--hsl-drawdown-fraction-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
             config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
             source_coins = config["backtest"]["coins"]
             # A frozen benchmark candidate is a concrete execution snapshot,

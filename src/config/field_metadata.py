@@ -50,13 +50,45 @@ def enrich_fields(fields):
             data.update(_bot_metadata(path))
         elif path[:1] == ("coin_overrides",):
             data["optimizable"] = False
-            if path[-1] == "wallet_exposure_limit":
+            if path[-1] == "wallet_exposure_limit_ratio":
                 data.update(unit="ratio", denominator="raw balance")
         elif path[:1] == ("backtest",):
             data["consumers"] = ("backtest", "optimize")
             data.update(_operational_fraction_metadata(path))
+            data.update(_backtest_quantity_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
+            if path[:2] == ("optimize", "prefilter"):
+                if path[2:3] == ("exposure_probe_fractions",):
+                    data.update(unit="fraction", denominator="effective per-position allowance including bounded excess allowance",
+                                description="Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.")
+                    if path[-1] == "*":
+                        data["domain"] = FieldDomain(minimum=0.0, maximum=0.999, exclusive_maximum=True, finite=True)
+                elif path[-1] in {"log_range_ema_1m", "log_range_ema_1h"}:
+                    data.update(unit="log range", denominator="candle low, inside ln(high / low)",
+                                domain=FieldDomain(minimum=0.0, finite=True),
+                                description="Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.")
+                elif path[-1] == "adverse_directionality_score":
+                    data.update(unit="score", domain=FieldDomain(minimum=0.0, maximum=1.0, finite=True),
+                                description="Declared adverse RMS directionality score for hypothetical cooldown measurements.")
+                elif path[-1] == "metric":
+                    from .prefilter import PREFILTER_METRICS
+
+                    data["domain"] = FieldDomain(choices=tuple(sorted(PREFILTER_METRICS)))
+            if path[:3] == ("optimize", "pymoo", "shared"):
+                if path[-1].endswith("_distribution_index"):
+                    data.update(unit="distribution index", domain=FieldDomain(minimum=0.0, exclusive_minimum=True),
+                                description="Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.")
+                elif path[-1].endswith(("_probability", "_probability_per_variable")):
+                    data.update(unit="probability", domain=FieldDomain(minimum=0.0, maximum=1.0),
+                                denominator=("offspring candidates" if path[-1] == "mutation_probability" else
+                                             "candidate coordinates conditional on mutation" if path[-1].startswith("mutation_") else
+                                             "parent-pair coordinates conditional on crossover"),
+                                description=("Per-candidate polynomial-mutation gate; auto is 1 / max(1, vector length)."
+                                             if path[-1] == "mutation_probability" else
+                                             "Conditional per-variable polynomial-mutation gate; auto is min(0.5, 1 / max(1, vector length))."
+                                             if path[-1].startswith("mutation_") else
+                                             "Per-variable simulated-binary-crossover gate; external pymoo candidate crossover policy is unchanged."))
         elif path[:1] == ("live",):
             # Reuse the command/runtime owner's declarations without copying
             # their shared-field classification into a second static list.
@@ -112,6 +144,25 @@ def _operational_fraction_metadata(path):
     return {}
 
 
+def _backtest_quantity_metadata(path):
+    name = path[-1]
+    if name == "btc_collateral_target_ratio":
+        return dict(unit="ratio", denominator="account equity",
+                    description="Target BTC collateral value / equity; values above one retain leveraged BTC collateral and negative USD balances.")
+    if name == "max_usd_debt_to_equity_ratio":
+        return dict(unit="ratio", denominator="account equity",
+                    description="Optional USD debt / equity ceiling when topping up BTC collateral; Null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.")
+    if name in {"maker_fee_override_fraction", "taker_fee_override_fraction"}:
+        return dict(unit="fraction", denominator="absolute fill quote notional",
+                    domain=FieldDomain(finite=True),
+                    description="Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.")
+    if name == "equity_floor_fraction":
+        return dict(unit="fraction", denominator="starting balance",
+                    domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_maximum=True, finite=True),
+                    description="Early-stop floor: equity at or below this fraction of starting balance ends replay.")
+    return {}
+
+
 def _bot_metadata(path):
     if path in {("bot", owner, "enabled") for owner in ("long", "short")}:
         return dict(description=(
@@ -122,12 +173,29 @@ def _bot_metadata(path):
     name = path[-1]
     data = {}
     if local.startswith("strategy."):
-        if name in {"ema_span_0_minutes", "ema_span_1_minutes", "volatility_ema_span_minutes",
-                    "offset_volatility_ema_span_minutes"}:
+        if name in {"ema_span_0_minutes", "ema_span_1_minutes", "log_range_ema_span_minutes",
+                    "offset_log_range_ema_span_minutes"}:
             data["unit"] = "minutes"
-        elif name in {"volatility_ema_span_1h_candles", "offset_volatility_ema_span_1h_candles"}:
+        elif name in {"log_range_ema_span_1h_candles", "offset_log_range_ema_span_1h_candles"}:
             data["unit"] = "one-hour candles"
+        if "log_range" in name and "ema_span" in name:
+            data["description"] = "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon."
+        elif "log_range" in name and name.endswith("_coefficient"):
+            additive = path[3] == "trailing_martingale" and path[4] == "close" and name.startswith("threshold_")
+            data.update(unit="price fraction per log range" if additive else "distance multiplier per log range",
+                        denominator="EMA of ln(candle high / candle low) at the named horizon",
+                        description=("Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain."
+                                     if additive else "Adds log-range sensitivity to the existing distance multiplier; its floor remains one."))
         if path[3] == "trailing_martingale":
+            if tuple(path[4:]) == ("entry", "reentry_qty_multiplier"):
+                data.update(unit="multiplier", denominator="absolute current position quantity",
+                            description="Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.")
+            elif name in {"threshold_exposure_ratio_coefficient", "retracement_exposure_ratio_coefficient"}:
+                data.update(unit=("distance multiplier per exposure ratio" if path[4] == "entry" else "price fraction per exposure ratio"),
+                            denominator="position wallet exposure divided by effective per-position wallet exposure limit",
+                            description=("Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one."
+                                         if path[4] == "entry" else
+                                         "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed."))
             denominators = {
                 ("entry", "initial_qty_fraction"): "raw balance times effective per-position wallet exposure limit, converted at entry price",
                 ("entry", "initial_ema_distance_fraction"): "entry EMA band reference price",
@@ -145,6 +213,12 @@ def _bot_metadata(path):
             data.update(unit="fraction", denominator=(
                 "raw balance times effective per-position wallet exposure limit, converted at order price"
                 if name == "base_qty_fraction" else "EMA anchor reference price"))
+        elif path[3] == "ema_anchor" and name == "entry_qty_exposure_coefficient":
+            data.update(unit="quantity multiplier per exposure ratio", denominator="nonnegative same-side wallet exposure at the book midpoint divided by effective wallet exposure limit",
+                        description="Entry quantity uses base quantity times max(1, 1 + same-side exposure ratio times this coefficient); long uses max(0, signed ratio), short uses max(0, -signed ratio).")
+        elif path[3] == "ema_anchor" and name == "inventory_offset_exposure_coefficient":
+            data.update(unit="price fraction per signed exposure ratio", denominator="signed wallet exposure at the book midpoint divided by effective wallet exposure limit",
+                        description="Signed exposure ratio times this coefficient is a price fraction subtracted from both bid and ask EMA anchor factors.")
         return data  # Native metadata still owns defaults, bounds and choices.
     if local == "strategy_kind":
         from .strategy_spec import get_supported_strategy_kinds
@@ -158,11 +232,13 @@ def _bot_metadata(path):
     elif local == "forager.score_hysteresis_margin":
         data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")
-    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction"}:
-        denominators = {"warmup.span_multiplier": "indicator span",
+    elif local in {"warmup.activation_span_fraction", "execution.market_order_near_touch_fraction"}:
+        denominators = {"warmup.activation_span_fraction": "indicator span",
                         "execution.market_order_near_touch_fraction": "market price"}
-        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
+        data.update(unit="fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
+        if local == "warmup.activation_span_fraction":
+            data["description"] = "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements."
     elif local == "warmup.max_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                     description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")
@@ -174,7 +250,7 @@ def _bot_metadata(path):
                                "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.")
     elif local == "universe.ignored_coins":
         data["description"] = "Side-owned exclusions subtracted from effective approval; null or [] means none."
-    elif name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
+    elif name in {"memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes"}:
         data.update(unit="minutes", domain=FieldDomain(minimum=1.0, finite=True),
                     description="Floating-point EMA span; native f32 decay representability is validated at load time.")
     elif local.startswith("entry_cooldown."):
@@ -189,13 +265,15 @@ def _bot_metadata(path):
         data.update(unit="relative weight", domain=FieldDomain(minimum=0.0, finite=True),
                     denominator="sum of authored forager weights",
                     description="Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.")
+        if name == "log_range":
+            data["description"] += " Weights the relative ranking of the one-minute EMA of ln(candle high / candle low)."
     elif local.startswith("forager.") and name.endswith("ema_span_minutes"):
         data["unit"] = "minutes"
         if name == "unilateralness_ema_span_minutes":
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
-    elif local == "hsl.drawdown_ratio_threshold":
+    elif local == "hsl.drawdown_threshold_fraction":
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
@@ -205,13 +283,13 @@ def _bot_metadata(path):
         data["domain"] = FieldDomain(choices=("limit", "market"))
     elif local == "hsl.scope":
         data["domain"] = FieldDomain(choices=("coin", "position_side", "portfolio"))
-    elif local == "loss_gate.max_drawdown_ratio":
+    elif local == "loss_gate.max_drawdown_fraction":
         data.update(unit="fraction", denominator="raw balance plus loss-gate remembered drawdown",
                     domain=FieldDomain(minimum=0.0, finite=True),
                     description="Values at least 1 disable the gate; zero blocks lossy non-panic closes.")
     elif local == "risk.max_positions":
         data.update(unit="positions", domain=FieldDomain(minimum=0, finite=True))
-    elif local == "risk.total_wallet_exposure_limit":
+    elif local == "risk.total_wallet_exposure_limit_ratio":
         data.update(unit="ratio", denominator="raw balance",
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "risk.we_excess_allowance_fraction":

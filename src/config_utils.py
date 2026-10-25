@@ -345,7 +345,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.portfolio.loss_gate.max_drawdown_ratio": {
+    "bot.portfolio.loss_gate.max_drawdown_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -1189,9 +1189,9 @@ RESERVED_CLI_ARGS = {
             "when market orders are allowed; this is not a live slippage cap."
         ),
     },
-    "bot.portfolio.loss_gate.max_drawdown_ratio": {
-        "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_ratio"],
+    "bot.portfolio.loss_gate.max_drawdown_fraction": {
+        "visible": ["--loss-gate-max-drawdown-fraction"],
+        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1389,9 +1389,9 @@ RESERVED_CLI_ARGS = {
             "effective coins and timestamp window for exact artifact replay."
         ),
     },
-    "backtest.maker_fee_override": {
-        "visible": ["--maker-fee-override"],
-        "hidden": ["--backtest.maker_fee_override", "--backtest_maker_fee_override"],
+    "backtest.maker_fee_override_fraction": {
+        "visible": ["--maker-fee-override-fraction"],
+        "hidden": ["--backtest.maker_fee_override_fraction", "--backtest_maker_fee_override_fraction"],
         "type": optional_float,
         "metavar": "FLOAT",
         "commands": {"backtest", "optimize"},
@@ -1399,11 +1399,11 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Override all backtest maker fees. Leave unset to use exchange-derived per-coin maker fees.",
+        "help": "Override all backtest maker fees as signed scale-one fractions (negative rebates allowed). Leave unset to use exchange-derived per-coin maker fees.",
     },
-    "backtest.taker_fee_override": {
-        "visible": ["--taker-fee-override"],
-        "hidden": ["--backtest.taker_fee_override", "--backtest_taker_fee_override"],
+    "backtest.taker_fee_override_fraction": {
+        "visible": ["--taker-fee-override-fraction"],
+        "hidden": ["--backtest.taker_fee_override_fraction", "--backtest_taker_fee_override_fraction"],
         "type": optional_float,
         "metavar": "FLOAT",
         "commands": {"backtest", "optimize"},
@@ -1411,7 +1411,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Override all backtest taker fees. Leave unset to use exchange-derived per-coin taker fees.",
+        "help": "Override all backtest taker fees as signed scale-one fractions (negative rebates allowed). Leave unset to use exchange-derived per-coin taker fees.",
     },
     "backtest.starting_balance": {
         "visible": ["--starting-balance", "-sb"],
@@ -1521,12 +1521,10 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimize Common"},
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
-    "optimize.pymoo.shared.mutation_prob": {
-        "visible": ["--optimize.pymoo.shared.mutation_prob"],
+    "optimize.pymoo.shared.mutation_probability": {
+        "visible": ["--optimize.pymoo.shared.mutation_probability"],
         "hidden": [
-            "--optimize_pymoo_shared_mutation_prob",
-            "--optimize.pymoo.shared.mutation_prob_var",
-            "--optimize_pymoo_shared_mutation_prob_var",
+            "--optimize_pymoo_shared_mutation_probability",
             "-psmpv",
         ],
         "type": str,
@@ -1539,7 +1537,7 @@ RESERVED_CLI_ARGS = {
 # Keep these convenience aliases stable across config grouping changes.
 for _pside in ("long", "short"):
     for _param, _acronym, _help in (
-        ("total_wallet_exposure_limit", "twel", "Total wallet exposure limit"),
+        ("total_wallet_exposure_limit_ratio", "twel", "Total wallet exposure limit ratio"),
         ("max_positions", "np", "Target number of concurrent position slots"),
     ):
         _key = f"bot.{_pside}.risk.{_param}"
@@ -1555,7 +1553,7 @@ for _pside in ("long", "short"):
 
 # Optimizer shortcuts set search bounds rather than live/backtest bot values.
 for _pside in ("long", "short"):
-    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit"
+    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit_ratio"
     RESERVED_CLI_ARGS[_key] = {
         "visible": [f"--{_key}"],
         "command_aliases": {"optimize": [f"-{_pside[0]}twel"]},
@@ -1567,7 +1565,7 @@ for _pside in ("long", "short"):
         "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
     }
 
-for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_ratio", "bot.portfolio.hsl.scope"):
+for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_fraction", "bot.portfolio.hsl.scope"):
     FIELD_RUNTIME_RULES[_path]["owner"] = "bot"
 FIELD_RUNTIME_RULES["bot.portfolio.loss_gate.memory_ema_span_minutes"] = deepcopy(
     FIELD_RUNTIME_RULES["bot.portfolio.unstuck.memory_ema_span_minutes"]
@@ -1600,7 +1598,7 @@ RESERVED_CLI_ARGS["bot.global.universe.approved_coins"] = {
 # optimizer projects these settings separately from its numeric search genes.
 for _path, _group in (
     ("bot.portfolio.strategy_kind", "Behavior"),
-    ("bot.portfolio.warmup.span_multiplier", "Backtest Runtime"),
+    ("bot.portfolio.warmup.activation_span_fraction", "Backtest Runtime"),
     ("bot.portfolio.warmup.max_minutes", "Backtest Runtime"),
     ("bot.long.universe.filter_by_min_effective_cost", "Coin Selection"),
     ("bot.short.universe.filter_by_min_effective_cost", "Coin Selection"),
@@ -1739,14 +1737,14 @@ CLI_HELP_OVERRIDES = {
         "Minutes per saved balance/equity sample. 1 keeps per-minute series; "
         "higher values thin balance_and_equity.csv.gz and related plots."
     ),
-    "backtest.btc_collateral_cap": (
-        "Target and ceiling share of equity held as BTC collateral. 0 keeps "
+    "backtest.btc_collateral_target_ratio": (
+        "Target BTC collateral value divided by account equity. 0 keeps "
         "USD-only; 1 targets fully BTC collateral; values >1 allow leveraged "
         "BTC collateral."
     ),
-    "backtest.btc_collateral_ltv_cap": (
+    "backtest.max_usd_debt_to_equity_ratio": (
         "Optional USD-debt/equity cap while topping up BTC collateral. Leave "
-        "unset for no LTV cap."
+        "null or nonpositive for no debt/equity cap."
     ),
     "backtest.compress_cache": (
         "Compress generated backtest cache artifacts to save disk. Set n/false "
@@ -1781,7 +1779,7 @@ CLI_HELP_OVERRIDES = {
         "Normalize combined-exchange volume with robust complete-day, cross-coin "
         "estimates. Disable to preserve each selected exchange's native volume."
     ),
-    "backtest.equity_floor_ratio": (
+    "backtest.equity_floor_fraction": (
         "Early-stop equity floor as a fraction of starting balance. Must "
         "satisfy 0 <= x < 1; 0.05 stops once equity is <= 5 percent of start."
     ),
@@ -1815,10 +1813,10 @@ for _pside in ("long", "short"):
                 "Default false; allows coin overrides in coin HSL scope."
             ),
             f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
-            f"bot.{_pside}.hsl.drawdown_ratio_threshold": (
+            f"bot.{_pside}.hsl.drawdown_threshold_fraction": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
             ),
-            f"bot.{_pside}.hsl.drawdown_ratio_ema_span_minutes": (
+            f"bot.{_pside}.hsl.drawdown_fraction_ema_span_minutes": (
                 f"EMA span, in minutes, for the {_pside} HSL drawdown signal."
             ),
             f"bot.{_pside}.hsl.cooldown_after_red_minutes": (
@@ -1848,7 +1846,7 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.risk.max_positions": (
                 f"Target number of concurrent {_pside} position slots."
             ),
-            f"bot.{_pside}.risk.total_wallet_exposure_limit": (
+            f"bot.{_pside}.risk.total_wallet_exposure_limit_ratio": (
                 f"Total wallet exposure limit for the {_pside} side."
             ),
         }
@@ -1888,7 +1886,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.recovery.exchange_symbol_unavailable_cooldown_hours",
         "live.account.leverage",
         "bot.portfolio.execution.market_orders_allowed",
-        "bot.portfolio.loss_gate.max_drawdown_ratio",
+        "bot.portfolio.loss_gate.max_drawdown_fraction",
         "live.execution.limit_order_create_max_market_distance_fraction",
         "live.execution.order_match_tolerance_fraction",
         "live.execution.order_replacement_churn_gate_activation_count",
@@ -1928,17 +1926,17 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
     runtime = {
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
-        "backtest.btc_collateral_cap",
-        "backtest.btc_collateral_ltv_cap",
+        "backtest.btc_collateral_target_ratio",
+        "backtest.max_usd_debt_to_equity_ratio",
         "backtest.candle_interval_minutes",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
         "backtest.gap_tolerance_ohlcvs_minutes",
-        "backtest.maker_fee_override",
+        "backtest.maker_fee_override_fraction",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
-        "backtest.taker_fee_override",
+        "backtest.taker_fee_override_fraction",
     }
     output = {
         "backtest.base_dir",
@@ -1981,16 +1979,16 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
     backtest_runtime = {
         "backtest.reducer.default",
         "backtest.balance_sample_divider",
-        "backtest.btc_collateral_cap",
-        "backtest.btc_collateral_ltv_cap",
+        "backtest.btc_collateral_target_ratio",
+        "backtest.max_usd_debt_to_equity_ratio",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
         "backtest.gap_tolerance_ohlcvs_minutes",
-        "backtest.maker_fee_override",
+        "backtest.maker_fee_override_fraction",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
-        "backtest.taker_fee_override",
+        "backtest.taker_fee_override_fraction",
         "backtest.volume_normalization",
     }
     optimize_common = {
@@ -2352,13 +2350,13 @@ def add_arguments_recursively(
             elif nullable_float_override:
                 type_ = optional_float
             elif value is None:
-                if full_name == "backtest.btc_collateral_ltv_cap":
+                if full_name == "backtest.max_usd_debt_to_equity_ratio":
                     type_ = optional_float
                 else:
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
-            elif full_name.endswith((".memory_ema_span_minutes", ".drawdown_ratio_ema_span_minutes")):
+            elif full_name.endswith((".memory_ema_span_minutes", ".drawdown_fraction_ema_span_minutes")):
                 type_ = normalize_memory_ema_span_minutes
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float

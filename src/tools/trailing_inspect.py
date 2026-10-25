@@ -174,8 +174,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     entry = _require_mapping(strategy.get("entry"), "strategy.entry")
     close = _require_mapping(strategy.get("close"), "strategy.close")
     total_wallet_exposure_limit = _finite_float(
-        risk.get("total_wallet_exposure_limit"),
-        f"bot.{pside}.risk.total_wallet_exposure_limit",
+        risk.get("total_wallet_exposure_limit_ratio"),
+        f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
     )
     max_positions = int(_finite_float(risk.get("max_positions"), f"bot.{pside}.risk.max_positions"))
     forced_mode_raw = str(live.get("modes", {}).get(pside, "") or "").strip()
@@ -248,7 +248,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
         "loss_gate_max_drawdown_ratio": _finite_float(
-            loss_gate["max_drawdown_ratio"], "bot.portfolio.loss_gate.max_drawdown_ratio"
+            loss_gate["max_drawdown_fraction"], "bot.portfolio.loss_gate.max_drawdown_fraction"
         ),
         "position_exposure_enforcer_enabled": bool(
             risk.get('position_exposure_enforcer', {}).get('enabled', False)
@@ -294,13 +294,13 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             entry.get("double_down_factor", 0.0), "entry.double_down_factor"
         ),
         "close_qty_fraction": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
-        "volatility_ema_span_minutes": _finite_float(
+        "log_range_ema_span_minutes": _finite_float(
             strategy.get("volatility_ema_span_1m", 0.0),
-            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_minutes"
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.log_range_ema_span_minutes"
         ),
-        "volatility_ema_span_1h_candles": _finite_float(
+        "log_range_ema_span_1h_candles": _finite_float(
             strategy.get("volatility_ema_span_1h", 0.0),
-            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_1h_candles"
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.log_range_ema_span_1h_candles"
         ),
     }
 
@@ -1614,9 +1614,9 @@ def render_overview(result: Mapping[str, Any]) -> str:
         lines.extend(f"  {comment}" for comment in classification["overall_comments"])
         if context:
             lines.append(
-                "  Volatility EMA spans: "
-                f"{context['volatility_ema_span_minutes']:g} minutes, "
-                f"{context['volatility_ema_span_1h_candles']:g} one-hour candles."
+                "  Log-range EMA spans: "
+                f"{context['log_range_ema_span_minutes']:g} minutes, "
+                f"{context['log_range_ema_span_1h_candles']:g} one-hour candles."
             )
         if side["overridden_parameters"]:
             lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))

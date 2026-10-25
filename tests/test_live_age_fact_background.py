@@ -24,7 +24,7 @@ def _bot(side="long", exchange="binance"):
     for pside in ("long", "short"):
         bot.config["bot"][pside]["enabled"] = pside == side
         bot.config["bot"][pside]["risk"].update(
-            max_positions=1, total_wallet_exposure_limit=1.0 if side == pside else 0.0,
+            max_positions=1, total_wallet_exposure_limit_ratio=1.0 if side == pside else 0.0,
         )
         bot.config["bot"][pside]["universe"]["minimum_coin_age_days"] = 7.25
     bot.exchange = exchange

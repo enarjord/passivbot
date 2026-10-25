@@ -24,7 +24,7 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     base = ["--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", mode]
     original = gpu_parity.fixture_inputs(args(*base))
     modified = gpu_parity.fixture_inputs(args(*base,
-        "--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "10000", "--hsl-memory-ema-span-minutes", "3600.0",
         "--unstuck-memory-ema-span-minutes", "5400.25",
         "--loss-gate-memory-ema-span-minutes", "7200.5",
@@ -35,8 +35,8 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
     for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
             [config["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else []):
-        assert policy["drawdown_ratio_threshold"] == .002
-        assert policy["drawdown_ratio_ema_span_minutes"] == 2.5
+        assert policy["drawdown_threshold_fraction"] == .002
+        assert policy["drawdown_fraction_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
         assert policy["cooldown_after_red_minutes"] == 10000
     expected = original[1].copy()
@@ -50,9 +50,9 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
 
 
 @pytest.mark.parametrize("flags", [
-    ("--hsl-red-threshold", "0"), ("--hsl-red-threshold", "1.1"),
-    ("--hsl-drawdown-ratio-ema-span-minutes", ".9"), ("--hsl-drawdown-ratio-ema-span-minutes", "nan"),
-    ("--hsl-drawdown-ratio-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
+    ("--hsl-drawdown-threshold-fraction", "0"), ("--hsl-drawdown-threshold-fraction", "1.1"),
+    ("--hsl-drawdown-fraction-ema-span-minutes", ".9"), ("--hsl-drawdown-fraction-ema-span-minutes", "nan"),
+    ("--hsl-drawdown-fraction-ema-span-minutes", "1e300"), ("--hsl-drawdown-threshold-fraction", "1e-300"),
     ("--hsl-cooldown-minutes", "-1"), ("--hsl-cooldown-minutes", "inf"),
     ("--hsl-memory-ema-span-minutes", ".9"), ("--hsl-memory-ema-span-minutes", "1e10"),
     ("--price-shock", "2", "64", ".7"), ("--price-shock", "0", "128", ".7"),
@@ -85,7 +85,7 @@ def test_shocked_fixture_rejects_final_gpu_encoding_before_simulation(monkeypatc
 
 
 @pytest.mark.parametrize("flags", [
-    ("--hsl-red-threshold", ".05"), ("--hsl-drawdown-ratio-ema-span-minutes", "30"),
+    ("--hsl-drawdown-threshold-fraction", ".05"), ("--hsl-drawdown-fraction-ema-span-minutes", "30"),
     ("--hsl-cooldown-minutes", "30"), ("--hsl-memory-ema-span-minutes", "1"),
     ("--price-shock", "0", "64", "1"),
 ])
@@ -102,15 +102,15 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
-        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == .002
+        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
     assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
-        "--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--price-shock", "0", "64", ".7"]) == 1
     recipe = json.loads(capsys.readouterr().out)["fixture_recipe"]
-    assert recipe["hsl_red_threshold"] == .002
-    assert recipe["hsl_drawdown_ratio_ema_span_minutes"] == 2.5
+    assert recipe["hsl_drawdown_threshold_fraction"] == .002
+    assert recipe["hsl_drawdown_fraction_ema_span_minutes"] == 2.5
     assert recipe["hsl_cooldown_minutes"] == 30
     assert recipe["hsl_memory_ema_span_minutes"] == 1440.0
     assert recipe["unstuck_memory_ema_span_minutes"] == 1440.0
@@ -446,10 +446,10 @@ def test_prepared_snapshot_roundtrip_and_coin_order_guard(tmp_path):
     prepared = gpu_parity.prepared_inputs(options)
     np.testing.assert_array_equal(prepared[1], candles)
     assert prepared[0]["backtest"]["coins"] == config["backtest"]["coins"]
-    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit": 0.25}
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit_ratio": 0.25}
     config_file.write_text(json.dumps(config))
     prepared = gpu_parity.prepared_inputs(options)
-    assert prepared[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.25
+    assert prepared[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.25
     np.savez(dataset, hlcvs=candles, timestamps=timestamps, btc=btc, coins=np.array(["COIN01", "COIN00"]))
     with pytest.raises(ValueError, match="coin order"):
         gpu_parity.prepared_inputs(options)
@@ -467,8 +467,8 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys, tmp_
     monkeypatch.setattr(gpu_parity, "run_comparison", failed)
     saved = tmp_path / "failed.json"
     assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128",
-        "--hsl", "portfolio", "--hsl-red-threshold", ".002",
-        "--hsl-drawdown-ratio-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "10000",
+        "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".002",
+        "--hsl-drawdown-fraction-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "10000",
         "--price-shock", "0", "64", ".7", "--price-shock", "1", "96", "1.3",
         "--report", str(saved)]) == 2
     report = json.loads(capsys.readouterr().out)
@@ -476,7 +476,7 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys, tmp_
     assert report["error"]["message"] == "device launch failed"
     assert json.loads(saved.read_text()) == report
     assert report["fixture_recipe"]["price_shocks"] == [[0, 64, .7], [1, 96, 1.3]]
-    assert report["fixture_recipe"]["hsl_drawdown_ratio_ema_span_minutes"] == 2.5
+    assert report["fixture_recipe"]["hsl_drawdown_fraction_ema_span_minutes"] == 2.5
     assert report["fixture_recipe"]["hsl_cooldown_minutes"] == 10000
 
 

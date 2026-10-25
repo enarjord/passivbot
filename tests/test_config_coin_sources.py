@@ -15,8 +15,8 @@ def _base_config():
             "end_date": "2025-01-01",
             "start_date": "2024-01-01",
             "exchanges": ["binance"],
-            "btc_collateral_cap": 1.0,
-            "btc_collateral_ltv_cap": None,
+            "btc_collateral_target_ratio": 1.0,
+            "max_usd_debt_to_equity_ratio": None,
             "gap_tolerance_ohlcvs_minutes": 120,
             "suite_enabled": False,
             "scenarios": []
@@ -26,7 +26,7 @@ def _base_config():
                 "enabled": True,
                 "risk": {
                     "max_positions": 4,
-                    "total_wallet_exposure_limit": 1.0
+                    "total_wallet_exposure_limit_ratio": 1.0
                 },
                 "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],
@@ -37,7 +37,7 @@ def _base_config():
                 "enabled": False,
                 "risk": {
                     "max_positions": 0,
-                    "total_wallet_exposure_limit": 0.0
+                    "total_wallet_exposure_limit_ratio": 0.0
                 },
                 "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],
@@ -45,7 +45,7 @@ def _base_config():
                 }
             },
             "portfolio": {"warmup": {
-                    "span_multiplier": 0.2,
+                    "activation_span_fraction": 0.2,
                     "max_minutes": None
                 }}, "global": {"universe": {}}
         },

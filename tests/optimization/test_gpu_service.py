@@ -110,17 +110,17 @@ def _complete_hsl_payload(payload):
 
 def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pins():
     payload = SimpleNamespace(bot_params_list=[{
-        "long": {"hsl_red_threshold": 0.27},
+        "long": {"hsl_drawdown_threshold_fraction": 0.27},
         "short": {},
     }])
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
-    assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
-    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_ratio_threshold"]
-    assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
-    assert native["portfolio"]["red_threshold"] == default_threshold
+    assert native["coins"]["BTC"][0]["drawdown_threshold_fraction"] == 0.27
+    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_threshold_fraction"]
+    assert native["coins"]["BTC"][1]["drawdown_threshold_fraction"] == default_threshold
+    assert native["portfolio"]["drawdown_threshold_fraction"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
-        assert "drawdown_ratio_threshold" not in policy
+        assert "red_threshold" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
@@ -1046,7 +1046,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = True
-        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
+        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit_ratio': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
         # Construction must retain the fused shared-account path when both
         # directional surfaces participate in global auto-unstuck selection.
         config["bot"][side]["unstuck"]["enabled"] = True
@@ -1487,8 +1487,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         {
             "hsl_enabled": True,
             "hsl_scale_budget_with_excess_allowance": False,
-            "hsl_red_threshold": 0.2,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_threshold_fraction": 0.2,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             "hsl_cooldown_minutes_after_red": 120.0,
             "hsl_memory_ema_span_minutes": 43200.5,
             "n_positions": 4,
@@ -1500,8 +1500,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
     assert packed == {
         "hsl_enabled": 1.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 60.0,
         "hsl_cooldown_ms_lo": 7200000.0,
         "hsl_memory_ema_span_minutes": 43200.5,
         "hsl_signal_mode": 2.0,
@@ -1519,8 +1519,8 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
             "hsl_enabled": False,
             "hsl_scale_budget_with_excess_allowance": False,
             "hsl_memory_ema_span_minutes": 43200.0,
-            "hsl_red_threshold": 0.1,
-            "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+            "hsl_drawdown_threshold_fraction": 0.1,
+            "hsl_drawdown_fraction_ema_span_minutes": 1.0,
             "hsl_cooldown_minutes_after_red": 0.0,
             "hsl_slot_count": 1,
         },
@@ -1759,7 +1759,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "risk": {
                             "we_excess_allowance_fraction": 0.25,
                         },
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                         "unstuck": {
                             "ema_span_0_minutes": 17.25,
                             "ema_span_1_minutes": 211.75,
@@ -1999,7 +1999,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
                 "bot": {
                     "long": {
                         "strategy": {"ema_anchor": {"offset_fraction": 0.25}},
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                     },
                     "short": {
                         "strategy": {"ema_anchor": {"offset_fraction": 0.5}},
@@ -2099,8 +2099,8 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     strategy = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
     effective_hsl = {
         "hsl_enabled": False,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 5.5,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 5.5,
         "hsl_memory_ema_span_minutes": 7.5,
         "hsl_scale_budget_with_excess_allowance": True,
         "hsl_cooldown_minutes_after_red": 12.5,
@@ -2116,8 +2116,8 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     _complete_hsl_payload(payload)
     hsl_patch = {
         "enabled": False,
-        "drawdown_ratio_threshold": 0.2,
-        "drawdown_ratio_ema_span_minutes": 5.5,
+        "drawdown_threshold_fraction": 0.2,
+        "drawdown_fraction_ema_span_minutes": 5.5,
         "memory_ema_span_minutes": 7.5,
         "scale_budget_with_excess_allowance": True,
         "cooldown_after_red_minutes": 12.5,
@@ -2293,7 +2293,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                                 'threshold_ratio': 0.8,
                             },
                         },
-                        "wallet_exposure_limit": 0.4,
+                        "wallet_exposure_limit_ratio": 0.4,
                         "unstuck": {
                             "enabled": True,
                             "ema_gating_enabled": False,
@@ -2370,12 +2370,12 @@ def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
         "bot": {
             "long": {
                 "enabled": True,
-                "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1},
+                "risk": {"total_wallet_exposure_limit_ratio": 1.0, "max_positions": 1},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
                 "enabled": True,
-                "risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.0, "max_positions": 0},
                 "universe": {"approved_coins": ["BTC"]},
             },
         },

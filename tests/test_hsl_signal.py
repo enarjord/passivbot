@@ -39,7 +39,7 @@ def request(*, mode="coin", side="long", slow=3.0, fast=3.0,
             )],
         ),
         slots=1, scale_budget_with_excess_allowance=False, exposure_budget=None,
-        memory_ema_span_minutes=slow, drawdown_ratio_ema_span_minutes=fast, threshold=0.01,
+        memory_ema_span_minutes=slow, drawdown_fraction_ema_span_minutes=fast, drawdown_threshold_fraction=0.01,
         cooldown_ms=120_000,
         budget_observations=[
             dict(timestamp=0,order=-1,balance=1000.0,slots=1,
@@ -57,6 +57,17 @@ def request(*, mode="coin", side="long", slow=3.0, fast=3.0,
 
 def evaluate(native, value):
     return json.loads(native.hsl_v9_evaluate(json.dumps(value,allow_nan=False)))
+
+
+@pytest.mark.parametrize("canonical,retired", [
+    ("drawdown_threshold_fraction", "threshold"),
+    ("drawdown_fraction_ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
+])
+def test_native_hsl_request_rejects_retired_quantity_names(native, canonical, retired):
+    value = request()
+    value[retired] = value.pop(canonical)
+    with pytest.raises(ValueError, match=retired):
+        evaluate(native, value)
 
 
 @pytest.mark.parametrize("mode",["coin","pside","portfolio"])
@@ -85,8 +96,8 @@ def test_retired_risk_exports_are_absent(native):
         assert not hasattr(native,name)
 
 
-@pytest.mark.parametrize("key,value",[("drawdown_ratio_ema_span_minutes",0.5),("memory_ema_span_minutes",1e12),
-                                      ("threshold",-1),("cooldown_ms",-1)])
+@pytest.mark.parametrize("key,value",[("drawdown_fraction_ema_span_minutes",0.5),("memory_ema_span_minutes",1e12),
+                                      ("drawdown_threshold_fraction",-1),("cooldown_ms",-1)])
 def test_malformed_policy_is_a_producer_error(native,key,value):
     payload=request();payload[key]=value
     with pytest.raises(ValueError):

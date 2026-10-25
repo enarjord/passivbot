@@ -93,7 +93,7 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
     risk = side_config.get("risk")
     if isinstance(risk, Mapping) and "max_positions" in risk:
         count = risk["max_positions"]
-        exposure = risk.get("total_wallet_exposure_limit")
+        exposure = risk.get("total_wallet_exposure_limit_ratio")
         # This tool also reads historical result artifacts. Their old fields
         # must not override an explicitly authored canonical policy.
         for path, alias, canonical in (
@@ -116,7 +116,7 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
         if n_positions_raw is None:
             n_positions_raw = risk.get("n_positions")
         if exposure_limit_raw is None:
-            exposure_limit_raw = risk.get("total_wallet_exposure_limit")
+            exposure_limit_raw = risk.get("total_wallet_exposure_limit_ratio")
     return n_positions_raw, exposure_limit_raw
 
 

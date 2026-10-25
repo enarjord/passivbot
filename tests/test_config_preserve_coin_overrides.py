@@ -14,7 +14,7 @@ from config_utils import format_config, get_template_config
         {
             "DOGEUSDT": {
                 "live": {"modes": {"long": "manual"}},
-                "bot": {"long": {"wallet_exposure_limit": 0.25}},
+                "bot": {"long": {"wallet_exposure_limit_ratio": 0.25}},
             },
         },
         {

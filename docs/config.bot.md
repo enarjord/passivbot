@@ -35,17 +35,17 @@ Throughout:
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
-* `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
+* `wel_base` abbreviates `wallet_exposure_limit_ratio` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`max_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 * Excess allowance is always bounded:
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
-  max(0, total_wallet_exposure_limit / wel_base - 1))`.
+  max(0, total_wallet_exposure_limit_ratio / wel_base - 1))`.
   If `wel_base` is non-positive/non-finite, Passivbot treats the effective
-  allowance and allowed exposure as zero. If `total_wallet_exposure_limit` is
+  allowance and allowed exposure as zero. If `total_wallet_exposure_limit_ratio` is
   non-positive/non-finite, Passivbot grants no excess headroom.
 * `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never
-  expands a base WEL past the side's configured `total_wallet_exposure_limit`.
+  expands a base WEL past the side's configured `total_wallet_exposure_limit_ratio`.
   An authored base WEL already above TWEL receives no excess headroom; the headroom
   clamp does not reduce that authored base itself.
 
@@ -68,7 +68,7 @@ gates closed.
 Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0_minutes`
 and `entry.ema_span_1_minutes`. They govern entry gating, forager entry readiness, and the one-way
 entry tie-break. Ordinary closes do not consume this band. The shared
-`volatility_ema_span_minutes` and `volatility_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
+`log_range_ema_span_minutes` and `log_range_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
 
 The explicit released-v8 converter moves old strategy-root spans into canonical `entry`
 paths across values, bounds and overrides, preserving floating-point precision and rejecting
@@ -80,15 +80,15 @@ each coin's effective entry spans during optimization.
 ```text
 alpha(span)         = 2 / (span + 1)
 entry_threshold_vol_term =
-    volatility_ema_1h * entry.threshold_volatility_1h_weight
-  + volatility_ema_1m * entry.threshold_volatility_1m_weight
-entry_threshold_we_term = (wel / wel_base) * entry.threshold_we_weight
+    log_range_ema_1h * entry.threshold_log_range_1h_coefficient
+  + log_range_ema_1m * entry.threshold_log_range_1m_coefficient
+entry_threshold_we_term = (wel / wel_allowed) * entry.threshold_exposure_ratio_coefficient
 entry_threshold_multiplier = max(1, 1 + entry_threshold_vol_term + entry_threshold_we_term)
 
 entry_retracement_vol_term =
-    volatility_ema_1h * entry.retracement_volatility_1h_weight
-  + volatility_ema_1m * entry.retracement_volatility_1m_weight
-entry_retracement_we_term = (wel / wel_base) * entry.retracement_we_weight
+    log_range_ema_1h * entry.retracement_log_range_1h_coefficient
+  + log_range_ema_1m * entry.retracement_log_range_1m_coefficient
+entry_retracement_we_term = (wel / wel_allowed) * entry.retracement_exposure_ratio_coefficient
 entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_retracement_we_term)
 
 initial_price(pside) =
@@ -117,15 +117,17 @@ if entry.ema_gate_mode gates re-entries:
     next_entry_price(long)  = min(next_entry_price(long), EMA_low * (1 - entry_initial_ema_dist))
     next_entry_price(short) = max(next_entry_price(short), EMA_high * (1 + entry_initial_ema_dist))
 
-next_entry_qty(last_fill_qty) =
-    last_fill_qty * entry.double_down_factor
+next_entry_qty(pos.size) =
+    max(min_entry_qty,
+        initial_entry_qty_at_reentry_price,
+        abs(pos.size) * entry.reentry_qty_multiplier)
 ```
 
 * Re-entry orders are generated until the wallet exposure implied by the next order would exceed
   `wel_allowed` (base WEL plus the TWEL-capped excess allowance, plus safeguards).
-* `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
-  `< 1` still increase size if the preceding fill was larger than the remaining gap to the
-  exposure cap.
+* `entry.reentry_qty_multiplier` scales the additional re-entry quantity from the absolute
+  current position quantity. One adds a quantity equal to the current position, before the
+  minimum/initial sizing floors, exchange rounding, and exposure cap.
 * When `entry.retracement_base_fraction <= 0`, re-entries are passive recursive limit orders.
 * When `entry.retracement_base_fraction > 0`, the threshold condition must be reached first and the
   order is emitted after retracement confirmation.
@@ -145,15 +147,15 @@ state from 1m OHLCVs and does not use exchange-native trailing order types.
 ```text
 close_threshold =
     close.threshold_base_fraction
-  + (wel / wel_base) * close.threshold_we_weight
-  + volatility_ema_1h * close.threshold_volatility_1h_weight
-  + volatility_ema_1m * close.threshold_volatility_1m_weight
+  + (wel / wel_allowed) * close.threshold_exposure_ratio_coefficient
+  + log_range_ema_1h * close.threshold_log_range_1h_coefficient
+  + log_range_ema_1m * close.threshold_log_range_1m_coefficient
 
 close_retracement_multiplier =
     max(1,
         1
-      + volatility_ema_1h * close.retracement_volatility_1h_weight
-      + volatility_ema_1m * close.retracement_volatility_1m_weight)
+      + log_range_ema_1h * close.retracement_log_range_1h_coefficient
+      + log_range_ema_1m * close.retracement_log_range_1m_coefficient)
 
 close_retracement =
     max(0, close.retracement_base_fraction) * close_retracement_multiplier
@@ -170,10 +172,10 @@ else:
         low_since_high <= high_since_open * (1 - close_retracement)
 ```
 
-Close orders are recursive when `close.threshold_we_weight != 0`: compute a slice up to
+Close orders are recursive when `close.threshold_exposure_ratio_coefficient != 0`: compute a slice up to
 `close.qty_fraction`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
 exhausted or the close ladder is complete. If `close.retracement_base_fraction <= 0` and
-`close.threshold_we_weight == 0`, all recursive closes would have the same price, so Rust emits one
+`close.threshold_exposure_ratio_coefficient == 0`, all recursive closes would have the same price, so Rust emits one
 full-position close instead of redundant same-price slices. The removed v7
 `close_grid_markup_start` / `close_grid_markup_end` linear TP grid is intentionally not part of the
 V8 strategy contract.
@@ -234,7 +236,7 @@ remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
 create no negative loss credit. The global `bot.portfolio.loss_gate` consumes the same ordered net fills with its own
 `memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
-`p = max_drawdown_ratio`, without TWEL multiplication. Each enabled filter consumes a fill
+`p = max_drawdown_fraction`, without TWEL multiplication. Each enabled filter consumes a fill
 once while the economic ledger records it once. Old rolling windows and loss percentages require
 explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
@@ -246,7 +248,7 @@ With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fractio
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
-effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)
+effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)
 wallet_exposure = abs(position_size) * position_price * c_mult / balance
 eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
 ```
@@ -339,7 +341,7 @@ unstuck, this trim is not gated by EMA distance or loss allowance.
 
 The total exposure enforcer repairs same-side portfolio exposure when the sum of
 all open same-side exchange positions exceeds
-`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`. Manual and
+`total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio`. Manual and
 panic positions count toward this same-side exposure measurement, but they are
 not repair candidates and never receive TWEL auto-reduce orders. For each
 position:
@@ -349,7 +351,7 @@ if not total_exposure_enforcer.enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio
+overweight_i       = total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio
                      / max_positions
 overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```

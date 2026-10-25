@@ -16,7 +16,7 @@ def options(*values):
 
 
 @pytest.mark.parametrize("flags", [
-    ("--hsl-red-threshold", "nan"), ("--hsl-drawdown-ratio-ema-span-minutes", "0"),
+    ("--hsl-drawdown-threshold-fraction", "nan"), ("--hsl-drawdown-fraction-ema-span-minutes", "0"),
     ("--hsl-cooldown-minutes", "-1"), ("--hsl-memory-ema-span-minutes", "0"),
     ("--price-shock", "4", "64", ".7"), ("--price-shock", "0", "10080", ".7"),
     ("--price-shock", "0", "64", "inf"),
@@ -43,8 +43,8 @@ def test_cohort_accepts_cooldown_just_inside_rust_timestamp_range():
 
 
 @pytest.mark.parametrize("flags", [
-    ("--hsl-drawdown-ratio-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
-    ("--hsl-drawdown-ratio-ema-span-minutes", "1e10"), ("--hsl-memory-ema-span-minutes", "1e10"),
+    ("--hsl-drawdown-fraction-ema-span-minutes", "1e300"), ("--hsl-drawdown-threshold-fraction", "1e-300"),
+    ("--hsl-drawdown-fraction-ema-span-minutes", "1e10"), ("--hsl-memory-ema-span-minutes", "1e10"),
     ("--price-shock", "0", "64", "1e40"),
     ("--price-shock", "0", "64", "1e-100"),
     ("--price-shock", "0", "64", "1e20", "--price-shock", "0", "64", "1e20"),
@@ -61,16 +61,16 @@ def test_gpu_encoding_rejected_before_benchmark(monkeypatch, flags):
 
 
 def test_gpu_policy_encoding_accepts_decaying_span_and_subnormal_threshold():
-    args = options("--hsl-drawdown-ratio-ema-span-minutes", "65536.5",
-                   "--hsl-red-threshold", str(2**-149))
-    assert args.hsl_drawdown_ratio_ema_span_minutes == 65536.5
-    assert args.hsl_red_threshold == 2**-149
+    args = options("--hsl-drawdown-fraction-ema-span-minutes", "65536.5",
+                   "--hsl-drawdown-threshold-fraction", str(2**-149))
+    assert args.hsl_drawdown_fraction_ema_span_minutes == 65536.5
+    assert args.hsl_drawdown_threshold_fraction == 2**-149
 
 
 def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     import numpy as np
     flags = ["--hsl", "portfolio", "--bars", "128", "--coins", "2", "--sides", "both",
-             "--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+             "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
              "--unstuck-memory-ema-span-minutes", "15.5", "--loss-gate-memory-ema-span-minutes", "31.25",
              "--hsl-cooldown-minutes", "10000", "--price-shock", "0", "64", ".7"]
     args = options("--candidates", "2", *flags)
@@ -86,8 +86,8 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     assert len(configs) == len(parameters) == 2
     for config in configs:
         assert config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
-        assert config["bot"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == .002
-        assert config["bot"]["portfolio"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
+        assert config["bot"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == .002
+        assert config["bot"]["portfolio"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
         assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 15.5
         assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 31.25
     assert args.price_shocks == [[0, 64, .7]]
@@ -246,12 +246,12 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
     monkeypatch.setattr(benchmark, "run_benchmark", fail)
     report_path = tmp_path / "report.json"
     assert benchmark.main(["--report", str(report_path), "--compact",
-        "--hsl", "portfolio", "--hsl-red-threshold", ".002",
+        "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".002",
         "--price-shock", "0", "64", ".7"]) == 2
     text = capsys.readouterr().out
     assert report_path.read_text() == text
     assert json.loads(text)["status"] == "execution_failed"
-    assert json.loads(text)["recipe"]["hsl_red_threshold"] == .002
+    assert json.loads(text)["recipe"]["hsl_drawdown_threshold_fraction"] == .002
     assert json.loads(text)["recipe"]["price_shocks"] == [[0, 64, .7]]
     assert "report" not in json.loads(text)["recipe"]
 
@@ -379,8 +379,8 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     path.write_text(json.dumps({"strategy_eq_recovery_days_p95": {"absolute": 0, "relative": 0}}))
     args = options("--strategies", strategy, "--bars", "512", "--coins", "2",
                    "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto",
-                   "--hsl", hsl, "--hsl-red-threshold", ".002",
-                   "--hsl-drawdown-ratio-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "1000",
+                   "--hsl", hsl, "--hsl-drawdown-threshold-fraction", ".002",
+                   "--hsl-drawdown-fraction-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "1000",
                    "--price-shock", "0", "256", ".7", "--price-shock", "1", "320", "1.3",
                    "--metrics", "strategy_eq_recovery_days_p95", "volume_pct_per_day_avg", "adg_btc",
                    "--limit", "fills_gap_p95_hours", "greater_than", "1",

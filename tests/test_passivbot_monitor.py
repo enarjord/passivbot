@@ -4275,7 +4275,7 @@ def test_unstuck_status_event_emits_structured_summary():
                 "status": "ok",
                 "allowance": -12.3,
                 "peak": 1000.0,
-                "pct_from_peak": -1.2,
+                "change_from_peak_percent": -1.2,
                 "loss_allowance_pct": 0.01,
                 "override_loss_allowance_pcts": {
                     "ETH/USDT:USDT": 0.004,
@@ -4443,7 +4443,7 @@ def test_unstuck_selection_event_emits_structured_summary():
     assert event.data["changed"] is True
     assert event.data["entry_price"] == pytest.approx(1.0)
     assert event.data["current_price"] == pytest.approx(1.1)
-    assert event.data["price_diff_pct"] == pytest.approx(10.0)
+    assert event.data["price_change_percent"] == pytest.approx(10.0)
     assert event.data["allowance"] == pytest.approx(-12.3)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -5254,7 +5254,7 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
         "reduce_only": False,
         "custom_id": "raw-client-order-id-123",
         "id": "raw-exchange-order-id-456",
-        "_delta": {"price_pct_diff": 0.001, "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": 0.001, "qty_difference_percent": 0.002},
     }
     result = {
         "id": "raw-result-order-id-789",
@@ -5565,7 +5565,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
         "raw_payload": "RAW_CONNECTOR_SECRET",
         "_context": "/private/operator/path",
         "_reason": "RAW_CONNECTOR_REASON_SECRET",
-        "_delta": {"price_pct_diff": float("inf"), "qty_pct_diff": 0.002},
+        "_delta": {"price_difference_percent": float("inf"), "qty_difference_percent": 0.002},
     }
     bot._execution_connector_call_context = {
         "action": "create",
@@ -5594,7 +5594,7 @@ def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     assert event.data["connector_route"] == "base"
     assert len(event.data["order_type"]) == 64
     assert len(event.data["pb_order_type"]) == 64
-    assert event.data["delta"] == {"qty_pct_diff": 0.002}
+    assert event.data["delta"] == {"qty_difference_percent": 0.002}
     rendered = json.dumps(event.to_dict(), sort_keys=True)
     assert "RAW_CONNECTOR_SECRET" not in rendered
     assert "RAW_CONNECTOR_REASON_SECRET" not in rendered
@@ -6819,7 +6819,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "status": "ok",
                     "allowance": -20.0,
                     "peak": 1100.0,
-                    "pct_from_peak": -9.1,
+                    "change_from_peak_percent": -9.1,
                     "loss_allowance_pct": 0.02,
                     "override_loss_allowance_pcts": {"BTC/USDT:USDT": 0.005},
                     "override_allowances": {"BTC/USDT:USDT": -44.75},

@@ -89,9 +89,9 @@ def test_actual_gpu_asymmetric_replay_matches_native_counts(monkeypatch, kind, p
         strategy = bot["strategy"][kind]
         strategy["ema_span_0_minutes"], strategy["ema_span_1_minutes"] = 2.0, 3.0
         if kind == "ema_anchor":
-            strategy.update(base_qty_fraction=0.001, offset_fraction=0.0, entry_double_down_factor=0.0)
+            strategy.update(base_qty_fraction=0.001, offset_fraction=0.0, entry_qty_exposure_coefficient=0.0)
         else:
-            strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, double_down_factor=0.0)
+            strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, reentry_qty_multiplier=0.0)
     for coin, market in markets.items():
         if coin != "__meta__":
             market["min_cost"] = 100.0

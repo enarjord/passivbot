@@ -34,23 +34,23 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            max_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     block.update(
         enabled=True,
-        drawdown_ratio_threshold=0.06,
-        drawdown_ratio_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.06,
+        drawdown_fraction_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
     set_risk_memory_spans(cfg, 288.0)
     if case == "entry":
-        block["drawdown_ratio_threshold"] = 0.5
+        block["drawdown_threshold_fraction"] = 0.5
         for pside in ("long", "short"):
             cfg["bot"][pside]["unstuck"]["enabled"] = False
             cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
             cfg['bot'][pside]['universe']['approved_coins'] = ["BTC"] if pside == side else []
-        cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
+        cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

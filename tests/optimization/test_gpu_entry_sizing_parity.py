@@ -28,7 +28,7 @@ def _fixture(side, coin_count, entry_kind):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
-        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
             ema_span_0=2.0,
@@ -43,13 +43,13 @@ def _fixture(side, coin_count, entry_kind):
         config["bot"][side]["strategy"]["trailing_martingale"]["entry"].update(
             threshold_base_pct=0.01,
             retracement_base_pct=0.001,
-            double_down_factor=0.1,
-            threshold_we_weight=0.0,
-            threshold_volatility_1h_weight=0.0,
-            threshold_volatility_1m_weight=0.0,
-            retracement_volatility_1h_weight=0.0,
-            retracement_volatility_1m_weight=0.0,
-            retracement_we_weight=0.0,
+            reentry_qty_multiplier=0.1,
+            threshold_exposure_ratio_coefficient=0.0,
+            threshold_log_range_1h_coefficient=0.0,
+            threshold_log_range_1m_coefficient=0.0,
+            retracement_log_range_1h_coefficient=0.0,
+            retracement_log_range_1m_coefficient=0.0,
+            retracement_exposure_ratio_coefficient=0.0,
         )
     elif entry_kind == "minimum":
         entry = config["bot"][side]["strategy"]["trailing_martingale"]["entry"]
@@ -139,9 +139,9 @@ def test_flat_selection_tracks_readiness_without_fills(side):
     inputs = _fixture(side, 2, "initial")
     config, candles, _, _, _ = inputs
     bot = config["bot"][side]
-    bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0)
     bot["forager"].update(
-        score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 1.0},
+        score_weights={"volume": 0.0, "log_range": 0.0, "ema_readiness": 1.0},
     )
     bot["strategy"]["trailing_martingale"]["entry"].update(
         ema_gate_mode="all",
@@ -178,16 +178,16 @@ def test_flat_selection_tracks_readiness_without_fills(side):
 def test_partial_initial_top_up_preserves_venue_steps(side, coin_count, retracement, case):
     config, candles, mss, btc, timestamps = _fixture(side, coin_count, "initial")
     config["backtest"].update(starting_balance=case["balance"],
-                             maker_fee_override=0.0, taker_fee_override=0.0)
-    config["bot"][side]["risk"]["total_wallet_exposure_limit"] = case["wel"] * coin_count
+                             maker_fee_override_fraction=0.0, taker_fee_override_fraction=0.0)
+    config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = case["wel"] * coin_count
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_pct=case["initial_pct"], threshold_base_pct=0.5,
                              retracement_base_pct=retracement)
     # Exposure-dependent close prices retain separate ladder rungs. A zero
     # exposure weight would intentionally collapse to a full-position close.
     strategy["close"].update(qty_pct=case["close_pct"], threshold_base_pct=case["threshold"],
-        retracement_base_pct=0.0, threshold_we_weight=-0.1,
-        threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0)
+        retracement_base_pct=0.0, threshold_exposure_ratio_coefficient=-0.1,
+        threshold_log_range_1h_coefficient=0.0, threshold_log_range_1m_coefficient=0.0)
     candles = np.tile(candles[:1], (12, 1, 1))
     price = case["price"]
     candles[:, :, :3] = price
@@ -273,18 +273,18 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = market_allowed
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = near_touch
-    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_pct=0.1, threshold_base_pct=0.01 if ladder == "entry" else 0.5,
-                             retracement_base_pct=0.0, double_down_factor=1.0,
-                             threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
-                             threshold_volatility_1m_weight=0.0)
+                             retracement_base_pct=0.0, reentry_qty_multiplier=1.0,
+                             threshold_exposure_ratio_coefficient=0.0, threshold_log_range_1h_coefficient=0.0,
+                             threshold_log_range_1m_coefficient=0.0)
     strategy["close"].update(threshold_base_pct=(0.02 if close_on_tick else 0.02005) if is_close else 0.5,
                              retracement_base_pct=0.0, qty_pct=0.01,
-                             threshold_we_weight=-0.1 if is_close else 0.0,
-                             threshold_volatility_1h_weight=0.0,
-                             threshold_volatility_1m_weight=0.0)
+                             threshold_exposure_ratio_coefficient=-0.1 if is_close else 0.0,
+                             threshold_log_range_1h_coefficient=0.0,
+                             threshold_log_range_1m_coefficient=0.0)
     # Keep both events away from warmup and the final trading bar.
     candles = np.tile(candles[:1], (12, 1, 1))
     candles[:, :, :3] = 100.0
@@ -331,19 +331,19 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
-    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
     bot = config["bot"][side]
-    bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0,
+    bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0,
                        total_exposure_entry_gate_enabled=entry_gate)
-    bot["forager"].update(score_weights={"volume": 0.01, "volatility": 0.99, "ema_readiness": 0.0},
+    bot["forager"].update(score_weights={"volume": 0.01, "log_range": 0.99, "ema_readiness": 0.0},
                           volume_ema_span_1m=1.0, volatility_ema_span_1m=1.0,
                           volume_drop_pct=0.0)
     bot["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_pct=0.1, initial_ema_dist=0.25, ema_gate_mode="initial",
         threshold_base_pct=0.5, retracement_base_pct=0.0,
-        threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
-        threshold_volatility_1m_weight=0.0)
+        threshold_exposure_ratio_coefficient=0.0, threshold_log_range_1h_coefficient=0.0,
+        threshold_log_range_1m_coefficient=0.0)
     candles = np.tile(candles[:1], (12, 1, 1))
     candles[:, :, :3] = 100.0
     # BTC owns the resting entry before ETH becomes slightly more attractive.
@@ -447,15 +447,15 @@ kernel void retracement_close_probe(constant float* values, device float* output
 def _decimal_boundary_inputs(side, coin_count, *, price, balance, initial_pct, qty_step,
                              factor, threshold, low, high):
     config, candles, markets, _, timestamps = _fixture(side, coin_count, "initial")
-    config["backtest"].update(starting_balance=balance, maker_fee_override=0.0,
-                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    config["backtest"].update(starting_balance=balance, maker_fee_override_fraction=0.0,
+                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_pct=initial_pct, threshold_base_pct=threshold,
-        retracement_base_pct=0.0, double_down_factor=factor, threshold_we_weight=0.0,
-        threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0)
+        retracement_base_pct=0.0, reentry_qty_multiplier=factor, threshold_exposure_ratio_coefficient=0.0,
+        threshold_log_range_1h_coefficient=0.0, threshold_log_range_1m_coefficient=0.0)
     strategy["close"].update(threshold_base_pct=0.5, retracement_base_pct=0.0,
-        threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
-        threshold_volatility_1m_weight=0.0)
+        threshold_exposure_ratio_coefficient=0.0, threshold_log_range_1h_coefficient=0.0,
+        threshold_log_range_1m_coefficient=0.0)
     candles = np.tile(candles[:1], (12, 1, 1))
     candles[:, :, :3] = price
     short = side == "short"
@@ -478,7 +478,7 @@ def _compound_boundary_inputs(side, coin_count, kind, offset, coin_pin):
     target = config["bot"][side]["strategy"]["trailing_martingale"][kind]
     target.update(values)
     if kind == "entry":
-        target["retracement_we_weight"] = 0.
+        target["retracement_exposure_ratio_coefficient"] = 0.
     else:
         target["qty_pct"] = 1.
     if coin_pin != "none":
@@ -528,10 +528,10 @@ def test_decimal_reentry_half_steps_match_rust_without_snapping(
         low=98.9, high=101.1)
     if coin_pin:
         config, _, markets, _, _ = inputs
-        config["bot"][side]["strategy"]["trailing_martingale"]["entry"]["double_down_factor"] = 0.25
+        config["bot"][side]["strategy"]["trailing_martingale"]["entry"]["reentry_qty_multiplier"] = 0.25
         config["coin_overrides"] = {
             coin: {"bot": {side: {"strategy": {"trailing_martingale": {
-                "entry": {"double_down_factor": factor}}}}}}
+                "entry": {"reentry_qty_multiplier": factor}}}}}}
             for coin in markets if coin != "__meta__"
         }
     out, fills = _evaluate(side, inputs)
@@ -559,10 +559,10 @@ def test_canonical_entry_ticks_keep_authored_off_grid_distances(side, coin_count
         }
         if coin_pin == "zeroed_modifiers":
             entry = config["bot"][side]["strategy"]["trailing_martingale"]["entry"]
-            entry.update(threshold_we_weight=0.25, threshold_volatility_1h_weight=1e-100)
+            entry.update(threshold_exposure_ratio_coefficient=0.25, threshold_log_range_1h_coefficient=1e-100)
             for override in config["coin_overrides"].values():
                 override["bot"][side]["strategy"]["trailing_martingale"]["entry"].update(
-                    threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0)
+                    threshold_exposure_ratio_coefficient=0.0, threshold_log_range_1h_coefficient=0.0)
     out, fills = _evaluate(side, inputs)
     expected_count = (1 if offset > 0 else 2) * coin_count
     assert len(fills) == expected_count

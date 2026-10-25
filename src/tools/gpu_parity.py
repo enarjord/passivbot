@@ -29,11 +29,11 @@ DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_d
 FIXTURE_DEFAULTS = {
     "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
-    "hsl_red_threshold": 0.05, "hsl_drawdown_ratio_ema_span_minutes": 30.0,
+    "hsl_drawdown_threshold_fraction": 0.05, "hsl_drawdown_fraction_ema_span_minutes": 30.0,
     "hsl_cooldown_minutes": 30.0, "hsl_memory_ema_span_minutes": 1440.0,
     "unstuck_memory_ema_span_minutes": 1440.0, "loss_gate_memory_ema_span_minutes": 1440.0, "price_shocks": [],
 }
-STRESS_OPTIONS = ("hsl_red_threshold", "hsl_drawdown_ratio_ema_span_minutes", "hsl_cooldown_minutes",
+STRESS_OPTIONS = ("hsl_drawdown_threshold_fraction", "hsl_drawdown_fraction_ema_span_minutes", "hsl_cooldown_minutes",
                   "hsl_memory_ema_span_minutes", "unstuck_memory_ema_span_minutes",
                   "loss_gate_memory_ema_span_minutes", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
@@ -93,8 +93,8 @@ def resolve_fixture_args(args):
             setattr(args, name, deepcopy(default))
     if not 1 <= args.coins <= 64 or not 61 <= args.bars <= 100_000:
         raise ValueError("fixtures require 1..64 coins and 61..100000 bars")
-    for name, lower, upper in (("hsl_red_threshold", 0, 1),
-                              ("hsl_drawdown_ratio_ema_span_minutes", 1, math.inf),
+    for name, lower, upper in (("hsl_drawdown_threshold_fraction", 0, 1),
+                              ("hsl_drawdown_fraction_ema_span_minutes", 1, math.inf),
                               ("hsl_cooldown_minutes", 0, math.inf),
                               ("hsl_memory_ema_span_minutes", 1, math.inf),
                               ("unstuck_memory_ema_span_minutes", 1, math.inf),
@@ -107,7 +107,7 @@ def resolve_fixture_args(args):
                 raise ValueError(f"fixture --{name.replace('_', '-')} cannot encode the GPU decay") from error
             continue
         if not math.isfinite(value) or not lower <= value <= upper or (
-                name == "hsl_red_threshold" and value == 0):
+                name == "hsl_drawdown_threshold_fraction" and value == 0):
             raise ValueError(f"invalid fixture --{name.replace('_', '-')}")
         try:
             encoded = struct.unpack("f", struct.pack("f", value))[0]
@@ -115,8 +115,8 @@ def resolve_fixture_args(args):
             raise ValueError(f"fixture --{name.replace('_', '-')} exceeds GPU float32 range") from error
         if not math.isfinite(encoded):
             raise ValueError(f"fixture --{name.replace('_', '-')} exceeds GPU float32 range")
-        if name == "hsl_red_threshold" and encoded <= 0:
-            raise ValueError("fixture --hsl-red-threshold must remain positive in GPU float32")
+        if name == "hsl_drawdown_threshold_fraction" and encoded <= 0:
+            raise ValueError("fixture --hsl-drawdown-threshold-fraction must remain positive in GPU float32")
     shocks = []
     # Rust converts this duration to an i64 millisecond timestamp.
     if args.hsl_cooldown_minutes * 60_000 >= float(2**63 - 1):
@@ -182,18 +182,18 @@ def fixture_inputs(args):
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config["backtest"].update(
         exchanges=[args.exchange], starting_balance=1000.0,
-        btc_collateral_cap=0.0, filter_by_min_effective_cost=args.filter_by_min_effective_cost,
+        btc_collateral_target_ratio=0.0, filter_by_min_effective_cost=args.filter_by_min_effective_cost,
         start_date=datetime.fromtimestamp(int(timestamps[0]) / 1000, timezone.utc).isoformat(),
         end_date=datetime.fromtimestamp((int(timestamps[-1]) + 60_000) / 1000, timezone.utc).isoformat(),
     )
     for side in ("long", "short"):
         bot = config["bot"][side]
         bot["enabled"] = side in active
-        bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         bot["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "position_side"},
-            drawdown_ratio_threshold=args.hsl_red_threshold,
-            drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
+            drawdown_threshold_fraction=args.hsl_drawdown_threshold_fraction,
+            drawdown_fraction_ema_span_minutes=args.hsl_drawdown_fraction_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
@@ -201,8 +201,8 @@ def fixture_inputs(args):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "portfolio":
         config["bot"]["portfolio"]["hsl"].update(
-            enabled=True, drawdown_ratio_threshold=args.hsl_red_threshold,
-            drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
+            enabled=True, drawdown_threshold_fraction=args.hsl_drawdown_threshold_fraction,
+            drawdown_fraction_ema_span_minutes=args.hsl_drawdown_fraction_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )

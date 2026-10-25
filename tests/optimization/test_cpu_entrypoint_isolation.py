@@ -106,7 +106,7 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
         config["optimize"]["bounds"] = {}
         for side in ("long", "short"):
             side_bounds = config["optimize"]["bounds"][side] = {"risk": {}, "strategy": {strategy: {}}}
-            for name in ("max_positions", "total_wallet_exposure_limit"):
+            for name in ("max_positions", "total_wallet_exposure_limit_ratio"):
                 value = config["bot"][side]["risk"][name]
                 side_bounds["risk"][name] = [value, value]
             if strategy == "ema_anchor":

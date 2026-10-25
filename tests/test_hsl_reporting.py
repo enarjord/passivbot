@@ -36,7 +36,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         cfg["coin_overrides"] = {
             "AAA": {
                 "bot": {
-                    "long": {"hsl": {"drawdown_ratio_threshold": 0.025, "drawdown_ratio_ema_span_minutes": 2.75}}
+                    "long": {"hsl": {"drawdown_threshold_fraction": 0.025, "drawdown_fraction_ema_span_minutes": 2.75}}
                 }
             }
         }
@@ -66,7 +66,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
             np.array([r["ema"] for r in rows], dtype=float),
         )
         assert (
-            lines["RED threshold"].get_ydata() == [scope["policy"]["red_threshold"]] * 2
+            lines["RED threshold"].get_ydata() == [scope["policy"]["drawdown_threshold_fraction"]] * 2
         )
         assert not any(
             "orange" in key.lower() or "yellow" in key.lower() for key in lines
@@ -94,7 +94,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
                 event["observed_at"], unit="ms"
             )
         if mode == "coin":
-            assert scope["policy"]["red_threshold"] == 0.025
+            assert scope["policy"]["drawdown_threshold_fraction"] == 0.025
             assert "AAA long" in signal_ax.get_title()
         if mode == "portfolio":
             assert scope["side"] is None and scope["coin"] is None
@@ -142,7 +142,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
     policies["BBB"] = deepcopy(policies["AAA"])
     for coin_policies in policies.values():
         coin_policies[1] = deepcopy(coin_policies[0])
-    policies["BBB"][0]["red_threshold"] = 0.04
+    policies["BBB"][0]["drawdown_threshold_fraction"] = 0.04
     data = run(args)[4]
     figures = create_forager_hard_stop_drawdown_figure(
         pd.DataFrame(),
@@ -167,7 +167,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
             )
             assert (
                 fig.axes[0].lines[2].get_ydata()
-                == [scope["policy"]["red_threshold"]] * 2
+                == [scope["policy"]["drawdown_threshold_fraction"]] * 2
             )
     finally:
         for fig in figures.values():
@@ -196,7 +196,7 @@ def test_native_report_saved_even_when_all_plotting_disabled(tmp_path):
     assert report == prepared.hard_stop_plot_data["hsl"]
     assert report["detailed"] is True
     assert report["schema_version"] == 1 and report["engine"] == "hsl"
-    assert report["scopes"][0]["policy"]["red_threshold"] == 0.01
+    assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
     assert report["samples"]
     assert not list(tmp_path.rglob("*.png"))
 
@@ -210,7 +210,7 @@ def test_compact_native_report_is_explicit_and_has_no_plot_trace():
     report = prepared.hard_stop_plot_data["hsl"]
     assert report["detailed"] is False
     assert report["samples"] == []
-    assert report["scopes"][0]["policy"]["red_threshold"] == 0.01
+    assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
     assert (
         create_forager_hard_stop_drawdown_figure(
             pd.DataFrame(),
