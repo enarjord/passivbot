@@ -10,6 +10,9 @@ since the latest release tag; these features may already be available when insta
   Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
   without changing their values, and admit the bounded device footprint against the safety budget.
 
+- Let GPU request batching learn from the first completed replay and wait for declared
+  CPU preparation across cold starts, with finite accumulation deadlines and prompt sealing.
+
 - Fix optimizer coin-override validation when dataset metadata, result paths and other
   runtime bookkeeping are present, while retaining strict rejection of unknown authored fields.
 

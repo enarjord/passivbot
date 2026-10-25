@@ -16,7 +16,6 @@ def burst_stream(policy, dataset="a"):
 
 
 def warm(policy, dataset="a", count=16, seconds=1.0):
-    policy.observe(dataset, count, 20.0)
     policy.observe(dataset, count, seconds)
 
 
@@ -34,18 +33,36 @@ def test_burst_gaps_control_idle_tail_and_absolute_bound():
     assert policy.deadline("a", now + 5) < now + 5
 
 
-def test_first_allocation_per_count_and_invalid_timing_are_not_warm_evidence():
+def test_first_successful_replay_and_new_counts_train_scheduling_cost():
     policy = BatchCoalescer()
     now = burst_stream(policy)
     for seconds in (0, -1, math.inf, math.nan):
         policy.observe("a", 16, seconds)
     assert not policy._streams["a"].seen_counts
-    policy.observe("a", 16, 20.0)
-    assert policy.deadline("a", now) == pytest.approx(now + 0.005)
+    assert policy._streams["a"].replay_seconds is None
     policy.observe("a", 16, 0.02)
     assert policy.deadline("a", now) == pytest.approx(now + 0.02)
-    policy.observe("a", 32, 40.0)
-    assert policy.deadline("a", now) == pytest.approx(now + 0.02)
+    policy.observe("a", 32, 0.04)
+    assert policy.deadline("a", now) == pytest.approx(now + 0.024)
+    assert policy._streams["a"].seen_counts == {16, 32}
+
+
+def test_first_cost_and_new_counts_train_preparing_without_cadence_samples():
+    policy = BatchCoalescer()
+    policy.arrived("a", 1, active=False)
+    policy.observe("a", 3, 12)
+    assert policy.preparing_deadline("a", 1) == pytest.approx(19)
+    assert policy.deadline("a", 1) == pytest.approx(1.005)
+    policy.observe("a", 1, 2)
+    assert policy.preparing_deadline("a", 1) == pytest.approx(16)
+
+
+@pytest.mark.parametrize("count", [0, -1, True, 1.5])
+def test_invalid_counts_cannot_train_scheduling_cost(count):
+    policy = BatchCoalescer()
+    policy.arrived("a", 1, active=False)
+    policy.observe("a", count, 12)
+    assert policy._streams["a"].replay_seconds is None
 
 
 def test_completed_cohort_gaps_and_other_datasets_do_not_pollute_cadence():
@@ -96,15 +113,17 @@ def test_preparing_allowance_survives_arrival_gaps_but_has_an_absolute_bound():
     assert policy.preparing_deadline("a", now) == pytest.approx(now + 1.5)
 
 
-def test_preparing_warm_cost_is_capped_and_only_cold_evidence_stays_ordinary():
+def test_preparing_cost_is_capped_and_cold_hints_have_a_finite_allowance():
     policy = BatchCoalescer()
     now = burst_stream(policy)
-    assert policy.preparing_deadline("a", now) == policy.deadline("a", now)
-    warm(policy, seconds=100.0)
+    assert policy.deadline("a", now) == pytest.approx(now + 0.005)
+    assert policy.preparing_deadline("a", now) == pytest.approx(now + 60.0)
+    warm(policy, seconds=1000.0)
     for _ in range(1500):
         now += 0.05
         policy.arrived("a", now, active=True)
-    assert policy.preparing_deadline("a", now - 75) == pytest.approx(now - 15)
+    assert policy.preparing_deadline("a", now) == pytest.approx(now + 300)
+    assert policy.preparing_deadline("a", now - 375) == pytest.approx(now - 75)
     policy.arrived("b", now, active=False)
     warm(policy, dataset="b", seconds=1.0)
     # Sparse cadence evidence does not override authoritative warm readiness.

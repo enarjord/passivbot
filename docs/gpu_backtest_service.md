@@ -313,23 +313,25 @@ Legacy exact-worker, drift-probe, validation and screened-seed controls do not a
 Request accumulation adapts independently of width in `auto`/`refresh` mode. The
 service retains the last 32 within-active-work arrival gaps for each dataset, including
 gaps between CPU preparation bursts. A doubled 90th-percentile gap supplies the idle
-tail; successful warm replay duration supplies the total allowance, capped at 0.5
-seconds. The first replay of each actual batch count is excluded from warm evidence.
-Until warm timing and three gaps exist, the fixed 5 ms accumulation policy remains.
+tail; successful replay duration supplies the total allowance, capped at 0.5 seconds.
+Scheduling learns from the first validated replay, including first-use setup cost;
+a new batch count does not restart that learning. Until completed timing and three
+gaps exist, the fixed 5 ms accumulation policy remains.
 This is a bounded heuristic, not a guarantee of optimal scheduling for every workload.
 
 While the CPU producer can prepare more work, automatic accumulation can continue beyond
-the ordinary 0.5-second absolute limit. Its allowance is 1.5 times successful warm replay
-duration, capped at 60 seconds from the original accumulation start. Explicit readiness
+the ordinary 0.5-second absolute limit. Its allowance is 1.5 times successful replay
+duration, capped at 300 seconds from the original accumulation start. Before any replay
+has completed, an explicit producer hint receives a 60-second startup allowance. Readiness
 remains authoritative through individual CPU preparation or collection pauses.
 A stale hint can spend the whole allowance,
 so the exclusively borrowing producer must clear it when preparation cannot continue.
-Without warm replay timing, hints retain the ordinary policy; warm hints need no arrival-gap
-samples. Exhausted input and full CPU admission windows seal preparation and
-release partial work promptly. An unrelated queued dataset outside the active preparation
-set retains the ordinary short bound. These internal bounds require no configuration knobs.
+Producer hints need no arrival-gap samples. Exhausted input and full CPU admission
+windows seal preparation and release partial work promptly. An unrelated queued dataset
+outside the active preparation set retains the ordinary short bound. These internal bounds
+require no configuration knobs.
 
-The CUDA facade's default `max_batch_delay=None` selects that policy. A numeric service
+The native GPU facade's default `max_batch_delay=None` selects that policy. A numeric service
 delay, including zero, retains fixed waiting; tuning-off mode defaults to 5 ms. An
 explicit width can therefore remain fixed while accumulation adapts. Already buffered
 work may dispatch immediately when its stream has stalled. Full queues, completed widths,
