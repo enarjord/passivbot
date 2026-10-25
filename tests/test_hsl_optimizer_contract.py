@@ -56,7 +56,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         args = payload(mode, cfg=candidate, mss=markets)
         hsl = args[-1]["equity_hard_stop_loss"]
         policy = hsl["portfolio"] if mode == "portfolio" else hsl["sides"][0]
-        assert policy["red_threshold"] == threshold
+        assert policy["drawdown_threshold_fraction"] == threshold
         result = run(args)
         counts.append(result[2]["hard_stop_triggers"])
     assert counts[0] > 0 and counts[1] == 0

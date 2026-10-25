@@ -56,7 +56,7 @@ def _request_owned_paths(config):
             "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
             "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
-            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_red_threshold", "hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes",
+            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
         )
@@ -102,7 +102,7 @@ def _static_contract(config):
             "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
             "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
-            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_red_threshold", "hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes",
+            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
         )

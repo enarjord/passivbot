@@ -163,8 +163,8 @@ def test_portfolio_bounds_move_before_unit_projection_and_keep_native_genes(kind
     assert bounds["portfolio"]["hsl"]["cooldown_after_red_minutes"] == [1, 2880, 10]
     native = flatten_optimize_bounds(bounds, strategy_kind=kind)
     assert native["hsl_cooldown_minutes_after_red"] == [1, 2880, 10]
-    assert native["hsl_drawdown_ratio_ema_span_minutes"] == [1, 2880, 10]
-    assert native["hsl_red_threshold"] == [0.01, 0.12, 0.001]
+    assert native["hsl_drawdown_fraction_ema_span_minutes"] == [1, 2880, 10]
+    assert native["hsl_drawdown_threshold_fraction"] == [0.01, 0.12, 0.001]
     assert any(item["path"] == "optimize.bounds.hsl" for item in result.changes)
     assert any(item["path"] == "optimize.bounds.portfolio.hsl.cooldown_minutes_after_red"
                for item in result.changes)

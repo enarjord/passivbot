@@ -432,7 +432,7 @@ def _scale_directional_minute_parameters(
         for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
-            hsl_span_column = offset + keys.index("hsl_drawdown_ratio_ema_span_minutes")
+            hsl_span_column = offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")
             hsl_spans = scaled[:, hsl_span_column]
             if np.any(~np.isfinite(hsl_spans)) or np.any(hsl_spans < 1.0):
                 raise ValueError(
@@ -1414,8 +1414,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             key: params[:, side * width + keys.index(key)]
             for key in (
                 "hsl_enabled",
-                "hsl_red_threshold",
-                "hsl_drawdown_ratio_ema_span_minutes",
+                "hsl_drawdown_threshold_fraction",
+                "hsl_drawdown_fraction_ema_span_minutes",
                 "hsl_cooldown_ms_lo",
                 "hsl_memory_ema_span_minutes",
                 "hsl_signal_mode",
@@ -1426,7 +1426,7 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
         if not np.isfinite(cols["hsl_enabled"]).all():
             raise ValueError("GPU HSL enablement must be finite")
         # HSL clocks belong to the selected scope, independently of realized memory.
-        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes"):
+        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes"):
             spans = cols[key].astype(np.float32)
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 alpha = np.float32(2) / (spans + np.float32(1))
@@ -1447,9 +1447,9 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             return cols[key][enabled]
 
         if (
-            np.any(selected("hsl_red_threshold") <= 0)
-            or np.any(selected("hsl_red_threshold") > 1)
-            or np.any(selected("hsl_drawdown_ratio_ema_span_minutes") < 1)
+            np.any(selected("hsl_drawdown_threshold_fraction") <= 0)
+            or np.any(selected("hsl_drawdown_threshold_fraction") > 1)
+            or np.any(selected("hsl_drawdown_fraction_ema_span_minutes") < 1)
             or np.any(selected("hsl_memory_ema_span_minutes") < 1)
             or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
             or any(np.any(selected(key) < 0) or np.any(selected(key) >= 2**24)
@@ -1465,8 +1465,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
     unified = params[:, mode] == 0
     for key in (
         "hsl_enabled",
-        "hsl_red_threshold",
-        "hsl_drawdown_ratio_ema_span_minutes",
+        "hsl_drawdown_threshold_fraction",
+        "hsl_drawdown_fraction_ema_span_minutes",
         "hsl_cooldown_ms_lo",
         "hsl_cooldown_ms_hi",
         "hsl_memory_ema_span_minutes",

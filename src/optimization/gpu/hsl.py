@@ -85,14 +85,14 @@ def pack_params(bot, signal_mode):
         raise ValueError("v8 HSL restart policy requires explicit v9 migration")
     cooldown_lo, cooldown_hi = pack_cooldown_ms(bot["hsl_cooldown_minutes_after_red"])
     try:
-        fast_span = validate_memory_span(bot["hsl_drawdown_ratio_ema_span_minutes"])
+        fast_span = validate_memory_span(bot["hsl_drawdown_fraction_ema_span_minutes"])
     except ValueError as error:
         raise ValueError("GPU HSL fast EMA span cannot encode the shared f32 decay") from error
     return {
         "hsl_enabled": float(enabled),
         "hsl_scale_budget_with_excess_allowance": float(bool(bot["hsl_scale_budget_with_excess_allowance"])),
-        "hsl_red_threshold": float(bot["hsl_red_threshold"]),
-        "hsl_drawdown_ratio_ema_span_minutes": fast_span,
+        "hsl_drawdown_threshold_fraction": float(bot["hsl_drawdown_threshold_fraction"]),
+        "hsl_drawdown_fraction_ema_span_minutes": fast_span,
         "hsl_cooldown_ms_lo": cooldown_lo,
         # Slow memory belongs to this effective HSL policy, including coin pins.
         "hsl_memory_ema_span_minutes": validate_memory_span(

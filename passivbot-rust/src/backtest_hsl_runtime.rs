@@ -12,9 +12,9 @@ pub struct Policy {
     pub enabled: bool,
     #[serde(default)]
     pub scale_budget_with_excess_allowance: bool,
-    pub red_threshold: f64,
+    pub drawdown_threshold_fraction: f64,
     pub memory_ema_span_minutes: f64,
-    pub drawdown_ratio_ema_span_minutes: f64,
+    pub drawdown_fraction_ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
     pub panic_close_order_type: String,
 }
@@ -33,9 +33,9 @@ impl Default for Policy {
         Self {
             enabled: false,
             scale_budget_with_excess_allowance: false,
-            red_threshold: 0.25,
+            drawdown_threshold_fraction: 0.25,
             memory_ema_span_minutes: 43_200.0,
-            drawdown_ratio_ema_span_minutes: 60.0,
+            drawdown_fraction_ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
             panic_close_order_type: "limit".into(),
         }
@@ -89,8 +89,8 @@ impl Config {
             }
             hsl_decay::Policy::new(
                 policy.memory_ema_span_minutes,
-                policy.drawdown_ratio_ema_span_minutes,
-                policy.red_threshold,
+                policy.drawdown_fraction_ema_span_minutes,
+                policy.drawdown_threshold_fraction,
                 cooldown.round() as i64,
             )?;
         }
@@ -195,8 +195,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 coin,
                 policy: hsl_decay::Policy::new(
                     p.memory_ema_span_minutes,
-                    p.drawdown_ratio_ema_span_minutes,
-                    p.red_threshold,
+                    p.drawdown_fraction_ema_span_minutes,
+                    p.drawdown_threshold_fraction,
                     (p.cooldown_minutes_after_red * 60_000.0).round() as i64,
                 )?,
                 state: ScopeState::default(),
@@ -585,9 +585,9 @@ mod tests {
     fn params(mode: &str, coins: usize) -> BacktestParams {
         let policy = Policy {
             enabled: true,
-            red_threshold: 0.005,
+            drawdown_threshold_fraction: 0.005,
             memory_ema_span_minutes: 3.0,
-            drawdown_ratio_ema_span_minutes: 1.0,
+            drawdown_fraction_ema_span_minutes: 1.0,
             cooldown_minutes_after_red: 2.0,
             ..Policy::default()
         };
@@ -1272,7 +1272,7 @@ mod tests {
         let config = p.equity_hard_stop_loss.hsl.as_mut().unwrap();
         let mut local = config.sides.clone();
         local[LONG].memory_ema_span_minutes = 7.0;
-        local[LONG].drawdown_ratio_ema_span_minutes = 3.0;
+        local[LONG].drawdown_fraction_ema_span_minutes = 3.0;
         local[LONG].scale_budget_with_excess_allowance = true;
         config.coins.insert("COIN1".into(), local);
         let mut bt = Backtest::new(

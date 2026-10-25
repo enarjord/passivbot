@@ -95,7 +95,7 @@ def test_native_hsl_shared_state_is_bit_identical_to_private_state(
     )
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     runner.max_dispatch_candidate_bars = 3 * 3 * len(sides) * 17
-    candidates = [{"hsl_red_threshold": 1e-6}, {"hsl_red_threshold": 0.03}, {}]
+    candidates = [{"hsl_drawdown_threshold_fraction": 1e-6}, {"hsl_drawdown_threshold_fraction": 0.03}, {}]
     ends = np.array([runner.n - 1, 73, 1], dtype=np.int32)
     loaders = (
         mps_kernel._ema_anchor_multicoin_shader_library,

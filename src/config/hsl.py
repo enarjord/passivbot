@@ -574,10 +574,8 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
 
 
 def native_hsl_policy(policy):
-    """Transport public HSL field names to the stable native HSL ABI."""
+    """Copy a public HSL policy and lower the native cooldown-duration name."""
     result = deepcopy(policy)
-    result["red_threshold"] = result.pop("drawdown_threshold_fraction")
-    result["drawdown_ratio_ema_span_minutes"] = result.pop("drawdown_fraction_ema_span_minutes")
     result["cooldown_minutes_after_red"] = result.pop("cooldown_after_red_minutes")
     return result
 

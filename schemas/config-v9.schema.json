@@ -2619,7 +2619,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -2643,7 +2643,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -3915,7 +3915,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "portfolio HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -3938,7 +3938,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "portfolio HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4482,7 +4482,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4506,7 +4506,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -13651,7 +13651,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -13674,7 +13674,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -14767,7 +14767,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -14790,7 +14790,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [

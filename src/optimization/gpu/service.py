@@ -2105,8 +2105,8 @@ class SharedAccountReplay:
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
-                    "hsl_red_threshold",
-                    "hsl_drawdown_ratio_ema_span_minutes",
+                    "hsl_drawdown_threshold_fraction",
+                    "hsl_drawdown_fraction_ema_span_minutes",
                     "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:

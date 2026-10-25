@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
+  explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
+  stay unchanged; retired native names are not accepted as aliases.
+
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
   `drawdown_fraction_ema_span_minutes`, the loss gate uses `max_drawdown_fraction`, and wallet
   exposure limits use `_ratio` names. Defaults, numeric values, bounds, and native execution

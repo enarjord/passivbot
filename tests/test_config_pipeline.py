@@ -435,7 +435,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "total_wallet_exposure_limit" not in prepared["bot"]["long"]
     assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
     assert "unstuck_threshold" not in prepared["bot"]["long"]
-    assert "hsl_red_threshold" not in prepared["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in prepared["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
     assert "filter_volume_ema_span_1m" not in prepared["bot"]["long"]
     assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
@@ -565,7 +565,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["hsl_red_threshold"]
+        compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
         == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (

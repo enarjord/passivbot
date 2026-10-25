@@ -391,7 +391,7 @@ def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy
     from tools.gpu_parity import build_parser, fixture_inputs as prepare
     config, candles, markets, btc, stamps = prepare(build_parser().parse_args([
         "--fixture", strategy, "--sides", sides, "--coins", "2", "--bars", "2880",
-        "--hsl", hsl, "--hsl-red-threshold", "0.002"]))
+        "--hsl", hsl, "--hsl-drawdown-threshold-fraction", "0.002"]))
     candles = np.concatenate((candles, candles[-1:]), axis=0)
     btc = np.concatenate((btc, btc[-1:]))
     stamps = np.concatenate((stamps, stamps[-1:] + 60_000))
@@ -624,7 +624,7 @@ def test_native_gpu_zero_schedule_and_hsl_replay(tmp_path, strategy,
     for policy in ([[0, 0]], [[1, 0]]):
         args = build_parser().parse_args(["--fixture", strategy, "--sides", "both", "--coins", "2",
                                          "--bars", "512", "--hsl", "portfolio",
-                                         "--hsl-red-threshold", "0.002"])
+                                         "--hsl-drawdown-threshold-fraction", "0.002"])
         inputs = prepare(args)
         write_schedule(tmp_path / f"selection_{len(policy)}.csv", inputs, policy)
         report = run_comparison(inputs, "binance", ["adg_strategy_eq", "drawdown_worst_strategy_eq",
@@ -772,7 +772,7 @@ def test_gpu_chunk_and_factual_hsl_preserve_eligibility_schedule(tmp_path, strat
     from optimization.gpu.service import SharedAccountReplay
     from tools.gpu_parity import build_parser, fixture_inputs as prepare
     inputs = prepare(build_parser().parse_args(["--fixture", strategy, "--sides", "both",
-        "--coins", "2", "--bars", "1600", "--hsl", "portfolio", "--hsl-red-threshold", ".002"]))
+        "--coins", "2", "--bars", "1600", "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".002"]))
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0], [0, 0]])
     config, candles, markets, btc, timestamps = inputs
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,

@@ -29,12 +29,12 @@ BOT_GROUP_FIELD_MAP = {
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
-        "drawdown_fraction_ema_span_minutes": "hsl_ema_span_minutes",
+        "drawdown_fraction_ema_span_minutes": "hsl_drawdown_fraction_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
-        "drawdown_threshold_fraction": "hsl_red_threshold",
+        "drawdown_threshold_fraction": "hsl_drawdown_threshold_fraction",
     },
     "unstuck": {
         "close_fraction": "unstuck_close_pct",

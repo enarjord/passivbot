@@ -22,7 +22,7 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy):
     values = dict.fromkeys(keys, 0.0)
     values.update(
         ema_span_0=2., ema_span_1=3., n_positions=3.,
-        hsl_enabled=1., hsl_red_threshold=.13, hsl_drawdown_ratio_ema_span_minutes=7.,
+        hsl_enabled=1., hsl_drawdown_threshold_fraction=.13, hsl_drawdown_fraction_ema_span_minutes=7.,
         hsl_cooldown_ms_lo=1., hsl_cooldown_ms_hi=1.,
         hsl_memory_ema_span_minutes=1234.5, hsl_signal_mode=2.,
         unstuck_ema_span_0=11., unstuck_ema_span_1=19.,
@@ -32,7 +32,7 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy):
         unilateralness_window=65.,
     )
     params = np.tile(np.array([values[key] for key in keys], np.float32), 2)
-    params[len(keys) + keys.index("hsl_red_threshold")] = .17
+    params[len(keys) + keys.index("hsl_drawdown_threshold_fraction")] = .17
     params[len(keys) + keys.index("hsl_memory_ema_span_minutes")] = 61.5
     stem = "ema" if strategy == "ema_anchor" else "trailing_martingale"
     kind = "Ema" if strategy == "ema_anchor" else "TrailingMartingale"
@@ -50,7 +50,7 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy):
         out[o] = a.minimum; out[o+1] = a.maximum;
         out[o+2] = a.exposure_weight; out[o+3] = a.adverse_weight;
         out[o+4] = a.span; out[o+5] = float(a.window);
-        out[o+6] = float(h.enabled); out[o+7] = h.red_threshold;
+        out[o+6] = float(h.enabled); out[o+7] = h.drawdown_threshold_fraction;
         out[o+8] = h.alpha; out[o+9] = float(h.decay_policy.cooldown_ms & 16777215);
         out[o+10] = float(h.signal_mode); out[o+11] = h.slot_count;
         out[o+12] = h.decay_policy.slow_alpha;

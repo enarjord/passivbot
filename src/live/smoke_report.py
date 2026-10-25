@@ -5260,7 +5260,7 @@ def _risk_event_group(
             "dist_to_red",
             "ema_gap_to_red",
             "elapsed_minutes",
-            "red_threshold",
+            "drawdown_threshold_fraction",
             "cooldown_until_ms",
             "cooldown_remaining",
             "cooldown_remaining_seconds",
@@ -5295,7 +5295,7 @@ def _risk_event_group(
             "drawdown_raw",
             "drawdown_ema",
             "dist_to_red",
-            "red_threshold",
+            "drawdown_threshold_fraction",
         ):
             latest_data.pop(key, None)
         anchor_source = latest_data.get("stop_event_anchor_source")
@@ -5312,7 +5312,7 @@ def _risk_event_group(
                 "drawdown_score",
                 "ema_gap_to_red",
                 "elapsed_minutes",
-                "red_threshold",
+                "drawdown_threshold_fraction",
             )
             if latest_data.get(key) is not None
         }
@@ -5322,7 +5322,7 @@ def _risk_event_group(
             "drawdown_ema",
             "dist_to_red",
             "ema_gap_to_red",
-            "red_threshold",
+            "drawdown_threshold_fraction",
         ):
             latest_data.pop(key, None)
     return {
@@ -5484,7 +5484,7 @@ def _hsl_scope_groups(group):
             "drawdown_raw": raw,
             "drawdown_ema": ema,
             "drawdown_score": score if available else None,
-            "red_threshold": threshold,
+            "drawdown_threshold_fraction": threshold,
             "dist_to_red": (
                 threshold - score
                 if available and score is not None and threshold is not None
@@ -5595,17 +5595,17 @@ def _summarize_hsl_status(
             dist_to_red = _numeric_value(data.get("dist_to_red"))
             if dist_to_red is None:
                 continue
-            red_threshold = _numeric_value(data.get("red_threshold"))
+            drawdown_threshold_fraction = _numeric_value(data.get("drawdown_threshold_fraction"))
             drawdown_score = _numeric_value(data.get("drawdown_score"))
             red_proximity_pct = None
-            if red_threshold is not None and red_threshold > 0:
+            if drawdown_threshold_fraction is not None and drawdown_threshold_fraction > 0:
                 if drawdown_score is not None:
                     red_proximity_pct = round(
-                        (drawdown_score / red_threshold) * 100.0, 3
+                        (drawdown_score / drawdown_threshold_fraction) * 100.0, 3
                     )
                 else:
                     red_proximity_pct = round(
-                        max(0.0, 1.0 - (dist_to_red / red_threshold)) * 100.0,
+                        max(0.0, 1.0 - (dist_to_red / drawdown_threshold_fraction)) * 100.0,
                         3,
                     )
             sample = {
@@ -5619,7 +5619,7 @@ def _summarize_hsl_status(
                         str(signal_mode) if signal_mode not in (None, "") else None
                     ),
                     "dist_to_red": dist_to_red,
-                    "red_threshold": red_threshold,
+                    "drawdown_threshold_fraction": drawdown_threshold_fraction,
                     "red_proximity_pct": red_proximity_pct,
                     "latest_ts": _non_negative_int(group.get("latest_ts")),
                 }.items()
@@ -5709,25 +5709,25 @@ def _summarize_hsl_raw_red_pending(
         if signal_mode not in (None, ""):
             signal_mode_counts[str(signal_mode)] += count
         tier = data.get("tier")
-        red_threshold = _numeric_value(data.get("red_threshold"))
+        drawdown_threshold_fraction = _numeric_value(data.get("drawdown_threshold_fraction"))
         drawdown_score = _numeric_value(data.get("drawdown_score"))
         red_proximity_pct = None
         if (
-            red_threshold is not None
-            and red_threshold > 0
+            drawdown_threshold_fraction is not None
+            and drawdown_threshold_fraction > 0
             and drawdown_score is not None
         ):
-            red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
+            red_proximity_pct = round((drawdown_score / drawdown_threshold_fraction) * 100.0, 3)
         if group.get("_current_raw_pending"):
-            data = {**data, "ema_gap_to_red": red_threshold - data["drawdown_ema"]}
+            data = {**data, "ema_gap_to_red": drawdown_threshold_fraction - data["drawdown_ema"]}
         ema_gap_to_red = _numeric_value(data.get("ema_gap_to_red"))
         ema_gap_to_red_pct = None
         if (
-            red_threshold is not None
-            and red_threshold > 0
+            drawdown_threshold_fraction is not None
+            and drawdown_threshold_fraction > 0
             and ema_gap_to_red is not None
         ):
-            ema_gap_to_red_pct = round((ema_gap_to_red / red_threshold) * 100.0, 3)
+            ema_gap_to_red_pct = round((ema_gap_to_red / drawdown_threshold_fraction) * 100.0, 3)
         pending.append(
             {
                 key: value

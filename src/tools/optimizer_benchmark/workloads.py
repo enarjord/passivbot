@@ -226,7 +226,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             options = ["--fixture", case.strategy,
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),
                        "--bars", str(bars), "--seed", str(seed), "--hsl", hsl,
-                       "--hsl-red-threshold", "0.005", "--hsl-drawdown-ratio-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
+                       "--hsl-drawdown-threshold-fraction", "0.005", "--hsl-drawdown-fraction-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
             config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
             source_coins = config["backtest"]["coins"]
             # A frozen benchmark candidate is a concrete execution snapshot,

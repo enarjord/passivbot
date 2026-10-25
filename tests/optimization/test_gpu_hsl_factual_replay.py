@@ -120,7 +120,7 @@ def test_authoritative_service_never_calls_cpu_simulation(reference, forbid_cpu,
 
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "128",
-        "--hsl", "portfolio", "--hsl-red-threshold", "1e-8", "--hsl-drawdown-ratio-ema-span-minutes", "1",
+        "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", "1e-8", "--hsl-drawdown-fraction-ema-span-minutes", "1",
     ]))
     metrics = ("fills_per_day", "hard_stop_triggers_per_year")
     with _native_dataset(inputs, "binance", metrics) as dataset:

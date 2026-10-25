@@ -194,7 +194,7 @@ def test_portfolio_optimizer_paths_target_portfolio_only():
     assert keys["bot.portfolio.hsl.drawdown_threshold_fraction"] == ("bot", "portfolio", "hsl", "drawdown_threshold_fraction")
     assert keys["bot.portfolio.hsl.drawdown_fraction_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
     assert not any(k.startswith(("bot.long.hsl.", "bot.short.hsl.")) for k in keys)
-    assert "hsl_red_threshold" in flatten_optimize_bounds(
+    assert "hsl_drawdown_threshold_fraction" in flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
 

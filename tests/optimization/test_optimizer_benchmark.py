@@ -256,7 +256,7 @@ def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_reject
     manifest = freeze(tmp_path / "explicit", bounds_config=explicit, **options)
     assert explicit == original
     specs = manifest["entries"][0]["bounds"]
-    assert specs == [dict(key="hsl_red_threshold", path=["bot", "portfolio", "hsl", "drawdown_threshold_fraction"],
+    assert specs == [dict(key="hsl_drawdown_threshold_fraction", path=["bot", "portfolio", "hsl", "drawdown_threshold_fraction"],
                           low=0.11, high=0.19, step=0.01)]
     invalid = get_expanded_config_prototype()["optimize"]["bounds"]
     original = deepcopy(invalid)

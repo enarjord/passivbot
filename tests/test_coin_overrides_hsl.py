@@ -84,7 +84,7 @@ def test_hsl_policy_registry_covers_every_canonical_leaf():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("hsl_red_threshold", 0.2),
+    ("hsl_drawdown_threshold_fraction", 0.2),
     ("unstuck_ema_span_0", 12.5),
     ("risk_we_excess_allowance_pct", 0.1),
 ])
@@ -104,7 +104,7 @@ def test_inline_hsl_patch_is_rejected_outside_coin_mode(mode, spelling):
     side = (
         {"hsl": {"drawdown_threshold_fraction": 0.2}}
         if spelling == "grouped"
-        else {"hsl_red_threshold": 0.2}
+        else {"hsl_drawdown_threshold_fraction": 0.2}
     )
 
     with pytest.raises(

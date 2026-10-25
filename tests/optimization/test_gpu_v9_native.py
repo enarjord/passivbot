@@ -50,7 +50,7 @@ def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "2",
         "--bars", "256", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", ".01", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".01", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--price-shock", "0", "120", ".8", "--price-shock", "1", "170", "1.2",
         "--unstuck",
@@ -120,7 +120,7 @@ def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expecte
     recipe = [
         "--fixture", strategy, "--sides", sides, "--coins", str(coins),
         "--bars", "256", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", ".01", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".01", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--price-shock", "0", "120", "1.2" if sides == "short" else ".8",
         "--unstuck",
@@ -157,7 +157,7 @@ def test_v9_native_ema_entry_fee_forces_a_stop_and_restart(mode, sides):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "ema_anchor", "--sides", sides, "--coins", "2",
         "--bars", "128", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", "1e-8", "--hsl-drawdown-ratio-ema-span-minutes", "1",
+        "--hsl-drawdown-threshold-fraction", "1e-8", "--hsl-drawdown-fraction-ema-span-minutes", "1",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--unstuck",
     ]))

@@ -3240,7 +3240,7 @@ def test_console_format_summarizes_hsl_status_distance_to_red():
             "tier": "green",
             "dist_to_red": 0.02,
             "drawdown_score": 0.03,
-            "red_threshold": 0.05,
+            "drawdown_threshold_fraction": 0.05,
             "cooldown_remaining": "none",
             "last_red_ts": 1_600_000,
             "has_open_position": True,
@@ -3249,7 +3249,7 @@ def test_console_format_summarizes_hsl_status_distance_to_red():
 
     assert format_console_event(event) == (
         "[risk] succeeded cycle=cy_hsl mode=coin tier=green "
-        "dist_to_red=0.020000 drawdown_score=0.030000 red_threshold=0.050000 "
+        "dist_to_red=0.020000 drawdown_score=0.030000 drawdown_threshold_fraction=0.050000 "
         "cooldown=none last_red_ts=1600000 symbol=ZEC/USDT:USDT "
         "pside=long reason=green"
     )
@@ -4284,7 +4284,7 @@ def test_console_format_summarizes_hsl_transition():
             "tier": "orange",
             "dist_to_red": 0.012345678,
             "drawdown_score": 0.1875,
-            "red_threshold": 0.2,
+            "drawdown_threshold_fraction": 0.2,
             "balance": 1_000.0,
             "strategy_equity": 950.0,
             "metrics": {"balance": 1_000.0},
@@ -4294,7 +4294,7 @@ def test_console_format_summarizes_hsl_transition():
 
     assert format_console_event(event) == (
         "[risk] succeeded cycle=cy_hsl_transition mode=coin tier=yellow->orange "
-        "dist_to_red=0.012346 drawdown_score=0.187500 red_threshold=0.200000 "
+        "dist_to_red=0.012346 drawdown_score=0.187500 drawdown_threshold_fraction=0.200000 "
         "ts=1782946000000 symbol=NEAR/USDT:USDT pside=long reason=yellow_to_orange"
     )
 

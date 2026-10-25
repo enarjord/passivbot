@@ -301,9 +301,9 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     policies = backtest_params["equity_hard_stop_loss"]
     btc_long = policies["coins"]["BTC/USDT:USDT"][0]
     assert btc_long["enabled"] is True
-    assert btc_long["red_threshold"] == pytest.approx(0.01)
+    assert btc_long["drawdown_threshold_fraction"] == pytest.approx(0.01)
     assert policies["sides"][0]["enabled"] is False
-    assert policies["sides"][0]["red_threshold"] == pytest.approx(0.2)
+    assert policies["sides"][0]["drawdown_threshold_fraction"] == pytest.approx(0.2)
     assert all(
         not any(k.startswith("hsl_") for k in pair["long"]) for pair in bot_params_list
     )
