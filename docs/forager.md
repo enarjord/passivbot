@@ -128,9 +128,8 @@ a current scoring diagnostic, the monitor does not fetch RMS data or reconstruct
 Raw native fields `volume_ema`, `log_range_ema`, `ema_entry_price_gap_fraction` and
 `unilateralness_score` are distinct from their normalized score components.
 
-Live currently supplies its latest market price as both bid and ask in the Python-collected
-payload; Rust's readiness calculation remains position-side-aware. Features whose weights
-are zero may be skipped when no other selection requirement consumes them.
+Features whose weights are zero may be skipped when no other selection requirement
+consumes them.
 
 Start with log-range weighting to favor active symbols, add EMA readiness to favor nearer
 entries, and add volume weight when liquidity matters. If rankings look noisy, first consider
