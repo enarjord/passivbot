@@ -1001,6 +1001,25 @@ def build_mps_multicoin_data(
             values[:, coin, 0], values[:, coin, 1], values[:, coin, 2], run, coin=coin
         )
     relation_dtype = np.int8 if gpu_device(torch) == "cuda" else np.int32
+    from optimization.gpu.residency import (
+        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
+        current_gpu_residency, MetalSuiteResidency,
+    )
+    invariant_bytes = multicoin_invariant_bytes(
+        candle_count, coin_count, device=gpu_device(torch),
+        include_hourly_ranges=include_hourly_ranges,
+    )
+    # Admission must precede the history-sized packing work, including spill mode.
+    if gpu_device(torch) == "mps":
+        residency = current_gpu_residency()
+        if spill_dir is not None and isinstance(residency, MetalSuiteResidency):
+            residency.check_preparation_memory(torch, invariant_bytes)
+        else:
+            # A direct spill has no residency owner yet. Check the nominal
+            # budget now; activation owns release and live availability checks.
+            check_mps_invariant_memory(torch, invariant_bytes, require_free=spill_dir is None)
+    elif spill_dir is None:
+        check_cuda_invariant_memory(torch, invariant_bytes)
     first_hour_observed = np.full(coin_count, candle_count, dtype=np.int64)
     if spill_dir is not None:
         arrays, max_costs, first_hour_observed = _spill_multicoin_arrays(
@@ -1056,25 +1075,6 @@ def build_mps_multicoin_data(
             market.taker_fee,
             max_effective_min_cost,
             *run.age_eligible_indices,
-        )
-
-    invariant_bytes = candle_count * coin_count * (
-        16 + 8 + 8 + 4 + 4 + np.dtype(relation_dtype).itemsize + 8
-        + (4 if include_hourly_ranges else 0)
-    )
-    recommended = None
-    if gpu_device(torch) == "cuda" and spill_dir is None:
-        from optimization.gpu.residency import check_cuda_invariant_memory
-        check_cuda_invariant_memory(torch, invariant_bytes)
-    elif gpu_device(torch) != "cuda":
-        recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
-        if callable(recommended_fn):
-            recommended = int(recommended_fn())
-    if recommended and invariant_bytes > int(recommended * 0.45):
-        raise MemoryError(
-            f"{gpu_device(torch).upper()} multicoin invariant tensors would consume "
-            f"{invariant_bytes / 2**30:.2f} GiB, above the 45% safety limit of "
-            f"the device's {recommended / 2**30:.2f} GiB recommended working set"
         )
 
     def tensor(array, *, dtype=None, name):

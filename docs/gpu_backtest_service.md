@@ -166,6 +166,21 @@ be rerun on GPU. Producer failures stop admission and preserve the original exce
 The CPU optimizer integrates these helpers and owns persistence and compatible-resume
 identities. Their execution caches are run-local.
 
+## Input memory and admission
+
+GPU optimizer preparation streams compressed NumPy caches to run-owned files and borrows
+read-only mappings instead of duplicating the raw history in heap and shared memory. Plain
+NumPy cache files remain borrowed and are never deleted by the optimizer. Descriptors retain
+file identity; replacing or modifying a prepared input fails closed. The parent releases files
+after service attachments close. CPU optimizer transport continues to use shared memory.
+
+For ordinary unsliced one-minute caches, GPU memory admission checks the NumPy header before
+decoding the payload. Suites, explicit dataset slices and aggregated histories are checked after
+their effective dimensions are known, before price packing. These checks retain the device's
+existing invariant safety budget; they do not guarantee sufficient system RAM or include all
+candidate/driver scratch. Validation uses bounded conversion and mask buffers without changing
+accepted candle values or the first reported invalid location.
+
 ## Canonical prepared-data binding
 
 `optimization.native_datasets.NativeDatasetRegistry` connects an existing canonical CPU

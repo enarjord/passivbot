@@ -1262,30 +1262,31 @@ def _require_exact_safe_proxy_candles(
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
         raise ValueError("MPS proxy requires HLCVs shaped [time, coin, fields]")
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        packed = np.asarray(values[:, :, :3], dtype=np.float32)
+    # Validate only exposed slices with bounded conversion/mask scratch. Casting
+    # the whole history first can allocate more than the packed GPU inputs.
+    from optimization.gpu.residency import PREPARATION_CHUNK_BYTES
+    chunk_rows = max(1, PREPARATION_CHUNK_BYTES // (3 * 4 + 8))
     for coin in range(values.shape[1]):
         if not bool(exposure_eligible_coins[coin]):
             continue
         first = max(0, int(first_valid_indices[coin]))
         last = min(int(last_valid_indices[coin]), values.shape[0] - 1)
-        if first > last:
-            continue
-        packed_hlc = packed[first : last + 1, coin]
-        packed_valid = np.all(np.isfinite(packed_hlc), axis=1) & (
-            packed_hlc[:, 2] > 0.0
-        )
-        if require_positive_high_low:
-            packed_valid &= (packed_hlc[:, 0] > 0.0) & (packed_hlc[:, 1] > 0.0)
-        unsafe = np.flatnonzero(~packed_valid)
-        if unsafe.size:
-            candle_index = first + int(unsafe[0])
-            raise ValueError(
-                "MPS proxy requires contiguous valid internal candles; all-NaN, "
-                "infinite, finite but non-positive, partially invalid, or float32-"
-                "unrepresentable prices remain fail-closed; "
-                f"coin index {coin}, invalid candle at {candle_index}"
-            )
+        for start in range(first, last + 1, chunk_rows):
+            stop = min(last + 1, start + chunk_rows)
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                packed_hlc = np.asarray(values[start:stop, coin, :3], dtype=np.float32)
+            packed_valid = np.all(np.isfinite(packed_hlc), axis=1) & (packed_hlc[:, 2] > 0.0)
+            if require_positive_high_low:
+                packed_valid &= (packed_hlc[:, 0] > 0.0) & (packed_hlc[:, 1] > 0.0)
+            unsafe = np.flatnonzero(~packed_valid)
+            if unsafe.size:
+                candle_index = start + int(unsafe[0])
+                raise ValueError(
+                    "MPS proxy requires contiguous valid internal candles; all-NaN, "
+                    "infinite, finite but non-positive, partially invalid, or float32-"
+                    "unrepresentable prices remain fail-closed; "
+                    f"coin index {coin}, invalid candle at {candle_index}"
+                )
 
 
 

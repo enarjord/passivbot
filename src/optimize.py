@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+from contextlib import ExitStack
 from cli_utils import help_requested
 
 if sys.platform.startswith("win"):
@@ -1447,11 +1448,20 @@ def _canonicalize_optimizer_individual(
 
 
 def validate_array(arr, name, allow_nan=True):
-    if not allow_nan and np.isnan(arr).any():
+    # NumPy masks can otherwise be as large as the entire candle history.
+    any_nan, any_inf, all_nan = False, False, True
+    values = np.asarray(arr)
+    for chunk in np.nditer(values, flags=["external_loop", "buffered", "zerosize_ok"],
+                           op_flags=["readonly"], buffersize=max(1, 8 * 2**20 // values.dtype.itemsize)):
+        nan = np.isnan(chunk)
+        any_nan |= bool(nan.any())
+        all_nan &= bool(nan.all())
+        any_inf |= bool(np.isinf(chunk).any())
+    if not allow_nan and any_nan:
         raise ValueError(f"{name} contains NaN values")
-    if np.isinf(arr).any():
+    if any_inf:
         raise ValueError(f"{name} contains inf values")
-    if allow_nan and np.isnan(arr).all():
+    if allow_nan and all_nan:
         raise ValueError(f"{name} is entirely NaN")
 
 
@@ -3553,6 +3563,23 @@ def _run_gpu_preparation_preflight(
         raise ValueError("GPU screening.scenarios requires a scenario suite")
 
 
+def _gpu_cached_input_preflight(path, shape, dtype):
+    """Reject an exact cached candle payload before decoding its history."""
+    if len(shape) != 3 or shape[2] != 4:
+        return
+    import torch
+    from optimization.gpu.runtime import gpu_device
+    from optimization.gpu.residency import (
+        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
+    )
+    device = gpu_device(torch)
+    required = multicoin_invariant_bytes(shape[0], shape[1], device=device)
+    if device == "mps":
+        check_mps_invariant_memory(torch, required)
+    else:
+        check_cuda_invariant_memory(torch, required)
+
+
 def _materialize_resolved_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
@@ -4048,9 +4075,25 @@ async def main():
     pool = None
     manager = None
     pool_terminated = False
+    artifact_loaders = ExitStack()
     try:
         _run_gpu_preparation_preflight(config, suite_cfg)
-        array_manager = SharedArrayManager()
+        is_gpu = str(config["optimize"].get("backend", "")).strip().lower() == "gpu"
+        # A header describes the actual replay only for unsliced, unaggregated
+        # ordinary caches. Suites and explicit dataset overrides admit after
+        # their effective subset/time range has been selected instead.
+        exact_cache_shape = (
+            not suite_cfg.get("enabled")
+            and not data_config["backtest"].get("hlcvs_data_dir")
+            and int(data_config["backtest"].get("candle_interval_minutes", 1) or 1) == 1
+        )
+        array_manager = (SharedArrayManager(
+            file_backed=True,
+            file_preflight=_gpu_cached_input_preflight if exact_cache_shape else None,
+        ) if is_gpu else SharedArrayManager())
+        if is_gpu:
+            from hlcvs_manifest import numpy_artifact_loader
+            artifact_loaders.enter_context(numpy_artifact_loader(array_manager.load_numpy_artifact))
         hlcvs_specs = {}
         btc_usd_specs = {}
         msss = {}
@@ -4404,8 +4447,9 @@ async def main():
                 logging.exception("Failed to shut down multiprocessing manager")
         if "evaluator_for_pool" in locals():
             _close_evaluator_for_pool(evaluator_for_pool)
+        artifact_loaders.close()
         if "array_manager" in locals():
-            logging.info("Releasing shared memory...")
+            logging.info("Releasing optimizer input arrays...")
             try:
                 array_manager.cleanup()
             except Exception:
