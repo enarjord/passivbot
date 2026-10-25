@@ -157,7 +157,8 @@
             "sortino_ratio_strategy_eq",
             "sharpe_ratio_strategy_eq",
             "loss_profit_ratio",
-            "strategy_eq_underwater_pct_mean",
+            "pain_index_strategy_eq",
+            "ulcer_index_strategy_eq",
             "hard_stop_restarts_per_year",
             "hard_stop_panic_close_loss_drawdown_pct_mean"
         ],
@@ -494,7 +495,7 @@
             {"goal": "min", "metric": "position_held_days_max"},
             {"goal": "min", "metric": "drawdown_worst_strategy_eq"},
             {"goal": "min", "metric": "loss_profit_ratio"},
-            {"goal": "min", "metric": "strategy_eq_underwater_pct_mean"}
+            {"goal": "min", "metric": "pain_index_strategy_eq"}
         ],
         "seed": null,
         "write_all_results": true

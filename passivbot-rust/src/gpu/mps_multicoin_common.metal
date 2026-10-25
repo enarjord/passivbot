@@ -47,13 +47,39 @@ inline float bootstrap_market_ema(
 }
 
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-// Observational raw portfolio risk; account liquidation values remain separate.
-inline void update_raw_strategy_risk(
-    float equity, thread float& peak, thread float& daily_worst
+// Compact moments preserve every observed mark, including zero drawdowns.
+// Daily partitioning limits float32 accumulation error; it does not resample.
+struct RawStrategyRiskState {
+    float peak;
+    float daily_worst;
+    float drawdown_sum;
+    float squared_sum;
+    float sample_count;
+};
+
+inline void update_raw_strategy_risk(float equity, thread RawStrategyRiskState& state) {
+    state.peak = fmax(state.peak, equity);
+    const float drawdown = (state.peak - equity) / fmax(fabs(state.peak), 1.0e-12f);
+    state.daily_worst = fmax(state.daily_worst, drawdown);
+    state.drawdown_sum += drawdown;
+    state.squared_sum += drawdown * drawdown;
+    state.sample_count += 1.0f;
+}
+
+inline void reset_raw_strategy_risk_day(thread RawStrategyRiskState& state) {
+    state.daily_worst = 0.0f;
+    state.drawdown_sum = 0.0f;
+    state.squared_sum = 0.0f;
+    state.sample_count = 0.0f;
+}
+
+inline void write_raw_strategy_risk_day(
+    thread const RawStrategyRiskState& state, device float* daily, int offset
 ) {
-    peak = fmax(peak, equity);
-    daily_worst = fmax(daily_worst,
-        (peak - equity) / fmax(fabs(peak), 1.0e-12f));
+    daily[offset] = state.daily_worst;
+    daily[offset + 1] = state.drawdown_sum;
+    daily[offset + 2] = state.squared_sum;
+    daily[offset + 3] = state.sample_count;
 }
 #endif
 
