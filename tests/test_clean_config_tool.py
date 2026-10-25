@@ -250,7 +250,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
             "bot.long.unstuck.ema_span_0_minutes": number(60)
         }
         cfg["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ] = [number(0), number(1), 0.01]
         output = render_source(
             json.dumps(cfg),
@@ -291,7 +291,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         assert type(pins["bot.long.unstuck.ema_span_0_minutes"]) is float
         bounds = result["optimize"]["bounds"]["long"]
         weight_bounds = bounds["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ]
         assert all(type(value) is float for value in weight_bounds)
         assert all(type(value) is int for value in bounds["risk"]["max_positions"])

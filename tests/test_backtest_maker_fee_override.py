@@ -373,10 +373,10 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
         "ema_span_1_minutes": 144.0,
         "entry_qty_exposure_coefficient": 0.8,
         "offset_fraction": 0.003,
-        "offset_volatility_ema_span_minutes": 30.0,
-        "offset_volatility_1m_weight": 2.5,
-        "offset_volatility_ema_span_1h_candles": 12.0,
-        "offset_volatility_1h_weight": 1.75,
+        "offset_log_range_ema_span_minutes": 30.0,
+        "offset_log_range_1m_coefficient": 2.5,
+        "offset_log_range_ema_span_1h_candles": 12.0,
+        "offset_log_range_1h_coefficient": 1.75,
         "inventory_offset_exposure_coefficient": 0.2,
     }
     config["bot"]["short"]["strategy"]["ema_anchor"] = {
@@ -385,10 +385,10 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
         "ema_span_1_minutes": 89.0,
         "entry_qty_exposure_coefficient": 0.5,
         "offset_fraction": 0.004,
-        "offset_volatility_ema_span_minutes": 45.0,
-        "offset_volatility_1m_weight": 3.5,
-        "offset_volatility_ema_span_1h_candles": 18.0,
-        "offset_volatility_1h_weight": 0.5,
+        "offset_log_range_ema_span_minutes": 45.0,
+        "offset_log_range_1m_coefficient": 3.5,
+        "offset_log_range_ema_span_1h_candles": 18.0,
+        "offset_log_range_1h_coefficient": 0.5,
         "inventory_offset_exposure_coefficient": 0.1,
     }
     mss = _base_mss()

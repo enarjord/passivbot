@@ -52,9 +52,9 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
         # Its price is flat, so only the projected fee consumes the allowance.
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
             qty_pct=1.0, threshold_base_pct=0.0, threshold_exposure_ratio_coefficient=0.0,
-            threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0,
-            retracement_base_pct=0.0, retracement_volatility_1h_weight=0.0,
-            retracement_volatility_1m_weight=0.0,
+            threshold_log_range_1h_coefficient=0.0, threshold_log_range_1m_coefficient=0.0,
+            retracement_base_pct=0.0, retracement_log_range_1h_coefficient=0.0,
+            retracement_log_range_1m_coefficient=0.0,
         )
     inputs = candles, markets, config, exchange, btc, timestamps
     proxy = SharedAccountReplay(

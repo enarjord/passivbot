@@ -122,11 +122,19 @@ def _bot_metadata(path):
     name = path[-1]
     data = {}
     if local.startswith("strategy."):
-        if name in {"ema_span_0_minutes", "ema_span_1_minutes", "volatility_ema_span_minutes",
-                    "offset_volatility_ema_span_minutes"}:
+        if name in {"ema_span_0_minutes", "ema_span_1_minutes", "log_range_ema_span_minutes",
+                    "offset_log_range_ema_span_minutes"}:
             data["unit"] = "minutes"
-        elif name in {"volatility_ema_span_1h_candles", "offset_volatility_ema_span_1h_candles"}:
+        elif name in {"log_range_ema_span_1h_candles", "offset_log_range_ema_span_1h_candles"}:
             data["unit"] = "one-hour candles"
+        if "log_range" in name and "ema_span" in name:
+            data["description"] = "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon."
+        elif "log_range" in name and name.endswith("_coefficient"):
+            additive = path[3] == "trailing_martingale" and path[4] == "close" and name.startswith("threshold_")
+            data.update(unit="price fraction per log range" if additive else "distance multiplier per log range",
+                        denominator="EMA of ln(candle high / candle low) at the named horizon",
+                        description=("Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain."
+                                     if additive else "Adds log-range sensitivity to the existing distance multiplier; its floor remains one."))
         if path[3] == "trailing_martingale":
             if tuple(path[4:]) == ("entry", "reentry_qty_multiplier"):
                 data.update(unit="multiplier", denominator="absolute current position quantity",
@@ -204,6 +212,8 @@ def _bot_metadata(path):
         data.update(unit="relative weight", domain=FieldDomain(minimum=0.0, finite=True),
                     denominator="sum of authored forager weights",
                     description="Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.")
+        if name == "log_range":
+            data["description"] += " Weights the relative ranking of the one-minute EMA of ln(candle high / candle low)."
     elif local.startswith("forager.") and name.endswith("ema_span_minutes"):
         data["unit"] = "minutes"
         if name == "unilateralness_ema_span_minutes":

@@ -260,8 +260,8 @@ _SHARED_SIDE_FIELDS = {
     FieldType.FLOAT: """
         universe.minimum_coin_age_days
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
-        forager.score_weights.volatility forager.score_weights.volume
-        forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
+        forager.score_weights.log_range forager.score_weights.volume
+        forager.unilateralness_ema_span_minutes forager.log_range_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
         hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes

@@ -1230,7 +1230,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
+        == config["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert (
         _strategy_side(compiled, "long")["entry"]["ema_span_0_minutes"]
@@ -1589,7 +1589,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
     )
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"
+        "bot.long.strategy.trailing_martingale.entry.threshold_log_range_1h_coefficient"
     ] = 3.5
 
     update_config_with_args(source_config, args, verbose=False)
@@ -1601,7 +1601,7 @@ def test_prepare_config_preserves_sparse_leaf_cli_override():
         raw_snapshot=raw_snapshot,
     )
     assert prepared["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_volatility_1h_weight"
+        "threshold_log_range_1h_coefficient"
     ] == pytest.approx(3.5)
 
 

@@ -68,7 +68,7 @@ gates closed.
 Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0_minutes`
 and `entry.ema_span_1_minutes`. They govern entry gating, forager entry readiness, and the one-way
 entry tie-break. Ordinary closes do not consume this band. The shared
-`volatility_ema_span_minutes` and `volatility_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
+`log_range_ema_span_minutes` and `log_range_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
 
 The explicit released-v8 converter moves old strategy-root spans into canonical `entry`
 paths across values, bounds and overrides, preserving floating-point precision and rejecting
@@ -80,14 +80,14 @@ each coin's effective entry spans during optimization.
 ```text
 alpha(span)         = 2 / (span + 1)
 entry_threshold_vol_term =
-    volatility_ema_1h * entry.threshold_volatility_1h_weight
-  + volatility_ema_1m * entry.threshold_volatility_1m_weight
+    log_range_ema_1h * entry.threshold_log_range_1h_coefficient
+  + log_range_ema_1m * entry.threshold_log_range_1m_coefficient
 entry_threshold_we_term = (wel / wel_allowed) * entry.threshold_exposure_ratio_coefficient
 entry_threshold_multiplier = max(1, 1 + entry_threshold_vol_term + entry_threshold_we_term)
 
 entry_retracement_vol_term =
-    volatility_ema_1h * entry.retracement_volatility_1h_weight
-  + volatility_ema_1m * entry.retracement_volatility_1m_weight
+    log_range_ema_1h * entry.retracement_log_range_1h_coefficient
+  + log_range_ema_1m * entry.retracement_log_range_1m_coefficient
 entry_retracement_we_term = (wel / wel_allowed) * entry.retracement_exposure_ratio_coefficient
 entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_retracement_we_term)
 
@@ -148,14 +148,14 @@ state from 1m OHLCVs and does not use exchange-native trailing order types.
 close_threshold =
     close.threshold_base_fraction
   + (wel / wel_allowed) * close.threshold_exposure_ratio_coefficient
-  + volatility_ema_1h * close.threshold_volatility_1h_weight
-  + volatility_ema_1m * close.threshold_volatility_1m_weight
+  + log_range_ema_1h * close.threshold_log_range_1h_coefficient
+  + log_range_ema_1m * close.threshold_log_range_1m_coefficient
 
 close_retracement_multiplier =
     max(1,
         1
-      + volatility_ema_1h * close.retracement_volatility_1h_weight
-      + volatility_ema_1m * close.retracement_volatility_1m_weight)
+      + log_range_ema_1h * close.retracement_log_range_1h_coefficient
+      + log_range_ema_1m * close.retracement_log_range_1m_coefficient)
 
 close_retracement =
     max(0, close.retracement_base_fraction) * close_retracement_multiplier

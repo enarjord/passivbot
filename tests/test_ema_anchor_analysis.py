@@ -35,10 +35,10 @@ def _ema_anchor_config() -> dict:
                         "ema_span_0_minutes": 2.0,
                         "ema_span_1_minutes": 6.0,
                         "offset_fraction": 0.01,
-                        "offset_volatility_ema_span_minutes": 2.0,
-                        "offset_volatility_1m_weight": 0.5,
-                        "offset_volatility_ema_span_1h_candles": 2.0,
-                        "offset_volatility_1h_weight": 0.25,
+                        "offset_log_range_ema_span_minutes": 2.0,
+                        "offset_log_range_1m_coefficient": 0.5,
+                        "offset_log_range_ema_span_1h_candles": 2.0,
+                        "offset_log_range_1h_coefficient": 0.25,
                         "inventory_offset_exposure_coefficient": 0.2,
                     }
                 }
@@ -50,10 +50,10 @@ def _ema_anchor_config() -> dict:
                         "ema_span_0_minutes": 2.0,
                         "ema_span_1_minutes": 6.0,
                         "offset_fraction": 0.02,
-                        "offset_volatility_ema_span_minutes": 2.0,
-                        "offset_volatility_1m_weight": 0.5,
-                        "offset_volatility_ema_span_1h_candles": 2.0,
-                        "offset_volatility_1h_weight": 0.25,
+                        "offset_log_range_ema_span_minutes": 2.0,
+                        "offset_log_range_1m_coefficient": 0.5,
+                        "offset_log_range_ema_span_1h_candles": 2.0,
+                        "offset_log_range_1h_coefficient": 0.25,
                         "inventory_offset_exposure_coefficient": 0.1,
                     }
                 }

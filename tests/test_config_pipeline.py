@@ -578,7 +578,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
-        == canonical["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
+        == canonical["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
     assert compiled["optimize"]["bounds"] == canonical["optimize"]["bounds"]
@@ -819,7 +819,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
     rounded = {
         "volume": 0.323,
         "ema_readiness": 0.434,
-        "volatility": 0.242,
+        "log_range": 0.242,
     }
     source["bot"]["long"]["forager"]["score_weights"] = rounded
     source["bot"]["short"]["forager"]["score_weights"] = rounded
@@ -1301,11 +1301,11 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     source = get_template_config()
     trailing_martingale = source["bot"]["global"]["strategy"]["trailing_martingale"]
     risk = source["bot"]["global"]["risk"]
-    trailing_martingale.pop("volatility_ema_span_1h_candles")
-    trailing_martingale.pop("volatility_ema_span_minutes")
+    trailing_martingale.pop("log_range_ema_span_1h_candles")
+    trailing_martingale.pop("log_range_ema_span_minutes")
     for key in (
-        "threshold_volatility_1h_weight",
-        "threshold_volatility_1m_weight",
+        "threshold_log_range_1h_coefficient",
+        "threshold_log_range_1m_coefficient",
         "threshold_exposure_ratio_coefficient",
     ):
         trailing_martingale["entry"].pop(key)
@@ -1323,17 +1323,17 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     long_risk = prepared["bot"]["long"]["risk"]
     template_strategy = _strategy_side(get_template_config(), "global")
     template_risk = get_template_config()["bot"]["global"]["risk"]
-    assert long_strategy["volatility_ema_span_1h_candles"] == pytest.approx(
-        template_strategy["volatility_ema_span_1h_candles"]
+    assert long_strategy["log_range_ema_span_1h_candles"] == pytest.approx(
+        template_strategy["log_range_ema_span_1h_candles"]
     )
-    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(
-        template_strategy["volatility_ema_span_minutes"]
+    assert long_strategy["log_range_ema_span_minutes"] == pytest.approx(
+        template_strategy["log_range_ema_span_minutes"]
     )
-    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(
-        template_strategy["entry"]["threshold_volatility_1h_weight"]
+    assert long_strategy["entry"]["threshold_log_range_1h_coefficient"] == pytest.approx(
+        template_strategy["entry"]["threshold_log_range_1h_coefficient"]
     )
-    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(
-        template_strategy["entry"]["threshold_volatility_1m_weight"]
+    assert long_strategy["entry"]["threshold_log_range_1m_coefficient"] == pytest.approx(
+        template_strategy["entry"]["threshold_log_range_1m_coefficient"]
     )
     assert long_strategy["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(
         template_strategy["entry"]["threshold_exposure_ratio_coefficient"]
@@ -1408,10 +1408,10 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
     source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 0.0,
         "ema_readiness": 0.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
     }
     source["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 0.0
-    source["bot"]["long"]["forager"]["volatility_ema_span_minutes"] = 0.0
+    source["bot"]["long"]["forager"]["log_range_ema_span_minutes"] = 0.0
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
@@ -1419,10 +1419,10 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
         "unilateralness": 0.0,
         "volume": 0.0,
         "ema_readiness": 1.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
     }
     assert prepared["bot"]["long"]["forager"]["volume_ema_span_minutes"] == 0.0
-    assert prepared["bot"]["long"]["forager"]["volatility_ema_span_minutes"] == 0.0
+    assert prepared["bot"]["long"]["forager"]["log_range_ema_span_minutes"] == 0.0
 
 
 def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
@@ -1432,7 +1432,7 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
     source["bot"]["short"]["forager"]["score_weights"] = {
         "volume": 0.0,
         "ema_readiness": 0.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1441,5 +1441,5 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
         "unilateralness": 0.0,
         "volume": 0.0,
         "ema_readiness": 0.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
     }

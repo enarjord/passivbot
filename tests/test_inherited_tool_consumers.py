@@ -25,7 +25,7 @@ def test_explicit_preset_reopens_visible_domains_from_lean_common_weights(kind):
     from tools.optimizer_bounds import apply_recommended_bounds
     raw = source(kind)
     raw["bot"]["global"]["forager"] = {"score_weights": {
-        "volume": 0.2, "volatility": 0.2, "ema_readiness": 0.2, "unilateralness": 0.4}}
+        "volume": 0.2, "log_range": 0.2, "ema_readiness": 0.2, "unilateralness": 0.4}}
     before = deepcopy(raw)
     exported = apply_recommended_bounds(raw)
     loaded = prepare_config(exported, verbose=False)

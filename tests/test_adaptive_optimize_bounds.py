@@ -33,7 +33,7 @@ def freeze_other_score_weights(config):
             config["bot"][side]["forager"]["score_weights"], path=f"bot.{side}.forager.score_weights"
         )
         target = config["optimize"]["bounds"][side]["forager"]
-        for name in ("volume", "volatility", "ema_readiness"):
+        for name in ("volume", "log_range", "ema_readiness"):
             target.setdefault("score_weights", {})[name] = [values[name], values[name]]
 
 def omit_cooldown_bounds(config):
@@ -82,7 +82,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
         assert f"{side}_{key}" not in original
     source["bot"][side]["forager"].update(
         score_weights={"volume": 1.0, "ema_readiness": 0.0,
-                       "volatility": 0.0, "unilateralness": 1.0},
+                       "log_range": 0.0, "unilateralness": 1.0},
         unilateralness_ema_span_minutes=42.5,
     )
     source["bot"][side]["entry_cooldown"].update(
@@ -128,7 +128,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
         source["bot"][side]["forager"].update(
             unilateralness_ema_span_minutes=span,
             score_weights={"volume": 1.0, "ema_readiness": 1.0,
-                           "volatility": 0.0, "unilateralness": weight},
+                           "log_range": 0.0, "unilateralness": weight},
         )
     freeze_other_score_weights(source)
     omit_unilateralness_bounds(source)
@@ -194,7 +194,7 @@ def test_direct_cleaning_keeps_omitted_bounds_and_reloads_fixed_effective_weight
     source = get_expanded_config_prototype()
     omit_unilateralness_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 2.0,
+        "volume": 1.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 2.0,
     }
     source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
     freeze_other_score_weights(source)

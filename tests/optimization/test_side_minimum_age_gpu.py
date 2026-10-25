@@ -38,7 +38,7 @@ def test_actual_gpu_age_admission_matches_native_counts(monkeypatch, kind, topol
         else:
             strategy["entry"].update(initial_qty_fraction=0.01, initial_ema_distance_fraction=0.0, reentry_qty_multiplier=0.0)
             for group in ("entry", "close"):
-                strategy[group].update(threshold_volatility_1h_weight=0.0, retracement_volatility_1h_weight=0.0)
+                strategy[group].update(threshold_log_range_1h_coefficient=0.0, retracement_log_range_1h_coefficient=0.0)
     for coin, market in markets.items():
         if coin != "__meta__":
             market["inception_timestamp_ms"] = int(timestamps[0])
@@ -114,7 +114,7 @@ def combined_policy_inputs(kind, eligible_side, allow_entry):
         else:
             strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, reentry_qty_multiplier=0.0)
             for group in ("entry", "close"):
-                strategy[group].update(threshold_volatility_1h_weight=0.0, retracement_volatility_1h_weight=0.0)
+                strategy[group].update(threshold_log_range_1h_coefficient=0.0, retracement_log_range_1h_coefficient=0.0)
     membership = config["backtest"]["coins"]
     config = prepare_config(clean_config(config), verbose=False)
     config["backtest"]["coins"] = membership

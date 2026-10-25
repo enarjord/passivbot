@@ -1041,7 +1041,7 @@ def test_direct_rust_zero_warmup_keeps_automatic_non_rms_budget(side, metadata):
     cfg = _ema_anchor_config(True, include_dataset=False)
     for pside in ("long", "short"):
         cfg["bot"][pside]["forager"].update(volume_ema_span_minutes=30.0, unilateralness_ema_span_minutes=1.0)
-        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_volatility_ema_span_1h_candles"] = 0.1
+        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_log_range_ema_span_1h_candles"] = 0.1
         cfg["bot"][pside]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -1147,7 +1147,7 @@ def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(si
     cfg['bot'][side]['universe']['approved_coins'] = coins
     cfg["bot"][side]["risk"]["max_positions"] = 3
     cfg["bot"][side]["forager"].update(unilateralness_ema_span_minutes=1.0,
-        score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
+        score_weights={"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
     cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=1)
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": coins}

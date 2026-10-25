@@ -246,7 +246,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
             for section in ("entry", "close"):
                 params[section].update(
                     threshold_base_pct=.9, threshold_exposure_ratio_coefficient=0.,
-                    threshold_volatility_1m_weight=0., threshold_volatility_1h_weight=0.,
+                    threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
                 )
     base = mps_kernel._MulticoinReplayRunner
     initial, run, concatenate = base.__init__, base.run, cuda_runtime.cat
