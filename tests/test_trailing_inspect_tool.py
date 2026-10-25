@@ -1431,3 +1431,19 @@ def test_overview_exports_fractional_ema_horizons_with_explicit_units(tmp_path, 
     assert "31.5 minutes" in report
     assert "4.25 one-hour candles" in report
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("stem,section,leaf", [
+    ("entry-threshold", "entry", "threshold_exposure_ratio_coefficient"),
+    ("entry-retracement", "entry", "retracement_exposure_ratio_coefficient"),
+    ("close-threshold", "close", "threshold_exposure_ratio_coefficient"),
+])
+def test_exposure_coefficient_flags_reach_the_actual_parameter_override(stem, section, leaf):
+    parser = trailing_inspect.build_parser()
+    args = parser.parse_args([f"--{stem}-exposure-ratio-coefficient", "0.375"])
+    params, _ = trailing_inspect.load_parameter_source(None, "long")
+    changed = trailing_inspect.apply_parameter_overrides(params, args)
+    assert params[section][leaf] == 0.375
+    assert len(changed) == 1 and leaf in changed[0]
+    with pytest.raises(SystemExit):
+        parser.parse_args([f"--{stem}-we-weight", "0.375"])
