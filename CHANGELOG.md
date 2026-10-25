@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Rename optimizer polish to `--polish-bounds-fraction`: `0.25` still narrows bounds by a
+  relative half-width of 25%, without rescaling values. Perturbation helpers now distinguish
+  relative fractions from probabilities of retaining an unchanged parameter.
+
 - Automatically stream local integer tick inputs for large Metal trailing-martingale histories.
   Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
   without changing their values, and admit the bounded device footprint against the safety budget.
