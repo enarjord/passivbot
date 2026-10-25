@@ -16,10 +16,10 @@ from tools.migrate_config_v9 import main, migrate
 def released(kind="trailing_martingale"):
     source = get_released_v8_defaults(strategy_kind=kind)
     source["backtest"]["visible_metrics"] = [
-        name for name in source["backtest"]["visible_metrics"] if not name.endswith("_w")
+        name for name in source["backtest"]["visible_metrics"] if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
     ]
     source["optimize"]["scoring"] = [
-        item for item in source["optimize"]["scoring"] if not item["metric"].endswith("_w")
+        item for item in source["optimize"]["scoring"] if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")
     ]
     return source
 

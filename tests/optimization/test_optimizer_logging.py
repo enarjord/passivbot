@@ -119,7 +119,7 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     caplog.set_level(logging.INFO)
     specs = [ObjectiveSpec("adg_strategy_eq", "max"), ObjectiveSpec("sharpe_ratio_strategy_eq", "max")]
     specs += [ObjectiveSpec(name, "min") for name in (
-        "strategy_eq_underwater_pct_mean", "strategy_eq_recovery_days_max",
+        "pain_index_strategy_eq", "strategy_eq_recovery_days_max",
         "drawdown_worst_strategy_eq", "drawdown_worst_mean_1pct_strategy_eq",
         "position_held_time_weighted_mean_hours",
     )]
@@ -176,11 +176,11 @@ def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
         result["optimize"] = {"scoring": [
             {"metric": "adg_strategy_eq", "goal": "max"},
             {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
-            {"metric": "strategy_eq_underwater_pct_mean", "goal": "min"},
+            {"metric": "pain_index_strategy_eq", "goal": "min"},
         ]}
         result["metrics"]["objectives"] = {
             "adg_strategy_eq": gain, "drawdown_worst_strategy_eq": drawdown,
-            "strategy_eq_underwater_pct_mean": underwater,
+            "pain_index_strategy_eq": underwater,
         }
         return result
 
@@ -201,7 +201,7 @@ def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
     assert "quality=unchanged_tradeoff" in caplog.text
     assert "adg_strategy_eq=[0.5,2]" in caplog.text
     assert "drawdown_worst_strategy_eq=[1,4]" in caplog.text
-    assert "strategy_eq_underwater_pct_mean=[1,4]" in caplog.text
+    assert "pain_index_strategy_eq=[1,4]" in caplog.text
     assert not any("*" in record.getMessage() for record in caplog.records)
 
 

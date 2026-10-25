@@ -459,7 +459,7 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
     kwargs = dict(
         symbols_by_side={"long": {"BTC"}, "short": set()},
         bp_lookup=lookup,
-        warmup_ratio=1.0,
+        activation_span_fraction=1.0,
         max_warmup_minutes=1_000_000,
         forager_enabled={"long": False, "short": False},
         span_buffer=1.0,
