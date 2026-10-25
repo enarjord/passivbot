@@ -170,7 +170,7 @@ def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_ga
 
 def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     config = _base_config()
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["max_realized_loss_pct"] == 0.1
@@ -201,7 +201,7 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
 
 def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coin_override():
     config = _base_config()
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     mss = _base_mss()
 
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
@@ -219,7 +219,7 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
         "short": ["ABCUSDT"],
     })
     config["bot"]["short"]["risk"]["max_positions"] = 1
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     market_settings = {
         coin: {
             "maker": 0.0001,
@@ -244,12 +244,12 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     config = _base_config()
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
-                "long": {"wallet_exposure_limit": 0.25},
-                "short": {"wallet_exposure_limit": 0.5},
+                "long": {"wallet_exposure_limit_ratio": 0.25},
+                "short": {"wallet_exposure_limit_ratio": 0.5},
             }
         }
     }
@@ -264,9 +264,9 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
 
 def test_zero_coin_wallet_override_preserves_side_total_exposure():
     config = _base_config()
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.5
     config["coin_overrides"] = {
-        "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit": 0.0}}}
+        "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.0}}}
     }
 
     bot_params_list, _, _, _ = prep_backtest_args(config, _base_mss(), "binance")
@@ -280,14 +280,14 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
     config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.2
+    config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.2
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
                 "long": {
                     "hsl": {
                         "enabled": True,
-                        "drawdown_ratio_threshold": 0.01,
+                        "drawdown_threshold_fraction": 0.01,
                     }
                 }
             }
@@ -327,7 +327,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     config["coin_overrides"] = {
-        "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
+        "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.25}}}
     }
     market_settings = {
         "BTC": {

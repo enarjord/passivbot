@@ -14,7 +14,7 @@ from test_hsl_backtest_config import inputs, payload, run
 
 def fixed_side_bounds(cfg):
     cfg["optimize"]["bounds"] = {
-        side: {"risk": {"max_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]}}
+        side: {"risk": {"max_positions": [1, 1], "total_wallet_exposure_limit_ratio": [1, 1]}}
         for side in ("long", "short")
     }
     if cfg["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
@@ -23,7 +23,7 @@ def fixed_side_bounds(cfg):
 
 def threshold_vector(shape, threshold):
     return [
-        threshold if path[-1] == "drawdown_ratio_threshold" else bound.low
+        threshold if path[-1] == "drawdown_threshold_fraction" else bound.low
         for (_, path), bound in zip(shape.key_paths, shape.bounds)
     ]
 
@@ -37,7 +37,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
+    target["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
     cfg["optimize"]["limits"] = []
     shape = build_optimization_shape(cfg)
@@ -112,7 +112,7 @@ def test_hsl_runtime_boundary_rejects_removed_metrics(tier):
 def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
+    cfg["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["drawdown_worst_ema_hsl_long"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)

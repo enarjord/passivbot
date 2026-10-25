@@ -24,7 +24,7 @@ def source(kind="trailing_martingale"):
         "portfolio": {"strategy_kind": kind},
         "long": {"enabled": True}, "global": { "universe": {"approved_coins": ["AAA"], "minimum_coin_age_days": 0.0}},
         "short": {"enabled": False}},
-        "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 3.0]}}}}}
+        "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit_ratio": [1.0, 3.0]}}}}}
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -42,7 +42,7 @@ def test_resume_compares_authored_bounds_and_resolved_activation_not_hydrated_do
     assert set(current["optimize"]["bounds"]) != {"global"}
     assert _resume_config_mismatches(saved, current) == []
     changed = deepcopy(saved)
-    changed["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit"] = [1.0, 4.0]
+    changed["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = [1.0, 4.0]
     assert any("optimize.bounds" in item for item in _resume_config_mismatches(changed, current))
 
 
@@ -59,7 +59,7 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     current_raw["bot"]["long"] = {"universe": {"ignored_coins": []}}
     current = load(current_raw)
     policy = apply_bot_policy_patch(get_bot_policy(current),
-        {"bot.global.risk.total_wallet_exposure_limit": 2.75}, channel="gene")
+        {"bot.global.risk.total_wallet_exposure_limit_ratio": 2.75}, channel="gene")
     policy = apply_bot_policy_patch(policy,
         {"bot.short.unstuck.close_fraction": 0.08}, channel="derived")
     install_bot_policy(current, policy)
@@ -71,8 +71,8 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     assert "ignored_coins" not in exported.get("long", {}).get("universe", {})
     assert "ignored_coins" not in exported.get("short", {}).get("universe", {})
     assert exported["global"]["universe"]["ignored_coins"] == str(ignored)
-    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.75
-    assert ("bot", "global", "risk", "total_wallet_exposure_limit") in get_bot_policy(result)._genes
+    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.75
+    assert ("bot", "global", "risk", "total_wallet_exposure_limit_ratio") in get_bot_policy(result)._genes
     assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.08
     assert get_bot_policy(result)._derived == policy._derived
     assert list(result["bot"]["long"]["universe"]["ignored_coins"]) == ["BBB"]
@@ -126,11 +126,11 @@ def test_prepared_dataset_reconstructs_effective_policy_without_source_reread(tm
     path.unlink()
     policy, execution = registered.policy_config(), registered.execution_config()
     assert get_bot_policy(policy) is not None
-    assert policy["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert policy["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert execution["bot"]["long"]["strategy"][kind]
     assert execution["bot"]["short"]["universe"]["approved_coins"] == ["AAA"]
-    policy["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 99
-    assert registered.policy_config()["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    policy["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 99
+    assert registered.policy_config()["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
 
 
 def test_request_owned_common_gene_reuses_execution_identity_but_equal_pin_changes_authority():
@@ -139,13 +139,13 @@ def test_request_owned_common_gene_reuses_execution_identity_but_equal_pin_chang
     key = execution_key(config)
     initial_contract = build_evaluation_contract(config)
     values = [binding.bound.low for binding in plan.bindings]
-    values[[binding.key for binding in plan.bindings].index("bot.global.risk.total_wallet_exposure_limit")] = 2.75
+    values[[binding.key for binding in plan.bindings].index("bot.global.risk.total_wallet_exposure_limit_ratio")] = 2.75
     changed = deepcopy(config)
     install_bot_policy(changed, plan.apply_vector(get_bot_policy(config), values))
     assert execution_key(changed) == key
     assert build_evaluation_contract(changed) == initial_contract
     raw = source()
-    raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit": 1.5}
+    raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit_ratio": 1.5}
     assert execution_key(load(raw)) != key
 
 
@@ -219,12 +219,12 @@ def test_actual_optimizer_patch_owner_records_equal_side_declarations(kind):
     from optimize import _apply_config_overrides
 
     config = load(source(kind))
-    _apply_config_overrides(config, {"bot.short.risk.total_wallet_exposure_limit": 1.5})
+    _apply_config_overrides(config, {"bot.short.risk.total_wallet_exposure_limit_ratio": 1.5})
     raw = bot_policy_source_view(config)["bot"]
-    assert raw["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
-    _apply_config_overrides(config, {"bot.global.risk.total_wallet_exposure_limit": 2.75})
-    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.75
-    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert raw["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
+    _apply_config_overrides(config, {"bot.global.risk.total_wallet_exposure_limit_ratio": 2.75})
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.75
+    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
@@ -235,10 +235,10 @@ def test_actual_optimizer_patch_owner_rebuilds_declared_bound_authority(kind):
     config = load(source(kind))
     before = get_bound_plan(config).identity()
     _apply_config_overrides(config, {
-        "optimize.bounds.global.risk.total_wallet_exposure_limit": [1.0, 4.0]})
+        "optimize.bounds.global.risk.total_wallet_exposure_limit_ratio": [1.0, 4.0]})
     assert get_bound_plan(config).identity() != before
     assert optimize_bounds_source_view(config)["optimize"]["bounds"] == {
-        "global": {"risk": {"total_wallet_exposure_limit": [1.0, 4.0]}}}
+        "global": {"risk": {"total_wallet_exposure_limit_ratio": [1.0, 4.0]}}}
 
 
 @pytest.mark.parametrize("value", [None, [], 0, "invalid"])
@@ -263,11 +263,11 @@ def test_actual_canonicalizer_repairs_only_outside_endpoints_before_transform(mo
     import optimize
     from optimization.shape import build_optimization_shape
     raw = source(kind)
-    raw["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit"] = [1.0, 70.0, 0.5]
+    raw["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = [1.0, 70.0, 0.5]
     config = load(raw)
     shape = build_optimization_shape(config)
     vector = optimize.config_to_individual(config, shape.bounds, shape.sig_digits, optimization_shape=shape)
-    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit")
+    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit_ratio")
     vector[index] = sample
     observed = []
     original = optimize.individual_to_config
@@ -279,7 +279,7 @@ def test_actual_canonicalizer_repairs_only_outside_endpoints_before_transform(mo
         vector, config, shape.bounds, shape.sig_digits, shape.key_paths, [])
     assert observed[0] == max(1.0, min(70.0, sample))
     assert vector[index] == expected
-    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == expected
+    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == expected
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
@@ -289,7 +289,7 @@ def test_actual_canonicalizer_never_repairs_nonfinite_genes(value):
     config = load(source())
     shape = build_optimization_shape(config)
     vector = optimize.config_to_individual(config, shape.bounds, shape.sig_digits, optimization_shape=shape)
-    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit")
+    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit_ratio")
     vector[index] = value
     with pytest.raises(TypeError, match="finite numeric"):
         optimize._canonicalize_optimizer_individual(

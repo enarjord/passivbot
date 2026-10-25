@@ -35,17 +35,17 @@ Throughout:
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
-* `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
+* `wel_base` abbreviates `wallet_exposure_limit_ratio` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`max_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 * Excess allowance is always bounded:
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
-  max(0, total_wallet_exposure_limit / wel_base - 1))`.
+  max(0, total_wallet_exposure_limit_ratio / wel_base - 1))`.
   If `wel_base` is non-positive/non-finite, Passivbot treats the effective
-  allowance and allowed exposure as zero. If `total_wallet_exposure_limit` is
+  allowance and allowed exposure as zero. If `total_wallet_exposure_limit_ratio` is
   non-positive/non-finite, Passivbot grants no excess headroom.
 * `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never
-  expands a base WEL past the side's configured `total_wallet_exposure_limit`.
+  expands a base WEL past the side's configured `total_wallet_exposure_limit_ratio`.
   An authored base WEL already above TWEL receives no excess headroom; the headroom
   clamp does not reduce that authored base itself.
 
@@ -234,7 +234,7 @@ remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
 create no negative loss credit. The global `bot.portfolio.loss_gate` consumes the same ordered net fills with its own
 `memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
-`p = max_drawdown_ratio`, without TWEL multiplication. Each enabled filter consumes a fill
+`p = max_drawdown_fraction`, without TWEL multiplication. Each enabled filter consumes a fill
 once while the economic ledger records it once. Old rolling windows and loss percentages require
 explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
@@ -246,7 +246,7 @@ With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fractio
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
-effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)
+effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)
 wallet_exposure = abs(position_size) * position_price * c_mult / balance
 eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
 ```
@@ -339,7 +339,7 @@ unstuck, this trim is not gated by EMA distance or loss allowance.
 
 The total exposure enforcer repairs same-side portfolio exposure when the sum of
 all open same-side exchange positions exceeds
-`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`. Manual and
+`total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio`. Manual and
 panic positions count toward this same-side exposure measurement, but they are
 not repair candidates and never receive TWEL auto-reduce orders. For each
 position:
@@ -349,7 +349,7 @@ if not total_exposure_enforcer.enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio
+overweight_i       = total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio
                      / max_positions
 overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```

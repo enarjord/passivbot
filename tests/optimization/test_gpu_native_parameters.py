@@ -51,7 +51,7 @@ def test_candidate_parameters_pack_global_scaled_hsl_budget_policy(strategy, sid
     config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
     config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
     config["coin_overrides"] = {"COIN00": {"bot": {side: {
-        "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
+        "wallet_exposure_limit_ratio": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
     }}}}
     from config.overrides import parse_overrides
     config = parse_overrides(config, verbose=False)

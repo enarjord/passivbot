@@ -170,7 +170,7 @@ def test_nested_scenario_overrides_remain_supported(validator):
 @pytest.mark.parametrize("patch", [
     {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
-    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_ratio": 0.5},
+    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_fraction": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
 ])
 def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, patch):
@@ -231,7 +231,7 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
 
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
     payload = source(coin_overrides={"BTC": {"override_config_path": "policy.json", "bot": {"long": {
-        "wallet_exposure_limit": 0.5, "hsl": {"enabled": False},
+        "wallet_exposure_limit_ratio": 0.5, "hsl": {"enabled": False},
         "unstuck": {"ema_span_0_minutes": 15.5},
     }}}})
     validator.validate(payload)
@@ -257,13 +257,13 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
             field = registry.find(path)
             assert field.optimize_key == key
             assert field.optimizable
-    field = registry.find(("bot", "long", "hsl", "drawdown_ratio_threshold"))
+    field = registry.find(("bot", "long", "hsl", "drawdown_threshold_fraction"))
     assert field.recommended_bounds == (0.15, 0.15, 0.001)
     assert field.domain.minimum == 0 and field.domain.maximum == 1
     assert field.domain.exclusive_minimum
     assert field.coin_override is CoinOverridePolicy.COIN_HSL_ONLY
     assert field.denominator == "scope equity plus remembered drawdown"
-    assert registry.find(("bot", "long", "risk", "total_wallet_exposure_limit")).coin_override is CoinOverridePolicy.FORBIDDEN
+    assert registry.find(("bot", "long", "risk", "total_wallet_exposure_limit_ratio")).coin_override is CoinOverridePolicy.FORBIDDEN
 
 
 def test_metadata_report_is_separate_and_optional_authority_has_no_default(capsys):

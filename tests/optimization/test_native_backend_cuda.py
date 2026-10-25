@@ -136,7 +136,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {
-                "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
+                "wallet_exposure_limit_ratio": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
             }}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
@@ -153,7 +153,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         else:
             seed_config["bot"][seed_side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = value
         if anchors:
-            seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
+            seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0 if index == 0 else 1
         if coupled:
             seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 2 if index == 0 else 20
         (seeds_path / f"{index}.json").write_text(json.dumps(clean_config(seed_config)))

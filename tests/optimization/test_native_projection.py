@@ -61,7 +61,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
     for side in ("long", "short"):
         config["optimize"]["bounds"][side] = {"risk": {
             key: [config["bot"][side]["risk"][key]] * 2
-            for key in ("max_positions", "total_wallet_exposure_limit")
+            for key in ("max_positions", "total_wallet_exposure_limit_ratio")
         }}
     config["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max"},
@@ -445,7 +445,7 @@ def test_dynamic_side_enablement_still_selects_a_distinct_static_contract(value)
     config = planner.prepare("base", vector).record_config
     pair = next(iter(planner._variants))
     changed = deepcopy(config)
-    changed["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = value
+    changed["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = value
     if value == 0.0:
         assert not planner._execution_projections[pair].matches(changed)
         assert planning.execution_key(changed) != planning.execution_key(config)
@@ -455,7 +455,7 @@ def test_dynamic_side_enablement_still_selects_a_distinct_static_contract(value)
 @pytest.mark.parametrize("path,value", [
     ("backtest.starting_balance", 2000.0),
     ('bot.portfolio.execution.market_orders_allowed', True),
-    ("bot.portfolio.loss_gate.max_drawdown_ratio", 0.5),
+    ("bot.portfolio.loss_gate.max_drawdown_fraction", 0.5),
 ])
 def test_post_construction_static_policies_still_require_a_compatible_dataset(path, value):
     planner, vector = projection_inputs()

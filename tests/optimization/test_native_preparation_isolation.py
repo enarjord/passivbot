@@ -70,7 +70,7 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
         for side in ("long", "short"):
             config["optimize"]["bounds"].setdefault(side, {})["risk"] = {
                 key: [config["bot"][side]["risk"][key]] * 2
-                for key in ("max_positions", "total_wallet_exposure_limit")
+                for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             }
         config["optimize"]["scoring"] = [
             {"metric": "adg_strategy_eq", "goal": "max"},

@@ -519,7 +519,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 reject_retired_gpu_selector(path, context="optimizer selector")
                 return path
             path = converted
-        return released_runtime_selector(path)
+        converted = released_runtime_selector(path)
+        if parameter_selector:
+            from config.public_names import released_fixed_selector
+
+            converted = released_fixed_selector(converted)
+        return converted
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides

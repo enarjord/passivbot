@@ -397,8 +397,8 @@ class TestOverrideVariations:
                 {
                     "label": "conservative",
                     "overrides": {
-                        "bot.long.risk.total_wallet_exposure_limit": 0.5,
-                        "bot.short.risk.total_wallet_exposure_limit": 0.5,
+                        "bot.long.risk.total_wallet_exposure_limit_ratio": 0.5,
+                        "bot.short.risk.total_wallet_exposure_limit_ratio": 0.5,
                     },
                 }
             ],
@@ -408,8 +408,8 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.long.risk.total_wallet_exposure_limit"] == 0.5
-        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit"] == 0.5
+        assert scenarios[0].overrides["bot.long.risk.total_wallet_exposure_limit_ratio"] == 0.5
+        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit_ratio"] == 0.5
 
     def test_tc5_2_scenario_disabling_position_side(self):
         """TC5.2: Scenario disabling a position side."""
@@ -418,11 +418,11 @@ class TestOverrideVariations:
             scenarios=[
                 {
                     "label": "long_only",
-                    "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0},
+                    "overrides": {"bot.short.risk.total_wallet_exposure_limit_ratio": 0},
                 },
                 {
                     "label": "short_only",
-                    "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
+                    "overrides": {"bot.long.risk.total_wallet_exposure_limit_ratio": 0},
                 },
             ],
         )
@@ -431,8 +431,8 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit"] == 0
-        assert scenarios[1].overrides["bot.long.risk.total_wallet_exposure_limit"] == 0
+        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit_ratio"] == 0
+        assert scenarios[1].overrides["bot.long.risk.total_wallet_exposure_limit_ratio"] == 0
 
     def test_tc5_3_scenario_with_trailing_retracement_overrides(self):
         """TC5.3: Scenario with v8 trailing retracement overrides."""

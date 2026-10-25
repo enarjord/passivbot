@@ -2977,7 +2977,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
     for side in ("long", "short"):
         enabled = side in enabled_sides
         risk = config["bot"][side]["risk"]
-        risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
+        risk["total_wallet_exposure_limit_ratio"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
@@ -3166,14 +3166,14 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
     for side in ("long", "short"):
         enabled = side in enabled_sides
         risk = config["bot"][side]["risk"]
-        risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
+        risk["total_wallet_exposure_limit_ratio"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 2 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
         config["bot"][side]["hsl"]["enabled"] = enabled
-        config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.9
+        config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.9
         config["bot"][side]["hsl"]["ema_span_minutes"] = 1.0
         config["bot"][side]["unstuck"]["enabled"] = False
     for side in enabled_sides:
@@ -4069,7 +4069,7 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
     for side in ("long", "short"):
         enabled = side in enabled_sides
         risk = config["bot"][side]["risk"]
-        risk["total_wallet_exposure_limit"] = 0.2 if enabled else 0.0
+        risk["total_wallet_exposure_limit_ratio"] = 0.2 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0

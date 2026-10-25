@@ -75,7 +75,7 @@ def _probe_inputs(config, params, checks):
             if overrides.get(coin, {})
             .get("bot", {})
             .get(side, {})
-            .get("wallet_exposure_limit")
+            .get("wallet_exposure_limit_ratio")
             != 0
         }
         # Backtest's allocation master is the first prepared coin, including
@@ -127,7 +127,7 @@ def _probe_inputs(config, params, checks):
                 continue
             # prep_backtest_args derives global WEL from total/slots; only an
             # explicit per-coin WEL overrides that runtime allocation.
-            base_limit = float(override_side.get("wallet_exposure_limit", -1))
+            base_limit = float(override_side.get("wallet_exposure_limit_ratio", -1))
             if base_limit == 0:
                 continue
             if base_limit <= 0:

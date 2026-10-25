@@ -203,7 +203,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
                 ema_span_1=3,
                 entry_double_down_factor=0,
             )
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1)
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in ("BTC", "ETH"):
         mss[coin].update(last_valid_index=count - 1, price_step=0.001)
     out, fills = _evaluate(side, (cfg, candles, mss, np.full(count, 50000.0), ts))
@@ -446,7 +446,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
             bot["strategy"][strategy]["entry"].update(
                 initial_ema_dist=0.05, ema_gate_mode="all",
             )
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1)
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in coins:
         mss[coin].update(last_valid_index=count - 1, price_step=0.001)
     mss["SOL"].update(first_valid_index=60, warmup_minutes=1)

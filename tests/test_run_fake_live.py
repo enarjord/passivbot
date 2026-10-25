@@ -401,7 +401,7 @@ def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fractio
     config = get_expanded_config_prototype()
     config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 15.0
     config["bot"]["portfolio"]["loss_gate"].update(
-        memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
+        memory_ema_span_minutes=3.0, max_drawdown_fraction=gate_fraction
     )
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"]["enabled"] = False
@@ -964,7 +964,7 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     # both HSL and auto-unstuck disabled.
     for pside in ("long", "short"):
         cfg["bot"][pside]["unstuck"]["enabled"] = False
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.5
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.5
     cfg["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")

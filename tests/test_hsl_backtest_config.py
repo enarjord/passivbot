@@ -32,7 +32,7 @@ def inputs(mode="coin"):
         cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
         cfg["bot"][side]["hsl"].update(enabled=False)
-        cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1)
+        cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1)
         # This minute-scale HSL fixture starts trading before an hourly candle
         # exists. Its strategy does not consume hourly volatility.
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
@@ -42,8 +42,8 @@ def inputs(mode="coin"):
     active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,
-        drawdown_ratio_threshold=0.01,
-        drawdown_ratio_ema_span_minutes=1.5,
+        drawdown_threshold_fraction=0.01,
+        drawdown_fraction_ema_span_minutes=1.5,
         cooldown_after_red_minutes=10,
         panic_close_order_type="market",
     )
@@ -141,8 +141,8 @@ def test_effective_coin_override_has_single_authority():
             "bot": {
                 "long": {
                     "hsl": {
-                        "drawdown_ratio_ema_span_minutes": 2.75,
-                        "drawdown_ratio_threshold": 0.4,
+                        "drawdown_fraction_ema_span_minutes": 2.75,
+                        "drawdown_threshold_fraction": 0.4,
                         "panic_close_order_type": "limit",
                     }
                 }
@@ -249,7 +249,7 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
 def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
     cfg, markets, _ = inputs()
     cfg["bot"]["long"]["unstuck"]["enabled"] = False
-    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=.03, drawdown_ratio_ema_span_minutes=1.0)
+    cfg["bot"]["long"]["hsl"].update(drawdown_threshold_fraction=.03, drawdown_fraction_ema_span_minutes=1.0)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=1.0, initial_ema_distance_fraction=0.0,
         ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
@@ -499,10 +499,10 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     cfg["backtest"]["dynamic_wel_by_tradability"] = False
     cfg["bot"]["long"]["risk"].update(
         max_positions=slots,
-        total_wallet_exposure_limit=2.5,
+        total_wallet_exposure_limit_ratio=2.5,
         we_excess_allowance_fraction=0.44,
     )
-    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
+    cfg["bot"]["long"]["hsl"].update(drawdown_threshold_fraction=0.2, drawdown_fraction_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=1,
         initial_ema_distance_fraction=0,
@@ -511,7 +511,7 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     )
     if slots > 1:
         cfg["coin_overrides"] = {
-            "AAA": {"bot": {"long": {"wallet_exposure_limit": 0.2}}}
+            "AAA": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.2}}}
         }
     ordinary = run(payload(cfg=cfg, mss=markets))
     cfg["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True

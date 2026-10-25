@@ -24,10 +24,10 @@ from tools.migrate_config_v9 import migrate
 PORTFOLIO_PATHS = (
     "strategy_kind", "hedge_mode", "execution.market_orders_allowed",
     "execution.market_order_near_touch_fraction", "warmup.span_multiplier",
-    "warmup.max_minutes", "loss_gate.max_drawdown_ratio",
+    "warmup.max_minutes", "loss_gate.max_drawdown_fraction",
     "loss_gate.memory_ema_span_minutes", "unstuck.memory_ema_span_minutes",
-    "hsl.scope", "hsl.enabled", "hsl.drawdown_ratio_threshold",
-    "hsl.drawdown_ratio_ema_span_minutes", "hsl.memory_ema_span_minutes",
+    "hsl.scope", "hsl.enabled", "hsl.drawdown_threshold_fraction",
+    "hsl.drawdown_fraction_ema_span_minutes", "hsl.memory_ema_span_minutes",
     "hsl.panic_close_order_type", "hsl.cooldown_after_red_minutes",
     "hsl.scale_budget_with_excess_allowance",
 )

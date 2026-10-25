@@ -218,7 +218,7 @@ def _build_template_config():
                     "warmup": {"span_multiplier": 0.3, "max_minutes": None},
                     "hsl": {"scope": "coin"},
                     "loss_gate": {
-                        "max_drawdown_ratio": 1.0,
+                        "max_drawdown_fraction": 1.0,
                         "memory_ema_span_minutes": 43200.0,
                     },
                     "unstuck": {"memory_ema_span_minutes": 43200.0},

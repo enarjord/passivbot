@@ -33,7 +33,7 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
         bot = config["bot"][side]
         bot["risk"].update(
             n_positions=coins,
-            total_wallet_exposure_limit=float(coins),
+            total_wallet_exposure_limit_ratio=float(coins),
         )
         # The fixture template already carries the canonical cooldown leaf;
         # a legacy risk leaf cannot override it. Prevent reentry after closes.

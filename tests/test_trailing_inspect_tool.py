@@ -318,7 +318,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 0.05,
+                    "max_drawdown_fraction": 0.05,
                 }},
             "long": {
                 "entry_cooldown": {
@@ -331,7 +331,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                     "position_exposure_enforcer": {
                         "enabled": True,
@@ -381,7 +381,7 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.125
     config["bot"]["long"]["risk"]["max_positions"] = 3.0
     config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
 
@@ -402,7 +402,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "hsl": {
@@ -418,7 +418,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                     },
                 },
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {
@@ -523,11 +523,11 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
             "portfolio": {"hsl": {
                     "scope": "coin",
                 }, "loss_gate": {
-                    "max_drawdown_ratio": 1.0,
+                    "max_drawdown_fraction": 1.0,
                 }},
             "long": {
                 "risk": {
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                     "max_positions": 1,
                 },
                 "strategy": {

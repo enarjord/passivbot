@@ -22,7 +22,7 @@ def inputs(*, suite=False, fixed=False, mirror=False):
         side: {
             "risk": {
                 key: [config["bot"][side]["risk"][key]] * 2
-                for key in ("max_positions", "total_wallet_exposure_limit")
+                for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             },
             "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": [0.01, 0.05]}}},
         }
@@ -173,7 +173,7 @@ def test_last_scenario_global_memory_span_override_is_request_owned(memory_key):
     "path,value",
     [
         ("live.startup.risk_bootstrap_max_lookback_minutes", 64800.0),
-        ("bot.portfolio.loss_gate.max_drawdown_ratio", 0.5),
+        ("bot.portfolio.loss_gate.max_drawdown_fraction", 0.5),
         ("bot.portfolio.execution.market_orders_allowed", True),
         ("backtest.starting_balance", 2000.0),
     ],
@@ -252,14 +252,14 @@ def test_candidate_side_topology_changes_require_compatible_prepared_dataset(cha
     planner, vector = inputs(suite=True)
     if change == "disable":
         planner.base.config["optimize"]["fixed_runtime_overrides"] = {
-            "bot.short.risk.total_wallet_exposure_limit": 0,
+            "bot.short.risk.total_wallet_exposure_limit_ratio": 0,
         }
     else:
         bindings = []
         for binding in planner.bindings:
             dataset = binding.dataset
             config = json.loads(dataset.config_json)
-            config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
+            config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0
             bindings.append(replace(binding, dataset=PreparedGpuDataset(
                 config=config, markets=json.loads(dataset.markets_json), exchange=dataset.exchange,
                 hlcvs=dataset.hlcvs, btc=dataset.btc, timestamps=dataset.timestamps,

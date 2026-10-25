@@ -181,8 +181,8 @@
             },
             "hsl": {
                 "cooldown_after_red_minutes": 1.0,
-                "drawdown_ratio_ema_span_minutes": 1.0,
-                "drawdown_ratio_threshold": 0.05,
+                "drawdown_fraction_ema_span_minutes": 1.0,
+                "drawdown_threshold_fraction": 0.05,
                 "enabled": true,
                 "memory_ema_span_minutes": 1440.0,
                 "panic_close_order_type": "market",
@@ -192,7 +192,7 @@
                 "max_positions": 1,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
                 "total_exposure_enforcer": {"enabled": false, "policy": "reduce_overweight", "threshold_ratio": 1.0},
-                "total_wallet_exposure_limit": 5,
+                "total_wallet_exposure_limit_ratio": 5,
                 "we_excess_allowance_fraction": 0
             },
             "strategy": {
@@ -248,7 +248,7 @@
             "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": true},
             "hedge_mode": false,
             "hsl": {"scope": "position_side"},
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
+            "loss_gate": {"max_drawdown_fraction": 1.0, "memory_ema_span_minutes": 1440.0},
             "strategy_kind": "trailing_martingale",
             "unstuck": {"memory_ema_span_minutes": 1440.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.0}
@@ -372,13 +372,13 @@
                 },
                 "hsl": {
                     "cooldown_after_red_minutes": [2160, 2160, 10],
-                    "drawdown_ratio_ema_span_minutes": [720, 720, 1],
+                    "drawdown_fraction_ema_span_minutes": [720, 720, 1],
                     "memory_ema_span_minutes": [1440.0, 1440.0],
-                    "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
+                    "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [7, 7, 1],
-                    "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
+                    "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
                     "we_excess_allowance_fraction": [0, 0.4, 0.01],
                     "position_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
                     "total_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]}

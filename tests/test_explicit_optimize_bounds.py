@@ -88,7 +88,7 @@ def test_cleaning_and_reload_preserve_disabled_zero_weight_coordinates():
     source["bot"]["short"]["forager"]["score_weights"] = {
         name: 0.0 for name in source["bot"]["short"]["forager"]["score_weights"]
     }
-    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     source["optimize"]["bounds"] = {}
     prepared = prepare_config(clean_config(source), verbose=False)
     bounds = gene_bounds(prepared)
@@ -214,7 +214,7 @@ def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "short-active", "overrides": {
-        "bot.short.risk.total_wallet_exposure_limit": 1.0,
+        "bot.short.risk.total_wallet_exposure_limit_ratio": 1.0,
         "bot.short.forager.score_weights.unilateralness": 0.5,
     }}])
     with pytest.raises(ValueError, match=r"short-active.*bot.short.forager.score_weights.*unilateralness"):
@@ -226,7 +226,7 @@ def mirrored_weight_source(strategy="trailing_martingale"):
         name: [0.0, 1.0] for name in ("volume", "volatility", "ema_readiness")
     }})
     source["bot"]["portfolio"]["strategy_kind"] = strategy
-    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     return source
 
@@ -245,7 +245,7 @@ def mirrored_weight_candidate(config, volume):
 @pytest.mark.parametrize("weight", ["volume", "unilateralness"])
 def test_mirrored_short_scenario_pins_validate_the_active_source_domains(strategy, weight):
     source = mirrored_weight_source(strategy)
-    assert source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     source["backtest"].update(suite_enabled=True, scenarios=[{
         "label": "mirrored-pin", "overrides": {
             f"bot.short.forager.score_weights.{weight}": 0.5,
@@ -262,14 +262,14 @@ def test_mirroring_shadows_short_runtime_pins_and_keeps_directional_selection():
     source["bot"]["long"]["forager"]["always_include"] = ["BTC"]
     source["bot"]["short"]["forager"]["always_include"] = ["ETH"]
     source["optimize"]["fixed_runtime_overrides"] = {
-        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "bot.short.risk.total_wallet_exposure_limit_ratio": 0.0,
         "bot.short.forager.score_weights.volume": 0.5,
     }
     config = prepare_config(source, verbose=False)
     volumes = []
     for volume in (0.1, 0.9):
         candidate = mirrored_weight_candidate(config, volume)
-        assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit"] > 0
+        assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] > 0
         assert candidate["bot"]["short"]["forager"]["score_weights"] == candidate["bot"]["long"]["forager"]["score_weights"]
         assert candidate["bot"]["short"]["forager"]["always_include"] == ["ETH"]
         volumes.append(candidate["bot"]["short"]["forager"]["score_weights"]["volume"])
@@ -320,7 +320,7 @@ def test_postmirror_long_scenario_pins_do_not_fix_short_source_domains():
         prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("field", ["max_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("field", ["max_positions", "total_wallet_exposure_limit_ratio"])
 @pytest.mark.parametrize("activity", ["runtime_source_disabled", "scenario_target_disabled", "scenario_target_reactivated"])
 def test_mirrored_weight_pins_follow_effective_runtime_and_scenario_activity(field, activity):
     from optimization.warmup import _apply_config_overrides
@@ -556,8 +556,8 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
 @pytest.mark.parametrize("transform,source_parts,target_parts,configured,domain", [
     ("couple_unstuck_ema_spans", ("strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
      ("long", "unstuck", "ema_span_0_minutes"), 42.5, [100.0, 200.0]),
-    ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit"),
-     ("short", "risk", "total_wallet_exposure_limit"), 0.0, [0.5, 1.5]),
+    ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit_ratio"),
+     ("short", "risk", "total_wallet_exposure_limit_ratio"), 0.0, [0.5, 1.5]),
     ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_fraction"),
      ("long", "strategy", "trailing_martingale", "close", "threshold_base_fraction"), 0.0, [0.01, 0.02]),
 ])

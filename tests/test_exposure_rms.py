@@ -32,7 +32,7 @@ def fixture_inputs(strategy="trailing_martingale", sides="both", scenario="ordin
         for side in ("long", "short"):
             config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.5
         config["coin_overrides"] = {"COIN00": {"bot": {
-            side: {"wallet_exposure_limit": 0.2}
+            side: {"wallet_exposure_limit_ratio": 0.2}
             for side in ("long", "short")
         }}}
         # A later listing changes runtime allocation.

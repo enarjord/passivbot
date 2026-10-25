@@ -86,7 +86,7 @@ def _native_args():
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
         cfg['bot'][side]['risk']['max_positions'] = 1
-        cfg['bot'][side]['risk']['total_wallet_exposure_limit'] = 1.0 if side == 'long' else 0.0
+        cfg['bot'][side]['risk']['total_wallet_exposure_limit_ratio'] = 1.0 if side == 'long' else 0.0
         cfg['bot'][side]['strategy']['trailing_martingale']['entry']['ema_gate_mode'] = 'disabled'
         # This short fixture tests fill admission, not hourly indicators.
         for leg in ['entry', 'close']:

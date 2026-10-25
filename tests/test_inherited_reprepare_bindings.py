@@ -92,20 +92,20 @@ def test_binding_canonicalization_preserves_numeric_origins_and_sparse_equal_pin
     weights = {"volume": 2.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 0.0}
     raw = {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"risk": {"total_wallet_exposure_limit": 1.5},
+        "global": {"risk": {"total_wallet_exposure_limit_ratio": 1.5},
                    "forager": {"score_weights": weights}},
-        "short": {"risk": {"total_wallet_exposure_limit": 1.5}},
-    }, "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 2.0]}}}}}
+        "short": {"risk": {"total_wallet_exposure_limit_ratio": 1.5}},
+    }, "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit_ratio": [1.0, 2.0]}}}}}
     config = prepare_config(raw, live_only=True, verbose=False)
     config["bot"]["global"]["universe"]["approved_coins"] = "coins.json"
     loaded = prepare_config(config, live_only=True, base_config_path=str(a / "config.json"), verbose=False)
     source = bot_policy_source_view(loaded)["bot"]
     assert source["global"]["forager"]["score_weights"] == weights
-    assert source["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    assert source["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert "risk" not in source.get("long", {}) and "forager" not in source["short"]
     assert loaded["bot"]["long"]["forager"]["score_weights"]["volume"] == pytest.approx(2.0 / 3.0)
     policy = get_bot_policy(loaded)
     plan = get_bound_plan(loaded)
     plan.apply_values(policy, {})
-    binding = next(binding for binding in plan.bindings if binding.key == "bot.global.risk.total_wallet_exposure_limit")
-    assert binding.effective_targets == (("bot", "long", "risk", "total_wallet_exposure_limit"),)
+    binding = next(binding for binding in plan.bindings if binding.key == "bot.global.risk.total_wallet_exposure_limit_ratio")
+    assert binding.effective_targets == (("bot", "long", "risk", "total_wallet_exposure_limit_ratio"),)

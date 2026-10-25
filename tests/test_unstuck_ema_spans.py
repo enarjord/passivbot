@@ -545,11 +545,11 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     opposite = "short" if side == "long" else "long"
     c["bot"][opposite]["unstuck"]["enabled"] = False
-    c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0
+    c["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0
     c["bot"][side]["unstuck"].update(
         enabled=True, loss_allowance_fraction=0.1, close_fraction=0.1, exposure_trigger_ratio=0.9
     )
-    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = bound
+    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit_ratio"] = bound
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
     c["bot"][side]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
@@ -558,9 +558,9 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     )
     assert compute_backtest_warmup_minutes(c) == baseline
     assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
-    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = [0, 1]
+    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit_ratio"] = [0, 1]
     c["coin_overrides"] = {
-        "BTC": {"bot": {side: {"wallet_exposure_limit": 0}}}
+        "BTC": {"bot": {side: {"wallet_exposure_limit_ratio": 0}}}
     }
     assert compute_backtest_warmup_minutes(c) == 700_000
     assert compute_per_coin_warmup_minutes(c)["__default__"] == 500_000
@@ -646,7 +646,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
-    c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=1)
+    c["bot"][side]["risk"].update(total_wallet_exposure_limit_ratio=1.0, max_positions=1)
     c["optimize"]["bounds"] = {}
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
@@ -654,7 +654,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
         "BTC": {
             "bot": {
                 side: {
-                    "wallet_exposure_limit": 0,
+                    "wallet_exposure_limit_ratio": 0,
                     "unstuck": {"ema_span_0_minutes": 500_000.5},
                 }
             }
@@ -662,7 +662,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     }
     assert compute_backtest_warmup_minutes(c) == baseline
     assert compute_per_coin_warmup_minutes(c)["BTC"] == baseline_coin
-    c["coin_overrides"]["BTC"]["bot"][side]["wallet_exposure_limit"] = 1.0
+    c["coin_overrides"]["BTC"]["bot"][side]["wallet_exposure_limit_ratio"] = 1.0
     assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_001
 
 
@@ -673,7 +673,7 @@ def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
     c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
-    c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=0)
+    c["bot"][side]["risk"].update(total_wallet_exposure_limit_ratio=1.0, max_positions=0)
     c["optimize"]["bounds"][side]["risk"]["max_positions"] = [0, 0]
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]

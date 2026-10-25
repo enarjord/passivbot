@@ -143,7 +143,7 @@ def _native_payload(long_days, short_days, *, inception=BASE, interval=1):
     ages(config, long_days, short_days)
     for side in ("long", "short"):
         config["bot"][side]["universe"]["approved_coins"] = ["AAA"]
-        config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+        config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         config["bot"][side]["hsl"]["enabled"] = False
     config["bot"]["portfolio"]["hedge_mode"] = True
     config["bot"]["short"]["strategy"] = deepcopy(config["bot"]["long"]["strategy"])

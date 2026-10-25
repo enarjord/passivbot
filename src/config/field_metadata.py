@@ -50,7 +50,7 @@ def enrich_fields(fields):
             data.update(_bot_metadata(path))
         elif path[:1] == ("coin_overrides",):
             data["optimizable"] = False
-            if path[-1] == "wallet_exposure_limit":
+            if path[-1] == "wallet_exposure_limit_ratio":
                 data.update(unit="ratio", denominator="raw balance")
         elif path[:1] == ("backtest",):
             data["consumers"] = ("backtest", "optimize")
@@ -174,7 +174,7 @@ def _bot_metadata(path):
                                "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.")
     elif local == "universe.ignored_coins":
         data["description"] = "Side-owned exclusions subtracted from effective approval; null or [] means none."
-    elif name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
+    elif name in {"memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes"}:
         data.update(unit="minutes", domain=FieldDomain(minimum=1.0, finite=True),
                     description="Floating-point EMA span; native f32 decay representability is validated at load time.")
     elif local.startswith("entry_cooldown."):
@@ -195,7 +195,7 @@ def _bot_metadata(path):
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
-    elif local == "hsl.drawdown_ratio_threshold":
+    elif local == "hsl.drawdown_threshold_fraction":
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
@@ -205,13 +205,13 @@ def _bot_metadata(path):
         data["domain"] = FieldDomain(choices=("limit", "market"))
     elif local == "hsl.scope":
         data["domain"] = FieldDomain(choices=("coin", "position_side", "portfolio"))
-    elif local == "loss_gate.max_drawdown_ratio":
+    elif local == "loss_gate.max_drawdown_fraction":
         data.update(unit="fraction", denominator="raw balance plus loss-gate remembered drawdown",
                     domain=FieldDomain(minimum=0.0, finite=True),
                     description="Values at least 1 disable the gate; zero blocks lossy non-panic closes.")
     elif local == "risk.max_positions":
         data.update(unit="positions", domain=FieldDomain(minimum=0, finite=True))
-    elif local == "risk.total_wallet_exposure_limit":
+    elif local == "risk.total_wallet_exposure_limit_ratio":
         data.update(unit="ratio", denominator="raw balance",
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "risk.we_excess_allowance_fraction":

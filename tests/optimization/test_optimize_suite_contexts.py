@@ -150,11 +150,11 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable
         {"label": "base"},
         {
             "label": "long_only",
-            "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.short.risk.total_wallet_exposure_limit_ratio": 0},
         },
         {
             "label": "short_only",
-            "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.long.risk.total_wallet_exposure_limit_ratio": 0},
         },
     ]
     set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})

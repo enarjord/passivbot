@@ -99,7 +99,7 @@ def test_native_recovery_matches_cpu_on_subhour_replay(cuda_runtime, strategy, s
     config['bot']["portfolio"]['hedge_mode'] = sides == 'both'
     if sides == "both":
         config["bot"]["short"]["risk"].update(
-            n_positions=coins, total_wallet_exposure_limit=float(coins),
+            n_positions=coins, total_wallet_exposure_limit_ratio=float(coins),
         )
     report = run_comparison(
         (config, candles, markets, btc, timestamps), "bybit", METRICS,

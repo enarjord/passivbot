@@ -453,10 +453,10 @@ def _validate_patch_leaf_types(
 
     for pside in ("long", "short"):
         side_patch = patch.get("bot", {}).get(pside, {})
-        if "wallet_exposure_limit" in side_patch:
-            value = side_patch["wallet_exposure_limit"]
+        if "wallet_exposure_limit_ratio" in side_patch:
+            value = side_patch["wallet_exposure_limit_ratio"]
             display_path = (
-                f"coin_overrides.{coin}.bot.{pside}.wallet_exposure_limit ({origin})"
+                f"coin_overrides.{coin}.bot.{pside}.wallet_exposure_limit_ratio ({origin})"
             )
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise TypeError(f"{display_path} must be numeric")
@@ -528,7 +528,7 @@ def _validate_effective_coin_config(
             effective_patch = deepcopy(patch[root])
             if root == "bot":
                 for side in ("long", "short"):
-                    effective_patch.get(side, {}).pop("wallet_exposure_limit", None)
+                    effective_patch.get(side, {}).pop("wallet_exposure_limit_ratio", None)
             nested_update(effective[root], effective_patch)
     # This effective config represents one coin. Its pinned cooldown leaves
     # cannot be changed by global optimizer genes, so omit those dimensions
@@ -579,12 +579,12 @@ def _validate_effective_coin_config(
     for path, original_value in _iter_patch_leaves(patch):
         normalized_value = _get_nested_value(prepared, path, default=_MISSING)
         if normalized_value is _MISSING:
-            # wallet_exposure_limit is a per-coin runtime value calculated after
+            # wallet_exposure_limit_ratio is a per-coin runtime value calculated after
             # canonical config preparation, so it has no canonical global leaf.
             if (
                 len(path) == 3
                 and path[0] == "bot"
-                and path[2] == "wallet_exposure_limit"
+                and path[2] == "wallet_exposure_limit_ratio"
             ):
                 normalized_value = original_value
             else:
@@ -640,9 +640,9 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
     for side in ("long", "short"):
         node = validation.get("bot", {})
         node = node.get(side) if isinstance(node, dict) else None
-        if isinstance(node, dict) and "wallet_exposure_limit" in node:
+        if isinstance(node, dict) and "wallet_exposure_limit_ratio" in node:
             wallet_patch.setdefault("bot", {})[side] = {
-                "wallet_exposure_limit": node.pop("wallet_exposure_limit")
+                "wallet_exposure_limit_ratio": node.pop("wallet_exposure_limit_ratio")
             }
     _validate_patch_leaf_types(config, wallet_patch, coin=coin, origin=source)
     validation.setdefault("config_version", config["config_version"])
@@ -752,8 +752,8 @@ def parse_old_coin_flags(config) -> dict:
     key_map = {
         "short_mode": ["live", "forced_mode_short"],
         "long_mode": ["live", "forced_mode_long"],
-        "WE_limit_long": ["bot", "long", "wallet_exposure_limit"],
-        "WE_limit_short": ["bot", "short", "wallet_exposure_limit"],
+        "WE_limit_long": ["bot", "long", "wallet_exposure_limit_ratio"],
+        "WE_limit_short": ["bot", "short", "wallet_exposure_limit_ratio"],
         "leverage": ["live", "leverage"],
     }
     if (

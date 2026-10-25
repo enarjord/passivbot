@@ -114,7 +114,7 @@ passivbot optimize configs/examples/default_trailing_martingale_long.json --star
 ```
 
 Wallet exposure shortcuts `-ltwel` and `-stwel` set
-`optimize.bounds.long.risk.total_wallet_exposure_limit` and the short equivalent.
+`optimize.bounds.long.risk.total_wallet_exposure_limit_ratio` and the short equivalent.
 Use a single value to fix exposure (for example `-ltwel 0`), or `LOW,HIGH[,STEP]`
 to set its search range. In live and backtest commands these shortcuts still set bot values.
 
@@ -594,7 +594,7 @@ bounds while pinning selected parameters to the config value:
 passivbot optimize path/to/config.json \
   --polish-pct 0.25 \
   --polish-bounds-mode override-all \
-  --optimize.fixed_params long.risk.max_positions,long.risk.total_wallet_exposure_limit
+  --optimize.fixed_params long.risk.max_positions,long.risk.total_wallet_exposure_limit_ratio
 ```
 
 When `--fine_tune_params` is combined with `--start`, the base optimizer config remains the run
@@ -964,7 +964,7 @@ over all exchanges before scoring.
   passive BTC exposure.
 - The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
 - Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
-  that side’s configured `total_wallet_exposure_limit`, letting you compare bots that use
+  that side’s configured `total_wallet_exposure_limit_ratio`, letting you compare bots that use
   different leverage budgets.
 
 ### Returns & Growth

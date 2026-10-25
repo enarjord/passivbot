@@ -1858,7 +1858,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_ratio"))
+        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -10363,9 +10363,9 @@ class Passivbot:
             )
             for symbol in self.coin_overrides:
                 ov_conf = self.coin_overrides[symbol].get("bot", {}).get(pside, {})
-                if "wallet_exposure_limit" in ov_conf:
+                if "wallet_exposure_limit_ratio" in ov_conf:
                     self.coin_overrides[symbol]["bot"][pside][
-                        "wallet_exposure_limit"
+                        "wallet_exposure_limit_ratio"
                     ] = self.get_wallet_exposure_limit(pside, symbol)
         if policy is not None:
             # These calculated allocation values serve live consumers, never
@@ -10381,7 +10381,7 @@ class Passivbot:
                 self.coin_overrides.get(symbol, {})
                 .get("bot", {})
                 .get(pside, {})
-                .get("wallet_exposure_limit")
+                .get("wallet_exposure_limit_ratio")
             )
             if fwel is not None:
                 return fwel
@@ -13403,7 +13403,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust bot.portfolio.loss_gate.max_drawdown_ratio to change behavior",
+                    "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,

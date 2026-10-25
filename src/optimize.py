@@ -3300,8 +3300,8 @@ def _format_starting_seed_bot(bot, live=None):
         live[field] = deepcopy(template["live"][field])
     defaults = get_expanded_config_prototype()["bot"]["long"]["hsl"]
     numeric_fields = (
-        "drawdown_ratio_threshold", "memory_ema_span_minutes",
-        "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes",
+        "drawdown_threshold_fraction", "memory_ema_span_minutes",
+        "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes",
     )
     numeric_seeds = {}
 

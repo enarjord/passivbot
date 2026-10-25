@@ -28,7 +28,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
-                      drawdown_ratio_threshold=.01, ema_span_minutes=1.,
+                      drawdown_threshold_fraction=.01, ema_span_minutes=1.,
                       cooldown_minutes_after_red=5.,
                       panic_close_order_type="market")
         strategy = config["bot"][direction]["strategy"]["trailing_martingale"]

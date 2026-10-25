@@ -131,7 +131,7 @@ Compare a base config against a small number of targeted runtime overrides:
       {
         "label": "twel_1_5",
         "overrides": {
-          "bot.long.risk.total_wallet_exposure_limit": 1.5
+          "bot.long.risk.total_wallet_exposure_limit_ratio": 1.5
         }
       },
       {

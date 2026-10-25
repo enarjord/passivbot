@@ -31,11 +31,11 @@ def get_common_bot_defaults():
         "hsl": {
             "memory_ema_span_minutes": 43200.0,
             "cooldown_after_red_minutes": 2160.0,
-            "drawdown_ratio_ema_span_minutes": 720.0,
+            "drawdown_fraction_ema_span_minutes": 720.0,
             "enabled": False,
             "scale_budget_with_excess_allowance": False,
             "panic_close_order_type": "limit",
-            "drawdown_ratio_threshold": 0.15,
+            "drawdown_threshold_fraction": 0.15,
         },
         "entry_cooldown": {
             "base_duration_minutes": 24.1,
@@ -45,7 +45,7 @@ def get_common_bot_defaults():
         },
         "risk": {
             "max_positions": 7,
-            "total_wallet_exposure_limit": 1.5,
+            "total_wallet_exposure_limit_ratio": 1.5,
             "we_excess_allowance_fraction": 0.37,
             "position_exposure_enforcer": {"enabled": False, "threshold_ratio": 1.0},
             "total_exposure_enforcer": {

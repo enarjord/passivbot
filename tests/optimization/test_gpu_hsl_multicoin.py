@@ -44,19 +44,19 @@ def make_proxy(
         coins={"binance": coins}, starting_balance=1000.0, btc_collateral_cap=0.0
     )
     for side in ("long", "short"):
-        config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
+        config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit_ratio': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
         config["bot"][side]["hsl"].update(
             enabled=enabled and mode != "portfolio",
-            drawdown_ratio_threshold=0.02,
-            drawdown_ratio_ema_span_minutes=2.5,
+            drawdown_threshold_fraction=0.02,
+            drawdown_fraction_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
         config["bot"]["portfolio"]["hsl"].update(
             enabled=enabled,
-            drawdown_ratio_threshold=0.02,
-            drawdown_ratio_ema_span_minutes=2.5,
+            drawdown_threshold_fraction=0.02,
+            drawdown_fraction_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
         )
@@ -240,7 +240,7 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_multicoin_static_policy_does_not_replace_other_coin_base(strategy):
-    p = make_proxy("coin", strategy, override={"enabled": False, "drawdown_ratio_threshold": 0.7})
+    p = make_proxy("coin", strategy, override={"enabled": False, "drawdown_threshold_fraction": 0.7})
     assert p.base_params["long"]["hsl_enabled"] == 1.0
     assert p.base_params["long"]["hsl_red_threshold"] == pytest.approx(0.02)
     _, r = raw(p, [{"long_hsl_red_threshold": 1e-6, "short_hsl_red_threshold": 1e-6}])

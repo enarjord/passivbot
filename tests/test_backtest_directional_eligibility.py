@@ -39,7 +39,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         # Directional masks are independent of age in this synthetic history.
         config["bot"][pside]["universe"]["minimum_coin_age_days"] = 0.0
         config["bot"][pside]["risk"].update(
-            {"max_positions": 1, "total_wallet_exposure_limit": 1.5}
+            {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.5}
         )
         config["bot"][pside]["forager"].update(
             {
@@ -147,7 +147,7 @@ def test_ema_anchor_entries_obey_side_specific_approved_coins(hedge_mode):
 def test_zero_wel_coin_override_disables_approved_side_entries():
     config = _ema_anchor_config(hedge_mode=True)
     config["coin_overrides"] = {
-        "SHORTCOIN": {"bot": {"short": {"wallet_exposure_limit": 0.0}}}
+        "SHORTCOIN": {"bot": {"short": {"wallet_exposure_limit_ratio": 0.0}}}
     }
     hlcvs, market_settings, btc_prices, timestamps = _synthetic_inputs()
 
@@ -188,14 +188,14 @@ def test_backtest_accepts_unheld_listing_boundaries_but_rejects_held_missing_tai
     hlcvs[21:, 0, :] = np.nan
     # Keep the other symbol active, proving the whole simulation can continue
     # past this absent symbol's listing window while it has no position.
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     fills, _, _ = run_backtest(
         hlcvs, market_settings, config, "binance", btc_prices, timestamps
     )
     assert len(fills) > 0
     assert all(str(fill[2]) == "SHORTCOIN" for fill in fills)
 
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.5
     # Fill a long entry, but keep highs below its close order until data ends.
     hlcvs[9:21, 0, 0] = 100.0
     with pytest.raises(ValueError, match="missing held-position valuation candle.*candle 21"):
