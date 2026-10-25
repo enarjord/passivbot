@@ -111,7 +111,16 @@ def test_deap_explicit_ack_keeps_authored_pymoo_policy():
     source=released("deap");policy=deepcopy(source["optimize"]["pymoo"]["shared"])
     result=migrate(source,memory_span_minutes=43200.0,acknowledge_search_backend_change=True)
     assert result.config["optimize"]["backend"]=="pymoo"
-    assert result.config["optimize"]["pymoo"]["shared"]==policy
+    current_names = {
+        "crossover_eta": "crossover_distribution_index",
+        "crossover_prob_var": "crossover_probability_per_variable",
+        "mutation_eta": "mutation_distribution_index",
+        "mutation_prob": "mutation_probability",
+        "mutation_prob_per_variable": "mutation_probability_per_variable",
+    }
+    expected_policy = {current_names.get(key, key): value for key, value in policy.items()}
+    assert result.config["optimize"]["pymoo"]["shared"] == expected_policy
+    assert source["optimize"]["pymoo"]["shared"] == policy
 
 
 def test_deap_ack_still_requires_an_explicit_pymoo_policy():
