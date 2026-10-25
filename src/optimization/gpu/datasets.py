@@ -65,7 +65,8 @@ class PreparedGpuDataset:
             dtype = np.dtype(spec.dtype)
             if dtype.kind not in "iuf":
                 raise ValueError(f"{name} must contain numeric values")
-            specs.append(SharedArraySpec(spec.name, shape, dtype.str))
+            specs.append(SharedArraySpec(spec.name, shape, dtype.str, spec.storage, spec.offset,
+                                         spec.file_identity))
         hlcvs, btc, timestamps = specs
         if len(hlcvs.shape) != 3 or hlcvs.shape[2] != 4:
             raise ValueError("hlcvs must have shape (bars, coins, 4)")

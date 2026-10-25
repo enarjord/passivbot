@@ -65,6 +65,32 @@ def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
         )
 
 
+def multicoin_invariant_bytes(candles, coins, *, device, include_hourly_ranges=True):
+    """Exact dense packed payload size, excluding candidate state and driver scratch."""
+    # bars, execution ticks, fill ticks, touch ticks, nearest ticks, min-qty
+    # bits/relation and (when requested) hourly ranges. CUDA packs relation as i8.
+    per_coin = 16 + 8 + 8 + 8 + 4 + 4 + (1 if device == "cuda" else 4)
+    return int(candles) * int(coins) * (per_coin + (4 if include_hourly_ranges else 0))
+
+
+def check_mps_invariant_memory(torch, invariant_bytes, *, working_set=None):
+    """Use the same admission policy before packing and before device activation."""
+    recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
+    if not callable(recommended_fn):
+        return  # Lightweight packer callers may not expose device memory telemetry.
+    total = int(recommended_fn())
+    allocated_fn = getattr(torch.mps, "driver_allocated_memory", None)
+    free = max(0, total - (int(allocated_fn()) if callable(allocated_fn) else 0))
+    budget = free if working_set is None else working_set
+    if invariant_bytes > min(int(budget * 0.45), free):
+        raise MemoryError(
+            f"Metal multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB; "
+            f"the available recommended working set is {free / 2**30:.2f} GiB "
+            f"and its 45% safety limit is {int(budget * 0.45) / 2**30:.2f} GiB. "
+            "Rejected before packing or device allocation."
+        )
+
+
 class CudaSuiteResidency:
     device = "cuda"
 
@@ -241,11 +267,7 @@ class MetalSuiteResidency(CudaSuiteResidency):
         free = max(0, total - int(torch.mps.driver_allocated_memory()))
         if self._working_set is None:
             self._working_set = free
-        if invariant_bytes > min(int(self._working_set * 0.45), free):
-            raise MemoryError(
-                "Metal invariant tensors exceed the available recommended working set "
-                "or its 45% invariant safety budget"
-            )
+        check_mps_invariant_memory(torch, invariant_bytes, working_set=self._working_set)
 
 
 @contextmanager

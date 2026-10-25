@@ -8,6 +8,8 @@ import platform
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,21 @@ REQUIRED_HLCVS_MANIFEST_FILES = (
     "coins",
     "market_specific_settings",
 )
+_numpy_artifact_loader = ContextVar("hlcvs_numpy_artifact_loader", default=None)
+
+
+@contextmanager
+def numpy_artifact_loader(loader, *, preflight=None):
+    """Select a run-owned loader without changing ordinary cache-loading defaults.
+
+    An optional preflight receives (path, shape, dtype) from the NPY header before
+    the loader reads the array payload. No device dependencies are imported.
+    """
+    token = _numpy_artifact_loader.set((loader, preflight))
+    try:
+        yield
+    finally:
+        _numpy_artifact_loader.reset(token)
 
 
 class HlcvsManifestError(RuntimeError):
@@ -141,6 +158,15 @@ def hash_json_value(value: Any) -> str:
 
 
 def load_numpy_artifact(path: Path) -> np.ndarray:
+    selected = _numpy_artifact_loader.get()
+    if selected is not None:
+        loader, preflight = selected
+        if preflight is not None:
+            from shared_arrays import numpy_artifact_header
+
+            shape, dtype, _fortran_order = numpy_artifact_header(path)
+            preflight(Path(path), shape, dtype)
+        return loader(path)
     if path.suffix == ".gz":
         with gzip.open(path, "rb") as f:
             return np.load(f)

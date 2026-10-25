@@ -2529,6 +2529,8 @@ async def prepare_hlcvs_mss(
                 btc_usd_prices,
                 timestamps,
             )
+    except MemoryError:
+        raise  # Resource admission cannot be repaired by refetching the same history.
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     local_v2 = None

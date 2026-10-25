@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce GPU optimizer host-memory peaks with read-only file-backed candle inputs and
+  bounded validation buffers. Check exact cached input sizes before decoding or packing,
+  and stop memory admission failures without retrying historical downloads.
+
 - Fix backtest and optimizer suite preparation when historical data lacks coins
   requested by a scenario. Preserve declared approval and ignore sources while
   restricting execution to available dataset columns.
