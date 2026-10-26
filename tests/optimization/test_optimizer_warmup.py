@@ -75,14 +75,14 @@ def _make_optimizer_config() -> dict:
     short_bot["strategy"]["trailing_martingale"]["log_range_ema_span_minutes"] = 0.0
 
     bounds = config["optimize"]["bounds"]
-    _set_bounds(config, {"long_ema_span_0_minutes": [1, 100, 1]})
-    _set_bounds(config, {"long_ema_span_1_minutes": [1, 100, 1]})
+    _set_bounds(config, {"long_entry_ema_span_0_minutes": [1, 100, 1]})
+    _set_bounds(config, {"long_entry_ema_span_1_minutes": [1, 100, 1]})
     _set_bounds(config, {"long_forager_volatility_ema_span_1m": [0, 0]})
     _set_bounds(config, {"long_forager_volume_ema_span_1m": [0, 0]})
     _set_bounds(config, {"long_log_range_ema_span_1h_candles": [0, 0]})
     _set_bounds(config, {"long_log_range_ema_span_minutes": [0, 0]})
-    _set_bounds(config, {"short_ema_span_0_minutes": [1, 100, 1]})
-    _set_bounds(config, {"short_ema_span_1_minutes": [1, 100, 1]})
+    _set_bounds(config, {"short_entry_ema_span_0_minutes": [1, 100, 1]})
+    _set_bounds(config, {"short_entry_ema_span_1_minutes": [1, 100, 1]})
     _set_bounds(config, {"short_forager_volatility_ema_span_1m": [0, 0]})
     _set_bounds(config, {"short_forager_volume_ema_span_1m": [0, 0]})
     _set_bounds(config, {"short_log_range_ema_span_1h_candles": [0, 0]})
@@ -188,7 +188,7 @@ def test_stamp_optimizer_warmup_respects_last_valid_index_cap():
     bounds-derived warmup would push it past the end of the data."""
 
     config = _make_optimizer_config()
-    _set_bounds(config, {"long_ema_span_0_minutes": [1, 100000, 1]})
+    _set_bounds(config, {"long_entry_ema_span_0_minutes": [1, 100000, 1]})
     mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 10}}
 
     stamp_warmup_metadata(mss, ["HYPE"], compute_optimizer_per_coin_warmup_minutes(config))
