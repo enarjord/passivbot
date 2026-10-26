@@ -2920,11 +2920,11 @@ def prep_backtest_args(
         btc_collateral_target_ratio = float(
             require_config_value(config, "backtest.btc_collateral_target_ratio")
         )
-        max_usd_debt_to_equity_ratio = require_config_value(
-            config, "backtest.max_usd_debt_to_equity_ratio"
+        max_usd_debt_to_wallet_value_ratio = require_config_value(
+            config, "backtest.max_usd_debt_to_wallet_value_ratio"
         )
-        if max_usd_debt_to_equity_ratio is not None:
-            max_usd_debt_to_equity_ratio = float(max_usd_debt_to_equity_ratio)
+        if max_usd_debt_to_wallet_value_ratio is not None:
+            max_usd_debt_to_wallet_value_ratio = float(max_usd_debt_to_wallet_value_ratio)
         backtest_params = {
             "starting_balance": require_config_value(
                 config, "backtest.starting_balance"
@@ -2933,8 +2933,8 @@ def prep_backtest_args(
             "maker_fee_fraction": maker_fee_fraction,
             "taker_fee_fraction": taker_fee_fraction,
             "coins": coins,
-            "btc_collateral_cap": btc_collateral_target_ratio,
-            "btc_collateral_ltv_cap": max_usd_debt_to_equity_ratio,
+            "btc_collateral_target_ratio": btc_collateral_target_ratio,
+            "max_usd_debt_to_wallet_value_ratio": max_usd_debt_to_wallet_value_ratio,
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],

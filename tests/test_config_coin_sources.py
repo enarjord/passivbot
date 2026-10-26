@@ -16,7 +16,7 @@ def _base_config():
             "start_date": "2024-01-01",
             "exchanges": ["binance"],
             "btc_collateral_target_ratio": 1.0,
-            "max_usd_debt_to_equity_ratio": None,
+            "max_usd_debt_to_wallet_value_ratio": None,
             "gap_tolerance_ohlcvs_minutes": 120,
             "suite_enabled": False,
             "scenarios": []

@@ -36,7 +36,7 @@ before backtesting a proposed replacement.
 | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
-| `backtest.btc_collateral_cap`, `backtest.btc_collateral_ltv_cap` | `backtest.btc_collateral_target_ratio`, `backtest.max_usd_debt_to_equity_ratio`; the same target and USD-debt/equity limit |
+| `backtest.btc_collateral_cap`, `backtest.btc_collateral_ltv_cap` | `backtest.btc_collateral_target_ratio`, `backtest.max_usd_debt_to_wallet_value_ratio`; the same target and USD-debt/total-wallet-value limit, excluding unrealized trading PnL |
 | `backtest.maker_fee_override`, `backtest.taker_fee_override` | `backtest.maker_fee_override_fraction`, `backtest.taker_fee_override_fraction`; signed values and `null` are unchanged |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_fraction` |
 | `live.auto_gs` | `live.modes.disapproved_position`: `graceful_stop` or `manual` |

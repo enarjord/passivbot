@@ -376,8 +376,8 @@ pub struct BacktestParams {
     pub warmup_minutes: Vec<usize>,
     pub trade_start_indices: Vec<usize>,
     pub global_warmup_bars: usize,
-    pub btc_collateral_cap: f64,
-    pub btc_collateral_ltv_cap: Option<f64>,
+    pub btc_collateral_target_ratio: f64,
+    pub max_usd_debt_to_wallet_value_ratio: Option<f64>,
     pub metrics_only: bool,
     pub ew_half_life_days: Option<f64>,
     pub hsl_detailed_report: bool,
@@ -870,14 +870,16 @@ impl OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd_cash_wallet: f64,                // raw usd wallet balance
-    pub usd_total_balance: f64,              // usd cash + btc converted to usd
-    pub usd_total_balance_rounded: f64,      // rounded usd total for hysteresis logic
-    pub btc_cash_wallet: f64,                // raw btc wallet balance
-    pub btc_total_balance: f64,              // btc cash + usd converted to btc
-    pub use_btc_collateral: bool,            // whether to use btc as collateral
-    pub btc_collateral_cap: f64,             // target/cap ratio of collateral held in btc
-    pub btc_collateral_ltv_cap: Option<f64>, // optional LTV ceiling when topping up btc
+    pub usd_cash_wallet: f64,           // raw usd wallet balance
+    pub usd_total_balance: f64,         // usd cash + btc converted to usd
+    pub usd_total_balance_rounded: f64, // rounded usd total for hysteresis logic
+    pub btc_cash_wallet: f64,           // raw btc wallet balance
+    pub btc_total_balance: f64,         // btc cash + usd converted to btc
+    pub use_btc_collateral: bool,       // whether to use btc as collateral
+    // BTC market value / total wallet value; values above one use USD debt.
+    pub btc_collateral_target_ratio: f64,
+    // max(-USD cash, 0) / the same total wallet value when topping up BTC.
+    pub max_usd_debt_to_wallet_value_ratio: Option<f64>,
 }
 
 #[derive(Default, Clone)]

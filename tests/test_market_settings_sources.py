@@ -29,7 +29,7 @@ def _base_config():
             "start_date": "2025-01-01",
             "exchanges": ["binance", "hyperliquid"],
             "btc_collateral_target_ratio": 1.0,
-            "max_usd_debt_to_equity_ratio": None,
+            "max_usd_debt_to_wallet_value_ratio": None,
             "gap_tolerance_ohlcvs_minutes": 120,
             "max_warmup_minutes": 0,
             "coin_sources": {},

@@ -12,6 +12,12 @@ since the latest release tag; these features may already be available when insta
 - Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
   including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
 
+- Align native BTC collateral inputs with `btc_collateral_target_ratio` and
+  `max_usd_debt_to_wallet_value_ratio`. Preserve leveraged targets, initial allocation, top-up limits,
+  uncapped debt sentinels and CPU replay values; reject retired native packet keys explicitly.
+  Both ratios use total marked wallet value (USD cash plus BTC market value), excluding unrealized
+  trading PnL. Released-v8 conversion emits the wallet-value name directly.
+
 - Name native maker and taker rates explicitly as fee fractions across CPU and GPU execution.
   Preserve signed rebates, zero fees, exchange fallback and external market-cache formats;
   reject retired native fee fields without changing monetary fee outputs.
@@ -69,7 +75,7 @@ since the latest release tag; these features may already be available when insta
 - Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
   public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
 
-- Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/wallet-value ratios,
   signed fee override fractions, and the starting-balance equity floor fraction. Warmup
   now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
   backtest/activation still uses `span * r`, with fractional-minute caps preserved.

@@ -29,9 +29,9 @@
             "btc_collateral_target_ratio": {
               "type": "number",
               "default": 0.0,
-              "description": "Target BTC collateral value / equity; values above one retain leveraged BTC collateral and negative USD balances.",
+              "description": "Target BTC collateral value / total wallet value; values above one retain leveraged BTC collateral and negative USD balances.",
               "x-passivbot-unit": "ratio",
-              "x-passivbot-denominator": "account equity",
+              "x-passivbot-denominator": "current BTC market value plus USD cash, excluding unrealized trading PnL",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -335,15 +335,15 @@
                 ]
               }
             },
-            "max_usd_debt_to_equity_ratio": {
+            "max_usd_debt_to_wallet_value_ratio": {
               "type": [
                 "number",
                 "null"
               ],
               "default": null,
-              "description": "Optional USD debt / equity ceiling when topping up BTC collateral; Null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.",
+              "description": "Optional USD debt / total wallet value ceiling when topping up BTC collateral; null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.",
               "x-passivbot-unit": "ratio",
-              "x-passivbot-denominator": "account equity",
+              "x-passivbot-denominator": "current BTC market value plus USD cash, excluding unrealized trading PnL",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -18400,8 +18400,8 @@
         "backtest.market_settings_sources": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_settings_sources"
         },
-        "backtest.max_usd_debt_to_equity_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_equity_ratio"
+        "backtest.max_usd_debt_to_wallet_value_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_wallet_value_ratio"
         },
         "backtest.offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"
@@ -20958,8 +20958,8 @@
         "market_settings_sources": {
           "$ref": "#/$defs/scenarioPatch:backtest.market_settings_sources"
         },
-        "max_usd_debt_to_equity_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_equity_ratio"
+        "max_usd_debt_to_wallet_value_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_wallet_value_ratio"
         },
         "offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"

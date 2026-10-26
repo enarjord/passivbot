@@ -20,7 +20,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 
 RENAMES = (
     (("backtest",), "btc_collateral_cap", "btc_collateral_target_ratio"),
-    (("backtest",), "btc_collateral_ltv_cap", "max_usd_debt_to_equity_ratio"),
+    (("backtest",), "btc_collateral_ltv_cap", "max_usd_debt_to_wallet_value_ratio"),
     (("backtest",), "maker_fee_override", "maker_fee_override_fraction"),
     (("backtest",), "taker_fee_override", "taker_fee_override_fraction"),
     (("backtest",), "equity_floor_ratio", "equity_floor_fraction"),
@@ -44,7 +44,7 @@ def _inputs(*, target=2.0, debt_cap=0.975):
     config = get_expanded_config_prototype()
     config["backtest"].update(
         start_date="2021-01-01", coins={"binance": ["BTC"]}, starting_balance=1000.0,
-        btc_collateral_target_ratio=target, max_usd_debt_to_equity_ratio=debt_cap,
+        btc_collateral_target_ratio=target, max_usd_debt_to_wallet_value_ratio=debt_cap,
         maker_fee_override_fraction=0.0, taker_fee_override_fraction=0.0,
     )
     config["bot"]["portfolio"]["strategy_kind"] = "ema_anchor"
@@ -77,12 +77,12 @@ def test_native_transport_keeps_leverage_signed_fees_and_debt_sentinels(debt_cap
                               equity_floor_fraction=0.07125)
     before = deepcopy(config)
     _, _, exchange_params, native = prep_backtest_args(config, markets, "binance")
-    assert native["btc_collateral_cap"] == 2.375
-    assert native["btc_collateral_ltv_cap"] == debt_cap
+    assert native["btc_collateral_target_ratio"] == 2.375
+    assert native["max_usd_debt_to_wallet_value_ratio"] == debt_cap
     assert native["maker_fee_fraction"] == exchange_params[0]["maker_fee_fraction"] == -0.000125
     assert native["taker_fee_fraction"] == exchange_params[0]["taker_fee_fraction"] == 0.000375
     assert native["equity_floor_fraction"] == 0.07125
-    assert not {"btc_collateral_target_ratio", "max_usd_debt_to_equity_ratio",
+    assert not {"btc_collateral_cap", "btc_collateral_ltv_cap",
                 "maker_fee_override_fraction", "taker_fee_override_fraction"}.intersection(native)
     assert config == before
 
@@ -118,21 +118,21 @@ def test_native_leveraged_collateral_target_is_not_clipped_or_rescaled():
     assert equities[:, 3] == pytest.approx([1000.0] * 3)
 
 
-def test_native_topup_limit_divides_usd_debt_by_equity():
+def test_native_topup_limit_divides_usd_debt_by_wallet_value():
     config, markets = _inputs(target=2.0, debt_cap=0.975)
     fills, _, *_ = _run(config, markets, [[[120.0, 80.0, 100.0, 1.0]]] * 10,
                        [100.0] * 10)
     initial, close = fills[:2]
     assert initial[6] == 20.0 and initial[7] == -1000.0
     assert close[3] > 0.0
-    equity_before_conversion = initial[6] * close[8] + initial[7] + close[3] + close[4]
+    wallet_value_before_conversion = initial[6] * close[8] + initial[7] + close[3] + close[4]
     usd_before_conversion = initial[7] + close[3] + close[4]
-    debt_limit = 0.975 * equity_before_conversion
+    debt_limit = 0.975 * wallet_value_before_conversion
     topup = debt_limit + usd_before_conversion
     assert topup > 0.0
-    assert -close[7] / equity_before_conversion == pytest.approx(0.975)
+    assert -close[7] / wallet_value_before_conversion == pytest.approx(0.975)
     assert close[6] == pytest.approx(initial[6] + topup * 0.999 / close[8])
-    assert close[5] == pytest.approx(equity_before_conversion - topup * 0.001)
+    assert close[5] == pytest.approx(wallet_value_before_conversion - topup * 0.001)
 
 
 def test_native_negative_maker_fee_fraction_remains_a_rebate():
@@ -171,8 +171,8 @@ def test_live_acquisition_and_backtest_activation_keep_their_distinct_baselines(
 def test_quantity_metadata_discloses_denominators_and_signed_fee_domain():
     registry = get_field_registry()
     for path, unit, denominator in [
-        (("backtest", "btc_collateral_target_ratio"), "ratio", "account equity"),
-        (("backtest", "max_usd_debt_to_equity_ratio"), "ratio", "account equity"),
+        (("backtest", "btc_collateral_target_ratio"), "ratio", "current BTC market value plus USD cash, excluding unrealized trading PnL"),
+        (("backtest", "max_usd_debt_to_wallet_value_ratio"), "ratio", "current BTC market value plus USD cash, excluding unrealized trading PnL"),
         (("backtest", "maker_fee_override_fraction"), "fraction", "absolute fill quote notional"),
         (("backtest", "taker_fee_override_fraction"), "fraction", "absolute fill quote notional"),
         (("backtest", "equity_floor_fraction"), "fraction", "starting balance"),

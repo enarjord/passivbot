@@ -232,7 +232,7 @@ _FIELDS_BY_TYPE = {
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
         "bot.portfolio.warmup.max_minutes",
-        "backtest.max_usd_debt_to_equity_ratio", "backtest.ew_half_life_days",
+        "backtest.max_usd_debt_to_wallet_value_ratio", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
     FieldType.INTEGER: (

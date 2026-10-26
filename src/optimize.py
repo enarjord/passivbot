@@ -838,7 +838,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "reducer",
         "balance_sample_divider",
         "btc_collateral_target_ratio",
-        "max_usd_debt_to_equity_ratio",
+        "max_usd_debt_to_wallet_value_ratio",
         "candle_interval_minutes",
         "coins",
         "coin_sources",

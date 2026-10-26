@@ -16,7 +16,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `backtest.balance_sample_divider` | integer | `60` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.base_dir` | string | `"backtests"` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.btc_collateral_target_ratio` | float | `0.0` | ratio / account equity | —; backtest, optimize | — | — | — | python |
+| `backtest.btc_collateral_target_ratio` | float | `0.0` | ratio / current BTC market value plus USD cash, excluding unrealized trading PnL | —; backtest, optimize | — | — | — | python |
 | `backtest.candle_interval_minutes` | integer | `1` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.coin_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.coin_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
@@ -48,7 +48,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.market_settings.overrides_by_exchange.*.*.qty_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.market_settings_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
-| `backtest.max_usd_debt_to_equity_ratio` | float \| null | `null` | ratio / account equity | —; backtest, optimize | — | — | — | python |
+| `backtest.max_usd_debt_to_wallet_value_ratio` | float \| null | `null` | ratio / current BTC market value plus USD cash, excluding unrealized trading PnL | —; backtest, optimize | — | — | — | python |
 | `backtest.offline` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.ohlcv_source_dir` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.organillo_csv` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |

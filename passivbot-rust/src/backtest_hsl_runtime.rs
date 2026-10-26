@@ -613,8 +613,8 @@ mod tests {
             warmup_minutes: vec![0; coins],
             trade_start_indices: vec![0; coins],
             global_warmup_bars: 1,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
+            btc_collateral_target_ratio: 0.0,
+            max_usd_debt_to_wallet_value_ratio: None,
             metrics_only: false,
             ew_half_life_days: None,
             hsl_detailed_report: true,
@@ -1108,7 +1108,8 @@ mod tests {
         assert_eq!(input.global.unstuck_realized_pnl_drawdown, 50.0);
         assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
         assert_eq!(
-            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction, 50.0).unwrap(),
+            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction, 50.0)
+                .unwrap(),
             0.15_f32.mul_add(1000.0, -50.0) as f64,
         );
         let actual = orchestrator::compute_ideal_orders(&input).unwrap();
