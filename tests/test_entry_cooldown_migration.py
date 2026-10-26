@@ -263,7 +263,7 @@ def test_risk_group_excludes_cooldown_and_canonical_group_retains_it():
     )
     risk = resolve_bound_selectors(config, ["long.risk"], bounds)
     assert "long_risk_entry_cooldown_minutes" not in risk
-    assert {"long_n_positions", "long_total_wallet_exposure_limit"} <= set(risk)
+    assert {"long_n_positions", "long_total_wallet_exposure_limit_ratio"} <= set(risk)
     assert "long_risk_entry_cooldown_minutes" in resolve_bound_selectors(
         config, ["long.entry_cooldown"], bounds
     )
