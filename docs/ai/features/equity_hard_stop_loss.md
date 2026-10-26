@@ -95,9 +95,15 @@ Ordinary preparation retains the actual immutable HSL candle-source and fill rec
 including for empty plans. A replacement receipt invalidates preparation and completed-plan
 acceptance after protection, even when its payload is equal. Quotes refreshed by preparation
 do not invalidate that receipt. These references belong only to the outstanding plan.
-The offline fake runner drains unmet account confirmations and owner-required fill readiness
-within its existing finite pass budget before advancing a bar; exhaustion is explicit and
-cannot certify a completed bar. Optional fill debt does not create a new readiness requirement.
+The offline fake runner drains unmet account confirmations, owner-required fill readiness and
+ordinary execution changes before advancing a bar. After a typed create/cancel connector deferral
+or an ordinary account-confirmation request, a fresh accepted ordinary plan must complete without
+another write or deferral, with its real planning account generation still current. Protective
+plans cannot clear that receipt. An accepted empty or policy-filtered nonwriting plan can settle
+when its generation is current. Each pass uses the normal owner and fresh planning. The eight-pass
+readiness budget permits one additional eight-pass drain after actual ordinary execution progress;
+generation changes alone do not extend it. Exhaustion is explicit and cannot certify a completed
+bar. Optional fill debt does not create a new readiness requirement.
 
 ## Configuration and validation
 

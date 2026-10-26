@@ -24,6 +24,12 @@ import tools.run_fake_live as runner
 async def test_standard_fake_runner_hsl_execution_and_trace(
     tmp_path, monkeypatch, mode, side, case, entrypoint
 ):
+    await _exercise_standard_fake_runner(tmp_path, monkeypatch, mode, side, case, entrypoint)
+
+
+async def _exercise_standard_fake_runner(
+    tmp_path, monkeypatch, mode, side, case, entrypoint, *, start_exposed=False
+):
     user = f"fake_hsl_cli_{tmp_path.name}"
     _cleanup_fake_user_state(user)
     legacy = prepare_config(
@@ -66,7 +72,9 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
             o, h, l, c = candle[1:5]
             candle[1:5] = [200 - o, 200 - l, 200 - h, 200 - c]
     if case == "entry":
-        scenario["account"]["positions"] = []
+        scenario["account"]["positions"] = (
+            [dict(scenario["account"]["positions"][0], qty=1.0)] if start_exposed else []
+        )
         scenario["run_initial_cycle"] = True
     scenario_path = tmp_path / "scenario.hjson"
     scenario_path.write_text(hjson.dumps(scenario))
@@ -147,6 +155,51 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("start_exposed", [False, True], ids=["market_entry", "typed_debt"])
+async def test_fake_ordinary_execution_settles_first_bar(tmp_path, monkeypatch, start_exposed):
+    from live.executor import DeferredOrderCreation
+
+    real_cycle = runner._run_fake_cycle
+    checked = set()
+
+    async def check_settled_cycle(bot):
+        if bot in checked:
+            return await real_cycle(bot)
+        checked.add(bot)
+        actual_results = []
+        real_orders = bot.execute_orders
+
+        async def observe_orders(orders):
+            result = await real_orders(orders)
+            actual_results.extend(result)
+            return result
+
+        monkeypatch.setattr(bot, "execute_orders", observe_orders)
+        result = await real_cycle(bot)
+        assert not result.get("preparation_pending"), result
+        if start_exposed:
+            assert any(isinstance(item, DeferredOrderCreation) for item in actual_results)
+        before = runner._canonicalize_artifact(
+            "fake_exchange_state", bot.cca.export_state()
+        )
+        timestamp = bot.cca.now_ms
+        # A fresh normal drain cannot add residual creations after either an
+        # initial market fill or the held-position typed-deferral wave.
+        await real_cycle(bot)
+        assert bot.cca.now_ms == timestamp
+        assert runner._canonicalize_artifact(
+            "fake_exchange_state", bot.cca.export_state()
+        ) == before
+        return result
+
+    monkeypatch.setattr(runner, "_run_fake_cycle", check_settled_cycle)
+    await _exercise_standard_fake_runner(
+        tmp_path, monkeypatch, "portfolio", "long", "entry", "in_process",
+        start_exposed=start_exposed,
+    )
+
+
+@pytest.mark.asyncio
 async def test_fake_cycle_returns_bounded_pending_while_protection_keeps_running():
     import asyncio
     from types import SimpleNamespace
@@ -185,6 +238,465 @@ async def test_fake_cycle_returns_bounded_pending_while_protection_keeps_running
     finally:
         release.set()
         instance.cancel_inputs()
+
+
+def _admission_receipt_bot():
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    from types import MethodType
+
+    bot = SimpleNamespace(
+        config={"live": {}}, create_result=[], cancel_result=[], plan_error=None,
+        invalidate_during_plan=False,
+        stop_signal_received=False,
+        _account_invalidation_generation=0,
+        _current_planning_snapshot=SimpleNamespace(account_invalidation_generation=0),
+        _authoritative_pending_confirmations={},
+        _begin_live_event_cycle=lambda **kwargs: None,
+        _staged_planner_required_surfaces=lambda **kwargs: set(),
+    )
+
+    async def create(orders):
+        return bot.create_result
+
+    async def cancel(orders):
+        return bot.cancel_result
+
+    async def execute(cancels, creates, *, configure_creations=True):
+        if cancels:
+            await bot.execute_cancellations(cancels)
+        if creates:
+            await bot.execute_orders(creates)
+        if bot.plan_error is not None:
+            raise bot.plan_error
+        if bot.invalidate_during_plan:
+            bot._account_invalidation_generation += 1
+        return "unchanged plan result"
+
+    bot.execute_orders, bot.execute_cancellations = create, cancel
+    bot.execute_order_plan_to_exchange = execute
+    bot._shutdown_requested = lambda: bot.stop_signal_received
+    ledger = SimpleNamespace(epoch=1, surfaces={surface: SimpleNamespace(epoch=1)
+                             for surface in ("balance", "positions", "open_orders", "fills")})
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = MethodType(
+        Passivbot._request_authoritative_confirmation, bot
+    )
+    runner._install_fake_ordinary_execution_receipts(bot)
+    return bot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["create", "cancel"])
+async def test_fake_admission_receipts_scope_typed_results_and_fresh_empty_plans(kind):
+    from live.executor import DeferredOrderCreation, DeferredOrderCancellation
+
+    bot = _admission_receipt_bot()
+    result = [DeferredOrderCreation() if kind == "create" else DeferredOrderCancellation()]
+    setattr(bot, f"{kind}_result", result)
+    cancels, creates = ([{}], []) if kind == "cancel" else ([], [{}])
+    assert await bot.execute_order_plan_to_exchange(cancels, creates) == "unchanged plan result"
+    assert runner._fake_ordinary_execution_pending(bot)
+    # Both successful and deferred protective plans leave ordinary debt alone.
+    await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
+    setattr(bot, f"{kind}_result", [{}])
+    await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
+    assert runner._fake_ordinary_execution_pending(bot)
+    await bot.execute_order_plan_to_exchange([], [])
+    assert not runner._fake_ordinary_execution_pending(bot)
+    # A result outside an ordinary plan cannot create debt or change transport.
+    setattr(bot, f"{kind}_result", result)
+    operation = bot.execute_orders if kind == "create" else bot.execute_cancellations
+    assert await operation([{}]) is result
+    assert not runner._fake_ordinary_execution_pending(bot)
+    # Counts do not infer debt from intentional filtering or terminal results.
+    setattr(bot, f"{kind}_result", [])
+    await bot.execute_order_plan_to_exchange(cancels, creates)
+    assert not runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_fake_admission_receipts_preserve_errors_and_do_not_clear_debt(cancelled, monkeypatch):
+    import asyncio
+    import contextvars
+    from live.executor import DeferredOrderCreation
+
+    make_context = contextvars.ContextVar
+    context = make_context("test_ordinary_receipt", default=None)
+    monkeypatch.setattr(contextvars, "ContextVar", lambda name, **kwargs:
+                        context if name == "fake_ordinary_execution_receipt"
+                        else make_context(name, **kwargs))
+    bot = _admission_receipt_bot()
+    bot.create_result = [DeferredOrderCreation()]
+    await bot.execute_order_plan_to_exchange([], [{}])
+    bot.create_result = [{}]
+    error = asyncio.CancelledError() if cancelled else RuntimeError("plan failure")
+    bot.plan_error = error
+    with pytest.raises(type(error)) as caught:
+        await bot.execute_order_plan_to_exchange([], [{}])
+    assert caught.value is error
+    assert context.get() is None
+    assert runner._fake_ordinary_execution_pending(bot)
+    bot.plan_error = None
+    await bot.execute_order_plan_to_exchange([], [])
+    assert not runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+async def test_fake_admission_receipts_preserve_debt_on_shutdown():
+    from live.executor import DeferredOrderCreation
+
+    bot = _admission_receipt_bot()
+    bot.create_result = [DeferredOrderCreation()]
+    await bot.execute_order_plan_to_exchange([], [{}])
+    bot.stop_signal_received = True
+    await bot.execute_order_plan_to_exchange([], [])
+    assert runner._fake_ordinary_execution_pending(bot)
+    bot.stop_signal_received = False
+    await bot.execute_order_plan_to_exchange([], [])
+    assert not runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+async def test_fake_successful_write_requires_replan_after_confirmation_is_consumed():
+    bot = _admission_receipt_bot()
+    result = [{}]
+
+    async def write(orders):
+        bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+        ledger = bot._ensure_freshness_ledger()
+        for surface, minimum in bot._authoritative_pending_confirmations.items():
+            ledger.surfaces[surface].epoch = minimum
+        return result
+
+    bot.execute_orders = write
+    await bot.execute_order_plan_to_exchange([], [{}])
+    assert runner._fake_ordinary_execution_pending(bot)
+    assert bot._fake_ordinary_execution_receipt.progress
+    await bot.execute_order_plan_to_exchange([], [])
+    assert not runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surfaces,minimum", [(set(), None), ({"fills"}, None), ({"open_orders"}, 1)])
+async def test_fake_ineffective_account_confirmation_does_not_create_execution_debt(surfaces, minimum):
+    bot = _admission_receipt_bot()
+
+    async def no_write(orders):
+        bot._request_authoritative_confirmation(surfaces, min_epoch=minimum)
+        return []
+
+    bot.execute_orders = no_write
+    await bot.execute_order_plan_to_exchange([], [{}])
+    assert not runner._fake_ordinary_execution_pending(bot)
+    assert not bot._fake_ordinary_execution_receipt.progress
+
+
+@pytest.mark.asyncio
+async def test_fake_protective_confirmation_cannot_set_or_clear_ordinary_execution_debt():
+    bot = _admission_receipt_bot()
+
+    async def write(orders):
+        bot._request_authoritative_confirmation({"open_orders"})
+        return [{}]
+
+    bot.execute_orders = write
+    await bot.execute_order_plan_to_exchange([], [{}], configure_creations=False)
+    assert bot._fake_ordinary_execution_receipt is None
+    await bot.execute_order_plan_to_exchange([], [{}])
+    previous = bot._fake_ordinary_execution_receipt
+    await bot.execute_order_plan_to_exchange([], [], configure_creations=False)
+    assert bot._fake_ordinary_execution_receipt is previous
+    assert runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["create", "cancel", "confirmation"])
+async def test_fake_failed_plan_retains_new_execution_debt(kind):
+    from ccxt.base.errors import NetworkError
+    from live.executor import DeferredOrderCreation, DeferredOrderCancellation
+
+    bot = _admission_receipt_bot()
+    assert not runner._fake_ordinary_execution_pending(bot)
+    if kind == "confirmation":
+        async def write(orders):
+            bot._request_authoritative_confirmation({"open_orders"})
+            return [{}]
+
+        bot.execute_orders = write
+    else:
+        setattr(bot, f"{kind}_result", [
+            DeferredOrderCreation() if kind == "create" else DeferredOrderCancellation()
+        ])
+    error = bot.plan_error = NetworkError("ordinary account unavailable")
+    cancels, creates = ([{}], []) if kind == "cancel" else ([], [{}])
+    with pytest.raises(NetworkError) as caught:
+        await bot.execute_order_plan_to_exchange(cancels, creates)
+    assert caught.value is error
+    assert runner._fake_ordinary_execution_pending(bot)
+    assert bot._fake_ordinary_execution_receipt.progress
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True])
+async def test_fake_stale_or_missing_snapshot_cannot_clear_execution_debt(missing):
+    from live.executor import DeferredOrderCreation
+
+    bot = _admission_receipt_bot()
+    bot.create_result = [DeferredOrderCreation()]
+    await bot.execute_order_plan_to_exchange([], [{}])
+    if missing:
+        bot._current_planning_snapshot = None
+        with pytest.raises(AttributeError):
+            await bot.execute_order_plan_to_exchange([], [])
+    else:
+        bot._account_invalidation_generation += 1
+        await bot.execute_order_plan_to_exchange([], [])
+    assert runner._fake_ordinary_execution_pending(bot)
+    assert bot._fake_ordinary_execution_receipt.progress
+
+
+@pytest.mark.asyncio
+async def test_fake_generation_changes_keep_pending_without_earning_execution_budget(monkeypatch):
+    from types import SimpleNamespace
+    from live import hsl_live
+
+    bot = _admission_receipt_bot()
+    bot.invalidate_during_plan = True
+    await bot.execute_order_plan_to_exchange([], [{}])
+    assert runner._fake_ordinary_execution_pending(bot)
+    assert not bot._fake_ordinary_execution_receipt.progress
+    bot.invalidate_during_plan = False
+    bot._current_planning_snapshot.account_invalidation_generation = 1
+    await bot.execute_order_plan_to_exchange([], [])
+    assert not runner._fake_ordinary_execution_pending(bot)
+    # A later protective/account invalidation supersedes that quiet receipt.
+    bot._account_invalidation_generation += 1
+    calls = []
+
+    async def cycle():
+        calls.append(True)
+        return dict(updated=False, ordinary_executed=False)
+
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _quote_tasks={},
+                               _discard_quote_tasks=set(), required_fill_facts=lambda: None)
+    monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
+    result = await runner._run_fake_cycle_ready(bot)
+    assert result["ordinary_execution_pending"]
+    assert result["passes"] == len(calls) == 8
+
+
+@pytest.mark.asyncio
+async def test_fake_sealed_plan_ignores_late_inherited_confirmation_context():
+    import asyncio
+
+    bot = _admission_receipt_bot()
+    release = asyncio.Event()
+    tasks = []
+
+    async def write(orders):
+        async def background():
+            await release.wait()
+            bot._request_authoritative_confirmation({"open_orders"})
+
+        tasks.append(asyncio.create_task(background()))
+        return []
+
+    bot.execute_orders = write
+    await bot.execute_order_plan_to_exchange([], [{}])
+    completed = bot._fake_ordinary_execution_receipt
+    release.set()
+    await asyncio.gather(*tasks)
+    assert bot._fake_ordinary_execution_receipt is completed
+    assert not runner._fake_ordinary_execution_pending(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["create", "cancel", "write"])
+async def test_fake_ordinary_execution_has_one_finite_extra_budget(kind, tmp_path, monkeypatch):
+    import asyncio
+    from live.hsl_live import owner
+    from live.executor import DeferredOrderCreation, DeferredOrderCancellation
+
+    bot = _admission_receipt_bot()
+    if kind == "write":
+        async def write(orders):
+            ledger = bot._ensure_freshness_ledger()
+            ledger.epoch += 1
+            bot._request_authoritative_confirmation({"open_orders"})
+            ledger.surfaces["open_orders"].epoch = bot._authoritative_pending_confirmations["open_orders"]
+            return [{}]
+
+        bot.execute_orders = write
+    else:
+        setattr(bot, f"{kind}_result", [
+            DeferredOrderCreation() if kind == "create" else DeferredOrderCancellation()
+        ])
+
+    async def refresh(**kwargs):
+        return True
+
+    bot.refresh_protective_authoritative_state = refresh
+    instance = owner(bot)
+    instance.remember_position = lambda: None
+    instance.schedule_history = instance.schedule_sources = lambda: None
+    instance._account_matches = lambda *args: True
+    waves = []
+
+    async def protect(**kwargs):
+        waves.append(True)
+        # Protection's successful empty plan must not erase ordinary debt.
+        await bot.execute_order_plan_to_exchange([], [], configure_creations=False)
+        return True
+
+    async def ordinary():
+        cancels, creates = ([{}], []) if kind == "cancel" else ([], [{}])
+        return cancels, creates, bot._current_planning_snapshot, object()
+
+    instance.protect, instance._ordinary_plan = protect, ordinary
+    try:
+        result = await asyncio.wait_for(runner._run_fake_cycle_ready(bot), 4.0)
+        assert result["passes"] == 16
+        assert result["ordinary_execution_pending"]
+        assert result["preparation_pending"]
+        assert len(waves) >= 16
+        with pytest.raises(RuntimeError, match="ordinary execution pending"):
+            runner._refuse_unsettled_fake_bar(result, [], tmp_path / "snapshots")
+        incomplete = json.loads((tmp_path / "incomplete.json").read_text())
+        assert incomplete["reason"] == "ordinary_execution_pending"
+        assert incomplete["market_clock_advanced_after_pending"] is False
+        from exchanges.fake import FakeCCXTClient
+        from test_run_fake_live import _scenario
+
+        client = FakeCCXTClient(_scenario(), quote="USDT")
+        timestamp = client.now_ms
+
+        async def still_pending(_bot):
+            return result
+
+        monkeypatch.setattr(runner, "_run_fake_cycle", still_pending)
+        with pytest.raises(RuntimeError, match="ordinary execution pending"):
+            await runner._run_fake_bot(bot, client, max_steps=None)
+        assert client.current_index == 0 and client.now_ms == timestamp
+        # A subsequent drain retains the debt; new deferred receipts cannot
+        # reset its finite budget, and a fresh accepted empty plan can clear it.
+        async def unaccepted():
+            return None
+
+        instance._ordinary_plan = unaccepted
+        again = await runner._run_fake_cycle_ready(bot)
+        assert again["passes"] == 16 and again["ordinary_execution_pending"]
+        assert runner._fake_ordinary_execution_pending(bot)
+        await bot.execute_order_plan_to_exchange([], [])
+        assert not runner._fake_ordinary_execution_pending(bot)
+    finally:
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_fake_admission_debt_blocks_unavailable_account_early_return(monkeypatch):
+    from types import SimpleNamespace
+    from live import hsl_live
+    from live.executor import DeferredOrderCreation
+
+    bot = _admission_receipt_bot()
+    bot.create_result = [DeferredOrderCreation()]
+    await bot.execute_order_plan_to_exchange([], [{}])
+    calls = []
+
+    async def cycle():
+        calls.append(True)
+        return dict(updated=False, ordinary_executed=False)
+
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _quote_tasks={},
+                               _discard_quote_tasks=set(), required_fill_facts=lambda: None)
+    monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
+    result = await runner._run_fake_cycle_ready(bot)
+    assert result["ordinary_execution_pending"]
+    assert result["passes"] == len(calls) == 16
+
+
+@pytest.mark.asyncio
+async def test_fake_protective_only_deferrals_keep_original_preparation_budget():
+    import asyncio
+    from live.hsl_live import owner
+    from live.executor import DeferredOrderCreation
+
+    bot = _admission_receipt_bot()
+    bot.create_result = [DeferredOrderCreation()]
+
+    async def refresh(**kwargs):
+        return True
+
+    bot.refresh_protective_authoritative_state = refresh
+    instance = owner(bot)
+    instance.remember_position = lambda: None
+    instance.schedule_history = instance.schedule_sources = lambda: None
+    release = asyncio.Event()
+    instance._ordinary_plan = release.wait
+    waves = []
+
+    async def protect(**kwargs):
+        waves.append(True)
+        await bot.execute_order_plan_to_exchange([], [{}], configure_creations=False)
+        return True
+
+    instance.protect = protect
+    try:
+        result = await asyncio.wait_for(runner._run_fake_cycle_ready(bot), 4.0)
+        assert result["passes"] == len(waves) == 8
+        assert not result["ordinary_execution_pending"]
+    finally:
+        release.set()
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_fake_protective_write_confirmation_survives_failed_account_refresh():
+    import asyncio
+    from live.hsl_live import owner
+
+    bot = _admission_receipt_bot()
+    refreshed, protected = [], []
+
+    async def refresh(**kwargs):
+        refreshed.append(True)
+        return False
+
+    async def write(orders):
+        bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+        return [{}]
+
+    async def protect(**kwargs):
+        protected.append(True)
+        await bot.execute_order_plan_to_exchange([], [{}], configure_creations=False)
+        return True
+
+    async def prepared():
+        return [], [], bot._current_planning_snapshot, object()
+
+    bot.execute_orders = write
+    bot.refresh_protective_authoritative_state = refresh
+    instance = owner(bot)
+    instance.protect = protect
+    instance._account_matches = lambda *args: False
+    instance._ordinary = asyncio.create_task(prepared())
+    await instance._ordinary
+    try:
+        result = await runner._run_fake_cycle_ready(bot)
+        assert result["passes"] == len(refreshed) == 8
+        assert len(protected) == 1  # No fresh account facts permit another write.
+        assert result["confirmation_pending"]
+        assert not result["ordinary_execution_pending"]
+        assert bot._fake_ordinary_execution_receipt is None
+        with pytest.raises(RuntimeError, match="confirmation pending"):
+            runner._refuse_unsettled_fake_bar(result, [], None)
+    finally:
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio

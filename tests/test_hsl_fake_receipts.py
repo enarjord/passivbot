@@ -319,6 +319,7 @@ async def test_account_outage_cannot_bypass_an_owned_input_acquisition(channel, 
 
     value = SimpleNamespace(config={"live": {}},
                             refresh_protective_authoritative_state=unavailable,
+                            _staged_planner_required_surfaces=lambda **kwargs: set(),
                             _begin_live_event_cycle=lambda **kwargs: None)
     instance = owner(value)
     release = asyncio.Event()
