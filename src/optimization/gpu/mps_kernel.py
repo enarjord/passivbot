@@ -1264,7 +1264,7 @@ def _decode_outputs(
         "profit_sum": scalars[:, 18],
         "loss_sum": scalars[:, 19],
         "position_unchanged_max_ms": scalars[:, 20],
-        "entry_initial_balance_pct": scalars[:, 21],
+        "initial_entry_balance_fraction": scalars[:, 21],
         "absolute_net_wallet_exposure_max_ratio": scalars[:, 22],
         "absolute_net_wallet_exposure_mean_ratio": scalars[:, 23],
         "fill_count": scalars[:, 24],
@@ -1357,10 +1357,10 @@ def _decode_multicoin_fused_outputs(
                              exposure_rms_enabled=exposure_rms_enabled, interval_ms=interval_ms)
     if exposure_rms_enabled:
         scalars = scalars[:, :-7]
-    long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
+    long_initial_entry_balance_fraction = output.pop("initial_entry_balance_fraction")
     output.update(
         {
-            "initial_entry_balance_fraction_long": long_entry_initial_balance_pct,
+            "initial_entry_balance_fraction_long": long_initial_entry_balance_fraction,
             "initial_entry_balance_fraction_short": scalars[:, 57],
             "profit_sum_long": scalars[:, 58],
             "loss_sum_long": scalars[:, 59],

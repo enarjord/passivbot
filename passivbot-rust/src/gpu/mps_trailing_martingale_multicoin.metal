@@ -5307,7 +5307,7 @@ inline void generate_tm_multicoin_side_orders(
     }
 }
 
-inline float tm_multicoin_entry_initial_balance_pct(
+inline float tm_multicoin_initial_entry_balance_fraction(
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* coin_overrides,
     int effective_n_positions
@@ -6567,7 +6567,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fills.loss_sum_long + fills.loss_sum_short;
     scalars[scalar_offset + 20] =
         fills.position_unchanged_max_min * interval_ms;
-    scalars[scalar_offset + 21] = tm_multicoin_entry_initial_balance_pct(
+    scalars[scalar_offset + 21] = tm_multicoin_initial_entry_balance_fraction(
         long_config, long_coin_overrides,
         wallet_exposure_denominator_n_positions(
             long_config.n_positions, long_side.max_tradable_seen
@@ -6622,7 +6622,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     scalars[scalar_offset + 55] = long_side.hsl_report_ema_max;
     scalars[scalar_offset + 56] = short_side.hsl_report_ema_max;
 #endif
-    scalars[scalar_offset + 57] = tm_multicoin_entry_initial_balance_pct(
+    scalars[scalar_offset + 57] = tm_multicoin_initial_entry_balance_fraction(
         short_config, short_coin_overrides,
         wallet_exposure_denominator_n_positions(
             short_config.n_positions, short_side.max_tradable_seen

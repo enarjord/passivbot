@@ -1002,7 +1002,7 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
-        assert!(source.contains("tm_multicoin_entry_initial_balance_pct("));
+        assert!(source.contains("tm_multicoin_initial_entry_balance_fraction("));
         assert!(source.contains("wallet_exposure_denominator_n_positions("));
         assert!(source.contains("coin_hsl[c].slot_count = float(effective_n_positions)"));
         assert!(source.contains("passivbot_trailing_martingale_multicoin_fused_impl("));
