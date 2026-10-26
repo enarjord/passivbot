@@ -755,7 +755,7 @@ class TestOrchestratorMultiSymbol:
         import passivbot_rust as pbr
 
         weights = {"volume": 1.0, "ema_readiness": 0.0,
-                   "volatility": 0.0, "unilateralness": 0.0}
+                   "log_range": 0.0, "unilateralness": 0.0}
         inp = make_input(
             balance=1_000.0,
             global_bp=bot_params_pair({"forager_score_weights": weights}),
