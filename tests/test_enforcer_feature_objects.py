@@ -78,7 +78,9 @@ def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, nativ
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = {"long"} if "long" in prefix else {"short"} if "short" in prefix else {"long", "short"}
     assert set(selected) == {f"{side}_risk_{native}_enforcer_threshold_ratio" for side in sides}
-    assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold_ratio"]
+    assert [value.removeprefix("bot.") for value in config["optimize"]["fixed_params"]] == [
+        f"{prefix}{owner}_exposure_enforcer.threshold_ratio".removeprefix("bot.")
+    ]
     assert any(item["path"] == "optimize.fixed_params" and item["old"] == [selector]
                and item["new"] == config["optimize"]["fixed_params"] for item in migrated.changes)
 
