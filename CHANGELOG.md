@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
 - Align native strategy sizing, price fractions and exposure coefficients with the authored
   configuration names, including optimizer IDs, calculator keywords and trailing diagnostics.
   Trailing-inspector exposure sensitivities use `--*-exposure-ratio-coefficient` flags.
