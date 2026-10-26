@@ -16,6 +16,9 @@ since the latest release tag; these features may already be available when insta
   suite aggregation maps. Rename supported metric selectors without changing reducer methods,
   retain custom rules, and require the existing consent for retired metric formulas.
 
+- Name the monitor snapshot's hourly entry log-range EMA `entry_log_range_ema_1h`,
+  matching the trailing inspector and snapshot validator. The underlying indicator is unchanged.
+
 - Give current HSL observations explicit units: raw and smoothed signal fractions, the selected
   trigger fraction, USD drawdown memory, and signed threshold gaps. Current report percentages
   use `_percent` names without rescaling. Update native reports, live diagnostics, previews,

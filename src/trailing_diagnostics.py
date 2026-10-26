@@ -615,10 +615,10 @@ def build_trailing_inputs_from_snapshot(
     ):
         raise KeyError(f"snapshot missing market.ema_bands.{pside} for {symbol}")
     side_band = side_market_bands[pside]
-    h1_by_side = market_entry.get("entry_volatility_logrange_ema", {})
+    h1_by_side = market_entry.get("entry_log_range_ema_1h", {})
     if not isinstance(h1_by_side, Mapping) or pside not in h1_by_side:
         raise KeyError(
-            f"snapshot missing market.entry_volatility_logrange_ema.{pside} for {symbol}; "
+            f"snapshot missing market.entry_log_range_ema_1h.{pside} for {symbol}; "
             "restart the bot with a newer monitor snapshot or use wizard mode"
         )
     if "c_mult" not in market_entry:

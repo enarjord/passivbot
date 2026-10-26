@@ -6930,7 +6930,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "ema_unavailable_reasons": [],
     }
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
-    assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"][
+    assert snapshot["market"]["BTC/USDT:USDT"]["entry_log_range_ema_1h"][
         "long"
     ] == pytest.approx(0.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["ema_bands"]["long"][

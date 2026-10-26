@@ -74,7 +74,7 @@ def _sample_snapshot():
                     "min_cost": 1.0,
                     "effective_min_cost": 5.0,
                     "c_mult": 1.0,
-                    "entry_volatility_logrange_ema": {"long": 0.0, "short": 0.0},
+                    "entry_log_range_ema_1h": {"long": 0.0, "short": 0.0},
                     "ema_bands": {
                         "long": {"lower": 100200.0, "upper": 100400.0},
                         "short": {"lower": 100200.0, "upper": 100400.0},
@@ -308,6 +308,28 @@ def test_build_trailing_inputs_from_snapshot_extracts_required_fields():
     assert inputs["h1_log_range_ema"] == pytest.approx(0.0)
     assert inputs["ema_lower"] == pytest.approx(100200.0)
     assert inputs["min_since_open"] == pytest.approx(99500.0)
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_hourly_log_range_snapshot_uses_current_field_without_rescaling(pside):
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["entry_log_range_ema_1h"][pside] = .025
+    market["entry_volatility_logrange_ema"] = {pside: .99}
+    inputs = build_trailing_inputs_from_snapshot(
+        _sample_config(), snapshot, symbol="BTC/USDT:USDT", pside=pside
+    )
+    assert inputs["h1_log_range_ema"] == .025
+
+
+def test_snapshot_requires_current_hourly_log_range_field():
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["entry_volatility_logrange_ema"] = market.pop("entry_log_range_ema_1h")
+    with pytest.raises(KeyError, match=r"entry_log_range_ema_1h.long"):
+        build_trailing_inputs_from_snapshot(
+            _sample_config(), snapshot, symbol="BTC/USDT:USDT", pside="long"
+        )
 
 
 def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit_ratio():

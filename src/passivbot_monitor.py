@@ -861,14 +861,14 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             ema_bands = hint.get("ema_bands")
             if isinstance(ema_bands, dict):
                 entry["ema_bands"] = deepcopy(ema_bands)
-        entry_volatility_logrange_ema: dict[str, float] = {}
+        entry_log_range_ema_1h: dict[str, float] = {}
         for pside in ("long", "short"):
-            entry_volatility_logrange_ema[pside] = float(
+            entry_log_range_ema_1h[pside] = float(
                 _monitor_h1_entry_logrange(
                     self, pside, symbol, strategy_cache=strategy_cache
                 )
             )
-        entry["entry_volatility_logrange_ema"] = entry_volatility_logrange_ema
+        entry["entry_log_range_ema_1h"] = entry_log_range_ema_1h
         out[symbol] = entry
     return out
 
