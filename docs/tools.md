@@ -264,13 +264,13 @@ exclusively to prevent accidental replacement.
 
 `passivbot tool trailing-inspect` explains the effective `trailing_martingale` entry and close
 behavior. It is offline and read-only. Passing only a config path produces an overview for both
-sides across quiet, normal, and high example volatility plus 0%, 50%, and 90% usage of the
+sides across quiet, normal, and high example log ranges plus 0%, 50%, and 90% usage of the
 effective exposure limit. Each row shows the threshold and retracement percentages, threshold
 price, nominal reversal-confirmation price, and Rust order-reference price from a readable 100.0
 average-position-price anchor. Use `--price-anchor` to change it.
 
 With a config, the overview labels each side as active or dormant and explains entry cooldown,
-simultaneous versus staged entry ladders, EMA gating, volatility/exposure sensitivity, recursive
+simultaneous versus staged entry ladders, EMA gating, log-range/exposure sensitivity, recursive
 close sizing, and relevant portfolio/PnL risk paths. Without a config, only strategy defaults are
 loaded, so runtime paths are explicitly labeled as unknown. The descriptions are heuristics for
 intuition, not assessments of strategy quality.
@@ -278,14 +278,16 @@ intuition, not assessments of strategy quality.
 Without either a positional config path or `--config`, the command uses the Rust-owned strategy
 defaults. A positional config path or the legacy `--config` form loads canonical
 `bot.<side>.strategy.trailing_martingale` parameters. Individual flags override either source.
-Percent values use config ratios, so `0.01` means 1%.
+Price offsets and trailing distances are scale-one fractions, so `0.01` means 1%.
+Exposure-ratio inputs describe usage of the effective exposure limit. Log-range inputs
+are EMAs of `ln(high / low)`.
 
 ```shell
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --side long --price-anchor 250
 
-# Customize the overview grid (values are config ratios, not percentage numbers).
+# Customize exposure ratios and raw logarithmic high/low range scenarios.
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --exposure-ratios 0,0.25,0.5,0.75,0.95 \
   --log-range-scenarios quiet:0.001:0.0005,normal:0.005:0.0025,high:0.015:0.0075

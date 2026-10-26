@@ -49,11 +49,12 @@ configuration paths; enabling a controller does not prove that a particular fixt
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
 Fixture-only `--hsl-drawdown-threshold-fraction`, `--hsl-drawdown-fraction-ema-span-minutes`,
-`--hsl-cooldown-minutes` and `--lookback-ema-span-minutes` set the explicit policy
-before canonical preparation. Defaults are 0.05, 30 minutes, 30 minutes and 1440
-minutes. These settings do not enable HSL; select its mode with `--hsl`. Fractional
-spans remain floats. The slow span controls continuous HSL and unstuck memory;
-the ordinary rolling loss-admission gate is configured independently.
+`--hsl-cooldown-minutes` set the explicit policy before canonical preparation.
+Defaults are 0.05, 30 minutes and 30 minutes. Independent slow-memory controls are
+`--hsl-memory-ema-span-minutes`, `--unstuck-memory-ema-span-minutes` and
+`--loss-gate-memory-ema-span-minutes`, each defaulting to 1440 minutes.
+These settings do not enable HSL; select its mode with `--hsl`. Fractional spans
+remain floats. Each memory belongs to its named risk consumer.
 Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
