@@ -14,7 +14,7 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "bot",
         "long",
         "forager",
-        "volatility_ema_span_minutes",
+        "log_range_ema_span_minutes",
     ),
     "long_forager_score_weights_volume": (
         "bot",
@@ -35,7 +35,7 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "long",
         "forager",
         "score_weights",
-        "volatility",
+        "log_range",
     ),
     "short_forager_score_weights_volume": (
         "bot",
@@ -56,7 +56,7 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "short",
         "forager",
         "score_weights",
-        "volatility",
+        "log_range",
     ),
     "short_forager_volume_ema_span_1m": (
         "bot",
@@ -68,7 +68,7 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "bot",
         "short",
         "forager",
-        "volatility_ema_span_minutes",
+        "log_range_ema_span_minutes",
     ),
 }
 

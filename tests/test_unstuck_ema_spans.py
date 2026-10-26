@@ -248,8 +248,8 @@ def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
         for key in (
             "ema_span_0_minutes",
             "ema_span_1_minutes",
-            "volatility_ema_span_minutes",
-            "volatility_ema_span_1h_candles",
+            "log_range_ema_span_minutes",
+            "log_range_ema_span_1h_candles",
         ):
             (strategy["entry"] if key in ("ema_span_0_minutes", "ema_span_1_minutes") else strategy)[key] = 1.0
     c["coin_overrides"] = {

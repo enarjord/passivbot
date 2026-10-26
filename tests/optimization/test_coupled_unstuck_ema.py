@@ -545,7 +545,7 @@ def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_
         "bot": {"long": {"strategy": {kind: inline_strategy}}},
     }}
     config["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1, "ema_readiness": 3, "volatility": 0, "unilateralness": 0,
+        "volume": 1, "ema_readiness": 3, "log_range": 0, "unilateralness": 0,
     }
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long", "couple_unstuck_ema_spans"]
     config["optimize"]["fixed_runtime_overrides"][f"bot.long.{strategy_suffix}.ema_span_0_minutes"] = 31.25
@@ -560,7 +560,7 @@ def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_
         assert candidate["bot"][side]["unstuck"]["ema_span_0_minutes"] == 31.25
         assert not (set(candidate["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
         assert candidate["bot"][side]["forager"]["score_weights"] == {
-            "volume": .25, "ema_readiness": .75, "volatility": 0.0, "unilateralness": 0.0,
+            "volume": .25, "ema_readiness": .75, "log_range": 0.0, "unilateralness": 0.0,
         }
     patch = candidate["coin_overrides"]["BTC"]
     assert "override_config_path" not in patch
@@ -595,7 +595,7 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
         "bot.long.hsl.cooldown_after_red_minutes": 1.0,
     }
     config["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1.0, "ema_readiness": 3.0, "volatility": 0.0, "unilateralness": 0.0,
+        "volume": 1.0, "ema_readiness": 3.0, "log_range": 0.0, "unilateralness": 0.0,
     }
     prepare_bound_plan(config)
     vector = [0.35]
@@ -620,7 +620,7 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
         assert candidate["bot"][side]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.35)
         assert candidate["bot"][side]["hsl"]["cooldown_after_red_minutes"] == 1.0
         assert candidate["bot"][side]["forager"]["score_weights"] == {
-            "volume": 0.25, "ema_readiness": 0.75, "volatility": 0.0, "unilateralness": 0.0,
+            "volume": 0.25, "ema_readiness": 0.75, "log_range": 0.0, "unilateralness": 0.0,
         }
         assert not (set(candidate["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
     assert _finalize_optimizer_vector_config(deepcopy(candidate)) == candidate

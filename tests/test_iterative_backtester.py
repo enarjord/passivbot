@@ -265,7 +265,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0_minutes": 48,
                         "ema_span_1_minutes": 60,
-                        "offset_volatility_ema_span_1h_candles": 12,
+                        "offset_log_range_ema_span_1h_candles": 12,
                         "offset_fraction": 0.003,
                     }
                 },
@@ -276,7 +276,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0_minutes": 48,
                         "ema_span_1_minutes": 60,
-                        "offset_volatility_ema_span_1h_candles": 12,
+                        "offset_log_range_ema_span_1h_candles": 12,
                         "offset_fraction": 0.003,
                     }
                 },

@@ -66,9 +66,9 @@
             "forager": {
                 "always_include": [],
                 "score_hysteresis_margin": 0.02,
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 1.0, "volume": 0.0},
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 1.0, "volume": 0.0},
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 225.0,
+                "log_range_ema_span_minutes": 225.0,
                 "volume_ema_span_minutes": 520.0
             },
             "hsl": {
@@ -95,10 +95,10 @@
                     "entry_qty_exposure_coefficient": 0.0,
                     "offset_fraction": 0.003,
                     "inventory_offset_exposure_coefficient": 0.2,
-                    "offset_volatility_1h_weight": 0.0,
-                    "offset_volatility_1m_weight": 0.0,
-                    "offset_volatility_ema_span_1h_candles": 24.0,
-                    "offset_volatility_ema_span_minutes": 60.0
+                    "offset_log_range_1h_coefficient": 0.0,
+                    "offset_log_range_1m_coefficient": 0.0,
+                    "offset_log_range_ema_span_1h_candles": 24.0,
+                    "offset_log_range_ema_span_minutes": 60.0
                 }
             },
             "universe": {
@@ -138,9 +138,9 @@
             },
             "forager": {
                 "always_include": [],
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 1.0, "volume": 0.0},
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 1.0, "volume": 0.0},
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 10.0,
+                "log_range_ema_span_minutes": 10.0,
                 "volume_ema_span_minutes": 360.0
             },
             "hsl": {
@@ -167,10 +167,10 @@
                     "entry_qty_exposure_coefficient": 0.0,
                     "offset_fraction": 0.003,
                     "inventory_offset_exposure_coefficient": 0.2,
-                    "offset_volatility_1h_weight": 0.0,
-                    "offset_volatility_1m_weight": 0.0,
-                    "offset_volatility_ema_span_1h_candles": 24.0,
-                    "offset_volatility_ema_span_minutes": 60.0
+                    "offset_log_range_1h_coefficient": 0.0,
+                    "offset_log_range_1m_coefficient": 0.0,
+                    "offset_log_range_ema_span_1h_candles": 24.0,
+                    "offset_log_range_ema_span_minutes": 60.0
                 }
             },
             "universe": {
@@ -301,11 +301,11 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 720, 1],
+                    "log_range_ema_span_minutes": [10, 720, 1],
                     "volume_ema_span_minutes": [360, 2880, 10]
                 },
                 "hsl": {
@@ -329,10 +329,10 @@
                         "entry_qty_exposure_coefficient": [0.0, 2.0, 0.01],
                         "offset_fraction": [0, 0.05, 0.0001],
                         "inventory_offset_exposure_coefficient": [0, 2, 0.001],
-                        "offset_volatility_1h_weight": [0, 40, 0.1],
-                        "offset_volatility_1m_weight": [0, 40, 0.1],
-                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
-                        "offset_volatility_ema_span_minutes": [5, 720, 1]
+                        "offset_log_range_1h_coefficient": [0, 40, 0.1],
+                        "offset_log_range_1m_coefficient": [0, 40, 0.1],
+                        "offset_log_range_ema_span_1h_candles": [1, 672, 1],
+                        "offset_log_range_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {
@@ -354,11 +354,11 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 720, 1],
+                    "log_range_ema_span_minutes": [10, 720, 1],
                     "volume_ema_span_minutes": [360, 2880, 10]
                 },
                 "hsl": {
@@ -382,10 +382,10 @@
                         "entry_qty_exposure_coefficient": [0.0, 2.0, 0.01],
                         "offset_fraction": [0, 0.05, 0.0001],
                         "inventory_offset_exposure_coefficient": [0, 2, 0.001],
-                        "offset_volatility_1h_weight": [0, 40, 0.1],
-                        "offset_volatility_1m_weight": [0, 40, 0.1],
-                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
-                        "offset_volatility_ema_span_minutes": [5, 720, 1]
+                        "offset_log_range_1h_coefficient": [0, 40, 0.1],
+                        "offset_log_range_1m_coefficient": [0, 40, 0.1],
+                        "offset_log_range_ema_span_1h_candles": [1, 672, 1],
+                        "offset_log_range_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {

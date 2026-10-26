@@ -23,6 +23,9 @@ before backtesting a proposed replacement.
 | TM `entry.double_down_factor` | `entry.reentry_qty_multiplier`, scaling the absolute current position quantity for an additional entry |
 | TM `entry.threshold_we_weight`, `entry.retracement_we_weight`, `close.threshold_we_weight` | Same role names ending in `_exposure_ratio_coefficient`; values and formulas are unchanged |
 | EMA-anchor `entry_double_down_factor`, `offset_psize_weight` | `entry_qty_exposure_coefficient`, `inventory_offset_exposure_coefficient`; same-side sizing and signed inventory shifts retain their original formulas |
+| Strategy `*_volatility_1m_weight` / `*_volatility_1h_weight` | Corresponding `*_log_range_1m_coefficient` / `*_log_range_1h_coefficient`; the indicator remains EMA of `ln(high / low)` |
+| Forager `score_weights.volatility` | `score_weights.log_range`, preserving relative weights and their normalization |
+| Forager/strategy log-range span names containing `volatility` | Corresponding names containing `log_range`, retaining the same minute or hourly-candle unit |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
@@ -71,7 +74,7 @@ The shared span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate spa
 `bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
 
-These unit spelling changes do not rescale values. Price and minute-volatility horizons remain
+These unit spelling changes do not rescale values. Price and minute-log-range horizons remain
 floating-point minutes, including backtests with aggregated candle intervals; hourly horizons
 remain floating-point counts of calendar-hour candles. Native parameter and optimizer identifiers
 keep their established spellings.

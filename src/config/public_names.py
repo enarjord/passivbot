@@ -30,8 +30,9 @@ PUBLIC_PATH_RENAMES = {
 }
 
 SHARED_SIDE_PATH_RENAMES = {
+    ("forager", "score_weights", "volatility"): ("forager", "score_weights", "log_range"),
     ("forager", "volume_ema_span_1m"): ("forager", "volume_ema_span_minutes"),
-    ("forager", "volatility_ema_span_1m"): ("forager", "volatility_ema_span_minutes"),
+    ("forager", "volatility_ema_span_1m"): ("forager", "log_range_ema_span_minutes"),
     ("forager", "unilateralness_ema_span_1m"): ("forager", "unilateralness_ema_span_minutes"),
     ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
     ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
@@ -60,6 +61,8 @@ def _public_path_renames():
             for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items():
                 for old, new in fields.items():
                     mappings[(*root, "strategy", kind, *old)] = (*root, "strategy", kind, *new)
+        root = ("optimize", "bounds", side, "forager")
+        mappings[(*root, "score_weights_volatility")] = (*root, "score_weights_log_range")
     return mappings
 
 

@@ -192,18 +192,18 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
         bot = config["bot"][side]["strategy"][strategy]
         if strategy == "ema_anchor":
             bot.update(ema_span_0=10., ema_span_1=20., offset=.02,
-                       inventory_offset_exposure_coefficient=0., offset_volatility_1m_weight=0.,
-                       offset_volatility_1h_weight=0., base_qty_pct=.02,
+                       inventory_offset_exposure_coefficient=0., offset_log_range_1m_coefficient=0.,
+                       offset_log_range_1h_coefficient=0., base_qty_pct=.02,
                        entry_qty_exposure_coefficient=1.)
         else:
             bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_dist=.01,
                                 initial_qty_pct=.02, reentry_qty_multiplier=1.,
                                 threshold_base_pct=.9, threshold_exposure_ratio_coefficient=0.,
-                                threshold_volatility_1m_weight=0.,
-                                threshold_volatility_1h_weight=0.)
+                                threshold_log_range_1m_coefficient=0.,
+                                threshold_log_range_1h_coefficient=0.)
             bot["close"].update(qty_pct=1., threshold_base_pct=.5,
-                                threshold_exposure_ratio_coefficient=0., threshold_volatility_1m_weight=0.,
-                                threshold_volatility_1h_weight=0.)
+                                threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
+                                threshold_log_range_1h_coefficient=0.)
     metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
                "position_held_hours_max", "hard_stop_time_in_red_pct")
     snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]

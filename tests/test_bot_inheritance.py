@@ -15,7 +15,7 @@ def catalog():
         "risk": {"capacity": 1.0},
         "entry_cooldown": {"maximum": None},
         "forager": {"always_include": [], "score_weights": {
-            "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
+            "volume": 0.2, "log_range": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
         }},
         "universe": {"approved_coins": ["AAA"], "ignored_coins": []},
     }

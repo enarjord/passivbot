@@ -132,21 +132,21 @@ def replay_inputs(kind, topology, margins):
         bot["forager"].update(volume_ema_span_minutes=1.0,
                               score_hysteresis_margin=margins[side])
         bot["forager"]["score_weights"] = {
-            "volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0}
+            "volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0}
         strategy = bot["strategy"][kind]
         band = strategy["entry"] if kind == "trailing_martingale" else strategy
         band.update(ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
         if kind == "ema_anchor":
             strategy.update(base_qty_fraction=0.01, offset_fraction=0.01,
-                            inventory_offset_exposure_coefficient=0.0, offset_volatility_1m_weight=0.0,
-                            offset_volatility_1h_weight=0.0, entry_qty_exposure_coefficient=0.0)
+                            inventory_offset_exposure_coefficient=0.0, offset_log_range_1m_coefficient=0.0,
+                            offset_log_range_1h_coefficient=0.0, entry_qty_exposure_coefficient=0.0)
         else:
             strategy["entry"].update(initial_qty_fraction=0.01, initial_ema_distance_fraction=0.01,
                                       reentry_qty_multiplier=0.0, threshold_base_fraction=0.01,
                                       retracement_base_fraction=0.0)
             for leg in ("entry", "close"):
-                for name in ("threshold_volatility_1h_weight", "retracement_volatility_1h_weight",
-                             "threshold_volatility_1m_weight", "retracement_volatility_1m_weight"):
+                for name in ("threshold_log_range_1h_coefficient", "retracement_log_range_1h_coefficient",
+                             "threshold_log_range_1m_coefficient", "retracement_log_range_1m_coefficient"):
                     strategy[leg][name] = 0.0
     config["backtest"].update(exchanges=["binance"], starting_balance=1000.0,
                                btc_collateral_cap=0.0, filter_by_min_effective_cost=False,

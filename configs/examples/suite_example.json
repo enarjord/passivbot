@@ -81,9 +81,9 @@
             "forager": {
                 "always_include": [],
                 "score_hysteresis_margin": 0.02,
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 1.0, "volume": 0.0},
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 1.0, "volume": 0.0},
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 225,
+                "log_range_ema_span_minutes": 225,
                 "volume_ema_span_minutes": 520
             },
             "hsl": {
@@ -107,11 +107,11 @@
                     "close": {
                         "qty_fraction": 0.1,
                         "retracement_base_fraction": 0.0,
-                        "retracement_volatility_1h_weight": 0.0,
-                        "retracement_volatility_1m_weight": 0.0,
+                        "retracement_log_range_1h_coefficient": 0.0,
+                        "retracement_log_range_1m_coefficient": 0.0,
                         "threshold_base_fraction": 0.006,
-                        "threshold_volatility_1h_weight": 1.0,
-                        "threshold_volatility_1m_weight": 0.0,
+                        "threshold_log_range_1h_coefficient": 1.0,
+                        "threshold_log_range_1m_coefficient": 0.0,
                         "threshold_exposure_ratio_coefficient": -0.004
                     },
                     "entry": {
@@ -122,16 +122,16 @@
                         "initial_ema_distance_fraction": 0.0097,
                         "initial_qty_fraction": 0.0276,
                         "retracement_base_fraction": 0.0,
-                        "retracement_volatility_1h_weight": 0.0,
-                        "retracement_volatility_1m_weight": 0.0,
+                        "retracement_log_range_1h_coefficient": 0.0,
+                        "retracement_log_range_1m_coefficient": 0.0,
                         "retracement_exposure_ratio_coefficient": 0.0,
                         "threshold_base_fraction": 0.033,
-                        "threshold_volatility_1h_weight": 2.4,
-                        "threshold_volatility_1m_weight": 0.0,
+                        "threshold_log_range_1h_coefficient": 2.4,
+                        "threshold_log_range_1m_coefficient": 0.0,
                         "threshold_exposure_ratio_coefficient": 0.135
                     },
-                    "volatility_ema_span_1h_candles": 1690,
-                    "volatility_ema_span_minutes": 60.0
+                    "log_range_ema_span_1h_candles": 1690,
+                    "log_range_ema_span_minutes": 60.0
                 }
             },
             "universe": {
@@ -279,11 +279,11 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 720, 1],
+                    "log_range_ema_span_minutes": [10, 720, 1],
                     "volume_ema_span_minutes": [360, 2880, 10]
                 },
                 "risk": {
@@ -298,11 +298,11 @@
                         "close": {
                             "qty_fraction": [0.05, 1, 0.01],
                             "retracement_base_fraction": [0, 0.015, 1e-05],
-                            "retracement_volatility_1h_weight": [0, 40, 0.1],
-                            "retracement_volatility_1m_weight": [0, 40, 0.1],
+                            "retracement_log_range_1h_coefficient": [0, 40, 0.1],
+                            "retracement_log_range_1m_coefficient": [0, 40, 0.1],
                             "threshold_base_fraction": [-0.02, 0.02, 1e-05],
-                            "threshold_volatility_1h_weight": [0, 40, 0.1],
-                            "threshold_volatility_1m_weight": [0, 40, 0.1],
+                            "threshold_log_range_1h_coefficient": [0, 40, 0.1],
+                            "threshold_log_range_1m_coefficient": [0, 40, 0.1],
                             "threshold_exposure_ratio_coefficient": [-0.05, 0.05, 0.0001]
                         },
                         "entry": {
@@ -312,16 +312,16 @@
                             "initial_ema_distance_fraction": [-0.01, 0.01, 0.0001],
                             "initial_qty_fraction": [0.01, 0.03, 0.0001],
                             "retracement_base_fraction": [0, 0.015, 1e-05],
-                            "retracement_volatility_1h_weight": [0, 40, 0.1],
-                            "retracement_volatility_1m_weight": [0, 40, 0.1],
+                            "retracement_log_range_1h_coefficient": [0, 40, 0.1],
+                            "retracement_log_range_1m_coefficient": [0, 40, 0.1],
                             "retracement_exposure_ratio_coefficient": [0, 5, 0.001],
                             "threshold_base_fraction": [0, 0.04, 1e-05],
-                            "threshold_volatility_1h_weight": [0, 40, 0.1],
-                            "threshold_volatility_1m_weight": [0, 40, 0.1],
+                            "threshold_log_range_1h_coefficient": [0, 40, 0.1],
+                            "threshold_log_range_1m_coefficient": [0, 40, 0.1],
                             "threshold_exposure_ratio_coefficient": [0, 5, 0.001]
                         },
-                        "volatility_ema_span_1h_candles": [672, 2016, 1],
-                        "volatility_ema_span_minutes": [5, 720, 1]
+                        "log_range_ema_span_1h_candles": [672, 2016, 1],
+                        "log_range_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {

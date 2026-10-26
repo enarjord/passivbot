@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
+  use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
+  EMA of `ln(high / low)`; values, normalization, native identifiers, and trading formulas are
+  unchanged. Released-v8 conversion emits the new public paths; earlier dev-v9 names are rejected.
+
 - Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
   `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses
   `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds,

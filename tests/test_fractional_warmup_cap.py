@@ -21,8 +21,8 @@ def _config(span, cap):
             "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 1.0, "max_minutes": cap}},
             "long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": span, "ema_span_1_minutes": span},
-                "volatility_ema_span_minutes": 0.0,
-                "volatility_ema_span_1h_candles": 0.0,
+                "log_range_ema_span_minutes": 0.0,
+                "log_range_ema_span_1h_candles": 0.0,
             }}},
             "short": {},
         },

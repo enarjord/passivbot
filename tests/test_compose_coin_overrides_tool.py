@@ -61,8 +61,8 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     ] = 0.02
     first["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 1.0
     second["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.0
-    first["bot"]["long"]["forager"]["volatility_ema_span_minutes"] = 100.0
-    second["bot"]["long"]["forager"]["volatility_ema_span_minutes"] = 200.0
+    first["bot"]["long"]["forager"]["log_range_ema_span_minutes"] = 100.0
+    second["bot"]["long"]["forager"]["log_range_ema_span_minutes"] = 200.0
     first["live"]["account"]["leverage"] = 3
     second["live"]["account"]["leverage"] = 5
 
@@ -111,7 +111,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     assert eth["live"]["account"]["leverage"] == 5
     assert "hsl" not in eth["bot"]["long"]
     assert "position_exposure_enforcer_threshold" not in eth["bot"]["long"].get("risk", {})
-    assert "bot.long.forager.volatility_ema_span_minutes" in report.account_wide_conflicts
+    assert "bot.long.forager.log_range_ema_span_minutes" in report.account_wide_conflicts
 
     prepared = prepare_config(composed, verbose=False, log_config_transforms=False)
     parse_overrides(prepared, verbose=False)

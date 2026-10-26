@@ -21,11 +21,11 @@ def get_common_bot_defaults():
             "score_weights": {
                 "unilateralness": 0.0,
                 "ema_readiness": 0.21,
-                "volatility": 0.61,
+                "log_range": 0.61,
                 "volume": 0.18,
             },
             "unilateralness_ema_span_minutes": 60.0,
-            "volatility_ema_span_minutes": 2274.0,
+            "log_range_ema_span_minutes": 2274.0,
             "volume_ema_span_minutes": 310.0,
         },
         "hsl": {

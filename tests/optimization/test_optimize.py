@@ -1579,13 +1579,13 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.55},
                     "forager": {
                         "volume_ema_span_minutes": 520,
-                        "volatility_ema_span_minutes": 225,
+                        "log_range_ema_span_minutes": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
                             "unilateralness": 0.0,
                             "volume": 0.0,
                             "ema_readiness": 0.0,
-                            "volatility": 1.0,
+                            "log_range": 1.0,
                         },
                     },
                     "hsl": {"enabled": False, "drawdown_threshold_fraction": 0.2},
@@ -1609,13 +1609,13 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 0.25},
                     "forager": {
                         "volume_ema_span_minutes": 360,
-                        "volatility_ema_span_minutes": 10,
+                        "log_range_ema_span_minutes": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
                             "unilateralness": 0.0,
                             "volume": 0.2,
                             "ema_readiness": 0.3,
-                            "volatility": 0.5,
+                            "log_range": 0.5,
                         },
                     },
                     "hsl": {"enabled": True, "drawdown_threshold_fraction": 0.1},
@@ -1706,11 +1706,11 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.9},
                     "forager": {
                         "volume_ema_span_minutes": 520,
-                        "volatility_ema_span_minutes": 225,
+                        "log_range_ema_span_minutes": 225,
                         "score_weights": {
                             "volume": 0.0,
                             "ema_readiness": 0.0,
-                            "volatility": 1.0,
+                            "log_range": 1.0,
                         },
                     },
                     "strategy": {
@@ -1722,11 +1722,11 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": 0.1},
                     "forager": {
                         "volume_ema_span_minutes": 10,
-                        "volatility_ema_span_minutes": 20,
+                        "log_range_ema_span_minutes": 20,
                         "score_weights": {
                             "volume": 0.1,
                             "ema_readiness": 0.2,
-                            "volatility": 0.7,
+                            "log_range": 0.7,
                         },
                     },
                     "strategy": {
@@ -1909,9 +1909,9 @@ class TestIndividualToConfig:
         close = result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
 
         assert close["retracement_base_fraction"] == pytest.approx(0.0)
-        assert close["retracement_volatility_1h_weight"] == pytest.approx(0.01)
-        assert close["retracement_volatility_1m_weight"] == pytest.approx(0.01)
-        assert close["threshold_volatility_1h_weight"] == pytest.approx(39.0)
+        assert close["retracement_log_range_1h_coefficient"] == pytest.approx(0.01)
+        assert close["retracement_log_range_1m_coefficient"] == pytest.approx(0.01)
+        assert close["threshold_log_range_1h_coefficient"] == pytest.approx(39.0)
 
     def test_canonicalizes_disabled_close_retracement_params_in_vector_for_dedupe(self):
         template = _independent_close_fixture()
@@ -1923,7 +1923,7 @@ class TestIndividualToConfig:
         template["bot"]["short"]["enabled"] = True
         template["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
             "close"
-        ]["retracement_volatility_1h_weight"] = [0.01, 70.0, 0.01]
+        ]["retracement_log_range_1h_coefficient"] = [0.01, 70.0, 0.01]
         template["optimize"]["bounds"]["short"].setdefault("risk", {})["max_positions"] = [1.0, 1.0]
         template["optimize"]["bounds"]["short"]["risk"][
             "total_wallet_exposure_limit_ratio"
@@ -1970,7 +1970,7 @@ class TestIndividualToConfig:
             key_to_idx["short_close_retracement_volatility_1h_weight"]
         ] == pytest.approx(70.0)
         assert long_close["retracement_base_fraction"] == pytest.approx(0.0)
-        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(70.0)
+        assert short_close["retracement_log_range_1h_coefficient"] == pytest.approx(70.0)
 
     def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
         template = {
@@ -3878,9 +3878,9 @@ class TestExtractConfigs:
             assert len(result) == 1
             assert "bot" in result[0]
             assert result[0]["bot"]["long"]["forager"]["score_weights"][
-                "volatility"
+                "log_range"
             ] == pytest.approx(
-                template["bot"]["long"]["forager"]["score_weights"]["volatility"]
+                template["bot"]["long"]["forager"]["score_weights"]["log_range"]
             )
         finally:
             os.unlink(path)

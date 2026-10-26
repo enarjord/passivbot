@@ -6,6 +6,11 @@ optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime bui
 merged public strategy exactly once at the native boundary. Normal loading accepts one public
 spelling; explicit released-v8 conversion reports path changes across all authored layers.
 
+Public candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`,
+not a return standard deviation. Strategy sensitivities use `_coefficient`; forager
+`score_weights.log_range` remains a relative ranking weight. Native volatility identifiers
+remain boundary bindings, not additional authored spellings.
+
 Fraction denominators are declared in the generated configuration reference. In particular,
 Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
 position entry price, plus any over-budget remainder, rounded and capped by the actual position.
@@ -155,12 +160,12 @@ Seed evaluation contract:
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
   device handles or borrowed-memory names. Resume does not require original seed files.
 
-Public price, unstuck and base-stream volatility/volume EMA horizons use `_minutes`, including
+Public price, unstuck and base-stream log-range/volume EMA horizons use `_minutes`, including
 `ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
 these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
 candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
-also uses minutes and requires completed one-minute candles. Hourly volatility indicators use
-`volatility_ema_span_1h_candles` or `offset_volatility_ema_span_1h_candles`: these are floating
+also uses minutes and requires completed one-minute candles. Hourly log-range indicators use
+`log_range_ema_span_1h_candles` or `offset_log_range_ema_span_1h_candles`: these are floating
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
 not rescale values, round derived spans or change native parameter IDs.
 
@@ -234,7 +239,7 @@ panic, and independent risk reducers continue when their own inputs are complete
 Rust ideal set remains authoritative: reconciliation cancels resting orders absent from that set
 and never preserves them merely because trailing reconstruction is pending.
 
-Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
+Entry thresholds and retracements are multiplicative distances. Positive log-range or wallet
 exposure weights widen them.
 
 `bot.<side>.strategy.trailing_martingale.entry.ema_gate_mode` controls which entry orders are
@@ -254,7 +259,7 @@ band distance even when `ema_gate_mode = "disabled"`. Candles and EMA bands are 
 for that tie-break, and missing EMA inputs must fail loudly.
 
 Close thresholds are additive so they can intentionally cross through break-even or negative markup
-as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
+as wallet exposure rises. Close retracement is scaled by log-range coefficients and intentionally has no
 wallet-exposure modifier.
 
 TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.

@@ -55,7 +55,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             else:
                 config["optimize"]["round_to_n_significant_digits"] = 2
                 config["optimize"]["bounds"]["long"]["forager"] = {
-                    "score_weights": {name: [0.0, 1.0] for name in ("volume", "ema_readiness", "volatility")},
+                    "score_weights": {name: [0.0, 1.0] for name in ("volume", "ema_readiness", "log_range")},
                 }
             config = prepare_config(config, verbose=False)
             config["backtest"]["coins"] = deepcopy(previous.config["backtest"]["coins"])
@@ -72,7 +72,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
         if policy == "anchor":
             vector[0] = 1.0
         elif policy == "weights":
-            weights = dict(volume=0.24, ema_readiness=0.55, volatility=0.53)
+            weights = dict(volume=0.24, ema_readiness=0.55, log_range=0.53)
             for index, (name, _path) in enumerate(base.key_paths):
                 for key, value in weights.items():
                     if name == f"bot.long.forager.score_weights.{key}":

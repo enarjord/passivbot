@@ -46,19 +46,19 @@ def config():
         threshold_exposure_ratio_coefficient=5.0,
         retracement_base_fraction=0.001,
         retracement_exposure_ratio_coefficient=0.1,
-        threshold_volatility_1m_weight=0,
-        threshold_volatility_1h_weight=0,
-        retracement_volatility_1m_weight=0,
-        retracement_volatility_1h_weight=0,
+        threshold_log_range_1m_coefficient=0,
+        threshold_log_range_1h_coefficient=0,
+        retracement_log_range_1m_coefficient=0,
+        retracement_log_range_1h_coefficient=0,
     )
     strategy["close"].update(
         threshold_base_fraction=0.01,
         threshold_exposure_ratio_coefficient=-0.005,
-        threshold_volatility_1m_weight=0,
-        threshold_volatility_1h_weight=0,
+        threshold_log_range_1m_coefficient=0,
+        threshold_log_range_1h_coefficient=0,
         retracement_base_fraction=0.002,
-        retracement_volatility_1m_weight=0,
-        retracement_volatility_1h_weight=0,
+        retracement_log_range_1m_coefficient=0,
+        retracement_log_range_1h_coefficient=0,
     )
     return result
 

@@ -14,7 +14,7 @@ CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day"
 
 
 def _is_distance_sensitivity(key):
-    return "weight" in key or key in {
+    return "weight" in key or ("log_range" in key and key.endswith("_coefficient")) or key in {
         "threshold_exposure_ratio_coefficient",
         "retracement_exposure_ratio_coefficient",
         "inventory_offset_exposure_coefficient",
@@ -89,7 +89,7 @@ def apply_features(config, case, coins, markets, bars):
             bot["entry_cooldown"].update(min_duration_minutes=1.0, max_duration_minutes=60.0,
                                           weights_minutes=dict(exposure_ratio=10.0, adverse_directionality=5.0))
         weights = bot["forager"]["score_weights"]
-        weights.update(volume=0.3, volatility=0.3, ema_readiness=0.4, unilateralness=0.2 if "forager_unilateral" in flags else 0.0)
+        weights.update(volume=0.3, log_range=0.3, ema_readiness=0.4, unilateralness=0.2 if "forager_unilateral" in flags else 0.0)
         if case.topology != "forager":
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
@@ -114,7 +114,7 @@ def apply_features(config, case, coins, markets, bars):
             if "volatility" in flags:
                 for leg in ("entry", "close"):
                     for key in strategy[leg]:
-                        if "volatility" in key and _is_distance_sensitivity(key):
+                        if "log_range" in key and _is_distance_sensitivity(key):
                             strategy[leg][key] = 0.1
             if "exposure_weight" in flags:
                 strategy["entry"]["threshold_exposure_ratio_coefficient"] = 0.01
