@@ -84,7 +84,7 @@ fn equity_shared_references_match_current_producers() {
         filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
-        max_realized_loss_pct: 1.0,
+        loss_gate_max_drawdown_fraction: 1.0,
         unstuck_memory_ema_span_minutes: 43_200.0,
         loss_gate_memory_ema_span_minutes: 43_200.0,
         liquidation_threshold: 0.05,

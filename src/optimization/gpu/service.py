@@ -682,7 +682,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
         "unstuck_memory_ema_span_minutes",
         "loss_gate_memory_ema_span_minutes",
         "market_order_slippage_pct",
@@ -1948,8 +1948,8 @@ class SharedAccountReplay:
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis": self.forager_score_hysteresis,
-            "max_realized_loss_pct": float(
-                backtest_params.get("max_realized_loss_pct", 1.0)
+            "loss_gate_max_drawdown_fraction": float(
+                backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
             ),
             "collect_coin_fill_counts": bool(
                 self.needed_metrics

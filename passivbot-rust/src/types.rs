@@ -385,7 +385,7 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: MinimumCostFilter,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
-    pub max_realized_loss_pct: f64,
+    pub loss_gate_max_drawdown_fraction: f64,
     pub unstuck_memory_ema_span_minutes: f64,
     pub loss_gate_memory_ema_span_minutes: f64,
     pub liquidation_threshold: f64,
@@ -641,12 +641,12 @@ pub struct BotParams {
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
     pub unstuck_ema_gating_enabled: bool,
-    pub unstuck_close_pct: f64,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_ema_span_0: f64,
-    pub unstuck_ema_span_1: f64,
-    pub unstuck_loss_allowance_pct: f64,
-    pub unstuck_threshold: f64,
+    pub unstuck_close_fraction: f64,
+    pub unstuck_ema_distance_fraction: f64,
+    pub unstuck_ema_span_0_minutes: f64,
+    pub unstuck_ema_span_1_minutes: f64,
+    pub unstuck_loss_allowance_fraction: f64,
+    pub unstuck_exposure_trigger_ratio: f64,
 }
 
 impl Default for BotParams {
@@ -696,12 +696,12 @@ impl Default for BotParams {
             risk_we_excess_allowance_fraction: 0.0,
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
-            unstuck_close_pct: 0.0,
-            unstuck_ema_dist: 0.0,
-            unstuck_ema_span_0: 60.0,
-            unstuck_ema_span_1: 60.0,
-            unstuck_loss_allowance_pct: 0.0,
-            unstuck_threshold: 0.0,
+            unstuck_close_fraction: 0.0,
+            unstuck_ema_distance_fraction: 0.0,
+            unstuck_ema_span_0_minutes: 60.0,
+            unstuck_ema_span_1_minutes: 60.0,
+            unstuck_loss_allowance_fraction: 0.0,
+            unstuck_exposure_trigger_ratio: 0.0,
         }
     }
 }

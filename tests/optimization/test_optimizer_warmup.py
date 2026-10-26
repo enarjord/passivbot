@@ -89,7 +89,7 @@ def _make_optimizer_config() -> dict:
     _set_bounds(config, {"short_log_range_ema_span_minutes": [0, 0]})
     for side in ("long", "short"):
         for i in (0, 1):
-            _set_bounds(config, {f"{side}_unstuck_ema_span_{i}": [1, 100, 1]})
+            _set_bounds(config, {f"{side}_unstuck_ema_span_{i}_minutes": [1, 100, 1]})
     return config
 
 

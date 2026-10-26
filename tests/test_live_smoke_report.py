@@ -6394,7 +6394,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "sides": {
                         "long": {
                             "allowance": -0.6064111797120435,
-                            "loss_allowance_pct": 0.01,
+                            "loss_allowance_fraction": 0.01,
                             "over_budget": True,
                         },
                     },

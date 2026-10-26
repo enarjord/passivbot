@@ -220,14 +220,14 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.universe.filter_by_min_effective_cost` | boolean | `true` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.minimum_coin_age_days` | float | `60.0` | days | long; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.long.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | long; live, backtest, optimize | Eligible (`long_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
-| `bot.long.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
+| `bot.long.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | long; live, backtest, optimize | Eligible (`long_unstuck_close_fraction`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
+| `bot.long.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_distance_fraction`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
 | `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
-| `bot.long.unstuck.ema_span_0_minutes` | float | `790.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
-| `bot.long.unstuck.ema_span_1_minutes` | float | `1080.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.long.unstuck.ema_span_0_minutes` | float | `790.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_0_minutes`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.long.unstuck.ema_span_1_minutes` | float | `1080.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_1_minutes`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
 | `bot.long.unstuck.enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
-| `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_threshold`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
-| `bot.long.unstuck.loss_allowance_fraction` | float | `0.0052` | fraction / applicable total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_loss_allowance_pct`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
+| `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_exposure_trigger_ratio`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
+| `bot.long.unstuck.loss_allowance_fraction` | float | `0.0052` | fraction / applicable total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_loss_allowance_fraction`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
 | `bot.portfolio.execution.market_order_near_touch_fraction` | float | `0.001` | fraction / market price | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.portfolio.execution.market_orders_allowed` | boolean | `false` | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
 | `bot.portfolio.hedge_mode` | boolean | `false` | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
@@ -314,14 +314,14 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.universe.filter_by_min_effective_cost` | boolean | `true` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.minimum_coin_age_days` | float | `60.0` | days | short; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.short.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | short; live, backtest, optimize | Eligible (`short_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
-| `bot.short.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
+| `bot.short.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | short; live, backtest, optimize | Eligible (`short_unstuck_close_fraction`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
+| `bot.short.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_distance_fraction`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
 | `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
-| `bot.short.unstuck.ema_span_0_minutes` | float | `790.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
-| `bot.short.unstuck.ema_span_1_minutes` | float | `1080.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.short.unstuck.ema_span_0_minutes` | float | `790.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_0_minutes`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.short.unstuck.ema_span_1_minutes` | float | `1080.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_1_minutes`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
 | `bot.short.unstuck.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
-| `bot.short.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_threshold`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
-| `bot.short.unstuck.loss_allowance_fraction` | float | `0.0052` | fraction / applicable total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_loss_allowance_pct`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
+| `bot.short.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_exposure_trigger_ratio`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
+| `bot.short.unstuck.loss_allowance_fraction` | float | `0.0052` | fraction / applicable total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_loss_allowance_fraction`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
 
 ## coin_overrides
 

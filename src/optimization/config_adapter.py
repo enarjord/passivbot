@@ -8,7 +8,7 @@ optimization-specific bounds logic.
 import math
 from typing import List, Tuple
 
-from config.bot import validate_unstuck_ema_dist_value
+from config.bot import validate_unstuck_ema_distance_fraction_value
 from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
@@ -178,7 +178,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 f"got {type(value).__name__}"
             )
         target_key = canonical_key or bound_key
-        if key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+        if key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             if (
                 not math.isfinite(bound.low)
@@ -188,18 +188,18 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 raise ValueError(
                     f"optimize.bounds.{target_key} must be positive and finite"
                 )
-        if target_key == "long_unstuck_ema_dist":
+        if target_key == "long_unstuck_ema_distance_fraction":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
-            validate_unstuck_ema_dist_value(
+            validate_unstuck_ema_distance_fraction_value(
                 bound.low,
-                path="optimize.bounds.long_unstuck_ema_dist lower bound",
+                path="optimize.bounds.long_unstuck_ema_distance_fraction lower bound",
                 pside="long",
             )
-        elif target_key == "short_unstuck_ema_dist":
+        elif target_key == "short_unstuck_ema_distance_fraction":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
-            validate_unstuck_ema_dist_value(
+            validate_unstuck_ema_distance_fraction_value(
                 bound.high,
-                path="optimize.bounds.short_unstuck_ema_dist upper bound",
+                path="optimize.bounds.short_unstuck_ema_distance_fraction upper bound",
                 pside="short",
             )
 

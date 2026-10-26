@@ -4582,14 +4582,14 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.5 if pside == "long" else 0.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.02 if pside == "long" else 0.0
         return 0.0
 
     def bp(pside, key, symbol=None):
         if (
             pside == "long"
-            and key == "unstuck_loss_allowance_pct"
+            and key == "unstuck_loss_allowance_fraction"
             and symbol == "HYPE/USDT:USDT"
         ):
             return 0.005
@@ -4602,7 +4602,7 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     parts, signature = bot._get_unstuck_status_parts_and_signature()
 
     assert info["allowance"] == pytest.approx(60.0)
-    assert info["override_loss_allowance_pcts"] == {
+    assert info["override_loss_allowance_fractions"] == {
         "HYPE/USDT:USDT": pytest.approx(0.005)
     }
     assert info["override_allowances"]["HYPE/USDT:USDT"] == pytest.approx(15.0)
@@ -7908,7 +7908,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": True,
                 "market_order_near_touch_threshold": 0.0,
-                "max_realized_loss_pct": 1.0,
+                "loss_gate_max_drawdown_fraction": 1.0,
             }
             return values.get(key, False)
 
@@ -8021,12 +8021,12 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
-    assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
+    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(1.0)
     bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.0
-    assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
+    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(0.0)
     del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"]
     with pytest.raises(KeyError, match="max_drawdown_fraction"):
-        bot._live_max_realized_loss_pct()
+        bot._loss_gate_max_drawdown_fraction()
 
 
 def test_orchestrator_exchange_params_require_live_fee_metadata():
@@ -8051,7 +8051,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.1
         return 0.0
 
@@ -8086,7 +8086,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
             return 1.0
-        if key == "unstuck_loss_allowance_pct":
+        if key == "unstuck_loss_allowance_fraction":
             return 0.01
         return 0.0
 

@@ -869,7 +869,7 @@ def compute_live_warmup_windows(
             if unstuck_eligible_lookup is not None and unstuck_eligible_lookup(
                 pside, sym
             ):
-                for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+                for key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
                     max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
             for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
                 max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
@@ -1857,7 +1857,7 @@ class Passivbot:
                     type(exc).__name__,
                 )
 
-    def _live_max_realized_loss_pct(self) -> float:
+    def _loss_gate_max_drawdown_fraction(self) -> float:
         return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
@@ -1873,18 +1873,18 @@ class Passivbot:
                 if (
                     bool(self.bp(pside, "unstuck_enabled", symbol))
                     and float(
-                        self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0
+                        self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0
                     )
                     > 0.0
-                    and float(self.bp(pside, "unstuck_close_pct", symbol) or 0.0) > 0.0
-                    and float(self.bp(pside, "unstuck_threshold", symbol) or 0.0) > 0.0
+                    and float(self.bp(pside, "unstuck_close_fraction", symbol) or 0.0) > 0.0
+                    and float(self.bp(pside, "unstuck_exposure_trigger_ratio", symbol) or 0.0) > 0.0
                 ):
                     return True
         return False
 
     def _orchestrator_uses_realized_pnl(self) -> bool:
         return (
-            self._live_max_realized_loss_pct() < 1.0
+            self._loss_gate_max_drawdown_fraction() < 1.0
             or self._unstuck_uses_realized_pnl()
         )
 
@@ -2605,23 +2605,23 @@ class Passivbot:
             logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
 
-    def _unstuck_loss_allowance_pct_overrides_for_logging(
+    def _unstuck_loss_allowance_fraction_overrides_for_logging(
         self, pside: str
     ) -> dict[str, float]:
-        base_pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        base_fraction = float(self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0)
         out: dict[str, float] = {}
         for symbol in sorted((getattr(self, "coin_overrides", {}) or {}).keys()):
-            pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
-            if abs(pct - base_pct) > 1e-15:
-                out[symbol] = pct
+            fraction = float(self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0)
+            if abs(fraction - base_fraction) > 1e-15:
+                out[symbol] = fraction
         return out
 
     @staticmethod
-    def _format_unstuck_override_pcts_for_logging(overrides: dict[str, float]) -> str:
+    def _format_unstuck_override_fractions_for_logging(overrides: dict[str, float]) -> str:
         if not overrides:
             return ""
         items = list(overrides.items())
-        shown = ", ".join(f"{symbol}={pct:.4f}" for symbol, pct in items[:4])
+        shown = ", ".join(f"{symbol}={fraction:.4f}" for symbol, fraction in items[:4])
         if len(items) > 4:
             shown = f"{shown}, +{len(items) - 4} more"
         return shown
@@ -2632,10 +2632,10 @@ class Passivbot:
         if twel <= 0.0:
             return {"status": "disabled"}
 
-        pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        override_pcts = self._unstuck_loss_allowance_pct_overrides_for_logging(pside)
-        if pct <= 0.0 and not any(
-            override_pct > 0.0 for override_pct in override_pcts.values()
+        fraction = float(self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0)
+        override_fractions = self._unstuck_loss_allowance_fraction_overrides_for_logging(pside)
+        if fraction <= 0.0 and not any(
+            override_fraction > 0.0 for override_fraction in override_fractions.values()
         ):
             return {"status": "unstuck_disabled"}
 
@@ -2649,21 +2649,21 @@ class Passivbot:
         balance_raw = self.get_raw_balance()
         balance_peak = balance_raw + drawdown
         change_from_peak_percent = (balance_raw / balance_peak - 1.0) * 100.0
-        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
+        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, fraction, twel, drawdown))
         override_allowances = {
-            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
-            for symbol, override_pct in override_pcts.items()
+            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_fraction, twel, drawdown))
+            for symbol, override_fraction in override_fractions.items()
         }
 
         return {
             "status": "ok",
             "allowance": allowance,
             # Signed deficit is observability only; execution uses Rust output.
-            "raw_allowance": pct * twel * balance_peak - drawdown,
+            "raw_allowance": fraction * twel * balance_peak - drawdown,
             "peak": balance_peak,
             "change_from_peak_percent": change_from_peak_percent,
-            "loss_allowance_pct": pct,
-            "override_loss_allowance_pcts": override_pcts,
+            "loss_allowance_fraction": fraction,
+            "override_loss_allowance_fractions": override_fractions,
             "override_allowances": override_allowances,
         }
 
@@ -2702,8 +2702,8 @@ class Passivbot:
                 signature_parts.append((pside, "no_history"))
             else:
                 allowance = info["allowance"]
-                overrides_str = self._format_unstuck_override_pcts_for_logging(
-                    info.get("override_loss_allowance_pcts", {})
+                overrides_str = self._format_unstuck_override_fractions_for_logging(
+                    info.get("override_loss_allowance_fractions", {})
                 )
                 overrides_suffix = (
                     f" | overrides={overrides_str}" if overrides_str else ""
@@ -2736,7 +2736,7 @@ class Passivbot:
                         "over_budget" if allowance < 0 else "ok",
                         round(float(allowance), 2),
                         tuple(
-                            sorted(info.get("override_loss_allowance_pcts", {}).items())
+                            sorted(info.get("override_loss_allowance_fractions", {}).items())
                         ),
                         str(info.get("next_symbol") or ""),
                         round(
@@ -2795,7 +2795,7 @@ class Passivbot:
             str(info.get("status") or "unknown"),
             Passivbot._status_materiality_number(info.get("allowance")) is not None
             and Passivbot._status_materiality_number(info.get("allowance")) < 0.0,
-            tuple(sorted((info.get("override_loss_allowance_pcts") or {}).items())),
+            tuple(sorted((info.get("override_loss_allowance_fractions") or {}).items())),
             str(info.get("next_symbol") or ""),
             info.get("next_target_price"),
             info.get("next_target_distance_ratio"),
@@ -13070,7 +13070,7 @@ class Passivbot:
                 ),
             },
             "loss_gate": {
-                "enabled": self._live_max_realized_loss_pct() < 1.0,
+                "enabled": self._loss_gate_max_drawdown_fraction() < 1.0,
                 "memory_ema_span_minutes": require_config_value(
                     self.config, "bot.portfolio.loss_gate.memory_ema_span_minutes"
                 ),
@@ -13398,11 +13398,11 @@ class Passivbot:
             projected_pnl = float(block.get("projected_pnl", 0.0) or 0.0)
             projected_balance = float(block.get("projected_balance_after", 0.0) or 0.0)
             balance_floor = float(block.get("balance_floor", 0.0) or 0.0)
-            max_loss_pct = float(block.get("max_realized_loss_pct", 1.0) or 1.0)
+            max_drawdown_fraction = float(block.get("loss_gate_max_drawdown_fraction", 1.0) or 1.0)
             if not structured_console_available:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
-                    "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
+                    "projected_pnl=%.6f projected_balance=%.6f floor=%.6f loss_gate_max_drawdown_fraction=%.6f | "
                     "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
@@ -13412,7 +13412,7 @@ class Passivbot:
                     projected_pnl,
                     projected_balance,
                     balance_floor,
-                    max_loss_pct,
+                    max_drawdown_fraction,
                 )
             if callable(emit_blocked_event):
                 emit_blocked_event(
@@ -13424,7 +13424,7 @@ class Passivbot:
                     projected_pnl=projected_pnl,
                     projected_balance=projected_balance,
                     balance_floor=balance_floor,
-                    max_realized_loss_pct=max_loss_pct,
+                    loss_gate_max_drawdown_fraction=max_drawdown_fraction,
                 )
 
     def _log_min_effective_cost_blocks(
@@ -15024,13 +15024,13 @@ class Passivbot:
             "risk_twel_enforcer_threshold_ratio",
             "risk_we_excess_allowance_fraction",
             "unstuck_enabled",
-            "unstuck_close_pct",
+            "unstuck_close_fraction",
             "unstuck_ema_gating_enabled",
-            "unstuck_ema_dist",
-            "unstuck_ema_span_0",
-            "unstuck_ema_span_1",
-            "unstuck_loss_allowance_pct",
-            "unstuck_threshold",
+            "unstuck_ema_distance_fraction",
+            "unstuck_ema_span_0_minutes",
+            "unstuck_ema_span_1_minutes",
+            "unstuck_loss_allowance_fraction",
+            "unstuck_exposure_trigger_ratio",
         ]
         out: dict[str, object] = {}
         strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
@@ -15112,9 +15112,9 @@ class Passivbot:
             and all(
                 self.bp(pside, key, symbol) > 0.0
                 for key in (
-                    "unstuck_loss_allowance_pct",
-                    "unstuck_close_pct",
-                    "unstuck_threshold",
+                    "unstuck_loss_allowance_fraction",
+                    "unstuck_close_fraction",
+                    "unstuck_exposure_trigger_ratio",
                     "total_wallet_exposure_limit_ratio",
                 )
             )
@@ -15393,14 +15393,14 @@ class Passivbot:
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_memory: dict
     ) -> float:
-        pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+        loss_fraction = float(self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0)
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
-        if pct <= 0.0 or twel <= 0.0:
+        if loss_fraction <= 0.0 or twel <= 0.0:
             return 0.0
         return float(
             pbr.calc_auto_unstuck_allowance_v9(
                 self.get_raw_balance(),
-                pct,
+                loss_fraction,
                 twel,
                 float(realized_memory["unstuck"]["drawdown"]),
             )
@@ -15586,7 +15586,7 @@ class Passivbot:
                     self, pside, symbol, modes.get(pside, {}).get(symbol)
                 ):
                     unstuck_spans = [
-                        float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
+                        float(self.bp(pside, f"unstuck_ema_span_{i}_minutes", symbol))
                         for i in (0, 1)
                     ]
                     if any(
@@ -17930,7 +17930,7 @@ class Passivbot:
         last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
             fill_increase_timestamps, delta_increase_timestamps
         )
-        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
+        loss_gate_max_drawdown_fraction = float(Passivbot._loss_gate_max_drawdown_fraction(self))
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -17962,7 +17962,7 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "max_realized_loss_pct": max_realized_loss_pct,
+                "loss_gate_max_drawdown_fraction": loss_gate_max_drawdown_fraction,
                 "unstuck_realized_pnl_drawdown": (
                     float(realized_memory["unstuck"]["drawdown"])
                     if realized_memory["unstuck"] is not None else 0.0

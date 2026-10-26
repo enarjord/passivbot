@@ -123,7 +123,7 @@ def _raw_rust_input(
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
         "panic_close_market": False,
-        "max_realized_loss_pct": 0.1,
+        "loss_gate_max_drawdown_fraction": 0.1,
         "global_bot_params": {
             "long": {
                 "n_positions": long_n_positions,
@@ -187,9 +187,9 @@ def _raw_rust_input(
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
-                        "unstuck_close_pct": 0.1,
-                        "unstuck_loss_allowance_pct": 0.1,
-                        "unstuck_threshold": 0.1,
+                        "unstuck_close_fraction": 0.1,
+                        "unstuck_loss_allowance_fraction": 0.1,
+                        "unstuck_exposure_trigger_ratio": 0.1,
                     },
                 },
                 "short": {
@@ -214,9 +214,9 @@ def _raw_rust_input(
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
-                        "unstuck_close_pct": 0.1,
-                        "unstuck_loss_allowance_pct": 0.1,
-                        "unstuck_threshold": 0.1,
+                        "unstuck_close_fraction": 0.1,
+                        "unstuck_loss_allowance_fraction": 0.1,
+                        "unstuck_exposure_trigger_ratio": 0.1,
                     },
                 },
             }
@@ -300,7 +300,7 @@ def _raw_loss_gate_block(**overrides) -> dict:
         "projected_balance_after": 890.0,
         "balance_peak": 1_000.0,
         "balance_floor": 900.0,
-        "max_realized_loss_pct": 0.1,
+        "loss_gate_max_drawdown_fraction": 0.1,
     }
     block.update(overrides)
     return block
@@ -975,9 +975,9 @@ def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
     ("order_type", "scope", "field", "value"),
     [
         ("close_unstuck_long", "symbol", "unstuck_enabled", False),
-        ("close_unstuck_long", "symbol", "unstuck_loss_allowance_pct", 0.0),
-        ("close_unstuck_long", "symbol", "unstuck_close_pct", 0.0),
-        ("close_unstuck_long", "symbol", "unstuck_threshold", 0.0),
+        ("close_unstuck_long", "symbol", "unstuck_loss_allowance_fraction", 0.0),
+        ("close_unstuck_long", "symbol", "unstuck_close_fraction", 0.0),
+        ("close_unstuck_long", "symbol", "unstuck_exposure_trigger_ratio", 0.0),
         (
             "close_auto_reduce_wel_long",
             "symbol",
@@ -3163,18 +3163,18 @@ def test_raw_rust_output_rejects_loss_gate_block_from_another_strategy():
 
 
 @pytest.mark.parametrize(
-    ("submitted_max_realized_loss_pct", "block_max_realized_loss_pct", "error"),
+    ("submitted_loss_gate_max_drawdown_fraction", "block_max_realized_loss_pct", "error"),
     [
         (1.0, 0.1, "submitted realized-loss gate is disabled"),
         (0.2, 0.1, "inconsistent with submitted policy"),
     ],
 )
 def test_raw_rust_output_rejects_loss_gate_block_inconsistent_with_submitted_policy(
-    submitted_max_realized_loss_pct, block_max_realized_loss_pct, error
+    submitted_loss_gate_max_drawdown_fraction, block_max_realized_loss_pct, error
 ):
     out = _raw_rust_output()
     out["diagnostics"]["loss_gate_blocks"] = [
-        _raw_loss_gate_block(max_realized_loss_pct=block_max_realized_loss_pct)
+        _raw_loss_gate_block(loss_gate_max_drawdown_fraction=block_max_realized_loss_pct)
     ]
 
     with pytest.raises(FatalBotException, match=error):
@@ -3182,7 +3182,7 @@ def test_raw_rust_output_rejects_loss_gate_block_inconsistent_with_submitted_pol
             out,
             {0: SYMBOL},
             _raw_rust_input(
-                max_realized_loss_pct=submitted_max_realized_loss_pct
+                loss_gate_max_drawdown_fraction=submitted_loss_gate_max_drawdown_fraction
             ),
         )
 

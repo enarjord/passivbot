@@ -158,12 +158,12 @@ def bot_params(**overrides):
         "risk_wel_enforcer_threshold_ratio": 0.0,
         "risk_twel_enforcer_threshold_ratio": 0.0,
         "risk_we_excess_allowance_fraction": 0.0,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     base.update(overrides)
     return base
@@ -318,7 +318,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 0.0,
+            "loss_gate_max_drawdown_fraction": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": "trailing_martingale",
@@ -459,10 +459,10 @@ class TestOrchestratorOrderAccuracy:
                     long_pos_size=5.0,  # Large position
                     long_pos_price=100.0,  # Original entry
                     long_bp={
-                        "unstuck_threshold": 0.1,  # Trigger at 10% loss
-                        "unstuck_loss_allowance_pct": 0.05,  # Allow 5% loss
-                        "unstuck_close_pct": 0.5,  # Close 50%
-                        "unstuck_ema_dist": -0.05,  # Unstuck entry 5% below EMA
+                        "unstuck_exposure_trigger_ratio": 0.1,  # Trigger at 10% loss
+                        "unstuck_loss_allowance_fraction": 0.05,  # Allow 5% loss
+                        "unstuck_close_fraction": 0.5,  # Close 50%
+                        "unstuck_ema_distance_fraction": -0.05,  # Unstuck entry 5% below EMA
                     },
                 )
             ],
@@ -493,16 +493,16 @@ class TestOrchestratorOrderAccuracy:
                         long_pos_size=5.0,
                         long_pos_price=100.0,
                         long_bp={
-                            "unstuck_threshold": 0.1,
-                            "unstuck_loss_allowance_pct": 0.05,
-                            "unstuck_close_pct": 0.5,
-                            "unstuck_ema_dist": -0.05,
+                            "unstuck_exposure_trigger_ratio": 0.1,
+                            "unstuck_loss_allowance_fraction": 0.05,
+                            "unstuck_close_fraction": 0.5,
+                            "unstuck_ema_distance_fraction": -0.05,
                         },
                     )
                 ],
             )
             inp["global"]["unstuck_allowance_long"] = 50.0
-            inp["global"]["max_realized_loss_pct"] = 1.0
+            inp["global"]["loss_gate_max_drawdown_fraction"] = 1.0
             return inp
 
         baseline = compute(pbr, stuck_input())

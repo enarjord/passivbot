@@ -4,6 +4,8 @@ from copy import deepcopy
 import math
 import re
 
+from .released_v8_unstuck import RELEASED_V8_UNSTUCK_FLAT_PATHS
+
 
 _RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
 _IGNORED_BACKTEST_WARMUP_REASON = (
@@ -11,6 +13,7 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
 _RELEASED_SHARED_FLAT_PATHS = {
+    **RELEASED_V8_UNSTUCK_FLAT_PATHS,
     "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
     "hsl_ema_span_minutes": ("hsl", "drawdown_fraction_ema_span_minutes"),
     "total_wallet_exposure_limit": ("risk", "total_wallet_exposure_limit_ratio"),

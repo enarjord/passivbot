@@ -1848,7 +1848,7 @@ def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
     balance_floor = _data_float(data, "balance_floor")
     if balance_floor:
         parts.append(f"floor={balance_floor}")
-    max_loss = _data_number(data, "max_realized_loss_pct")
+    max_loss = _data_number(data, "loss_gate_max_drawdown_fraction")
     if max_loss is not None:
         parts.append(f"max_loss={max_loss * 100.0:.4f}%")
     return parts

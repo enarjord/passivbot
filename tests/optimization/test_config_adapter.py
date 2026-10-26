@@ -62,11 +62,11 @@ class TestConfigAdapter:
         assert isinstance(bounds[0], Bound)
 
         short_param_idx = next(
-            idx for idx, (key, _) in enumerate(key_paths) if key == "short_unstuck_close_pct"
+            idx for idx, (key, _) in enumerate(key_paths) if key == "short_unstuck_close_fraction"
         )
         assert bounds[short_param_idx].low == bounds[short_param_idx].high == 0.01
         long_param_idx = next(idx for idx, (key, _) in enumerate(key_paths)
-                              if key == "long_unstuck_close_pct")
+                              if key == "long_unstuck_close_fraction")
         assert bounds[long_param_idx].high == 0.12
 
     def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
@@ -109,14 +109,14 @@ class TestConfigAdapter:
         ("bound_key", "bound_value", "expected"),
         [
             (
-                "long_unstuck_ema_dist",
+                "long_unstuck_ema_distance_fraction",
                 [-1.0, -0.5, 0.01],
-                r"optimize\.bounds\.long_unstuck_ema_dist lower bound must be > -1\.0",
+                r"optimize\.bounds\.long_unstuck_ema_distance_fraction lower bound must be > -1\.0",
             ),
             (
-                "short_unstuck_ema_dist",
+                "short_unstuck_ema_distance_fraction",
                 [-0.99, 1.0, 0.01],
-                r"optimize\.bounds\.short_unstuck_ema_dist upper bound must be < 1\.0",
+                r"optimize\.bounds\.short_unstuck_ema_distance_fraction upper bound must be < 1\.0",
             ),
         ],
     )

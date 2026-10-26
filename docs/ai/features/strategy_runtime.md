@@ -301,6 +301,15 @@ Auto-unstuck has its own EMA trigger toggle:
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
 
+Native unstuck fields use `unstuck_close_fraction`, `unstuck_ema_distance_fraction`,
+`unstuck_ema_span_0_minutes`, `unstuck_ema_span_1_minutes`,
+`unstuck_loss_allowance_fraction` and `unstuck_exposure_trigger_ratio`. The native account
+loss-gate policy is `loss_gate_max_drawdown_fraction`; its public field remains
+`bot.portfolio.loss_gate.max_drawdown_fraction`. These names preserve scaling, signed
+quantities, fractional spans and off sentinels. Explicit released-v8 conversion retains the
+released spellings independently of current native identifiers.
+
+
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
 `bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
 ordinary closes, HSL closes and signed rebates all contribute in deterministic economic

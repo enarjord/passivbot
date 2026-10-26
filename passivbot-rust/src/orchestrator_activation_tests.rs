@@ -254,9 +254,9 @@ fn side_activation_preserves_independently_enabled_risk_reducers() {
                 bot.risk_wel_enforcer_threshold_ratio = 1.0;
                 bot.unstuck_enabled = risk == "unstuck";
                 bot.unstuck_ema_gating_enabled = false;
-                bot.unstuck_close_pct = 0.1;
-                bot.unstuck_loss_allowance_pct = 0.1;
-                bot.unstuck_threshold = 0.5;
+                bot.unstuck_close_fraction = 0.1;
+                bot.unstuck_loss_allowance_fraction = 0.1;
+                bot.unstuck_exposure_trigger_ratio = 0.5;
                 let global = match side {
                     PositionSide::Long => &mut input.global.global_bot_params.long,
                     PositionSide::Short => &mut input.global.global_bot_params.short,

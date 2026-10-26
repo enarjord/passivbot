@@ -150,9 +150,9 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     if pinned.get("wallet_exposure_limit_ratio") == 0:
         return False
     for key in (
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit_ratio",
         "n_positions",
     ):
@@ -408,8 +408,8 @@ def compute_backtest_warmup_minutes(
     minute_fields = [
         "ema_span_0_minutes",
         "ema_span_1_minutes",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]
@@ -461,7 +461,7 @@ def compute_backtest_warmup_minutes(
         "short_forager_volatility_ema_span_1m",
     ]
     bound_keys_minutes.extend(
-        f"{side}_unstuck_ema_span_{i}"
+        f"{side}_unstuck_ema_span_{i}_minutes"
         for side in sorted(unstuck_gate_sides)
         for i in (0, 1)
     )
@@ -527,8 +527,8 @@ def compute_per_coin_warmup_minutes(
     minute_fields = [
         "ema_span_0_minutes",
         "ema_span_1_minutes",
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]

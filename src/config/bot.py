@@ -32,7 +32,7 @@ REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
     "risk_wel_enforcer_threshold_ratio",
     "risk_twel_enforcer_threshold_ratio",
-    "unstuck_threshold",
+    "unstuck_exposure_trigger_ratio",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
 CLIFF_EDGE_DUST_EPS = 1e-9
@@ -50,7 +50,7 @@ FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
 }
 
 
-def validate_unstuck_ema_dist_value(value, *, path: str, pside: str) -> None:
+def validate_unstuck_ema_distance_fraction_value(value, *, path: str, pside: str) -> None:
     try:
         numeric = float(value)
     except (TypeError, ValueError) as exc:
@@ -174,8 +174,8 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "unstuck_ema_gating_enabled"),
             path=f"bot.{pside}.unstuck.ema_gating_enabled",
         )
-        validate_unstuck_ema_dist_value(
-            get_grouped_bot_value(bot_side, "unstuck_ema_dist"),
+        validate_unstuck_ema_distance_fraction_value(
+            get_grouped_bot_value(bot_side, "unstuck_ema_distance_fraction"),
             path=f"bot.{pside}.unstuck.ema_distance_fraction",
             pside=pside,
         )
@@ -446,25 +446,25 @@ def normalize_hsl_risk_unstuck_numerics(
         risk_path = f"bot.{pside}.risk"
         unstuck_path = f"bot.{pside}.unstuck"
         for key in ("ema_span_0", "ema_span_1"):
-            raw = get_grouped_bot_value(bot_side, f"unstuck_{key}")
+            raw = get_grouped_bot_value(bot_side, f"unstuck_{key}_minutes")
             if isinstance(raw, bool):
                 raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
             value = float(raw)
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
-            set_grouped_bot_value(bot_side, f"unstuck_{key}", value)
+            set_grouped_bot_value(bot_side, f"unstuck_{key}_minutes", value)
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_fraction"),
             path=f"{risk_path}.we_excess_allowance_fraction",
         )
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "unstuck_close_pct"),
+            get_grouped_bot_value(bot_side, "unstuck_close_fraction"),
             path=f"{unstuck_path}.close_fraction",
             max_value=1.0,
         )
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "unstuck_loss_allowance_pct"),
+            get_grouped_bot_value(bot_side, "unstuck_loss_allowance_fraction"),
             path=f"{unstuck_path}.loss_allowance_fraction",
         )
 

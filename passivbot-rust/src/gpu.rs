@@ -902,7 +902,7 @@ mod tests {
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
         assert!(source.contains("one global auto-unstuck intent"));
-        assert!(source.contains("unstuck_loss_allowance_pct"));
+        assert!(source.contains("unstuck_loss_allowance_fraction"));
         assert!(!source.contains("hard_stop"));
         assert_eq!(
             mps_ema_anchor_multicoin_source(),
@@ -1206,7 +1206,7 @@ mod tests {
         assert!(source.contains("as_type<float>(touch_min_qty_bits[k * C + c])"));
         assert!(source.contains("minimum_close_relation > 0"));
         assert!(source.contains("one-global-intent least-stuck selector"));
-        assert!(source.contains("unstuck_loss_allowance_pct"));
+        assert!(source.contains("unstuck_loss_allowance_fraction"));
         assert!(!source.contains("hard_stop"));
     }
 }

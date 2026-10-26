@@ -21,7 +21,7 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
     keys = [
         *strategy_optimize_key_path_map(kind),
         *param_paths.OPTIMIZABLE_BOT_KEY_PATHS,
-        "long_n_positions", "short_unstuck_ema_span_0",
+        "long_n_positions", "short_unstuck_ema_span_0_minutes",
         "hsl_drawdown_threshold_fraction", "hsl_drawdown_fraction_ema_span_minutes", "hsl_unknown",
         "unknown", "other_n_positions", "long_unknown", "long_n_positions",
     ]

@@ -28,9 +28,9 @@ def loss_gate_proxy(
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["max_realized_loss_pct"] = 0.003 if unstuck else 0.0003
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
-        config["live"]["max_realized_loss_pct"] = max_loss_pct
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     if not unstuck:
         # Each flat-price close loses only its fee. Entry fees initially exhaust
         # the gate; continuous decay later admits ordinary closes without unstuck.
@@ -79,7 +79,7 @@ def test_shared_gate_production_consumers_and_transport(
         original, inputs = make_proxy(sides, span, strategy=strategy)
         del original
         candles, markets, config, exchange, btc, timestamps = inputs
-        config["live"]["max_realized_loss_pct"] = fraction
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = fraction
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,

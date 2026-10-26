@@ -267,7 +267,7 @@ def _with_tm_loss_gate_disabled(source: str, disabled: bool) -> str:
     return _TM_LOSS_GATE_DISABLED_DEFINE + source
 
 
-def _encode_max_realized_loss_pct(value: float) -> float:
+def _encode_loss_gate_max_drawdown_fraction(value: float) -> float:
     """Match the shared risk graph's nearest binary32 fraction cast.
 
     Original float64 enablement is transported separately: a fraction just below
@@ -337,8 +337,8 @@ def _scale_directional_minute_parameters(
         raise ValueError("MPS candle interval must be finite and at least one minute")
     scaled = np.array(params, dtype=np.float64, copy=True)
     minute_keys = {
-        "unstuck_ema_span_0",
-        "unstuck_ema_span_1",
+        "unstuck_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes",
         "entry_cooldown_minutes",
     }
     minute_keys.update(
@@ -432,7 +432,7 @@ def _scale_directional_minute_parameters(
                 scaled[finite_ceiling, column] /= interval_minutes
             else:
                 scaled[:, column] /= interval_minutes
-        for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+        for key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
             hsl_span_column = offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")
@@ -1545,7 +1545,7 @@ class _MulticoinReplayRunner:
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -1790,12 +1790,12 @@ class _MulticoinReplayRunner:
         self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
         self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         self.forager_score_hysteresis = validate_forager_score_hysteresis(forager_score_hysteresis)
-        max_realized_loss_pct = float(max_realized_loss_pct)
-        if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
-            raise ValueError("max_realized_loss_pct must be finite and non-negative")
-        self.loss_gate_enabled = max_realized_loss_pct < 1.0
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            max_realized_loss_pct
+        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
+        if not np.isfinite(loss_gate_max_drawdown_fraction) or loss_gate_max_drawdown_fraction < 0.0:
+            raise ValueError("loss_gate_max_drawdown_fraction must be finite and non-negative")
+        self.loss_gate_enabled = loss_gate_max_drawdown_fraction < 1.0
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            loss_gate_max_drawdown_fraction
         )
         market_order_slippage_pct = float(market_order_slippage_pct)
         if (
@@ -1822,7 +1822,7 @@ class _MulticoinReplayRunner:
                 run.interval_ms,
                 float(side == "short"),
                 self.forager_score_hysteresis[side],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
                 market_order_slippage_pct,
                 float(bool(hsl_panic_market)),
@@ -2801,7 +2801,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -2836,7 +2836,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
@@ -2898,9 +2898,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
-        max_realized_loss_pct = float(max_realized_loss_pct)
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            max_realized_loss_pct
+        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            loss_gate_max_drawdown_fraction
         )
         market_order_slippage_pct = float(market_order_slippage_pct)
         market_order_near_touch_threshold = float(market_order_near_touch_threshold)
@@ -2913,7 +2913,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 run.interval_ms,
                 0.0,
                 self.forager_score_hysteresis["long"],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
                 market_order_slippage_pct,
                 float(bool(hsl_panic_market_long)),
@@ -3064,7 +3064,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -3091,7 +3091,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         interrupt_check=None,
         selection=None,
     ):
-        self.loss_gate_enabled = float(max_realized_loss_pct) < 1.0
+        self.loss_gate_enabled = float(loss_gate_max_drawdown_fraction) < 1.0
         self.loss_gate_specialization = True
         super().__init__(
             run,
@@ -3099,7 +3099,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             side=side,
             coin_overrides=coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
@@ -3259,7 +3259,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        max_realized_loss_pct: float = 1.0,
+        loss_gate_max_drawdown_fraction: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -3294,7 +3294,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
@@ -3354,8 +3354,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             self.coin_overrides_absent and not bool(np.isfinite(short_coin_overrides).any())
         )
         self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
-        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
-            float(max_realized_loss_pct)
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
+            float(loss_gate_max_drawdown_fraction)
         )
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
@@ -3366,7 +3366,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 run.interval_ms,
                 0.0,
                 self.forager_score_hysteresis["long"],
-                encoded_max_realized_loss_pct,
+                encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
                 float(market_order_slippage_pct),
                 float(bool(hsl_panic_market_long)),

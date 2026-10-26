@@ -47,7 +47,7 @@ class OrchestrationBot(Passivbot):
         self.positions: dict[str, dict[str, dict[str, float]]] = {}
         self.PB_modes = {"long": {}, "short": {}}
         self._market_prices = market_prices
-        self._live_values = {"market_orders_allowed": False, "max_realized_loss_pct": 1.0}
+        self._live_values = {"market_orders_allowed": False, "loss_gate_max_drawdown_fraction": 1.0}
         self.qty_steps = {}
         self.price_steps = {}
         self.min_qtys = {}

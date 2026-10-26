@@ -48,7 +48,7 @@ def test_old_development_spellings_are_not_normal_loader_aliases(old, new):
 def test_nondefault_fraction_bounds_keep_stable_native_optimizer_ids(kind):
     config = get_template_config()
     config["bot"]["portfolio"]["strategy_kind"] = kind
-    keys = ["long_unstuck_close_pct", "long_unstuck_loss_allowance_pct", "long_risk_we_excess_allowance_fraction"]
+    keys = ["long_unstuck_close_fraction", "long_unstuck_loss_allowance_fraction", "long_risk_we_excess_allowance_fraction"]
     keys += (["long_entry_initial_qty_fraction", "long_entry_initial_ema_distance_fraction", "long_close_qty_fraction"]
              if kind == "trailing_martingale" else ["long_base_qty_fraction", "long_offset_fraction"])
     bounds = {}
@@ -107,9 +107,9 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
 
 
 @pytest.mark.parametrize("selector,expected", [
-    ("close_pct", {"long_unstuck_close_pct", "short_unstuck_close_pct"}),
-    ("long.unstuck.close_pct", {"long_unstuck_close_pct"}),
-    ("bot.*.unstuck.close_pct", {"long_unstuck_close_pct", "short_unstuck_close_pct"}),
+    ("close_pct", {"long_unstuck_close_fraction", "short_unstuck_close_fraction"}),
+    ("long.unstuck.close_pct", {"long_unstuck_close_fraction"}),
+    ("bot.*.unstuck.close_pct", {"long_unstuck_close_fraction", "short_unstuck_close_fraction"}),
     ("initial_qty_pct", {"long_entry_initial_qty_fraction", "short_entry_initial_qty_fraction"}),
     ("strategy.trailing_martingale.close.qty_pct", {"long_close_qty_fraction", "short_close_qty_fraction"}),
 ])
@@ -204,7 +204,7 @@ def test_released_conversion_projects_root_bounds_pins_scenarios_and_file_preced
     assert config["optimize"]["fixed_runtime_overrides"]["bot.long.unstuck.close_fraction"] == 0.081
     assert config["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.close_fraction"] == 0.091
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
-    assert "long_unstuck_close_pct" in flat
+    assert "long_unstuck_close_fraction" in flat
     assert any("close_pct" in change["path"] and "close_fraction" in str(change["new"])
                for change in result.changes)
     prepare_config(config, verbose=False)

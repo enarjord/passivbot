@@ -48,7 +48,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
         "--unstuck",
     ]))
-    config["live"].update(max_realized_loss_pct=0.1, lookback_ema_span_minutes=8.0)
+    config["live"].update(loss_gate_max_drawdown_fraction=0.1, lookback_ema_span_minutes=8.0)
     key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(

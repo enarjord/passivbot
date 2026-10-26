@@ -161,12 +161,12 @@ def bot_params(**overrides):
         "risk_we_excess_allowance_fraction": 0.0,
         "risk_entry_cooldown_minutes": 0.0,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     base.update(overrides)
     return base
@@ -334,7 +334,7 @@ def make_input(
             "loss_gate_realized_pnl_drawdown": 0.0,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": strategy_kind,
@@ -1354,8 +1354,8 @@ def test_json_rejects_missing_realized_loss_gate_param():
         balance=1_000.0,
         symbols=[make_symbol(0, bid=100.0, ask=100.0)],
     )
-    del inp["global"]["max_realized_loss_pct"]
-    with pytest.raises(ValueError, match=r"missing field `max_realized_loss_pct`"):
+    del inp["global"]["loss_gate_max_drawdown_fraction"]
+    with pytest.raises(ValueError, match=r"missing field `loss_gate_max_drawdown_fraction`"):
         compute(pbr, inp)
 
 
@@ -3313,7 +3313,7 @@ def test_panic_close_order_type_rejects_invalid_symbol_value():
             {"risk_we_excess_allowance_fraction": -0.01},
             r"bot\.long\.risk_we_excess_allowance_fraction",
         ),
-        ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
+        ({"unstuck_ema_distance_fraction": -1.0}, r"bot\.long\.unstuck_ema_distance_fraction"),
     ],
 )
 def test_json_rejects_invalid_global_hsl_risk_unstuck_values(overrides, match):
@@ -3339,13 +3339,13 @@ def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
                 0,
                 bid=100.0,
                 ask=101.0,
-                long_bp={"unstuck_close_pct": 1.01},
+                long_bp={"unstuck_close_fraction": 1.01},
             )
         ],
     )
 
     with pytest.raises(
-        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"
+        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_fraction"
     ):
         compute(pbr, inp)
 
@@ -3741,10 +3741,10 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
 
     balance = 1_000.0
     long_bp = {
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
 
@@ -3787,10 +3787,10 @@ def test_unstuck_allowance_uses_only_its_independent_realized_memory():
     import passivbot_rust as pbr
 
     params = {
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_loss_allowance_fraction": 0.01,
         "risk_wel_enforcer_enabled": False,
         "risk_twel_enforcer_enabled": False,
     }
@@ -3822,9 +3822,9 @@ def test_trailing_martingale_emits_compatible_unstuck_and_trailing_closes_togeth
         "risk_wel_enforcer_enabled": False,
         "risk_twel_enforcer_enabled": False,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_close_pct": 0.0195,
-        "unstuck_threshold": 0.9,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.0195,
+        "unstuck_exposure_trigger_ratio": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     strategy = adaptive_strategy_params(
         close={"qty_fraction": 0.2624, "retracement_base_fraction": 0.005, "threshold_base_fraction": 0.01}
@@ -3871,15 +3871,15 @@ def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     global_bp = bot_params_pair(
         long_overrides={
             "total_wallet_exposure_limit_ratio": 1.5,
-            "unstuck_loss_allowance_pct": 0.02,
+            "unstuck_loss_allowance_fraction": 0.02,
         }
     )
     sym = make_symbol(
@@ -3921,10 +3921,10 @@ def test_auto_unstuck_quantizes_off_tick_book_price_before_live_validation(
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     symbol_kwargs = {
         f"{pside}_pos_size": position_size,
@@ -3960,10 +3960,10 @@ def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     sym = make_symbol(
         0,
@@ -3991,11 +3991,11 @@ def test_unstuck_ema_gating_disabled_skips_missing_ema_requirement():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_pct": 0.5,
+        "unstuck_close_fraction": 0.5,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.005,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.005,
     }
     sym = make_symbol(
         0,
@@ -4576,10 +4576,10 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4618,10 +4618,10 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
@@ -4667,10 +4667,10 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.4,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.4,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4683,7 +4683,7 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["global"]["unstuck_allowance_long"] = 1e9
-    inp["global"]["max_realized_loss_pct"] = 0.019
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.019
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
@@ -4720,7 +4720,7 @@ def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
         {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee": 0.0}
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp["global"]["max_realized_loss_pct"] = 0.105
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.105
 
     out = compute(pbr, inp)
 
@@ -4765,7 +4765,7 @@ def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
     sym0["exchange"]["maker_fee"] = 0.0
     sym1["exchange"]["maker_fee"] = 0.0
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
-    inp["global"]["max_realized_loss_pct"] = 0.07
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.07
 
     out = compute(pbr, inp)
     wel_orders = [
@@ -4798,10 +4798,10 @@ def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -4841,10 +4841,10 @@ def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_pct": 0.5,
-        "unstuck_threshold": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_fraction": 0.5,
+        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_loss_allowance_fraction": 0.01,
     }
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
@@ -5090,7 +5090,7 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 1_000.0
-    inp["global"]["max_realized_loss_pct"] = 0.0
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.0
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 0.0
 
     out = compute(pbr, inp)
@@ -5154,7 +5154,7 @@ def test_realized_loss_gate_uses_balance_raw(unstuck_drawdown):
     # so a negative projected close is blocked without using snapped balance.
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 980.0
-    inp["global"]["max_realized_loss_pct"] = 0.001  # very tight gate
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.001  # very tight gate
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 70.0
     inp["global"]["unstuck_realized_pnl_drawdown"] = unstuck_drawdown
 
@@ -5190,8 +5190,8 @@ def test_balance_raw_is_required_even_when_sizing_balance_is_supplied():
             r"balance must be finite and > 0",
         ),
         (
-            lambda inp: inp["global"].__setitem__("max_realized_loss_pct", -0.01),
-            r"global\.max_realized_loss_pct must be finite and >= 0",
+            lambda inp: inp["global"].__setitem__("loss_gate_max_drawdown_fraction", -0.01),
+            r"global\.loss_gate_max_drawdown_fraction must be finite and >= 0",
         ),
         (
             lambda inp: inp["global"].__setitem__("unstuck_allowance_long", -1.0),
@@ -5244,7 +5244,7 @@ def test_balance_raw_zero_rejected():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 0.0
-    inp["global"]["max_realized_loss_pct"] = 0.05
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
@@ -5271,7 +5271,7 @@ def test_balance_raw_negative_rejected():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = -1.0
-    inp["global"]["max_realized_loss_pct"] = 0.05
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
     inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
@@ -5331,7 +5331,7 @@ def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
         },
     )
     inp_blocked = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp_blocked["global"]["max_realized_loss_pct"] = 0.01
+    inp_blocked["global"]["loss_gate_max_drawdown_fraction"] = 0.01
 
     out_blocked = compute(pbr, inp_blocked)
     blocked_types = [o["order_type"] for o in out_blocked["orders"]]
@@ -5404,7 +5404,7 @@ def test_loss_gate_rejects_non_positive_raw_balance():
         },
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp["global"]["max_realized_loss_pct"] = 0.01
+    inp["global"]["loss_gate_max_drawdown_fraction"] = 0.01
 
     for raw_balance in [0.0, -1.0]:
         inp_case = copy.deepcopy(inp)
@@ -5420,12 +5420,12 @@ def test_unstuck_uses_independent_spans_and_scopes_missing_emas(side):
     params = dict(
         n_positions=1,
         total_wallet_exposure_limit_ratio=1.0,
-        unstuck_close_pct=0.1,
-        unstuck_threshold=0.001,
-        unstuck_loss_allowance_pct=0.01,
-        unstuck_ema_dist=0.0,
-        unstuck_ema_span_0=30.5,
-        unstuck_ema_span_1=80.5,
+        unstuck_close_fraction=0.1,
+        unstuck_exposure_trigger_ratio=0.001,
+        unstuck_loss_allowance_fraction=0.01,
+        unstuck_ema_distance_fraction=0.0,
+        unstuck_ema_span_0_minutes=30.5,
+        unstuck_ema_span_1_minutes=80.5,
     )
     sym = make_symbol(
         0,

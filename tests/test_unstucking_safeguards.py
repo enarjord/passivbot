@@ -472,9 +472,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "volatility": 1.0,
                 },
                 "risk_wel_enforcer_threshold_ratio": 0.0,
-                "unstuck_threshold": 0.0,
-                "unstuck_close_pct": 0.0,
-                "unstuck_ema_dist": 0.0,
+                "unstuck_exposure_trigger_ratio": 0.0,
+                "unstuck_close_fraction": 0.0,
+                "unstuck_ema_distance_fraction": 0.0,
             }
             self._bot_value_defaults = {
                 "n_positions": 0,
@@ -491,7 +491,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
                 },
-                "unstuck_loss_allowance_pct": 0.0,
+                "unstuck_loss_allowance_fraction": 0.0,
             }
             self._live_values = {
                 "side_activation": {"long": True, "short": True},
@@ -3238,14 +3238,14 @@ def _make_order(
 @pytest.mark.asyncio
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
-    cfg["live"]["max_realized_loss_pct"] = 0.02
+    cfg["live"]["loss_gate_max_drawdown_fraction"] = 0.02
     bot = _make_dummy_bot(cfg)
     bot._bp_defaults.update(
         {
             "unstuck_enabled": True,
-            "unstuck_loss_allowance_pct": 0.01,
-            "unstuck_close_pct": 0.1,
-            "unstuck_threshold": 0.5,
+            "unstuck_loss_allowance_fraction": 0.01,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.5,
         }
     )
     bot._bot_value_defaults["total_wallet_exposure_limit_ratio"] = 0.5

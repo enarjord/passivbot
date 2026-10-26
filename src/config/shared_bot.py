@@ -37,14 +37,14 @@ BOT_GROUP_FIELD_MAP = {
         "drawdown_threshold_fraction": "hsl_drawdown_threshold_fraction",
     },
     "unstuck": {
-        "close_fraction": "unstuck_close_pct",
-        "ema_distance_fraction": "unstuck_ema_dist",
-        "ema_span_0_minutes": "unstuck_ema_span_0",
-        "ema_span_1_minutes": "unstuck_ema_span_1",
+        "close_fraction": "unstuck_close_fraction",
+        "ema_distance_fraction": "unstuck_ema_distance_fraction",
+        "ema_span_0_minutes": "unstuck_ema_span_0_minutes",
+        "ema_span_1_minutes": "unstuck_ema_span_1_minutes",
         "ema_gating_enabled": "unstuck_ema_gating_enabled",
         "enabled": "unstuck_enabled",
-        "loss_allowance_fraction": "unstuck_loss_allowance_pct",
-        "exposure_trigger_ratio": "unstuck_threshold",
+        "loss_allowance_fraction": "unstuck_loss_allowance_fraction",
+        "exposure_trigger_ratio": "unstuck_exposure_trigger_ratio",
     },
 }
 

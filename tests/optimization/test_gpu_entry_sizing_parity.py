@@ -12,10 +12,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fixture(side, coin_count, entry_kind):
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
     coins = ["BTC", "ETH"][:coin_count]
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']["portfolio"]['strategy_kind'] = 'trailing_martingale'
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
@@ -25,6 +25,9 @@ def _fixture(side, coin_count, entry_kind):
     )
     for direction in ("long", "short"):
         bot = config["bot"][direction]
+        bot["enabled"] = direction == side
+        bot["universe"]["minimum_coin_age_days"] = 0.0
+        bot["universe"]["filter_by_min_effective_cost"] = False
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False

@@ -1162,27 +1162,27 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
                 if allowance_raw is not None
                 else (0.0 if unstuck_uses_realized_pnl else None)
             ),
-            "configured_loss_allowance_pct": float(
-                self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
+            "configured_loss_allowance_fraction": float(
+                self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0
             ),
-            "configured_close_pct": float(
-                self.bot_value(pside, "unstuck_close_pct") or 0.0
+            "configured_close_fraction": float(
+                self.bot_value(pside, "unstuck_close_fraction") or 0.0
             ),
-            "configured_threshold": float(
-                self.bot_value(pside, "unstuck_threshold") or 0.0
+            "configured_exposure_trigger_ratio": float(
+                self.bot_value(pside, "unstuck_exposure_trigger_ratio") or 0.0
             ),
         }
         for key in ("allowance", "peak", "change_from_peak_percent"):
             if key in info:
                 side_payload[key] = float(info[key])
-        if "loss_allowance_pct" in info:
-            side_payload["configured_loss_allowance_pct"] = float(
-                info["loss_allowance_pct"]
+        if "loss_allowance_fraction" in info:
+            side_payload["configured_loss_allowance_fraction"] = float(
+                info["loss_allowance_fraction"]
             )
-        override_pcts = info.get("override_loss_allowance_pcts")
-        if isinstance(override_pcts, dict) and override_pcts:
-            side_payload["override_loss_allowance_pcts"] = {
-                str(symbol): float(pct) for symbol, pct in override_pcts.items()
+        override_fractions = info.get("override_loss_allowance_fractions")
+        if isinstance(override_fractions, dict) and override_fractions:
+            side_payload["override_loss_allowance_fractions"] = {
+                str(symbol): float(fraction) for symbol, fraction in override_fractions.items()
             }
         override_allowances = info.get("override_allowances")
         if isinstance(override_allowances, dict) and override_allowances:
@@ -1229,11 +1229,11 @@ def _build_monitor_runtime_market_hints(
                             and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
                         ):
                             continue
-                        distance_key = "unstuck_ema_dist"
+                        distance_key = "unstuck_ema_distance_fraction"
                     else:
                         distance_key = "entry_initial_ema_distance_fraction"
                     span_keys = (
-                        ("unstuck_ema_span_0", "unstuck_ema_span_1")
+                        ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
                         if family == "unstuck"
                         else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
                     )
