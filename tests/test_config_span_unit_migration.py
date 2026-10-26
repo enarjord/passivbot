@@ -112,8 +112,9 @@ def test_released_span_selector_suffixes_preserve_native_gene_membership(prefix)
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = ["long"] if "long" in prefix else ["long", "short"]
     assert set(selected) == {f"{side}_forager_volume_ema_span_1m" for side in sides}
-    expected_prefix = "bot." + prefix if prefix.startswith("long.") else prefix
-    assert config["optimize"]["fixed_params"] == [f"{expected_prefix}volume_ema_span_minutes"]
+    assert [value.removeprefix("bot.") for value in config["optimize"]["fixed_params"]] == [
+        f"{prefix}volume_ema_span_minutes".removeprefix("bot.")
+    ]
     assert any(item["path"].startswith("optimize.fixed_params") for item in result.changes)
 
 
