@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
 - Align native BTC collateral inputs with `btc_collateral_target_ratio` and
   `max_usd_debt_to_wallet_value_ratio`. Preserve leveraged targets, initial allocation, top-up limits,
   uncapped debt sentinels and CPU replay values; reject retired native packet keys explicitly.
