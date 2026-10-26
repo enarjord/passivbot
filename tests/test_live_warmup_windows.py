@@ -79,8 +79,8 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
 
     def forager(pside, key, sym):
         values = {
-            "forager_volume_ema_span_1m": 760.0,
-            "forager_volatility_ema_span_1m": 110.0,
+            "forager_volume_ema_span_minutes": 760.0,
+            "forager_log_range_ema_span_minutes": 110.0,
         }
         return values.get(key, 0.0)
 
