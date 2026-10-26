@@ -577,6 +577,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         put(node, (new,), value, f"{path}.{old}")
         record(f"{path}.{old}", value, {new: value}, "canonical v9 field rename")
 
+    # Normalize frozen strategy IDs before unstuck migration groups flat bounds
+    # through current native metadata. The final public-name pass is idempotent.
+    from .released_v8_strategy import rewrite_released_strategy_bounds
+
+    rewrite_released_strategy_bounds(result, strategy_kind=released_kind, record=record)
+
     # Released flat bounds are source spellings, independent of current optimizer IDs.
     bound_values = result.get("optimize", {}).get("bounds", {})
     if isinstance(bound_values, dict):
