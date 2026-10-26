@@ -274,7 +274,7 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     from released_v8_fixtures import released_v8_policy
     source = released_v8_policy()
     source["backtest"].pop("reducer", None)
-    source["backtest"]["aggregate"] = {"daily_realized_pnl_mean_fraction": "max"}
+    source["backtest"]["aggregate"] = {"adg_pnl": "max"}
     before = deepcopy(source)
     cfg_path, out_path = tmp_path / "in.json", tmp_path / "out.json"
     cfg_path.write_text(json.dumps(source))

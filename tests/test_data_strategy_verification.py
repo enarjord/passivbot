@@ -682,7 +682,7 @@ class TestLegacyMigration:
             "enabled": True,
             "include_base_scenario": True,
             "base_label": "combined",
-            "aggregate": {"default": "mean", "mdg_fraction": "min"},
+            "aggregate": {"default": "mean", "mdg": "min"},
             "scenarios": [
                 {"label": "binance", "exchanges": ["binance"]},
                 {"label": "bybit", "exchanges": ["bybit"]},

@@ -65,6 +65,7 @@ def migrate_unstuck_ema_spans(
     tracker=None,
     explicit_bounds=None,
     strategy_defaults=None,
+    scenario_strategy_paths=None,
 ) -> None:
     kind = normalize_strategy_kind(config.get("bot", {}).get("portfolio", {}).get("strategy_kind"))
     # Explicit released conversion supplies its frozen positive fallbacks;
@@ -272,15 +273,20 @@ def migrate_unstuck_ema_spans(
                 target[parts[-1]] = deepcopy(value)
             canonicalize_shared_bot_side(effective_side)
             for key in keys:
-                for old_path in (
+                old_paths = [
                     f"bot.{side}.strategy.{kind}."
                     + ("entry." if kind == "trailing_martingale" else "")
                     + key,
                     f"bot.{side}.{key}",
-                    f"bot.{side}.strategy.{kind}."
-                    + ("entry." if kind == "trailing_martingale" else "")
-                    + RELEASED_V8_UNSTUCK_FLAT_PATHS[f"unstuck_{key}"][-1],
-                ):
+                ]
+                if scenario_strategy_paths is not None:
+                    # Only explicit released conversion supplies projected paths;
+                    # ordinary callers keep their existing source vocabulary.
+                    old_paths.append(
+                        f"bot.{side}.strategy.{kind}."
+                        + ".".join(scenario_strategy_paths[key])
+                    )
+                for old_path in old_paths:
                     new_path = f"bot.{side}.unstuck.{key}"
                     public_key = RELEASED_V8_UNSTUCK_FLAT_PATHS[f"unstuck_{key}"][-1]
                     public_path = f"bot.{side}.unstuck.{public_key}"
