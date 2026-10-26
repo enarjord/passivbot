@@ -213,7 +213,7 @@ _FIELDS_BY_TYPE = {
         "bot.portfolio": "strategy_kind",
     },
     FieldType.ARRAY: {
-        "backtest": "exchanges scenarios visible_metrics",
+        "backtest": "exchanges scenarios",
         "logging": "live_event_debug_profiles",
         "optimize": "enable_overrides fixed_params limits scoring",
         "optimize.prefilter": "checks exposure_probe_fractions",
@@ -322,7 +322,6 @@ def get_field_registry() -> FieldRegistry:
                 add(path, kind, nullable=path in {
                     "backtest.filter_by_min_effective_cost",
                     "backtest.maker_fee_override_fraction", "backtest.taker_fee_override_fraction",
-                    "backtest.visible_metrics",
                 })
     for kind, paths in _NULLABLE_FIELDS.items():
         for path in paths:

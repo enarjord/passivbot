@@ -304,15 +304,12 @@ def test_removed_underwater_metrics_are_rejected_without_aliases(old, object_for
 
 
 @pytest.mark.parametrize('old', ['strategy_eq_underwater_pct_mean', 'strategy_eq_underwater_pct_median'])
-@pytest.mark.parametrize('surface', ['limit', 'visible', 'reducer'])
-def test_removed_underwater_metrics_are_rejected_in_limits_visibility_and_reducers(old, surface):
-    from analysis_visibility import validate_visible_metrics_config
+@pytest.mark.parametrize('surface', ['limit', 'reducer'])
+def test_removed_underwater_metrics_are_rejected_in_limits_and_reducers(old, surface):
     from config.limits import normalize_limit_entries
     from config.reducers import reducer_mapping_from_aliases
     with pytest.raises(ValueError, match='daily-worst underwater metric.*removed'):
         if surface == 'limit':
             normalize_limit_entries([{'metric': old, 'penalize_if': 'greater_than', 'value': .1}])
-        elif surface == 'visible':
-            validate_visible_metrics_config({'backtest': {'visible_metrics': [old]}})
         else:
             reducer_mapping_from_aliases({'reducer': {old: 'mean'}}, path='backtest')

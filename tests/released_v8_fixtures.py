@@ -12,9 +12,6 @@ def released_v8_policy():
     Full-template migration has its own unmodified-input regression coverage.
     """
     config = get_released_v8_defaults(strategy_kind="trailing_martingale")
-    config["backtest"]["visible_metrics"] = [
-        name for name in config["backtest"]["visible_metrics"] if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     config["optimize"]["scoring"] = [
         objective for objective in config["optimize"]["scoring"]
         if not objective["metric"].endswith("_w") and not objective["metric"].startswith("strategy_eq_underwater_pct_")

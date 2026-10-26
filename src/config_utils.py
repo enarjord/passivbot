@@ -1797,10 +1797,6 @@ CLI_HELP_OVERRIDES = {
     "backtest.suite_enabled": (
         "Enable suite mode from config. CLI --suite y/n overrides it for one run."
     ),
-    "backtest.visible_metrics": (
-        "Terminal metric visibility config. null uses optimize scoring/limits; "
-        "[] shows all; a list adds named metrics. Full analysis is still saved."
-    ),
     "config_version": (
         f"Source config schema version ({CONFIG_SCHEMA_VERSION} for final canonical V9). "
         "Cannot be overridden at runtime; use explicit migration tools."

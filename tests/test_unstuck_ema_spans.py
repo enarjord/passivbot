@@ -26,7 +26,6 @@ from released_v8_fixtures import released_v8_policy
 def legacy_config(kind="trailing_martingale"):
     c = get_released_v8_defaults(strategy_kind=kind)
     nonweighted = released_v8_policy()
-    c["backtest"]["visible_metrics"] = nonweighted["backtest"]["visible_metrics"]
     c["optimize"]["scoring"] = nonweighted["optimize"]["scoring"]
     # Keep released authoring spellings independent of the current template.
     # These cases exercise the older strategy-coupled unstuck horizons.

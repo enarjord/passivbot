@@ -146,22 +146,6 @@
         "starting_balance": 100000,
         "suite_enabled": false,
         "taker_fee_override_fraction": 0.00055,
-        "visible_metrics": [
-            "adg_fraction_strategy_equity",
-            "adg_fraction_strategy_equity",
-            "mdg_fraction_strategy_equity",
-            "recovery_max_days_strategy_equity",
-            "position_held_max_days",
-            "drawdown_max_fraction_strategy_equity",
-            "active_day_turnover_proxy_mean_ratio",
-            "sortino_ratio_strategy_equity",
-            "sharpe_ratio_strategy_equity",
-            "loss_profit_ratio",
-            "pain_index_fraction_strategy_equity",
-            "ulcer_index_fraction_strategy_equity",
-            "hsl_restarts_per_year",
-            "hsl_panic_episode_loss_mean_fraction"
-        ],
         "volume_normalization": true
     },
     "bot": {

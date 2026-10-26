@@ -147,32 +147,18 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
     def visit(node, path=""):
         if isinstance(node, list):
-            visible = path.split(".")[-1] == "visible_metrics"
             scoring = path.split(".")[-1] == "scoring"
             original = deepcopy(node) if scoring else None
             replacements_before = len(replacement_paths)
             converted = []
             for index, value in enumerate(node):
                 current = f"{path}[{index}]"
-                if visible and isinstance(value, str):
-                    from .released_v8_metrics import RELEASED_V8_METRIC_NAMES, released_v8_visibility_family
-
-                    visible_name = value.strip()
-                    family = (() if visible_name in RELEASED_V8_METRIC_NAMES or _is_retired_metric(visible_name)
-                              else released_v8_visibility_family(visible_name))
-                    if family:
-                        selected = list(dict.fromkeys(convert(name, current) for name in family))
-                        changes.append(dict(path=current, old=value, new=selected,
-                                            reason="expand released-v8 visibility family before metric renaming"))
-                        converted.extend(selected)
-                    else:
-                        converted.append(convert(value, current))
-                elif isinstance(value, str) and path.split(".")[-1] == "scoring":
+                if isinstance(value, str) and path.split(".")[-1] == "scoring":
                     converted.append(convert(value, current))
                 else:
                     visit(value, current)
                     converted.append(value)
-            node[:] = list(dict.fromkeys(converted)) if visible else converted
+            node[:] = converted
             if scoring and len(replacement_paths) > replacements_before:
                 from config.scoring import normalize_scoring_entries
 
@@ -203,6 +189,11 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
+            if ((key == "visible_metrics" and path.split(".")[-1] == "backtest")
+                    or key == "backtest.visible_metrics"):
+                changes.append(dict(path=current, old=node.pop(key), new=None,
+                                    reason="removed terminal-only metric visibility setting; backtests display their complete analysis"))
+                continue
             if key == "metric" and not released_aggregate:
                 node[key] = convert(node[key], current)
             elif metric_map and key != "default":

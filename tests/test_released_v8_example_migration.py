@@ -15,9 +15,6 @@ from tools.migrate_config_v9 import main, migrate
 
 def released(kind="trailing_martingale"):
     source = get_released_v8_defaults(strategy_kind=kind)
-    source["backtest"]["visible_metrics"] = [
-        name for name in source["backtest"]["visible_metrics"] if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     source["optimize"]["scoring"] = [
         item for item in source["optimize"]["scoring"] if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")
     ]
@@ -124,32 +121,6 @@ def test_cli_reports_ignored_cap_and_preserves_the_input_file(tmp_path):
     assert src.read_bytes() == original
 
 
-@pytest.mark.parametrize("visible", [None, []])
-def test_visible_metric_null_and_empty_list_keep_distinct_existing_meanings(visible):
-    from analysis_visibility import filter_analysis_for_visibility
-
-    source = get_template_config()
-    source["backtest"]["visible_metrics"] = visible
-    source["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
-    source["optimize"]["limits"] = []
-    Draft202012Validator(generate_schema()).validate(source)
-    prepared = prepare_config(source, verbose=False)
-    analysis = {"adg_fraction_strategy_equity": 0.1, "volume_pct_per_day_avg": 0.2}
-    result = filter_analysis_for_visibility(analysis, prepared)
-    assert result.analysis == (analysis if visible == [] else {"adg_fraction_strategy_equity": 0.1})
-    assert source["backtest"]["visible_metrics"] is visible
-
-
-def test_migration_keeps_authored_null_visible_metrics_and_emits_valid_schema():
-    source = released()
-    source["backtest"]["visible_metrics"] = None
-    original = deepcopy(source)
-    result = migrate(source, memory_span_minutes=123.5)
-    assert result.config["backtest"]["visible_metrics"] is None
-    Draft202012Validator(generate_schema()).validate(result.config)
-    assert source == original
-
-
 def test_referenced_full_config_discards_only_its_unused_backtest_cap(tmp_path):
     source = released()
     source["live"]["max_warmup_minutes"] = 12.5
@@ -231,7 +202,6 @@ def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_
     metric, target, caplog,
 ):
     source = released()
-    source["backtest"]["visible_metrics"] = []
     source["optimize"]["scoring"] = [{"goal": "max", "metric": metric}]
     source["optimize"]["limits"] = [
         {"metric": metric, "penalize_if": "greater_than", "value": 0.125},
@@ -254,4 +224,42 @@ def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_
     assert "recency weighting changes" in choice["reason"]
     assert "formulas are not equivalent" in choice["reason"]
     assert metric in caplog.text and target in caplog.text
+    assert source == original
+
+
+@pytest.mark.parametrize("visible", [None, [], ["sharpe"], ["adg_strategy_eq_w_per_exposure_long"]])
+def test_migration_removes_visible_metrics_without_replacing_display_only_formulas(visible):
+    source = released()
+    source["backtest"]["visible_metrics"] = visible
+    original = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    assert "visible_metrics" not in result.config["backtest"]
+    removed = [item for item in result.changes if item["path"] == "backtest.visible_metrics"]
+    assert len(removed) == 1
+    assert removed[0]["old"] == visible and removed[0]["new"] is None
+    assert "removed terminal-only metric visibility" in removed[0]["reason"]
+    Draft202012Validator(generate_schema()).validate(result.config)
+    assert source == original
+
+
+def test_migration_removes_nested_visibility_overrides_with_reported_paths():
+    source = released()
+    source["backtest"]["scenarios"] = [{"label": "sample", "overrides": {
+        "backtest.visible_metrics": ["adg_strategy_eq_w_per_exposure_long"],
+    }}]
+    source["optimize"]["fixed_runtime_overrides"] = {
+        "backtest": {"visible_metrics": None},
+    }
+    original = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    assert "visible_metrics" not in result.config["backtest"]
+    assert result.config["backtest"]["scenarios"][0]["overrides"] == {}
+    assert result.config["optimize"]["fixed_runtime_overrides"] == {}
+    paths = {item["path"] for item in result.changes
+             if "removed terminal-only metric visibility" in item["reason"]}
+    assert paths == {
+        "backtest.visible_metrics",
+        "backtest.scenarios[0].overrides.backtest.visible_metrics",
+        "optimize.fixed_runtime_overrides.backtest.visible_metrics",
+    }
     assert source == original

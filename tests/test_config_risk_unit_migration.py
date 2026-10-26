@@ -14,10 +14,6 @@ from tools.migrate_config_v9 import migrate
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_path, kind):
     source = get_released_v8_defaults(strategy_kind=kind)
-    source["backtest"]["visible_metrics"] = [
-        name for name in source["backtest"]["visible_metrics"]
-        if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     source["optimize"]["scoring"] = [
         row for row in source["optimize"]["scoring"]
         if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")
@@ -107,10 +103,6 @@ def test_released_flat_hsl_bounds_keep_their_source_keys_after_native_id_rename(
     source_key, target, value
 ):
     source = get_released_v8_defaults()
-    source["backtest"]["visible_metrics"] = [
-        name for name in source["backtest"]["visible_metrics"]
-        if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     source["optimize"]["scoring"] = [
         row for row in source["optimize"]["scoring"]
         if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")

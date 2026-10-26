@@ -118,10 +118,6 @@ def test_full_v8_flat_bounds_and_dotted_fixed_selector_migrate_without_mutation(
     from tools.migrate_config_v9 import migrate
 
     config = get_released_v8_defaults(strategy_kind=kind)
-    config["backtest"]["visible_metrics"] = [
-        name for name in config["backtest"]["visible_metrics"]
-        if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     config["optimize"]["scoring"] = [
         row for row in config["optimize"]["scoring"]
         if not row["metric"].endswith("_w")
@@ -152,10 +148,6 @@ def _released_flat_bound_source(kind, missing_spans=("ema_span_0", "ema_span_1")
     from config.migrations.released_v8 import get_released_v8_defaults
 
     config = get_released_v8_defaults(strategy_kind=kind)
-    config["backtest"]["visible_metrics"] = [
-        name for name in config["backtest"]["visible_metrics"]
-        if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
-    ]
     config["optimize"]["scoring"] = [
         row for row in config["optimize"]["scoring"]
         if not row["metric"].endswith("_w")

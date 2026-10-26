@@ -103,7 +103,6 @@ def test_new_strategy_quantities_roundtrip_with_unchanged_native_values(kind, ol
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_v8_strategy_quantities_keep_sources_bounds_files_and_final_targets(tmp_path, kind):
     config = get_released_v8_defaults(strategy_kind=kind)
-    config["backtest"]["visible_metrics"] = [m for m in config["backtest"]["visible_metrics"] if not m.endswith("_w") and not m.startswith("strategy_eq_underwater_pct_")]
     config["optimize"]["scoring"] = [m for m in config["optimize"]["scoring"] if not m["metric"].endswith("_w") and not m["metric"].startswith("strategy_eq_underwater_pct_")]
     fields = [row for row in FIELDS if row[0] == kind]
     file_patch = {"bot": {"long": {"strategy": {kind: {}}}}}

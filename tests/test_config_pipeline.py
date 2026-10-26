@@ -23,7 +23,6 @@ from config.strategy import build_runtime_strategy_side
 from config.strategy_spec import get_supported_strategy_kinds
 
 
-
 def _set_path(mapping, path, value):
     current = mapping
     for part in path[:-1]:
@@ -802,10 +801,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
             "ema_span_0_minutes"
         ]
     )
-    assert (
-        prepared["backtest"]["visible_metrics"]
-        == template["backtest"]["visible_metrics"]
-    )
+    assert "visible_metrics" not in prepared["backtest"]
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
 
@@ -833,61 +829,6 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
     assert prepared["bot"]["short"]["forager"]["score_weights"][
         "ema_readiness"
     ] == pytest.approx(0.4344344344344344)
-
-
-def test_prepare_config_preserves_backtest_visible_metrics():
-    source = {
-        "config_version": CONFIG_SCHEMA_VERSION,
-        "backtest": {
-            "visible_metrics": [
-                "gain_multiplier",
-                "drawdown_max_fraction_strategy_equity",
-                "hsl_restart_count_short",
-            ]
-        },
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {},
-        "optimize": {"bounds": {}},
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["backtest"]["visible_metrics"] == [
-        "gain_multiplier",
-        "drawdown_max_fraction_strategy_equity",
-        "hsl_restart_count_short",
-    ]
-
-
-def test_prepare_config_rejects_unknown_backtest_visible_metrics():
-    source = {
-        "config_version": CONFIG_SCHEMA_VERSION,
-        "backtest": {"visible_metrics": ["not_a_metric"]},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {},
-        "optimize": {"bounds": {}},
-    }
-
-    with pytest.raises(ValueError, match="unknown backtest.visible_metrics entries"):
-        prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-
-def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
-    source = {
-        "config_version": CONFIG_SCHEMA_VERSION,
-        "backtest": {"visible_metrics": "adg_fraction"},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {},
-        "optimize": {"bounds": {}},
-    }
-
-    with pytest.raises(
-        ValueError, match="backtest.visible_metrics must be null, \\[\\], or"
-    ):
-        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_rejects_unversioned_configs_without_explicit_migration():
@@ -1396,12 +1337,6 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
     assert _strategy_side(prepared, "short") == _strategy_side(prepared, "long")
 
 
-
-
-
-
-
-
 def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
     source = get_expanded_config_prototype()
     source["bot"]["long"]["forager"]["score_weights"] = {
@@ -1442,3 +1377,11 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
         "ema_readiness": 0.0,
         "log_range": 0.0,
     }
+
+
+@pytest.mark.parametrize("value", [None, [], ["gain_multiplier"], "adg_fraction"])
+def test_prepare_config_rejects_retired_visible_metrics_field(value):
+    source = get_template_config()
+    source["backtest"]["visible_metrics"] = value
+    with pytest.raises(ValueError, match=r"backtest\.visible_metrics.*unknown configuration field"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)

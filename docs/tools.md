@@ -1008,7 +1008,6 @@ PYTHONPATH=src python3 src/repro_harness.py optimize_results/.../pareto/<hash>.j
 PYTHONPATH=src python3 src/tools/capture_optimize_memory.py --wait --output tmp/optimize_memory.json
 ```
 
-`src/analysis_visibility.py` is a reusable helper module for resolving `backtest.visible_metrics` against optimize scoring/limits so analysis views can consistently show only the requested metric surface.
 
 ## VPS sync helpers
 
