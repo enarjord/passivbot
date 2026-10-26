@@ -201,7 +201,13 @@ def test_workspace_plot_fills_for_coin_uses_loaded_artifact(tmp_path):
         plt.close(fig)
 
 
-def test_forager_coin_fill_plot_uses_datetime_axis():
+@pytest.mark.parametrize(
+    ("start_fraction", "end_fraction", "expected_minutes"),
+    [(0.0, 1.0, [1, 2, 3]), (0.5, 0.5, [2])],
+)
+def test_forager_coin_fill_plot_uses_datetime_axis(
+    start_fraction, end_fraction, expected_minutes
+):
     timestamps = np.array(
         [
             int(ts.value // 1_000_000)
@@ -225,13 +231,19 @@ def test_forager_coin_fill_plot_uses_datetime_axis():
         }
     )
 
-    fig = create_forager_coin_figures(["BTC"], fills, hlcvs, timestamps=timestamps)["BTC"]
+    fig = create_forager_coin_figures(
+        ["BTC"], fills, hlcvs, timestamps=timestamps,
+        start_fraction=start_fraction, end_fraction=end_fraction,
+    )["BTC"]
 
     try:
         ax = fig.axes[0]
         assert ax.get_xlabel() == "datetime"
         assert np.issubdtype(ax.lines[0].get_xdata().dtype, np.datetime64)
-        assert str(ax.lines[0].get_xdata()[0]).startswith("2026-01-01")
+        np.testing.assert_array_equal(
+            ax.lines[0].get_xdata(),
+            pd.to_datetime(timestamps[expected_minutes], unit="ms").to_numpy(),
+        )
     finally:
         from plotting import plt
 
@@ -247,3 +259,30 @@ def test_load_backtest_artifact_fails_loudly_on_missing_cache_file(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="hlcvs_file"):
         load_backtest_artifact(artifact_dir)
+
+
+def test_notebook_fill_plot_keywords_match_the_current_plotting_api():
+    import ast
+    import inspect
+    import json
+    from pathlib import Path
+    from plotting import plot_fills_long
+
+    path = Path(__file__).resolve().parents[1] / "notebooks" / "notes_backtest.ipynb"
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    calls = []
+    for cell in notebook["cells"]:
+        if cell.get("cell_type") != "code":
+            continue
+        source = "".join(cell.get("source", []))
+        if "plot_fills_long(" not in source:
+            continue
+        calls.extend(node for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                     and node.func.id == "plot_fills_long")
+    assert calls
+    for call in calls:
+        inspect.signature(plot_fills_long).bind(
+            *(object() for _ in call.args),
+            **{keyword.arg: object() for keyword in call.keywords},
+        )
