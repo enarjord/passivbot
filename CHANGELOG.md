@@ -16,6 +16,10 @@ since the latest release tag; these features may already be available when insta
   suite aggregation maps. Rename supported metric selectors without changing reducer methods,
   retain custom rules, and require the existing consent for retired metric formulas.
 
+- Best-effort released-v8 migration has explicit ordinary fallbacks for four retired weighted
+  metric families without EW counterparts. Report the changed recency formula and any resulting
+  duplicate-objective consolidation; strict conversion and explicit formula choices retain priority.
+
 - Hyperliquid diagnostic probes name price-distance inputs `--distance-fraction` and
   `--close-order-distance-fraction`. Values remain scale-one fractions; probe execution and
   its explicit live-mutation acknowledgement are unchanged.

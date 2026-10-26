@@ -90,11 +90,14 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
     replacements = dict(replacements or {})
     used = set()
     ew_requested = False
+    replacement_paths = set()
 
     def convert(name, path):
         from config.ew import is_ew_metric
         from config.metrics import canonicalize_metric_name
-        from .released_v8_metrics import released_v8_metric_name, released_v8_ew_replacement
+        from .released_v8_metrics import (
+            released_v8_metric_name, released_v8_ew_replacement, released_v8_ordinary_fallback,
+        )
 
         nonlocal ew_requested
         name = name.strip() if isinstance(name, str) else name
@@ -105,13 +108,17 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                                     reason="released-v8 metric naming; value and formula unchanged"))
             return new
         inferred = name not in replacements and best_effort
+        ordinary_fallback = None
         if inferred:
             if name.startswith("strategy_eq_underwater_pct_") and name != "strategy_eq_underwater_pct_mean":
                 raise ValueError(f"{path}: no inferred replacement for {name!r}; supply --metric-replacement explicitly")
             candidate = ("pain_index_fraction_strategy_equity" if name == "strategy_eq_underwater_pct_mean"
                          else released_v8_ew_replacement(name))
             if candidate is None:
-                raise ValueError(f"{path}: no supported _ew replacement for {name!r}; supply --metric-replacement explicitly")
+                ordinary_fallback = released_v8_ordinary_fallback(name)
+                if ordinary_fallback is None:
+                    raise ValueError(f"{path}: no supported _ew replacement or known ordinary fallback for {name!r}; supply --metric-replacement explicitly")
+                candidate = ordinary_fallback[0]
         elif name not in replacements:
             raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW and an explicit formula choice")
         if not acknowledge and not best_effort:
@@ -121,12 +128,15 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             raise ValueError(f"replacement for {name!r} must name a supported non-retired metric")
         new = canonicalize_metric_name(new)
         used.add(name)
+        replacement_paths.add(path)
         ew_requested |= is_ew_metric(new)
         if inferred or (best_effort and not acknowledge):
             from .best_effort_v9 import record_guess
 
             record_guess(changes, path, name, new,
-                         ("adopt minute-sampled Pain Index; daily-worst underwater mean is not equivalent"
+                         (f"use full-window ordinary {ordinary_fallback[1]}; drop the retired equal average of full-history and up to nine shorter suffix estimators; recency weighting changes and formulas are not equivalent; re-evaluate objectives and limits"
+                          if ordinary_fallback is not None else
+                          "adopt minute-sampled Pain Index; daily-worst underwater mean is not equivalent"
                           if inferred and candidate == "pain_index_fraction_strategy_equity" else
                           "adopt exponential recency formula; retired _w formula is not equivalent"
                           if inferred else "accept explicit replacement formula under best-effort consent"))
@@ -138,6 +148,9 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
     def visit(node, path=""):
         if isinstance(node, list):
             visible = path.split(".")[-1] == "visible_metrics"
+            scoring = path.split(".")[-1] == "scoring"
+            original = deepcopy(node) if scoring else None
+            replacements_before = len(replacement_paths)
             converted = []
             for index, value in enumerate(node):
                 current = f"{path}[{index}]"
@@ -160,6 +173,29 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                     visit(value, current)
                     converted.append(value)
             node[:] = list(dict.fromkeys(converted)) if visible else converted
+            if scoring and len(replacement_paths) > replacements_before:
+                from config.scoring import normalize_scoring_entries
+
+                # Use the canonical owner's equality/conflict semantics. Formula
+                # replacement can make formerly distinct objectives identical.
+                metrics = [item if isinstance(item, str) else item.get("metric")
+                           for item in node if isinstance(item, (str, dict))]
+                duplicate = len(metrics) != len(set(metrics))
+                normalized = normalize_scoring_entries(node)[0] if duplicate else None
+                if normalized is not None and len(normalized) < len(node):
+                    node[:] = [spec.to_config() for spec in normalized]
+                    reason = (
+                        "canonical scoring normalization after metric formula replacement "
+                        f"coalesces identical current objectives: {len(original)} -> {len(node)}; "
+                        "goals and retained scenario/reducer policy are unchanged"
+                    )
+                    if best_effort:
+                        from .best_effort_v9 import record_guess
+
+                        record_guess(changes, path, original, node, reason)
+                    else:
+                        changes.append(dict(path=path, old=original, new=deepcopy(node), reason=reason))
+                    changes[-1].update(old_count=len(original), new_count=len(node))
             return
         if not isinstance(node, dict):
             return

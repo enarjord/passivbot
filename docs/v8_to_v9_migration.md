@@ -153,11 +153,24 @@ The retired daily-worst underwater mean is replaced by minute-sampled Pain Index
 when explicitly selected and acknowledged; its old thresholds are not equivalent.
 Best-effort migration may infer that choice and records the formula change. The removed
 underwater median has no inferred replacement and requires an explicit metric choice.
-Best-effort migration can infer a supported `_ew` formula, but still requires
-`--metric-replacement` when no supported exponential counterpart exists. Selecting an ordinary
-full-period metric remains a different formula, including when another objective already uses it.
-Existing scoring normalization consolidates duplicate objectives created by an explicit choice;
-inspect the resulting objective list before starting a new search.
+Best-effort migration can infer a supported `_ew` formula. Four released families without an
+exponential counterpart instead have explicit ordinary fallbacks:
+
+| Released selector | Best-effort ordinary replacement |
+| --- | --- |
+| `volume_pct_per_day_avg_w` | `active_day_turnover_proxy_mean_ratio` |
+| `mdg_strategy_eq_w` | `mdg_fraction_strategy_equity` |
+| `adg_pnl_w` | `daily_realized_pnl_mean_fraction` |
+| `mdg_pnl_w` | `daily_realized_pnl_median_fraction` |
+
+These retain the ordinary quantity, statistic and scale, including the realized-PnL basis of
+the last two. They drop the retired equal average of the full-history estimate and up to nine
+shorter suffix estimates. Full-period ordinary statistics are different formulas; they do not
+enable EW analysis or supply an EW half-life. Each inference is reported as such. Supported
+outer statistic suffixes remain intact; unknown families still require `--metric-replacement`.
+Existing scoring normalization consolidates identical objectives created by formula choices;
+the report includes the old/new objective lists and counts. Inspect that list and re-evaluate
+limits before starting a new search. Explicit replacements take precedence over inferred choices.
 `backtest.visible_metrics: null` is retained: it derives displayed metrics from objectives and
 limits. An empty list instead displays all metrics.
 DEAP inputs additionally require an authored `optimize.pymoo.shared` policy and
@@ -195,7 +208,8 @@ are emitted as choices are made, including before a later validation failure.
 
 | Missing choice or saved-result field | Best-effort policy |
 |---|---|
-| Retired `_w` metric | Replace `_w` with `_ew` when that metric exists, preserving currency and supported statistic suffixes |
+| Supported released `_w` family with an EW counterpart | Use its frozen EW replacement, preserving verified currency and supported outer statistic suffixes |
+| The four released turnover / MDG strategy-equity / daily realized-PnL families above | Use the named full-period ordinary statistic and report loss of suffix-window recency averaging |
 | EW half-life absent or `null`, with an EW metric requested | Set global `backtest.ew_half_life_days` to `180.0` |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
 | Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |

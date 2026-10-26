@@ -222,11 +222,36 @@ def test_invalid_released_fee_inputs_fail_without_guessing_or_mutating(value, be
     assert source == original
 
 
-@pytest.mark.parametrize("metric", ["volume_pct_per_day_avg_w", "mdg_strategy_eq_w", "adg_pnl_w"])
-def test_best_effort_still_requires_choices_without_supported_exponential_metrics(metric):
+@pytest.mark.parametrize("metric,target", [
+    ("volume_pct_per_day_avg_w", "active_day_turnover_proxy_mean_ratio"),
+    ("mdg_strategy_eq_w", "mdg_fraction_strategy_equity"),
+    ("adg_pnl_w", "daily_realized_pnl_mean_fraction"),
+])
+def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_changes(
+    metric, target, caplog,
+):
     source = released()
+    source["backtest"]["visible_metrics"] = []
     source["optimize"]["scoring"] = [{"goal": "max", "metric": metric}]
+    source["optimize"]["limits"] = [
+        {"metric": metric, "penalize_if": "greater_than", "value": 0.125},
+    ]
     original = deepcopy(source)
-    with pytest.raises(ValueError, match="no supported _ew replacement.*metric-replacement"):
-        migrate(source, best_effort=True)
+    with pytest.raises(ValueError, match=f"retired metric '{metric}' requires --metric-replacement"):
+        migrate(source, memory_span_minutes=123.5)
+    assert source == original
+
+    result = migrate(source, best_effort=True)
+    assert result.config["optimize"]["scoring"] == [{"goal": "max", "metric": target}]
+    assert result.config["optimize"]["limits"] == [
+        {"metric": target, "penalize_if": "greater_than", "value": 0.125},
+    ]
+    choice = next(item for item in result.changes
+                  if item["path"] == "optimize.scoring[0].metric")
+    assert choice["old"] == metric and choice["new"] == target
+    assert choice["best_effort"] is True
+    assert "full-window ordinary" in choice["reason"]
+    assert "recency weighting changes" in choice["reason"]
+    assert "formulas are not equivalent" in choice["reason"]
+    assert metric in caplog.text and target in caplog.text
     assert source == original
