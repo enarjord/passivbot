@@ -75,7 +75,7 @@ def test_lossless_migration_runtime_warmup_and_roundtrip():
         names.get(key, key): value for key, value in old["bot"]["long"]["unstuck"].items()
     }
     bounds = flatten_optimize_bounds(prepared["optimize"]["bounds"], strategy_kind=KIND)
-    assert bounds["long_ema_span_0"] == [12.5, 321.75, 0.25]
+    assert bounds["long_entry_ema_span_0_minutes"] == [12.5, 321.75, 0.25]
     saved = clean_config(prepared)
     reloaded = prepare_config(saved, verbose=False)
     assert clean_config(reloaded) == saved
@@ -151,9 +151,9 @@ def test_retired_selectors_reject_and_entry_group_selects_current_genes():
         assert resolve_bound_selectors(config, [selector], bounds) == {}
     canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"
     assert require_existing_config_path(config, canonical)[-2:] == ("entry", "ema_span_0_minutes")
-    assert set(resolve_bound_selectors(config, [canonical], bounds)) == {"long_ema_span_0"}
+    assert set(resolve_bound_selectors(config, [canonical], bounds)) == {"long_entry_ema_span_0_minutes"}
     selected = resolve_bound_selectors(config, ["long.strategy.entry"], bounds)
-    assert {"long_ema_span_0", "long_ema_span_1"} <= set(selected)
+    assert {"long_entry_ema_span_0_minutes", "long_entry_ema_span_1_minutes"} <= set(selected)
     assert not any(key.startswith("long_close") for key in selected)
 
 
@@ -263,6 +263,7 @@ def test_canonical_wildcard_leaf_selector_preserves_active_strategy_genes(kind):
     bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
     entry = "entry." if kind == KIND else ""
     selected = resolve_bound_selectors(config, [f"*.strategy.{kind}.{entry}ema_span_0_minutes"], bounds)
-    assert set(selected) == {"long_ema_span_0", "short_ema_span_0"}
+    native_span = "entry_ema_span_0_minutes" if kind == KIND else "ema_span_0_minutes"
+    assert set(selected) == {f"long_{native_span}", f"short_{native_span}"}
     for path in selected.values():
         assert ("entry" in path) == (kind == KIND)
