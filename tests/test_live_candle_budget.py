@@ -1145,7 +1145,7 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
                 return {
                     "volume": 1.0 if pside == "long" else 0.0,
                     "ema_readiness": 0.0,
-                    "volatility": 0.0,
+                    "log_range": 0.0,
                 }
             return 0.0
 
