@@ -11,11 +11,11 @@ from config.authoring import compact_config, resolved_config
 from config.field_registry import get_field_registry
 from config.hsl import generated_template
 from config.migrations.released_v8 import get_released_v8_defaults
+from config.migrations.released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES
 from config.json_schema import generate_schema
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
 from config.schema import get_template_config
-
 from released_v8_fixtures import released_v8_policy
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
@@ -49,6 +49,23 @@ def write(node, path, value):
     for part in parts[:-1]:
         node = node.setdefault(part, {})
     node[parts[-1]] = value
+
+
+def expected_released_strategy_bounds(kind, bounds):
+    """Use frozen released paths, independent of current native strategy names."""
+    names = RELEASED_V8_STRATEGY_PATH_RENAMES[kind]
+    expected = {}
+
+    def visit(node, prefix=()):
+        for key, value in node.items():
+            path = (*prefix, key)
+            if isinstance(value, dict):
+                visit(value, path)
+            else:
+                write(expected, ".".join(names.get(path, path)), deepcopy(value))
+
+    visit(bounds)
+    return expected
 
 
 def test_registry_declares_exact_portfolio_scope_and_remaining_global_defaults():
@@ -166,7 +183,7 @@ def test_exports_retain_explicit_portfolio_policy_values_and_side_independence(m
 def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported(owner):
     source = released_v8_policy()
     old = {"live.hedge_mode": True, "live.warmup_ratio": 0.625,
-           "live.market_order_near_touch_fraction": 0.0125}
+           "live.market_order_near_touch_threshold": 0.0125}
     if owner == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = old
     else:
@@ -199,10 +216,8 @@ def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changi
     original = deepcopy(source)
     output = migrate(source, memory_span_minutes=123.5).config
     defaults = get_released_v8_defaults(strategy_kind=kind)
-    from config.public_names import rewrite_released_public_names
-    rewrite_released_public_names(defaults, strategy_kind=kind)
     for side in ("long", "short"):
-        expected = deepcopy(defaults["optimize"]["bounds"][side]["strategy"][kind])
+        expected = expected_released_strategy_bounds(kind, defaults["optimize"]["bounds"][side]["strategy"][kind])
         assert output["optimize"]["bounds"][side]["strategy"] == {kind: expected}
         assert ("hsl" in output["optimize"]["bounds"][side]) == (scope != "portfolio")
     assert output["bot"]["portfolio"]["hsl"]["scope"] == scope
