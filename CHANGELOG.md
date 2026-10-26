@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
 - Align native unstuck fields and optimizer IDs with explicit fractions, exposure ratios and
   minute spans; name the native account loss gate `loss_gate_max_drawdown_fraction`.
   Unstuck status fields use matching fraction names. Numeric behavior, signed fees and GPU
