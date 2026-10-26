@@ -3098,7 +3098,7 @@ def prepare_order_churn_evidence(bot, ideal_orders: dict, *, generation: int) ->
     decisions = state.evaluate_and_record(
         complete_ideals,
         now_monotonic=time.monotonic(),
-        tolerance=float(bot.live_value("order_match_tolerance_pct")),
+        tolerance=float(bot.live_value("order_match_tolerance_fraction")),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
         max_sample_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
@@ -3764,7 +3764,7 @@ def apply_order_match_tolerance(
 
     Returns (remaining_cancel, remaining_create, skipped_pairs)
     """
-    tolerance = float(bot.live_value("order_match_tolerance_pct"))
+    tolerance = float(bot.live_value("order_match_tolerance_fraction"))
     if tolerance <= 0.0:
         return to_cancel, to_create, 0
 

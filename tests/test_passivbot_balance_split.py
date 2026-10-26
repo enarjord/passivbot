@@ -925,7 +925,7 @@ def _counted_staged_account_refresh_bot(
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = balance
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = balance
     bot.balance = balance
     bot._exchange_reported_balance_raw = balance
@@ -6627,7 +6627,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6827,7 +6827,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6974,7 +6974,7 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -7336,7 +7336,7 @@ async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raise
     bot.balance_raw = 50.0
     bot.balance_override = None
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._exchange_reported_balance_raw = 50.0
     bot._apply_open_orders_snapshot = AsyncMock()
     bot._apply_positions_snapshot = MagicMock()
@@ -7378,7 +7378,7 @@ async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_i
     bot.balance = 50.0
     bot.balance_raw = 50.0
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_override = "invalid"
     bot._balance_override_logged = False
     bot._exchange_reported_balance_raw = 50.0
@@ -7636,7 +7636,7 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     ok = await bot.update_balance()
     assert ok is True
@@ -7655,7 +7655,7 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     with caplog.at_level(logging.INFO):
         ok = bot._apply_balance_snapshot(123.45)
@@ -10234,7 +10234,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
         return {symbol: 100.0 for symbol in symbols}
 
     bot._get_live_last_prices = fake_get_live_last_prices
-    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_fraction" else 0.0
 
     secret = "open-order-secret https://example.invalid/open-order"
     unsafe_order_id = "token=order-id-secret https://example.invalid/order-id"
@@ -11593,7 +11593,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -11869,7 +11869,7 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 100.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._balance_composition = composition
 
     assert bot._apply_balance_snapshot(100.0) is True

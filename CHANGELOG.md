@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
+  public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
+
 - Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
   signed fee override fractions, and the starting-balance equity floor fraction. Warmup
   now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
