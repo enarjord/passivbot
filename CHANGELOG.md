@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
+- Preserve named reducer rules when converting released-v8 `backtest.aggregate` and legacy
+  suite aggregation maps. Rename supported metric selectors without changing reducer methods,
+  retain custom rules, and require the existing consent for retired metric formulas.
+
 - Name the raw GPU initial-entry allocation `initial_entry_balance_fraction`, matching the
   directional analysis metrics without changing scalar columns, values or allocation math.
 

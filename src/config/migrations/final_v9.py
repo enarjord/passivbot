@@ -199,16 +199,27 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             return
         if not isinstance(node, dict):
             return
-        metric_map = path.split(".")[-1] in {"reducer", "limits"}
+        released_aggregate = path in {"backtest.aggregate", "backtest.suite.aggregate"}
+        metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
-            if key == "metric":
+            if key == "metric" and not released_aggregate:
                 node[key] = convert(node[key], current)
             elif metric_map and key != "default":
-                prefix = next((prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
-                                                     "lower_bound_", "upper_bound_")
-                               if key.startswith(prefix)), "")
+                prefix = "" if released_aggregate else next((
+                    prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
+                                          "lower_bound_", "upper_bound_")
+                    if key.startswith(prefix)), "")
                 metric = key.removeprefix(prefix)
+                if released_aggregate and not _is_retired_metric(metric):
+                    from .released_v8_metrics import released_v8_metric_name
+
+                    try:
+                        released_v8_metric_name(metric)
+                    except ValueError:
+                        # Released aggregate rules also accepted custom metrics.
+                        # Only this vocabulary probe permits their passthrough.
+                        continue
                 renamed = prefix + convert(metric, current)
                 if renamed != key:
                     value = node.pop(key)
@@ -617,7 +628,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from config.public_names import rewrite_released_public_names
 
     result = deepcopy(source)
-    from .released_v8_strategy import released_strategy_kind
+    from .released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES, released_strategy_kind
 
     released_kind = released_strategy_kind(
         result, default=None if sparse else "trailing_martingale"
@@ -934,6 +945,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         result, verbose=False,
         strategy_defaults={side: released["bot"][side]["strategy"][kind]
                            for side in ("long", "short")},
+        scenario_strategy_paths={
+            key: RELEASED_V8_STRATEGY_PATH_RENAMES[kind][
+                ("entry", key) if kind == "trailing_martingale" else (key,)
+            ]
+            for key in ("ema_span_0", "ema_span_1")
+        },
     )
     move_operational_live(result, record=record)
     from .control_sentinels import migrate_control_sentinels

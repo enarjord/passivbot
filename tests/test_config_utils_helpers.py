@@ -899,10 +899,7 @@ def test_profit_ratio_alias_survives_config_roundtrip_and_gpu_preflight(
     assert reloaded["optimize"][surface] == prepared["optimize"][surface]
 
 
-@pytest.mark.parametrize("surface", ["scoring", "limits"])
-def test_prepare_gpu_config_preserves_canonical_metric_gpu_admission(
-    surface,
-):
+def _prepared_canonical_metric_gpu_config(surface):
     cfg = get_template_config()
     cfg["optimize"]["backend"] = "gpu"
     cfg["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
@@ -920,7 +917,12 @@ def test_prepare_gpu_config_preserves_canonical_metric_gpu_admission(
             }
         ]
 
-    prepared = prepare_config(cfg, verbose=False)
+    return prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_prepare_gpu_config_preserves_canonical_metric_provenance(surface):
+    prepared = _prepared_canonical_metric_gpu_config(surface)
 
     assert prepared["optimize"]["scoring"] == (
         [{"goal": "min", "metric": "recovery_max_days_strategy_equity"}]
@@ -930,6 +932,13 @@ def test_prepare_gpu_config_preserves_canonical_metric_gpu_admission(
     assert prepared["_raw"]["optimize"][surface]
 
     reject_configured_exact_only_gpu_metrics(prepared)
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_canonical_metric_preserves_native_gpu_admission(surface):
+    pytest.importorskip("torch")
+    prepared = _prepared_canonical_metric_gpu_config(surface)
+
     from config.scoring import normalize_scoring_entries
     from optimization.gpu.metrics import validate_gpu_metric_names
 
