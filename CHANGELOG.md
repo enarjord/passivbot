@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name benchmark account fractions, ratios, counts and log returns explicitly; advance the
+  account metric/discovery identities without changing economic calculations or converting old results.
+
 - Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
   explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
   stay unchanged; retired native names are not accepted as aliases.
