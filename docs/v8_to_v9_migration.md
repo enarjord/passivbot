@@ -171,8 +171,10 @@ outer statistic suffixes remain intact; unknown families still require `--metric
 Existing scoring normalization consolidates identical objectives created by formula choices;
 the report includes the old/new objective lists and counts. Inspect that list and re-evaluate
 limits before starting a new search. Explicit replacements take precedence over inferred choices.
-`backtest.visible_metrics: null` is retained: it derives displayed metrics from objectives and
-limits. An empty list instead displays all metrics.
+The terminal-only `backtest.visible_metrics` setting is removed during explicit v8 migration,
+with its removal recorded in the migration report. Standalone backtests display their complete
+analysis. Current v9 configurations must omit this retired field.
+
 DEAP inputs additionally require an authored `optimize.pymoo.shared` policy and
 `--acknowledge-search-backend-change`; outer genetic gates and offspring policies are
 not equivalent. Existing pymoo fallback settings are materialized in the report.

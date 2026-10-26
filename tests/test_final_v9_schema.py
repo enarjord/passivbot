@@ -328,7 +328,6 @@ def test_deap_retirement_requires_separate_search_acknowledgment():
 def test_weighted_metric_retirement_requires_choice_and_distinct_formula_ack():
     config = v8_config()
     config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w", "goal": "max"}]
-    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
     with pytest.raises(ValueError, match="metric-replacement"):
         migrate(config, memory_span_minutes=123.5)
     choices = {"adg_strategy_eq_w": "adg_fraction_strategy_equity"}
@@ -337,7 +336,6 @@ def test_weighted_metric_retirement_requires_choice_and_distinct_formula_ack():
     result = migrate(config, memory_span_minutes=123.5, metric_replacements=choices,
                      acknowledge_metric_formula_change=True)
     assert result.config["optimize"]["scoring"] == [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
-    assert result.config["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity"]
 
 
 @pytest.mark.parametrize("key", ["crossover_eta", "crossover_probability", "mutation_eta",
@@ -532,15 +530,13 @@ def test_best_effort_rejects_invalid_authored_windows(days):
         migrate(config, best_effort=True)
 
 
-@pytest.mark.parametrize("location", ["visible", "scoring", "limits", "reducer"])
+@pytest.mark.parametrize("location", ["scoring", "limits", "reducer"])
 @pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "adg_fraction_strategy_equity_ew"),
                                    ("sharpe_ratio_w_usd", "sharpe_ratio_usd_ew"),
                                    ("sortino_ratio_w_btc", "sortino_ratio_btc_ew")])
 def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, new, caplog):
     config = v8_config()
-    if location == "visible":
-        config["backtest"]["visible_metrics"] = [old]
-    elif location == "scoring":
+    if location == "scoring":
         config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
     elif location == "limits":
         config["optimize"]["limits"] = {"penalize_if_lower_than_" + old: 0.1}
@@ -556,12 +552,12 @@ def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, n
 
 def test_best_effort_explicit_choices_take_precedence():
     config = v8_config()
-    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w", "goal": "max"}]
     config["backtest"]["ew_half_life_days"] = 17.0
     result = migrate(config, best_effort=True, memory_span_minutes=99.5,
                      metric_replacements={"adg_strategy_eq_w": "adg_fraction_strategy_equity"})
     assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 99.5
-    assert result.config["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity"]
+    assert result.config["optimize"]["scoring"] == [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
     assert result.config["backtest"]["ew_half_life_days"] == 17.0
     assert not any(item["path"] == "live.pnls_max_lookback_days" and item.get("best_effort")
                    for item in result.changes)
@@ -569,7 +565,7 @@ def test_best_effort_explicit_choices_take_precedence():
 
 def test_best_effort_retired_metric_without_ew_counterpart_requires_choice():
     config = v8_config()
-    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w_per_exposure_long"]
+    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w_per_exposure_long", "goal": "max"}]
     with pytest.raises(ValueError, match="no supported _ew replacement"):
         migrate(config, best_effort=True)
 
@@ -615,7 +611,7 @@ def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
 
 def test_strict_migration_preserves_metric_choices_when_span_is_missing():
     config = v8_config()
-    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w", "goal": "max"}]
     with pytest.raises(ValueError, match="explicitly choose --lookback-ema-span-minutes"):
         migrate(config, metric_replacements={"adg_strategy_eq_w": "adg_fraction_strategy_equity"},
                 acknowledge_metric_formula_change=True)
@@ -626,7 +622,7 @@ def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
     target = tmp_path / "target.json"
     report = tmp_path / "report.json"
     config = v8_config()
-    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w", "goal": "max"}]
     source.write_text(json.dumps(config))
     before = source.read_bytes()
     assert main([str(source), str(target), "--best-effort", "--dry-run", "--report", str(report)]) == 0
@@ -639,7 +635,7 @@ def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
             assert item["path"] in caplog.text
     assert main([str(source), str(target), "--best-effort"]) == 0
     loaded = prepare_config(load_raw_config(str(target)), verbose=False)
-    assert loaded["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity_ew"]
+    assert loaded["optimize"]["scoring"] == [{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}]
     published = target.read_bytes()
     with pytest.raises(SystemExit):
         main([str(source), str(target), "--best-effort"])

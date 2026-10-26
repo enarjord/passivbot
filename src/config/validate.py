@@ -103,7 +103,6 @@ def validate_limit_order_fill_buffer_fraction(value) -> float:
 def validate_config(
     config: dict, *, raw_optimize=None, verbose: bool = True, tracker=None
 ) -> None:
-    from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
     from .prefilter import resolve_prefilter, prefilter_enabled
     from .policy import validate_shared_bot_policy
@@ -422,5 +421,4 @@ def validate_config(
     monitor_cfg = require_config_dict(config, "monitor")
     if not str(monitor_cfg["root_dir"]).strip():
         raise ValueError("config.monitor.root_dir must be a non-empty string")
-    validate_visible_metrics_config(config)
     validate_forager_config(config, verbose=verbose, tracker=tracker)

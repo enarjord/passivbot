@@ -82,13 +82,13 @@ def test_explicit_choice_has_priority_over_the_ordinary_fallback(best_effort):
 
 @pytest.mark.parametrize("old,choice", RELEASED_V8_ORDINARY_FALLBACKS.items())
 def test_all_metric_reference_contexts_report_their_own_fallback_path(old, choice):
-    source = {"backtest": {"visible_metrics": [old], "reducer": {old: "min"},
+    source = {"backtest": {"reducer": {old: "min"},
                            "scenarios": [{"overrides": {"optimize.scoring": [{"metric": old, "goal": "max"}]}}]},
               "optimize": {"scoring": [old], "limits": [{"metric": old, "penalize_if": "greater_than", "value": .125}],
                            "fixed_runtime_overrides": {"optimize.limits": {f"upper_bound_{old}": .25}}}}
     changes = []
     replace_retired_metrics(source, replacements={}, acknowledge=False, changes=changes, best_effort=True)
-    expected = {"backtest.visible_metrics[0]", f"backtest.reducer.{old}",
+    expected = {f"backtest.reducer.{old}",
                 "backtest.scenarios[0].overrides.optimize.scoring[0].metric", "optimize.scoring[0]",
                 "optimize.limits[0].metric", f"optimize.fixed_runtime_overrides.optimize.limits.upper_bound_{old}"}
     assert {item["path"] for item in changes} == expected

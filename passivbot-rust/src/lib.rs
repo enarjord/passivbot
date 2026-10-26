@@ -4,6 +4,7 @@ mod backtest;
 mod closes;
 mod coin_selection;
 mod config_prefilter;
+mod core_metrics;
 mod constants;
 mod dynamic;
 mod entries;

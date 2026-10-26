@@ -96,7 +96,6 @@ from config_utils import (
     sanitize_prepared_config_for_dump,
 )
 from backtest_dataset import dump_backtest_dataset_metadata
-from analysis_visibility import filter_analysis_for_visibility
 from utils import (
     MarketIdentifierResolutionError,
     MarketIdentifierExchangeMismatch,
@@ -3219,15 +3218,7 @@ def post_process(
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     label_prefix = f"[{label}] " if label else ""
-    visible_analysis = filter_analysis_for_visibility(analysis, config)
-    if visible_analysis.shown_count < visible_analysis.total_count:
-        logging.info(
-            "%sShowing %d of %d metrics (set backtest.visible_metrics=[] to show all).",
-            label_prefix,
-            visible_analysis.shown_count,
-            visible_analysis.total_count,
-        )
-    logging.info("%s%s", label_prefix, pprint.pformat(visible_analysis.analysis))
+    logging.info("%s%s", label_prefix, pprint.pformat(analysis))
     results_path = make_get_filepath(
         str(output_directory) + "/"
         if output_directory is not None

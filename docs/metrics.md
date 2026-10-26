@@ -19,8 +19,7 @@ the quantity reference gives their precise daily, unannualized estimators. USD a
 curves are evaluated even without BTC collateral. Shared USD loss amounts remain shared metrics.
 Current v9 selectors and results use these exact spellings. Only explicit versioned v8 conversion
 accepts released historical names; there is no earlier development-v9 compatibility layer.
-`backtest.visible_metrics` retains family-prefix selection over current producer names: for example,
-`hsl` selects current `hsl_*` outputs. Prefix matching performs no historical-name translation.
+Standalone backtests print the complete analysis report.
 
 ## Effective backtest period
 

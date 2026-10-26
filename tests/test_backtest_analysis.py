@@ -1,3 +1,4 @@
+import json
 import logging
 
 import numpy as np
@@ -924,7 +925,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
 
 
-def test_post_process_visible_metrics_filters_logged_output_only(
+def test_post_process_logs_and_exports_complete_analysis(
     tmp_path, monkeypatch, caplog
 ):
     def _fake_process_forager_fills(*args, **kwargs):
@@ -956,7 +957,6 @@ def test_post_process_visible_metrics_filters_logged_output_only(
         "backtest": {
             "balance_sample_divider": 60,
             "coins": {"binance": ["BTC"]},
-            "visible_metrics": None,
         },
         "bot": {
             "long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}},
@@ -969,6 +969,12 @@ def test_post_process_visible_metrics_filters_logged_output_only(
         },
     }
 
+    analysis = {
+        "adg_fraction_usd": 0.01,
+        "adg_fraction_btc": 0.02,
+        "loss_profit_ratio": 0.5,
+        "recovery_max_hours_strategy_equity": 12.0,
+    }
     caplog.set_level(logging.INFO)
     bt.post_process(
         plot_context=bt.BacktestPlotContext(
@@ -989,24 +995,19 @@ def test_post_process_visible_metrics_filters_logged_output_only(
         fills=[],
         equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
         btc_usd_prices=np.array([]),
-        analysis={
-            "adg_fraction_usd": 0.01,
-            "adg_fraction_btc": 0.02,
-            "loss_profit_ratio": 0.5,
-            "recovery_max_hours_strategy_equity": 12.0,
-        },
+        analysis=analysis,
         results_path=str(tmp_path),
         exchange="binance",
     )
 
     logged = caplog.text
-    assert "Showing 3 of 4 metrics" in logged
+    assert "Showing " not in logged
     assert "adg_fraction_usd" in logged
     assert "adg_fraction_btc" in logged
     assert "loss_profit_ratio" in logged
-    assert "recovery_max_hours_strategy_equity" not in logged
+    assert "recovery_max_hours_strategy_equity" in logged
     analysis_path = next(tmp_path.glob("*/analysis.json"))
-    assert "recovery_max_hours_strategy_equity" in analysis_path.read_text(encoding="utf-8")
+    assert json.loads(analysis_path.read_text(encoding="utf-8")) == analysis
 
 
 def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():

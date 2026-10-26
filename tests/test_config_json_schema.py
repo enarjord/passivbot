@@ -348,3 +348,10 @@ def test_grouped_operational_coin_permissions_are_closed(validator):
         assert list(validator.iter_errors(source(coin_overrides={
             'BTC': {'live': {group: {field: value}}},
         })))
+
+
+@pytest.mark.parametrize("value", [None, [], ["adg_fraction_strategy_equity"]])
+def test_editor_schema_rejects_removed_visible_metrics_field(validator, value):
+    payload = source(backtest={"visible_metrics": value})
+    with pytest.raises(ValidationError, match="visible_metrics"):
+        validator.validate(payload)

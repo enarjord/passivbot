@@ -2,7 +2,6 @@
 
 import pytest
 
-from analysis_visibility import validate_visible_metrics_config
 from config.limits import normalize_limit_entries
 from config.metrics import metric_aliases
 from config.reducers import reducer_mapping_from_aliases
@@ -13,7 +12,7 @@ from config.scoring import ObjectiveSpec, normalize_scoring_entries
     "adg_w", "adg_w_usd_mean", "adg_w_per_exposure_long_usd",
     "adg_strategy_pnl_rebased_w", "volume_pct_per_day_avg_w",
 ])
-@pytest.mark.parametrize("surface", ["string", "object", "spec", "limit", "visible", "reducer"])
+@pytest.mark.parametrize("surface", ["string", "object", "spec", "limit", "reducer"])
 def test_retired_formula_rejected_at_every_authored_metric_boundary(metric, surface):
     with pytest.raises(ValueError, match="legacy weighted metric.*retired"):
         if surface == "string":
@@ -24,8 +23,6 @@ def test_retired_formula_rejected_at_every_authored_metric_boundary(metric, surf
             normalize_scoring_entries([ObjectiveSpec(metric, "max")])
         elif surface == "limit":
             normalize_limit_entries([{"metric": metric, "penalize_if": "less_than", "value": 0}])
-        elif surface == "visible":
-            validate_visible_metrics_config({"backtest": {"visible_metrics": [metric]}})
         else:
             reducer_mapping_from_aliases({"reducer": {metric: "mean"}}, path="backtest")
 

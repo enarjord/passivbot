@@ -15,8 +15,6 @@ from optimization.warmup import _apply_config_overrides
 
 def released(kind):
     c=get_released_v8_defaults(strategy_kind=kind)
-    c['backtest']['visible_metrics']=[x for x in c['backtest']['visible_metrics']
-        if not x.endswith('_w') and not x.startswith('strategy_eq_underwater_pct_')]
     c['optimize']['scoring']=[x for x in c['optimize']['scoring']
         if not x['metric'].endswith('_w') and not x['metric'].startswith('strategy_eq_underwater_pct_')]
     return c

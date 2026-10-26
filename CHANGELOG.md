@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Remove `backtest.visible_metrics` and its console-only metric filtering. Backtests display
+  their emitted analysis directly; explicit released-v8 conversion drops the retired presentation
+  field, and current configs reject it.
+
 - The offline fake runner settles ordinary writes and typed create/cancel admission deferrals
   through fresh current-account plans before advancing a market bar. It reports bounded exhaustion
   explicitly; protective passes and live execution admission remain unchanged.

@@ -5592,14 +5592,12 @@ def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
     entry["optimize"]["write_all_results"] = True
     entry["backtest"]["base_dir"] = "/old/backtests"
     entry["backtest"]["ohlcv_source_dir"] = "/input/ohlcvs"
-    entry["backtest"]["visible_metrics"] = ["adg_fraction_strategy_equity"]
     config = deepcopy(entry)
     config["optimize"]["n_cpus"] = 8
     config["optimize"]["pareto_max_size"] = 250
     config["optimize"]["write_all_results"] = False
     config["backtest"]["base_dir"] = "/new/backtests"
     # Input dataset selectors remain unchanged; they are validated separately.
-    config["backtest"]["visible_metrics"] = ["drawdown_max_fraction_strategy_equity"]
 
     assert optimize._resume_config_mismatches(entry, config) == []
 

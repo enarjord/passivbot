@@ -2030,8 +2030,8 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "Early-stop equity floor as a fraction of starting balance" in help_text
     assert "Backtest-only simulated market-order slippage" in help_text
     assert "not a live slippage cap" in help_text
-    assert "Terminal metric visibility config" in help_text
-    assert "[] shows all; a list adds named metrics" in help_text
+    assert "Terminal metric visibility config" not in help_text
+    assert "--backtest.visible_metrics" not in help_text
     assert "--bot.long.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
     assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text

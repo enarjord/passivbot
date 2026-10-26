@@ -2,7 +2,6 @@
 
 import pytest
 
-from analysis_visibility import resolve_visible_metric_names, validate_visible_metrics_config
 from config.ew import EW_METRICS
 from config.metric_definitions import METRIC_DEFINITIONS
 from config.metrics import (
@@ -54,15 +53,6 @@ def test_removed_development_names_are_not_runtime_aliases(old):
     specs, _ = normalize_scoring_entries([{"metric": old, "goal": "max"}])
     assert specs[0].metric == old
     assert resolve_metric_value({"adg_fraction_usd": .0125}, old) is None
-    config = get_template_config()
-    config["optimize"].update(scoring=[], limits=[])
-    config["backtest"]["visible_metrics"] = [old]
-    # Existing family prefixes match current names without an alias table.
-    if any(name.startswith(old + "_") for name in KNOWN_METRICS):
-        validate_visible_metrics_config(config)
-    else:
-        with pytest.raises(ValueError, match="unknown backtest.visible_metrics"):
-            validate_visible_metrics_config(config)
 
 
 def test_shared_usd_loss_amount_is_not_an_account_curve_selector():
@@ -232,52 +222,6 @@ def test_generic_math_selectors_keep_passthrough_without_owned_aliases():
     assert [(spec.metric, spec.goal) for spec in specs] == [("m0", "min"), ("metric_a", "max")]
     assert canonicalize_metric_name("metric_a_mean") == "metric_a_mean"
     assert split_metric_stat_suffix("metric_a_mean") == ("metric_a", "mean")
-
-
-def test_visibility_families_expand_only_current_producer_names():
-    config = get_template_config()
-    config["optimize"].update(scoring=[], limits=[])
-    config["backtest"]["visible_metrics"] = ["hsl"]
-    validate_visible_metrics_config(config)
-    keys = ["hsl_trigger_count", "hsl_red_time_fraction", "fills_count"]
-    assert resolve_visible_metric_names(config, keys) == keys[:2]
-
-
-@pytest.mark.parametrize("prefix,renamed", [
-    ("fills", {"analysis_duration_days", "entry_to_close_fill_count_ratio", "fills_entry_count"}),
-    (" fills ", {"analysis_duration_days", "entry_to_close_fill_count_ratio", "fills_entry_count"}),
-    ("drawdown", {"hsl_signal_ema_max_fraction", "drawdown_max_fraction_strategy_equity", "drawdown_max_fraction_usd"}),
-    ("position_held", {"position_held_mean_hours", "position_held_max_days"}),
-    ("equity_balance_diff", {"equity_balance_gap_negative_max_fraction_usd", "equity_balance_gap_positive_mean_fraction_btc"}),
-])
-def test_full_released_v8_migration_preserves_visibility_family_membership(prefix, renamed):
-    from copy import deepcopy
-    from config import prepare_config
-    from config.migrations.released_v8 import get_released_v8_defaults
-    from config.migrations.released_v8_metrics import released_v8_visibility_family
-    from tools.migrate_config_v9 import migrate
-
-    source = get_released_v8_defaults()
-    source["backtest"]["visible_metrics"] = [prefix]
-    source["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
-    before = deepcopy(source)
-    result = migrate(source, memory_span_minutes=123.5)
-    prepared = prepare_config(result.config, verbose=False)
-    selected = prepared["backtest"]["visible_metrics"]
-    expected = {released_v8_metric_name(name) for name in released_v8_visibility_family(prefix)}
-    assert set(selected) == expected
-    assert renamed <= expected
-    assert len(selected) == len(expected)
-    assert source == before
-    assert any(change["old"] == prefix and change["new"] == selected
-               and "visibility family" in change["reason"] for change in result.changes)
-
-
-def test_released_visibility_family_does_not_hide_retired_formula_choices():
-    source = {"backtest": {"visible_metrics": ["sharpe"]}}
-    with pytest.raises(ValueError, match="retired metric"):
-        replace_retired_metrics(source, replacements={}, acknowledge=False, changes=[])
-    assert source == {"backtest": {"visible_metrics": ["sharpe"]}}
 
 
 @pytest.mark.parametrize("metric,bare", [

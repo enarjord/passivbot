@@ -79,7 +79,6 @@ def test_setup_projection_ignores_paths_logging_and_output_settings():
     other["backtest"].update(
         base_dir="another",
         cache_dir={"binance": "elsewhere"},
-        visible_metrics=["nothing"],
         offline=True,
     )
     other["live"].update(

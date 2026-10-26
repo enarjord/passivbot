@@ -146,7 +146,6 @@ def effective_setup_config(config, *, optimize=False) -> dict:
         "hlcvs_data_dir",
         "ohlcv_source_dir",
         "offline",
-        "visible_metrics",
         "balance_sample_divider",
         "cm_debug_level",
         "cm_progress_log_interval_seconds",
