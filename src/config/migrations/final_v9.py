@@ -163,16 +163,27 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             return
         if not isinstance(node, dict):
             return
-        metric_map = path.split(".")[-1] in {"reducer", "limits"}
+        released_aggregate = path in {"backtest.aggregate", "backtest.suite.aggregate"}
+        metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
             if key == "metric":
                 node[key] = convert(node[key], current)
             elif metric_map and key != "default":
-                prefix = next((prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
-                                                     "lower_bound_", "upper_bound_")
-                               if key.startswith(prefix)), "")
+                prefix = "" if released_aggregate else next((
+                    prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
+                                          "lower_bound_", "upper_bound_")
+                    if key.startswith(prefix)), "")
                 metric = key.removeprefix(prefix)
+                if released_aggregate and not _is_retired_metric(metric):
+                    from .released_v8_metrics import released_v8_metric_name
+
+                    try:
+                        released_v8_metric_name(metric)
+                    except ValueError:
+                        # Released aggregate rules also accepted custom metrics.
+                        # Only this vocabulary probe permits their passthrough.
+                        continue
                 renamed = prefix + convert(metric, current)
                 if renamed != key:
                     value = node.pop(key)

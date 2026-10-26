@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve named reducer rules when converting released-v8 `backtest.aggregate` and legacy
+  suite aggregation maps. Rename supported metric selectors without changing reducer methods,
+  retain custom rules, and require the existing consent for retired metric formulas.
+
 - Make analysis metric units explicit and put curve, position side and exponential weighting
   modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
   strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without

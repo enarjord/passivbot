@@ -112,6 +112,94 @@ def test_released_alias_collisions_consolidate_equal_values_and_reject_conflicts
         replace_retired_metrics(conflicting, replacements={}, acknowledge=False, changes=[])
 
 
+def _released_aggregate_source(rules, suite):
+    return {"backtest": {"suite": {"aggregate": rules}}} if suite else {
+        "backtest": {"aggregate": rules}
+    }
+
+
+@pytest.mark.parametrize("suite", [False, True])
+def test_released_aggregate_rules_rename_known_metrics_and_preserve_custom_rules(suite):
+    rules = {"default": "mean", "adg_pnl": "max", "mdg": "min", "usd_adg": "median",
+             "adg_pnl_max": "std", "custom_metric": "max",
+             "penalize_if_greater_than_adg": "min"}
+    source = _released_aggregate_source(rules, suite)
+    changes = []
+    replace_retired_metrics(source, replacements={}, acknowledge=False, changes=changes)
+    assert rules == {"default": "mean", "daily_realized_pnl_mean_fraction": "max",
+                     "mdg_fraction": "min", "adg_fraction_usd": "median",
+                     "daily_realized_pnl_mean_fraction_max": "std", "custom_metric": "max",
+                     "penalize_if_greater_than_adg": "min"}
+    path = "backtest.suite.aggregate" if suite else "backtest.aggregate"
+    assert {row["path"] for row in changes} == {
+        f"{path}.{metric}" for metric in ("adg_pnl", "mdg", "usd_adg", "adg_pnl_max")
+    }
+    assert all("value and formula unchanged" in row["reason"] for row in changes)
+
+
+@pytest.mark.parametrize("suite", [False, True])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_released_aggregate_alias_collisions_keep_existing_authority(suite, conflict):
+    rules = {"n_days": "max", "fills_analysis_duration_days": "min" if conflict else "max"}
+    source = _released_aggregate_source(rules, suite)
+    if conflict:
+        with pytest.raises(ValueError, match="conflicts with selected metric"):
+            replace_retired_metrics(source, replacements={}, acknowledge=False, changes=[])
+    else:
+        replace_retired_metrics(source, replacements={}, acknowledge=False, changes=[])
+        assert rules == {"analysis_duration_days": "max"}
+
+
+@pytest.mark.parametrize("suite", [False, True])
+def test_released_aggregate_retired_formula_still_requires_explicit_consent(suite):
+    old, new = "adg_w_btc", "adg_fraction_btc_ew"
+    with pytest.raises(ValueError, match="no supported _ew replacement"):
+        replace_retired_metrics(_released_aggregate_source({"custom_metric_w": "min"}, suite),
+                                replacements={}, acknowledge=False, changes=[], best_effort=True)
+    with pytest.raises(ValueError, match="requires --metric-replacement"):
+        replace_retired_metrics(_released_aggregate_source({old: "min"}, suite),
+                                replacements={}, acknowledge=False, changes=[])
+    with pytest.raises(ValueError, match="acknowledge-metric-formula-change"):
+        replace_retired_metrics(_released_aggregate_source({old: "min"}, suite),
+                                replacements={old: new}, acknowledge=False, changes=[])
+    rules, changes = {old: "min"}, []
+    replace_retired_metrics(_released_aggregate_source(rules, suite),
+                            replacements={old: new}, acknowledge=True, changes=changes)
+    assert rules == {new: "min"}
+    assert any(row["old"] == old and row["new"] == new and
+               "acknowledged explicit" in row["reason"] for row in changes)
+    inferred, changes = {old: "max"}, []
+    source = _released_aggregate_source(inferred, suite)
+    replace_retired_metrics(source, replacements={}, acknowledge=False, changes=changes,
+                            best_effort=True)
+    assert inferred == {new: "max"}
+    assert source["backtest"]["ew_half_life_days"] == 180.0
+    assert any(row.get("best_effort") and row["old"] == old and
+               "not equivalent" in row["reason"] for row in changes)
+
+
+def test_aggregate_conversion_does_not_broaden_other_metric_or_metadata_boundaries():
+    source = {"metadata": {"aggregate": {"adg_pnl": "max"}}}
+    replace_retired_metrics(source, replacements={}, acknowledge=False, changes=[])
+    assert source == {"metadata": {"aggregate": {"adg_pnl": "max"}}}
+    with pytest.raises(ValueError, match="not a supported released-v8"):
+        replace_retired_metrics({"backtest": {"reducer": {"custom_metric": "max"}}},
+                                replacements={}, acknowledge=False, changes=[])
+
+
+@pytest.mark.parametrize("suite", [False, True])
+def test_current_v9_still_rejects_released_aggregate_config_shapes(suite):
+    from config import prepare_config
+
+    source = get_template_config()
+    if suite:
+        source["backtest"]["suite"] = {"aggregate": {"adg_pnl": "max"}}
+    else:
+        source["backtest"]["aggregate"] = {"adg_pnl": "max"}
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        prepare_config(source, verbose=False)
+
+
 def test_best_effort_retired_formula_choices_are_reported_as_new_formulas():
     source = {"optimize": {"scoring": ["adg_w_btc", "strategy_eq_underwater_pct_mean"]}}
     changes = []
