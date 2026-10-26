@@ -121,7 +121,7 @@ def _released_aggregate_source(rules, suite):
 @pytest.mark.parametrize("suite", [False, True])
 def test_released_aggregate_rules_rename_known_metrics_and_preserve_custom_rules(suite):
     rules = {"default": "mean", "adg_pnl": "max", "mdg": "min", "usd_adg": "median",
-             "adg_pnl_max": "std", "custom_metric": "max",
+             "adg_pnl_max": "std", "custom_metric": "max", "metric": "max",
              "penalize_if_greater_than_adg": "min"}
     source = _released_aggregate_source(rules, suite)
     changes = []
@@ -129,6 +129,7 @@ def test_released_aggregate_rules_rename_known_metrics_and_preserve_custom_rules
     assert rules == {"default": "mean", "daily_realized_pnl_mean_fraction": "max",
                      "mdg_fraction": "min", "adg_fraction_usd": "median",
                      "daily_realized_pnl_mean_fraction_max": "std", "custom_metric": "max",
+                     "metric": "max",
                      "penalize_if_greater_than_adg": "min"}
     path = "backtest.suite.aggregate" if suite else "backtest.aggregate"
     assert {row["path"] for row in changes} == {
@@ -182,6 +183,11 @@ def test_aggregate_conversion_does_not_broaden_other_metric_or_metadata_boundari
     source = {"metadata": {"aggregate": {"adg_pnl": "max"}}}
     replace_retired_metrics(source, replacements={}, acknowledge=False, changes=[])
     assert source == {"metadata": {"aggregate": {"adg_pnl": "max"}}}
+    descriptor = {"optimize": {"scoring": [{"metric": "adg_pnl", "goal": "max"}]}}
+    replace_retired_metrics(descriptor, replacements={}, acknowledge=False, changes=[])
+    assert descriptor["optimize"]["scoring"] == [{
+        "metric": "daily_realized_pnl_mean_fraction", "goal": "max"
+    }]
     with pytest.raises(ValueError, match="not a supported released-v8"):
         replace_retired_metrics({"backtest": {"reducer": {"custom_metric": "max"}}},
                                 replacements={}, acknowledge=False, changes=[])

@@ -167,7 +167,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
-            if key == "metric":
+            if key == "metric" and not released_aggregate:
                 node[key] = convert(node[key], current)
             elif metric_map and key != "default":
                 prefix = "" if released_aggregate else next((
