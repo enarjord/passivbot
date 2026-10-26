@@ -121,9 +121,15 @@ contract; Forager does not invent substitute observations.
 
 ## Diagnostics And Tuning
 
-The monitor's ranking total comes from the latest Rust scoring diagnostic, including all
-four components and tie ordering. Its source timestamp identifies the observation. Without
-a current scoring diagnostic, the monitor does not fetch RMS data or reconstruct a total.
+When unilateralness has a positive weight, the monitor uses a cached Rust scoring hint
+whose weights and span match the settings. That ranking includes all four components and
+Rust's tie ordering; `observed_at_ms` records when the hint was observed. If no matching
+hint is available, this branch omits the ranking.
+
+With unilateralness weight zero (the default), Python reconstructs the ranking from the
+volume, log range and EMA readiness components using cached candidate data. Treat that
+display as a diagnostic reconstruction; it does not establish Rust's selected symbol or
+tie ordering.
 
 Raw native fields `volume_ema`, `log_range_ema`, `ema_entry_price_gap_fraction` and
 `unilateralness_score` are distinct from their normalized score components.
