@@ -105,9 +105,9 @@ pub struct CoinMeta {
     /// Contract multiplier (lot size) used for sized calculations.
     pub c_mult: f64,
     /// Maker fee rate associated with this market (fractional, not percentage).
-    pub maker_fee: f64,
+    pub maker_fee_fraction: f64,
     /// Taker fee rate associated with this market (fractional, not percentage).
-    pub taker_fee: f64,
+    pub taker_fee_fraction: f64,
     /// First index (inclusive) in the HLCV tensor that contains valid data for this coin.
     pub first_valid_index: usize,
     /// Last index (inclusive) in the HLCV tensor that contains valid data for this coin.
@@ -293,8 +293,8 @@ pub struct ExchangeParams {
     pub min_qty: f64,
     pub min_cost: f64,
     pub c_mult: f64,
-    pub maker_fee: f64,
-    pub taker_fee: f64,
+    pub maker_fee_fraction: f64,
+    pub taker_fee_fraction: f64,
 }
 
 impl Default for ExchangeParams {
@@ -305,8 +305,8 @@ impl Default for ExchangeParams {
             min_qty: 0.00001,
             min_cost: 1.0,
             c_mult: 1.0,
-            maker_fee: 0.0002,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0002,
+            taker_fee_fraction: 0.00055,
         }
     }
 }
@@ -340,8 +340,8 @@ impl ExchangeParams {
         finite_non_negative(self.min_qty, "min_qty")?;
         finite_non_negative(self.min_cost, "min_cost")?;
         finite_positive(self.c_mult, "c_mult")?;
-        finite(self.maker_fee, "maker_fee")?;
-        finite(self.taker_fee, "taker_fee")?;
+        finite(self.maker_fee_fraction, "maker_fee_fraction")?;
+        finite(self.taker_fee_fraction, "taker_fee_fraction")?;
         Ok(())
     }
 }
@@ -365,8 +365,8 @@ pub struct BacktestParams {
     pub minimum_coin_age_days: [f64; 2],
     pub inception_timestamps_ms: Vec<Option<u64>>,
     pub starting_balance: f64,
-    pub maker_fee: f64,
-    pub taker_fee: f64,
+    pub maker_fee_fraction: f64,
+    pub taker_fee_fraction: f64,
     pub coins: Vec<String>,
     pub active_coin_indices: Option<Vec<usize>>,
     pub first_timestamp_ms: u64,

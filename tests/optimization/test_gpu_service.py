@@ -187,8 +187,8 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "min_qty": 0.001,
         "min_cost": 5.0,
         "c_mult": 1.0,
-        "maker_fee": 0.0004,
-        "taker_fee": 0.00055,
+        "maker_fee_fraction": 0.0004,
+        "taker_fee_fraction": 0.00055,
     }
     original = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
@@ -200,7 +200,7 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         exchange_params=[market],
         base_params={"long": {"offset_fraction": 0.01}},
     )
-    changed_fee = dict(market, maker_fee=0.0005)
+    changed_fee = dict(market, maker_fee_fraction=0.0005)
     changed = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
         exchange="bybit",
@@ -1115,8 +1115,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 "min_qty": 0.001,
                 "min_cost": 5.0,
                 "c_mult": 1.0,
-                "maker_fee": 0.0002,
-                "taker_fee": 0.0006,
+                "maker_fee_fraction": 0.0002,
+                "taker_fee_fraction": 0.0006,
             }
             for _ in range(2)
         ],

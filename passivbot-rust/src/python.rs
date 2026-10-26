@@ -413,6 +413,13 @@ fn get_u64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u64> {
 }
 
 fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<CoinMeta> {
+    for retired in ["maker_fee", "taker_fee"] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native coin metadata field '{retired}'; rebuild the current metadata"
+            )));
+        }
+    }
     let index = dict
         .get_item("index")?
         .map(|val| val.extract::<usize>())
@@ -474,8 +481,8 @@ fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<C
         min_qty: fval!("min_qty"),
         min_cost: fval!("min_cost"),
         c_mult: fval!("c_mult"),
-        maker_fee: fval!("maker_fee"),
-        taker_fee: fval!("taker_fee"),
+        maker_fee_fraction: fval!("maker_fee_fraction"),
+        taker_fee_fraction: fval!("taker_fee_fraction"),
         first_valid_index: usize_val!("first_valid_index"),
         last_valid_index: usize_val!("last_valid_index"),
         warmup_minutes: usize_val!("warmup_minutes"),
@@ -496,8 +503,8 @@ fn coin_meta_to_dict<'py>(py: Python<'py>, meta: &CoinMeta) -> PyResult<Bound<'p
     dict.set_item("min_qty", meta.min_qty)?;
     dict.set_item("min_cost", meta.min_cost)?;
     dict.set_item("c_mult", meta.c_mult)?;
-    dict.set_item("maker_fee", meta.maker_fee)?;
-    dict.set_item("taker_fee", meta.taker_fee)?;
+    dict.set_item("maker_fee_fraction", meta.maker_fee_fraction)?;
+    dict.set_item("taker_fee_fraction", meta.taker_fee_fraction)?;
     dict.set_item("first_valid_index", meta.first_valid_index)?;
     dict.set_item("last_valid_index", meta.last_valid_index)?;
     dict.set_item("warmup_minutes", meta.warmup_minutes)?;
@@ -2336,6 +2343,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         "market_order_slippage_pct",
         "limit_order_fill_buffer_pct",
         "max_realized_loss_pct",
+        "maker_fee",
+        "taker_fee",
     ] {
         if dict.get_item(retired)?.is_some() {
             return Err(PyValueError::new_err(format!(
@@ -2382,8 +2391,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 
     let params = BacktestParams {
         starting_balance: extract_value(dict, "starting_balance")?,
-        maker_fee: extract_value(dict, "maker_fee")?,
-        taker_fee: extract_value(dict, "taker_fee")?,
+        maker_fee_fraction: extract_value(dict, "maker_fee_fraction")?,
+        taker_fee_fraction: extract_value(dict, "taker_fee_fraction")?,
         coins: extract_value(dict, "coins")?,
         active_coin_indices: match dict.get_item("active_coin_indices")? {
             Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
@@ -2550,14 +2559,21 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 }
 
 fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
+    for retired in ["maker_fee", "taker_fee"] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native exchange field '{retired}'; rebuild the current exchange payload"
+            )));
+        }
+    }
     let params = ExchangeParams {
         qty_step: extract_value(dict, "qty_step")?,
         price_step: extract_value(dict, "price_step")?,
         min_qty: extract_value(dict, "min_qty")?,
         min_cost: extract_value(dict, "min_cost")?,
         c_mult: extract_value(dict, "c_mult")?,
-        maker_fee: extract_value(dict, "maker_fee")?,
-        taker_fee: extract_value(dict, "taker_fee")?,
+        maker_fee_fraction: extract_value(dict, "maker_fee_fraction")?,
+        taker_fee_fraction: extract_value(dict, "taker_fee_fraction")?,
     };
     params.validate_required().map_err(PyValueError::new_err)?;
     Ok(params)

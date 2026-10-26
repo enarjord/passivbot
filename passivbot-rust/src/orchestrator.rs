@@ -1679,16 +1679,16 @@ mod core {
                 )
             }
         };
-        let fee_rate = if market_execution {
-            exchange.taker_fee
+        let fee_fraction = if market_execution {
+            exchange.taker_fee_fraction
         } else {
-            exchange.maker_fee
+            exchange.maker_fee_fraction
         };
-        if !fee_rate.is_finite() {
+        if !fee_fraction.is_finite() {
             return None;
         }
-        let fee_abs = qty_to_cost(close_qty, execution_price, exchange.c_mult) * fee_rate.abs();
-        let fee_paid = if fee_rate < 0.0 { fee_abs } else { -fee_abs };
+        let fee_abs = qty_to_cost(close_qty, execution_price, exchange.c_mult) * fee_fraction.abs();
+        let fee_paid = if fee_fraction < 0.0 { fee_abs } else { -fee_abs };
         Some(gross_pnl + fee_paid)
     }
 
@@ -8355,8 +8355,8 @@ mod core {
                 bid: 100.0,
                 ask: 100.0,
             };
-            sym.exchange.maker_fee = 0.0002;
-            sym.exchange.taker_fee = 0.00055;
+            sym.exchange.maker_fee_fraction = 0.0002;
+            sym.exchange.taker_fee_fraction = 0.00055;
             sym.long.bot_params.wallet_exposure_limit_ratio = 0.5;
             sym.long.bot_params.risk_wel_enforcer_threshold_ratio = 1.0;
             sym.long.bot_params.total_wallet_exposure_limit_ratio = 1.0;
@@ -8421,7 +8421,7 @@ mod core {
                 bid: 94.0,
                 ask: 94.0,
             };
-            sym0.exchange.maker_fee = 0.0;
+            sym0.exchange.maker_fee_fraction = 0.0;
             sym0.long.position = Position {
                 size: 10.0,
                 price: 100.0,
@@ -8429,7 +8429,7 @@ mod core {
 
             let mut sym1 = make_basic_symbol(1);
             sym1.order_book = sym0.order_book.clone();
-            sym1.exchange.maker_fee = 0.0;
+            sym1.exchange.maker_fee_fraction = 0.0;
             sym1.long.position = sym0.long.position;
 
             let input = OrchestratorInput {
@@ -8515,7 +8515,7 @@ mod core {
                 bid: 94.0,
                 ask: 94.0,
             };
-            sym0.exchange.maker_fee = 0.0;
+            sym0.exchange.maker_fee_fraction = 0.0;
             sym0.long.position = Position {
                 size: 10.0,
                 price: 100.0,
@@ -8523,7 +8523,7 @@ mod core {
 
             let mut sym1 = make_basic_symbol(1);
             sym1.order_book = sym0.order_book.clone();
-            sym1.exchange.maker_fee = 0.0;
+            sym1.exchange.maker_fee_fraction = 0.0;
             sym1.long.position = sym0.long.position;
 
             let input = OrchestratorInput {
@@ -8614,7 +8614,7 @@ mod core {
                 bid: 90.0,
                 ask: 90.0,
             };
-            sym.exchange.maker_fee = 0.0;
+            sym.exchange.maker_fee_fraction = 0.0;
             sym.long.position = Position {
                 size: 10.0,
                 price: 100.0,
@@ -8686,7 +8686,7 @@ mod core {
             sym.exchange.qty_step = 1.0;
             sym.exchange.min_qty = 10.0;
             sym.exchange.min_cost = 0.0;
-            sym.exchange.maker_fee = 0.0;
+            sym.exchange.maker_fee_fraction = 0.0;
             sym.long.position = Position {
                 size: 11.0,
                 price: 100.0,
@@ -8748,7 +8748,7 @@ mod core {
                 sym.exchange.qty_step = 0.5;
                 sym.exchange.min_qty = 9.0;
                 sym.exchange.min_cost = 0.0;
-                sym.exchange.maker_fee = 0.0;
+                sym.exchange.maker_fee_fraction = 0.0;
                 sym.long.position = Position {
                     size: 10.5,
                     price: 100.0,
@@ -8815,7 +8815,7 @@ mod core {
                 bid: 90.0,
                 ask: 90.0,
             };
-            sym0.exchange.maker_fee = 0.0;
+            sym0.exchange.maker_fee_fraction = 0.0;
             sym0.long.position = Position {
                 size: 4.0,
                 price: 100.0,
@@ -8823,7 +8823,7 @@ mod core {
 
             let mut sym1 = make_basic_symbol(1);
             sym1.order_book = sym0.order_book.clone();
-            sym1.exchange.maker_fee = 0.0;
+            sym1.exchange.maker_fee_fraction = 0.0;
             sym1.long.position = Position {
                 size: 6.0,
                 price: 100.0,
@@ -8906,8 +8906,8 @@ mod core {
                 min_qty: 0.0,
                 min_cost: 0.0,
                 c_mult: 1.0,
-                maker_fee: 0.0,
-                taker_fee: 0.0,
+                maker_fee_fraction: 0.0,
+                taker_fee_fraction: 0.0,
                 ..Default::default()
             };
             exchange.price_step = 0.1;

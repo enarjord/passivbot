@@ -37,7 +37,7 @@ def test_martingale_close_diagnostics_remain_available(
         "pside": side,
         "exchange": {
             "qty_step": 0.01, "price_step": 0.01, "min_qty": 0.01,
-            "min_cost": 1.0, "c_mult": 1.0, "maker_fee": 0.0, "taker_fee": 0.0,
+            "min_cost": 1.0, "c_mult": 1.0, "maker_fee_fraction": 0.0, "taker_fee_fraction": 0.0,
         },
         "state": {
             "balance": 1000.0, "order_book": {"bid": 110.0, "ask": 110.1},

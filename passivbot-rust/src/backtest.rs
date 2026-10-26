@@ -515,7 +515,7 @@ struct OrderFillExecution {
     /// Forced delisting is a bar-close event; ordinary fills precede that close.
     at_bar_close: bool,
     price: f64,
-    fee_rate: f64,
+    fee_fraction: f64,
     liquidity: &'static str,
 }
 
@@ -1656,12 +1656,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         backtest_params: &BacktestParams,
     ) -> Self {
         assert!(
-            backtest_params.maker_fee.is_finite(),
-            "backtest maker_fee must be finite"
+            backtest_params.maker_fee_fraction.is_finite(),
+            "backtest maker_fee_fraction must be finite"
         );
         assert!(
-            backtest_params.taker_fee.is_finite(),
-            "backtest taker_fee must be finite"
+            backtest_params.taker_fee_fraction.is_finite(),
+            "backtest taker_fee_fraction must be finite"
         );
         crate::limit_fills::validate_buffer(backtest_params.limit_order_fill_buffer_fraction)
             .expect("invalid backtest fill buffer");
@@ -3007,7 +3007,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             adjusted_close_qty,
             exec.price,
             self.exchange_params_list[idx].c_mult,
-        ) * exec.fee_rate;
+        ) * exec.fee_fraction;
         let pnl = calc_pnl_long(
             current_position.price,
             exec.price,
@@ -3106,7 +3106,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             adjusted_close_qty,
             exec.price,
             self.exchange_params_list[idx].c_mult,
-        ) * exec.fee_rate;
+        ) * exec.fee_fraction;
         let pnl = calc_pnl_short(
             current_position.price,
             exec.price,
@@ -3189,7 +3189,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.hsl_before_fill(k, idx, exec)?;
         // long entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
-            * exec.fee_rate;
+            * exec.fee_fraction;
         self.pnl_cumsum_running_net += fee_paid;
         self.pnl_cumsum_running_net_pside[LONG] += fee_paid;
         let balance_before = self.snapshot_balance();
@@ -3264,7 +3264,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.hsl_before_fill(k, idx, exec)?;
         // short entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
-            * exec.fee_rate;
+            * exec.fee_fraction;
         self.pnl_cumsum_running_net += fee_paid;
         self.pnl_cumsum_running_net_pside[SHORT] += fee_paid;
         let balance_before = self.snapshot_balance();
@@ -3431,7 +3431,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     let exec = OrderFillExecution {
                         at_bar_close: true,
                         price,
-                        fee_rate: self.exchange_params_list[idx].taker_fee,
+                        fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                         liquidity: "taker",
                     };
                     self.did_fill_long[idx] = true;
@@ -3452,7 +3452,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     let exec = OrderFillExecution {
                         at_bar_close: true,
                         price,
-                        fee_rate: self.exchange_params_list[idx].taker_fee,
+                        fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                         liquidity: "taker",
                     };
                     self.did_fill_short[idx] = true;
@@ -3571,7 +3571,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 .map(|price| OrderFillExecution {
                     at_bar_close: false,
                     price,
-                    fee_rate: self.exchange_params_list[idx].taker_fee,
+                    fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                     liquidity: "taker",
                 });
         }
@@ -3579,7 +3579,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             return Some(OrderFillExecution {
                 at_bar_close: false,
                 price: order.order.price,
-                fee_rate: self.exchange_params_list[idx].maker_fee,
+                fee_fraction: self.exchange_params_list[idx].maker_fee_fraction,
                 liquidity: "maker",
             });
         }
@@ -4907,8 +4907,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5448,8 +5448,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5529,8 +5529,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5598,8 +5598,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5704,8 +5704,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0002,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0002,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5791,8 +5791,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0002,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0002,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5879,8 +5879,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.001,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.001,
             coins: vec!["DELIST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -5954,7 +5954,7 @@ mod tests {
     }
 
     #[test]
-    fn non_panic_market_entry_uses_slippage_exchange_taker_fee_and_liquidity_tag() {
+    fn non_panic_market_entry_uses_slippage_exchange_taker_fee_fraction_and_liquidity_tag() {
         let hlcvs = Array3::from_shape_vec(
             (2, 1, 4),
             vec![
@@ -5976,8 +5976,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0002,
-            taker_fee: 0.00099,
+            maker_fee_fraction: 0.0002,
+            taker_fee_fraction: 0.00099,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6014,7 +6014,7 @@ mod tests {
             btc_usd_prices.view(),
             vec![bp_pair],
             vec![ExchangeParams {
-                taker_fee: 0.00055,
+                taker_fee_fraction: 0.00055,
                 ..Default::default()
             }],
             &backtest_params,
@@ -6039,7 +6039,7 @@ mod tests {
     }
 
     #[test]
-    fn limit_entry_uses_exchange_maker_fee_and_liquidity_tag() {
+    fn limit_entry_uses_exchange_maker_fee_fraction_and_liquidity_tag() {
         let hlcvs = Array3::from_shape_vec(
             (2, 1, 4),
             vec![
@@ -6061,8 +6061,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.00099,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.00099,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6099,7 +6099,7 @@ mod tests {
             btc_usd_prices.view(),
             vec![bp_pair],
             vec![ExchangeParams {
-                maker_fee: 0.0002,
+                maker_fee_fraction: 0.0002,
                 ..Default::default()
             }],
             &backtest_params,
@@ -6158,8 +6158,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.00099,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.00099,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6196,7 +6196,7 @@ mod tests {
             btc_usd_prices.view(),
             vec![bp_pair],
             vec![ExchangeParams {
-                maker_fee: 0.0002,
+                maker_fee_fraction: 0.0002,
                 ..Default::default()
             }],
             &backtest_params,
@@ -6221,7 +6221,7 @@ mod tests {
             assert!(bt.order_fill_execution(1, 0, &order).is_none());
             let fill = bt.order_fill_execution(2, 0, &order).unwrap();
             assert_eq!(fill.price, 100.0);
-            assert_eq!(fill.fee_rate, 0.0002);
+            assert_eq!(fill.fee_fraction, 0.0002);
             assert_eq!(fill.liquidity, "maker");
             if !matches!(
                 order_type,
@@ -6449,8 +6449,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
-            maker_fee: 0.0,
-            taker_fee: 0.0,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.0,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6606,8 +6606,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6671,8 +6671,8 @@ mod tests {
                 minimum_coin_age_days: [0.0; 2],
                 inception_timestamps_ms: vec![],
                 starting_balance: 1000.0,
-                maker_fee: 0.0,
-                taker_fee: 0.00055,
+                maker_fee_fraction: 0.0,
+                taker_fee_fraction: 0.00055,
                 coins: vec!["TEST".to_string()],
                 active_coin_indices: None,
                 first_timestamp_ms: 0,
@@ -6744,8 +6744,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6821,8 +6821,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
-            maker_fee: 0.0,
-            taker_fee: 0.0,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.0,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6859,8 +6859,8 @@ mod tests {
             btc_usd_prices.view(),
             vec![bp_pair],
             vec![ExchangeParams {
-                maker_fee: 0.0,
-                taker_fee: 0.0,
+                maker_fee_fraction: 0.0,
+                taker_fee_fraction: 0.0,
                 ..Default::default()
             }],
             &backtest_params,
@@ -6904,8 +6904,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -6982,8 +6982,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7068,8 +7068,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7170,8 +7170,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7287,8 +7287,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec![
                 "A".to_string(),
                 "B".to_string(),
@@ -7448,8 +7448,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.00099,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.00099,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7488,7 +7488,7 @@ mod tests {
             btc_usd_prices.view(),
             vec![bp_pair],
             vec![ExchangeParams {
-                maker_fee: 0.0002,
+                maker_fee_fraction: 0.0002,
                 ..Default::default()
             }],
             &backtest_params,
@@ -7557,8 +7557,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["A".to_string(), "B".to_string(), "C".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7674,8 +7674,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec![
                 "A".to_string(),
                 "B".to_string(),
@@ -7759,8 +7759,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["A".to_string(), "B".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,
@@ -7842,8 +7842,8 @@ mod tests {
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
+            maker_fee_fraction: 0.0,
+            taker_fee_fraction: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
             first_timestamp_ms: 0,

@@ -106,8 +106,8 @@ fn grid(
         min_qty: 1e-12,
         min_cost: 0.0,
         c_mult: 1.0,
-        maker_fee: 0.0,
-        taker_fee: 0.0,
+        maker_fee_fraction: 0.0,
+        taker_fee_fraction: 0.0,
     };
     let mut position = Position {
         size: 0.0,

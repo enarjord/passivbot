@@ -188,8 +188,8 @@ def _hype_trailing_martingale_close_inputs():
             "min_qty": 0.1,
             "min_cost": 1.0,
             "c_mult": 1.0,
-            "maker_fee": 0.0002,
-            "taker_fee": 0.00055,
+            "maker_fee_fraction": 0.0002,
+            "taker_fee_fraction": 0.00055,
         },
         "state": {
             "balance": 99.88140021,

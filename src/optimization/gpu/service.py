@@ -696,8 +696,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "min_qty",
         "min_cost",
         "c_mult",
-        "maker_fee",
-        "taker_fee",
+        "maker_fee_fraction",
+        "taker_fee_fraction",
     )
     contract = {
         "version": 10,
@@ -1823,8 +1823,8 @@ class SharedAccountReplay:
                 min_qty=float(item["min_qty"]),
                 min_cost=float(item["min_cost"]),
                 c_mult=float(item["c_mult"]),
-                maker_fee=float(item["maker_fee"]),
-                taker_fee=float(item["taker_fee"]),
+                maker_fee_fraction=float(item["maker_fee_fraction"]),
+                taker_fee_fraction=float(item["taker_fee_fraction"]),
             )
             for item in payload.exchange_params
         ]

@@ -2167,8 +2167,8 @@ inline bool gate_ema_multicoin_close(
     int market_execution_tick,
     float price_step,
     float c_mult,
-    float maker_fee,
-    float taker_fee,
+    float maker_fee_fraction,
+    float taker_fee_fraction,
     float market_order_slippage_fraction,
     bool gate_enabled,
     thread float& remaining_loss_budget
@@ -2177,11 +2177,11 @@ inline bool gate_ema_multicoin_close(
     float execution_price = market
         ? ordinary_market_fill_price(market_execution_tick, price_step)
         : float(tick) * price_step;
-    float fee_rate = market ? taker_fee : maker_fee;
+    float fee_fraction = market ? taker_fee_fraction : maker_fee_fraction;
     float gross_pnl = qty * c_mult * (short_side
         ? pprice - execution_price : execution_price - pprice);
     float net_pnl = gross_pnl
-        - qty * execution_price * c_mult * fee_rate;
+        - qty * execution_price * c_mult * fee_fraction;
     if (!isfinite(net_pnl) || !realized_loss_gate_allows(
             net_pnl, remaining_loss_budget, gate_enabled)) {
         return false;
@@ -2283,8 +2283,8 @@ inline void gate_ema_multicoin_side_ordinary_closes(
         );
         float price_step = coin_settings[coin_offset + 1];
         float c_mult = coin_settings[coin_offset + 4];
-        float maker_fee = coin_settings[coin_offset + 5];
-        float taker_fee = coin_settings[coin_offset + 11];
+        float maker_fee_fraction = coin_settings[coin_offset + 5];
+        float taker_fee_fraction = coin_settings[coin_offset + 11];
         bool has_reducer = side.close_is_protective_reducer[c];
         if (has_reducer) {
             if (side.secondary_close_qty[c] > 0.0f
@@ -2293,7 +2293,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
                     side.secondary_close_tick[c],
                     side.secondary_close_market[c], side.pprice[c],
                     short_side, clamped_market_execution_tick(market_execution_ticks, coin_settings, k, c, coin_count, short_side), price_step, c_mult,
-                    maker_fee, taker_fee, market_order_slippage_fraction,
+                    maker_fee_fraction, taker_fee_fraction, market_order_slippage_fraction,
                     gate_enabled, remaining_loss_budget
                 )) {
                 side.secondary_close_qty[c] = 0.0f;
@@ -2303,7 +2303,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
             && !gate_ema_multicoin_close(
                 side.close_qty[c], side.close_tick[c], side.close_market[c],
                 side.pprice[c], short_side, clamped_market_execution_tick(market_execution_ticks, coin_settings, k, c, coin_count, short_side), price_step,
-                c_mult, maker_fee, taker_fee, market_order_slippage_fraction,
+                c_mult, maker_fee_fraction, taker_fee_fraction, market_order_slippage_fraction,
                 gate_enabled, remaining_loss_budget
             )) {
             side.close_qty[c] = 0.0f;
@@ -2617,8 +2617,8 @@ inline bool process_ema_multicoin_side_fills(
         const float qty_step = coin_settings[coin_offset + 0];
         const float price_step = coin_settings[coin_offset + 1];
         const float c_mult = coin_settings[coin_offset + 4];
-        const float maker_fee = coin_settings[coin_offset + 5];
-        const float taker_fee = coin_settings[coin_offset + 11];
+        const float maker_fee_fraction = coin_settings[coin_offset + 5];
+        const float taker_fee_fraction = coin_settings[coin_offset + 11];
 
 #if PASSIVBOT_HSL_DISABLED
         bool primary_market_panic = false;
@@ -2680,7 +2680,7 @@ inline bool process_ema_multicoin_side_fills(
                 : fill_price - pprice[c]);
             float net_pnl = pnl
                 - adjusted * fill_price * c_mult
-                    * (market_execution ? taker_fee : maker_fee);
+                    * (market_execution ? taker_fee_fraction : maker_fee_fraction);
 #if PASSIVBOT_HSL_DISABLED
             bool is_hsl_panic = false;
 #else
@@ -2691,7 +2691,7 @@ inline bool process_ema_multicoin_side_fills(
                 side, account, fills, coin_fill_counts,
                 candidate_index, coin_count, c, k, pnl, net_pnl,
                 adjusted, fill_price, adjusted * fill_price * c_mult
-                    * (market_execution ? taker_fee : maker_fee),
+                    * (market_execution ? taker_fee_fraction : maker_fee_fraction),
                 fmax(round_step(psize[c] - adjusted, qty_step), 0.0f),
                 pprice[c], close, c_mult, short_side,
                 is_hsl_panic, collect_coin_fill_counts,
@@ -2752,7 +2752,7 @@ inline bool process_ema_multicoin_side_fills(
                 : float(entry_tick[c]) * price_step;
             float adjusted = round_step(entry_qty[c], qty_step);
             float fee = adjusted * fill_price * c_mult
-                * (entry_market[c] ? taker_fee : maker_fee);
+                * (entry_market[c] ? taker_fee_fraction : maker_fee_fraction);
 #if !PASSIVBOT_HSL_DISABLED
             hsl_before_fill(side.coin_hsl[c], account.balance, fill_price, k);
 #endif
@@ -2871,7 +2871,7 @@ inline bool force_close_ema_multicoin_delisted_position(
     if (!finite_positive(close)) return false;
     const float price_step = coin_settings[coin_offset + 1];
     const float c_mult = coin_settings[coin_offset + 4];
-    const float taker_fee = coin_settings[coin_offset + 11];
+    const float taker_fee_fraction = coin_settings[coin_offset + 11];
     const float close_price = ordinary_market_fill_price(
                     market_execution_tick_at(market_execution_ticks, k, coin, coin_count, short_side), price_step
                 );
@@ -2883,13 +2883,13 @@ inline bool force_close_ema_multicoin_delisted_position(
             : close_price - position_price
     );
     const float net_pnl = pnl
-        - close_qty * close_price * c_mult * taker_fee;
+        - close_qty * close_price * c_mult * taker_fee_fraction;
     const bool coin_hsl_mode =
         side.hsl.signal_mode == HSL_SIGNAL_COIN;
     record_ema_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee_fraction,
         0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position, true

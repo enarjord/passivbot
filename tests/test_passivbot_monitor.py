@@ -7529,8 +7529,8 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
                 "min_qty": 0.1,
                 "min_cost": 1.0,
                 "c_mult": 1.0,
-                "maker_fee": 0.0002,
-                "taker_fee": 0.00055,
+                "maker_fee_fraction": 0.0002,
+                "taker_fee_fraction": 0.00055,
             }
 
         def _bot_params_to_rust_dict(self, pside, requested_symbol):
