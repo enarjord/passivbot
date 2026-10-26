@@ -36,7 +36,7 @@ async def _main() -> int:
         help="resting side; buy posts below market, sell posts above market",
     )
     parser.add_argument(
-        "--distance-pct",
+        "--distance-fraction",
         type=float,
         default=0.25,
         help="fractional price distance from mid so order stays resting (default 0.25 = 25%%)",
@@ -106,11 +106,11 @@ async def _main() -> int:
         target_notional = max(float(args.notional_usdc), min_cost * 1.02)
 
         if args.side == "buy":
-            raw_price = last_price * (1.0 - abs(float(args.distance_pct)))
+            raw_price = last_price * (1.0 - abs(float(args.distance_fraction)))
             price = round_to_step(raw_price, price_step, mode="down")
             amount = round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
         else:
-            raw_price = last_price * (1.0 + abs(float(args.distance_pct)))
+            raw_price = last_price * (1.0 + abs(float(args.distance_fraction)))
             price = round_to_step(raw_price, price_step, mode="up")
             amount = round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
 
