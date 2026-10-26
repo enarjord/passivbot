@@ -950,9 +950,9 @@ def _validate_hlcvs_valid_windows_from_mss(
 @dataclass
 class BacktestExecutionSettings:
     market_orders_allowed: bool
-    market_order_near_touch_threshold: float
-    market_order_slippage_pct: float
-    limit_order_fill_buffer_pct: float
+    market_order_near_touch_fraction: float
+    market_order_slippage_fraction: float
+    limit_order_fill_buffer_fraction: float
     unstuck_memory_ema_span_minutes: float
     loss_gate_memory_ema_span_minutes: float
 
@@ -1345,7 +1345,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             float(equities_array[-1, 1]) if equities_array.size else float("nan")
         )
         logging.debug(
-            "Backtest liquidated early | final_equity_usd=%.6f | liquidation_threshold=%.6f",
+            "Backtest liquidated early | final_equity_usd=%.6f | equity_floor_fraction=%.6f",
             final_equity_usd,
             float(
                 get_optional_config_value(
@@ -2629,27 +2629,27 @@ def get_backtest_execution_settings(
 ) -> BacktestExecutionSettings:
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
-    from config.validate import validate_limit_order_fill_buffer_pct
+    from config.validate import validate_limit_order_fill_buffer_fraction
 
-    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+    limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
         require_config_value(config, "backtest.limit_order_fill_buffer_fraction")
     )
-    market_order_slippage_pct = float(
+    market_order_slippage_fraction = float(
         get_optional_config_value(config, "backtest.market_order_slippage_fraction", 0.0005)
         or 0.0
     )
-    if market_order_slippage_pct < 0.0:
+    if market_order_slippage_fraction < 0.0:
         raise ValueError("backtest.market_order_slippage_fraction must be >= 0.0")
     market_orders_allowed_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
         field_name='bot.portfolio.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
-    market_order_near_touch_threshold = float(
-        market_order_near_touch_threshold_raw or 0.0
+    market_order_near_touch_fraction_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
+    market_order_near_touch_fraction = float(
+        market_order_near_touch_fraction_raw or 0.0
     )
-    if market_order_near_touch_threshold < 0.0:
+    if market_order_near_touch_fraction < 0.0:
         raise ValueError("bot.portfolio.execution.market_order_near_touch_fraction must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
         require_config_value(config, "bot.portfolio.unstuck.memory_ema_span_minutes"),
@@ -2661,9 +2661,9 @@ def get_backtest_execution_settings(
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=market_order_near_touch_threshold,
-        market_order_slippage_pct=market_order_slippage_pct,
-        limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
+        market_order_near_touch_fraction=market_order_near_touch_fraction,
+        market_order_slippage_fraction=market_order_slippage_fraction,
+        limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
         unstuck_memory_ema_span_minutes=unstuck_memory_span,
         loss_gate_memory_ema_span_minutes=loss_gate_memory_span,
     )
@@ -2681,15 +2681,15 @@ def log_backtest_execution_settings(
     )
     logging.info(
         "[backtest]   market_order_near_touch_fraction = %s (bot.portfolio.execution)",
-        execution_settings.market_order_near_touch_threshold,
+        execution_settings.market_order_near_touch_fraction,
     )
     logging.info(
         "[backtest]   market_order_slippage_fraction = %s (backtest)",
-        execution_settings.market_order_slippage_pct,
+        execution_settings.market_order_slippage_fraction,
     )
     logging.info(
         "[backtest]   limit_order_fill_buffer_fraction = %s (backtest)",
-        execution_settings.limit_order_fill_buffer_pct,
+        execution_settings.limit_order_fill_buffer_fraction,
     )
     logging.info(
         "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.portfolio.unstuck)",
@@ -2908,11 +2908,11 @@ def prep_backtest_args(
             raise ValueError("cached HSL policies differ from the effective config")
     if backtest_params is None:
         hard_stop_cfg_long = _resolve_backtest_hsl(config, hsl_coin_policies)
-        liquidation_threshold = float(
+        equity_floor_fraction = float(
             get_optional_config_value(config, "backtest.equity_floor_fraction", 0.05)
             or 0.0
         )
-        if not (0.0 <= liquidation_threshold < 1.0):
+        if not (0.0 <= equity_floor_fraction < 1.0):
             raise ValueError(
                 "backtest.equity_floor_fraction must satisfy 0.0 <= x < 1.0"
             )
@@ -2960,12 +2960,12 @@ def prep_backtest_args(
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
-            "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
-            "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
+            "market_order_slippage_fraction": execution_settings.market_order_slippage_fraction,
+            "limit_order_fill_buffer_fraction": execution_settings.limit_order_fill_buffer_fraction,
             "market_orders_allowed": execution_settings.market_orders_allowed,
-            "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
+            "market_order_near_touch_fraction": execution_settings.market_order_near_touch_fraction,
             "forager_score_hysteresis": hysteresis,
-            "liquidation_threshold": liquidation_threshold,
+            "equity_floor_fraction": equity_floor_fraction,
         }
     if backtest_params["equity_hard_stop_loss"].get("engine") == "hsl":
         # One authority for HSL policies: the explicit scope config above.

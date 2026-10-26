@@ -22,7 +22,7 @@ from optimization.gpu.parameters import (
     prepare_candidate_parameters,
 )
 from optimization.gpu.coin_parameters import build_coin_override_parameters
-from config.validate import validate_limit_order_fill_buffer_pct
+from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
@@ -40,7 +40,7 @@ from optimization.gpu.metric_registry import (
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
     FORAGER_HYSTERESIS_ABI,
-    validate_market_order_slippage_pct,
+    validate_market_order_slippage_fraction,
     adaptive_params,
     ADAPTIVE_OVERRIDE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
@@ -674,8 +674,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "last_valid_indices",
         "trade_start_indices",
         "global_warmup_bars",
-        "liquidation_threshold",
-        "limit_order_fill_buffer_pct",
+        "equity_floor_fraction",
+        "limit_order_fill_buffer_fraction",
         "filter_by_min_effective_cost",
         "side_activation",
         "minimum_coin_age_days",
@@ -685,9 +685,9 @@ def _gpu_proxy_execution_checkpoint_contract(
         "loss_gate_max_drawdown_fraction",
         "unstuck_memory_ema_span_minutes",
         "loss_gate_memory_ema_span_minutes",
-        "market_order_slippage_pct",
+        "market_order_slippage_fraction",
         "market_orders_allowed",
-        "market_order_near_touch_threshold",
+        "market_order_near_touch_fraction",
         "forager_score_hysteresis",
     )
     market_keys = (
@@ -1430,14 +1430,14 @@ def _prepared_multicoin_data(
     cache=None,
     stream_tick_inputs=False,
     compact_hourly_ranges=False,
-    limit_order_fill_buffer_pct=0.0,
-    market_order_slippage_pct=0.0,
+    limit_order_fill_buffer_fraction=0.0,
+    market_order_slippage_fraction=0.0,
 ):
     """Share immutable suite tensors only for identical validated packing inputs."""
-    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-        limit_order_fill_buffer_pct
+    limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+        limit_order_fill_buffer_fraction
     )
-    market_order_slippage_pct = validate_market_order_slippage_pct(market_order_slippage_pct)
+    market_order_slippage_fraction = validate_market_order_slippage_fraction(market_order_slippage_fraction)
     candles = checkpoint_contract["hlcvs"]
     timeline = checkpoint_contract["timestamps"]
     key = (
@@ -1451,9 +1451,9 @@ def _prepared_multicoin_data(
         timeline["sha256"],
         tuple(runs),
         tuple(markets),
-        limit_order_fill_buffer_pct,
+        limit_order_fill_buffer_fraction,
         MARKET_EXECUTION_TICKS_ABI,
-        market_order_slippage_pct,
+        market_order_slippage_fraction,
         bool(stream_tick_inputs),
         bool(compact_hourly_ranges),
     )
@@ -1475,8 +1475,8 @@ def _prepared_multicoin_data(
             kwargs["compact_hourly_ranges"] = bool(compact_hourly_ranges)
         return build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct, **kwargs,
-            market_order_slippage_pct=market_order_slippage_pct,
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction, **kwargs,
+            market_order_slippage_fraction=market_order_slippage_fraction,
         )
     data = (
         residency.prepare(key, build)
@@ -1663,8 +1663,8 @@ class SharedAccountReplay:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
-        limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-            backtest_params.get("limit_order_fill_buffer_pct", 0.0)
+        limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
+            backtest_params.get("limit_order_fill_buffer_fraction", 0.0)
         )
         from optimization.gpu.hsl import project_bot
 
@@ -1849,8 +1849,8 @@ class SharedAccountReplay:
                 ),
                 first_ts_ms=int(backtest_params["first_timestamp_ms"]),
                 interval_ms=interval_ms,
-                liquidation_threshold=float(
-                    backtest_params.get("liquidation_threshold", 0.05)
+                equity_floor_fraction=float(
+                    backtest_params.get("equity_floor_fraction", 0.05)
                 ),
                 first_valid_idx=int(backtest_params["first_valid_indices"][coin]),
                 last_valid_idx=int(backtest_params["last_valid_indices"][coin]),
@@ -1909,8 +1909,8 @@ class SharedAccountReplay:
             cache=prepared_data_cache,
             stream_tick_inputs=stream_tick_inputs,
             compact_hourly_ranges=stream_tick_inputs and runs[0].interval_ms == 60_000,
-            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
-            market_order_slippage_pct=backtest_params.get("market_order_slippage_pct", 0.0),
+            limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
+            market_order_slippage_fraction=backtest_params.get("market_order_slippage_fraction", 0.0),
         )
         if stream_tick_inputs:
             discard_readonly_file_pages(values)
@@ -1958,14 +1958,14 @@ class SharedAccountReplay:
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
             ),
-            "market_order_slippage_pct": float(
-                backtest_params.get("market_order_slippage_pct", 0.0)
+            "market_order_slippage_fraction": float(
+                backtest_params.get("market_order_slippage_fraction", 0.0)
             ),
             "market_orders_allowed": bool(
                 backtest_params.get("market_orders_allowed", False)
             ),
-            "market_order_near_touch_threshold": float(
-                backtest_params.get("market_order_near_touch_threshold", 0.001)
+            "market_order_near_touch_fraction": float(
+                backtest_params.get("market_order_near_touch_fraction", 0.001)
             ),
             "hsl_ema_tail_enabled": bool(self.needed_metrics & _HSL_EMA_TAIL_METRICS),
             "hsl_raw_drawdown_enabled": bool(

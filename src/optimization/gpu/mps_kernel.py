@@ -42,7 +42,7 @@ from optimization.gpu.runtime import (
 
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
-    validate_market_order_slippage_pct,
+    validate_market_order_slippage_fraction,
     ADAPTIVE_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
@@ -1481,14 +1481,14 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
 
 
 
-def _validate_market_execution_data(data, market_order_slippage_pct):
+def _validate_market_execution_data(data, market_order_slippage_fraction):
     """Reject stale preparation before any runner allocation or dispatch."""
-    slippage = validate_market_order_slippage_pct(market_order_slippage_pct)
-    required = {"market_execution_ticks", "market_execution_ticks_abi", "market_order_slippage_pct"}
+    slippage = validate_market_order_slippage_fraction(market_order_slippage_fraction)
+    required = {"market_execution_ticks", "market_execution_ticks_abi", "market_order_slippage_fraction"}
     if not required <= data.keys():
         raise ValueError("Prepared GPU data lacks native market execution ticks")
     if (data["market_execution_ticks_abi"] != MARKET_EXECUTION_TICKS_ABI
-            or data["market_order_slippage_pct"] != slippage):
+            or data["market_order_slippage_fraction"] != slippage):
         raise ValueError("Prepared GPU market execution ABI/slippage disagrees with runner")
     ticks = data["market_execution_ticks"]
     if (not isinstance(ticks, torch.Tensor)
@@ -1549,9 +1549,9 @@ class _MulticoinReplayRunner:
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -1572,7 +1572,7 @@ class _MulticoinReplayRunner:
         interrupt_check=None,
         selection=None,
     ):
-        self.market_execution_ticks = _validate_market_execution_data(data, market_order_slippage_pct)
+        self.market_execution_ticks = _validate_market_execution_data(data, market_order_slippage_fraction)
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
             raise ValueError("max_dispatch_candidate_bars must be positive")
         self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
@@ -1797,23 +1797,23 @@ class _MulticoinReplayRunner:
         encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
             loss_gate_max_drawdown_fraction
         )
-        market_order_slippage_pct = float(market_order_slippage_pct)
+        market_order_slippage_fraction = float(market_order_slippage_fraction)
         if (
-            not np.isfinite(market_order_slippage_pct)
-            or market_order_slippage_pct < 0.0
+            not np.isfinite(market_order_slippage_fraction)
+            or market_order_slippage_fraction < 0.0
         ):
             raise ValueError(
-                "market_order_slippage_pct must be finite and non-negative"
+                "market_order_slippage_fraction must be finite and non-negative"
             )
-        market_order_near_touch_threshold = float(market_order_near_touch_threshold)
+        market_order_near_touch_fraction = float(market_order_near_touch_fraction)
         if (
-            not np.isfinite(market_order_near_touch_threshold)
-            or market_order_near_touch_threshold < 0.0
+            not np.isfinite(market_order_near_touch_fraction)
+            or market_order_near_touch_fraction < 0.0
         ):
             raise ValueError(
-                "market_order_near_touch_threshold must be finite and non-negative"
+                "market_order_near_touch_fraction must be finite and non-negative"
             )
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -1824,10 +1824,10 @@ class _MulticoinReplayRunner:
                 self.forager_score_hysteresis[side],
                 encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                market_order_slippage_pct,
+                market_order_slippage_fraction,
                 float(bool(hsl_panic_market)),
                 float(bool(market_orders_allowed)),
-                market_order_near_touch_threshold,
+                market_order_near_touch_fraction,
                 float(minimum_cost_filters[side]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
@@ -2805,9 +2805,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -2840,9 +2840,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -2902,9 +2902,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
             loss_gate_max_drawdown_fraction
         )
-        market_order_slippage_pct = float(market_order_slippage_pct)
-        market_order_near_touch_threshold = float(market_order_near_touch_threshold)
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        market_order_slippage_fraction = float(market_order_slippage_fraction)
+        market_order_near_touch_fraction = float(market_order_near_touch_fraction)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -2915,12 +2915,12 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 self.forager_score_hysteresis["long"],
                 encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                market_order_slippage_pct,
+                market_order_slippage_fraction,
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
-                market_order_near_touch_threshold,
+                market_order_near_touch_fraction,
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
@@ -3068,9 +3068,9 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -3103,9 +3103,9 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -3263,9 +3263,9 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
-        market_order_slippage_pct: float = 0.0,
+        market_order_slippage_fraction: float = 0.0,
         market_orders_allowed: bool = False,
-        market_order_near_touch_threshold: float = 0.001,
+        market_order_near_touch_fraction: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -3298,9 +3298,9 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
             side_activation=side_activation,
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -3357,7 +3357,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
             float(loss_gate_max_drawdown_fraction)
         )
-        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
@@ -3368,12 +3368,12 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 self.forager_score_hysteresis["long"],
                 encoded_loss_gate_max_drawdown_fraction,
                 float(self.collect_coin_fill_counts),
-                float(market_order_slippage_pct),
+                float(market_order_slippage_fraction),
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
-                float(market_order_near_touch_threshold),
+                float(market_order_near_touch_fraction),
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.

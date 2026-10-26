@@ -2328,6 +2328,21 @@ fn forager_score_hysteresis_from_dict(
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    // Missing optional policy retains its default. An obsolete authored key
+    // must not disappear into that default, including when its new key exists.
+    for retired in [
+        "liquidation_threshold",
+        "market_order_near_touch_threshold",
+        "market_order_slippage_pct",
+        "limit_order_fill_buffer_pct",
+        "max_realized_loss_pct",
+    ] {
+        if dict.get_item(retired)?.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "unsupported retired native backtest field '{retired}'; rebuild the current backtest payload"
+            )));
+        }
+    }
     if dict.contains("calculate_legacy_w")? {
         return Err(PyValueError::new_err(
             "calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain",
@@ -2469,8 +2484,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             dict,
             "loss_gate_memory_ema_span_minutes",
         )?,
-        liquidation_threshold: dict
-            .get_item("liquidation_threshold")?
+        equity_floor_fraction: dict
+            .get_item("equity_floor_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.05),
@@ -2480,20 +2495,20 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
-        market_order_near_touch_threshold: dict
-            .get_item("market_order_near_touch_threshold")?
+        market_order_near_touch_fraction: dict
+            .get_item("market_order_near_touch_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.001),
-        // Legacy native payloads predate this optional simulation setting.
+        // Native packets may omit this optional simulation setting.
         // Default only absence; explicit malformed values still fail below.
-        limit_order_fill_buffer_pct: dict
-            .get_item("limit_order_fill_buffer_pct")?
+        limit_order_fill_buffer_fraction: dict
+            .get_item("limit_order_fill_buffer_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0),
-        market_order_slippage_pct: dict
-            .get_item("market_order_slippage_pct")?
+        market_order_slippage_fraction: dict
+            .get_item("market_order_slippage_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),
@@ -2525,7 +2540,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             "inception_timestamps_ms must match coins",
         ));
     }
-    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
+    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_fraction)
         .map_err(PyValueError::new_err)?;
     if let Some(hsl) = &params.equity_hard_stop_loss.hsl {
         hsl.validate(&params.coins, params.candle_interval_minutes)

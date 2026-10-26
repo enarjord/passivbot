@@ -19,7 +19,7 @@ def test_buffer_survives_config_and_backtest_payload(buffer):
     mss = {'BTC': dict(maker=0.0002, taker=0.00055, qty_step=0.001,
                        price_step=0.1, min_qty=0.001, min_cost=10.0, c_mult=1.0)}
     *_, params = prep_backtest_args(cfg, mss, 'binance')
-    assert params['limit_order_fill_buffer_pct'] == buffer
+    assert params['limit_order_fill_buffer_fraction'] == buffer
 
 
 def test_older_configs_receive_zero_default():
@@ -114,7 +114,7 @@ def test_real_rust_buffer_rejects_marginal_entry_and_keeps_fill_price():
     assert len(baseline[0]) > 0
     # The native fill schema has fill_price at index 10.
     assert all(float(fill[10]) == 100.0 for fill in baseline[0])
-    args[-1]['limit_order_fill_buffer_pct'] = 0.0001
+    args[-1]['limit_order_fill_buffer_fraction'] = 0.0001
     stressed = pbr.run_backtest(*args)
     assert len(stressed[0]) == 0
 
@@ -125,8 +125,8 @@ def test_real_rust_rejects_invalid_buffer_at_python_boundary(value):
 
     assert not getattr(pbr, '__is_stub__', False)
     args = _native_args()
-    args[-1]['limit_order_fill_buffer_pct'] = value
-    with pytest.raises(ValueError, match='limit_order_fill_buffer_pct'):
+    args[-1]['limit_order_fill_buffer_fraction'] = value
+    with pytest.raises(ValueError, match='limit_order_fill_buffer_fraction'):
         pbr.run_backtest(*args)
 
 
@@ -147,7 +147,7 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
         available_exchanges=['binance'], available_coins={'BTC'},
         base_coin_sources={'BTC': 'binance'},
     )
-    assert get_backtest_execution_settings(changed).limit_order_fill_buffer_pct == 0.0001
+    assert get_backtest_execution_settings(changed).limit_order_fill_buffer_fraction == 0.0001
     assert cfg['backtest']["limit_order_fill_buffer_fraction"] == 0.0
 
 
@@ -168,7 +168,7 @@ def test_legacy_native_payload_matches_explicit_zero_buffer(use_bundle):
     else:
         call = lambda: pbr.run_backtest(*args)
     expected = call()
-    del args[-1]["limit_order_fill_buffer_pct"]
+    del args[-1]["limit_order_fill_buffer_fraction"]
     actual = call()
     assert len(actual[0]) > 0
     np.testing.assert_equal(actual, expected)

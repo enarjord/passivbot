@@ -1390,7 +1390,7 @@ inline void generate_ema_multicoin_side_orders(
     int effective_n_positions,
     int current_hsl_mode,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
+    float market_order_near_touch_fraction,
     int forced_unstuck_coin,
     ulong one_way_initial_blocked_mask
 ) {
@@ -1812,7 +1812,7 @@ inline void generate_ema_multicoin_side_orders(
         float close_price = short_side ? bid_price : ask_price;
         bool candidate_entry_market = should_use_ordinary_market_execution(
             candidate_entry_tick, !short_side, price_now, price_step,
-            market_orders_allowed, market_order_near_touch_threshold
+            market_orders_allowed, market_order_near_touch_fraction
         );
         float entry_exposure_price = candidate_entry_market
             ? price_now : entry_price;
@@ -1901,7 +1901,7 @@ inline void generate_ema_multicoin_side_orders(
             close_tick[c] = candidate_close_tick;
             close_market[c] = should_use_ordinary_market_execution(
                 candidate_close_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
             if (close_market[c]) {
                 close_qty[c] = resize_market_close_qty(
@@ -2050,7 +2050,7 @@ inline EmaMulticoinReducerCandidate make_ema_multicoin_reducer_candidate(
     float min_cost,
     float c_mult,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold
+    float market_order_near_touch_fraction
 ) {
     EmaMulticoinReducerCandidate candidate =
         empty_ema_multicoin_reducer_candidate();
@@ -2060,7 +2060,7 @@ inline EmaMulticoinReducerCandidate make_ema_multicoin_reducer_candidate(
     }
     candidate.market = should_use_ordinary_market_execution(
         requested_tick, short_side, market_price, price_step,
-        market_orders_allowed, market_order_near_touch_threshold
+        market_orders_allowed, market_order_near_touch_fraction
     );
     float executable_qty = requested_qty;
     if (candidate.market) {
@@ -2107,7 +2107,7 @@ inline void prepare_ema_multicoin_reducer_candidates(
     int coin_count,
     bool short_side,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
+    float market_order_near_touch_fraction,
     thread EmaMulticoinReducerCandidate* preferred,
     thread EmaMulticoinReducerCandidate* fallback
 ) {
@@ -2132,7 +2132,7 @@ inline void prepare_ema_multicoin_reducer_candidates(
                 side.close_market[c], side.twel_close_qty[c],
                 side.twel_close_tick[c], false, short_side, market_price,
                 qty_step, price_step, min_qty, min_cost, c_mult,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
 #if PASSIVBOT_UNSTUCK_ENABLED
         EmaMulticoinReducerCandidate unstuck =
@@ -2141,7 +2141,7 @@ inline void prepare_ema_multicoin_reducer_candidates(
                 side.close_market[c], side.unstuck_close_qty[c],
                 side.unstuck_close_tick[c], true, short_side, market_price,
                 qty_step, price_step, min_qty, min_cost, c_mult,
-                market_orders_allowed, market_order_near_touch_threshold
+                market_orders_allowed, market_order_near_touch_fraction
             );
 #else
         EmaMulticoinReducerCandidate unstuck =
@@ -2169,7 +2169,7 @@ inline bool gate_ema_multicoin_close(
     float c_mult,
     float maker_fee,
     float taker_fee,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     bool gate_enabled,
     thread float& remaining_loss_budget
 ) {
@@ -2271,7 +2271,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
     int k,
     int coin_count,
     bool short_side,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     bool gate_enabled,
     thread float& remaining_loss_budget
 ) {
@@ -2293,7 +2293,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
                     side.secondary_close_tick[c],
                     side.secondary_close_market[c], side.pprice[c],
                     short_side, clamped_market_execution_tick(market_execution_ticks, coin_settings, k, c, coin_count, short_side), price_step, c_mult,
-                    maker_fee, taker_fee, market_order_slippage_pct,
+                    maker_fee, taker_fee, market_order_slippage_fraction,
                     gate_enabled, remaining_loss_budget
                 )) {
                 side.secondary_close_qty[c] = 0.0f;
@@ -2303,7 +2303,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
             && !gate_ema_multicoin_close(
                 side.close_qty[c], side.close_tick[c], side.close_market[c],
                 side.pprice[c], short_side, clamped_market_execution_tick(market_execution_ticks, coin_settings, k, c, coin_count, short_side), price_step,
-                c_mult, maker_fee, taker_fee, market_order_slippage_pct,
+                c_mult, maker_fee, taker_fee, market_order_slippage_fraction,
                 gate_enabled, remaining_loss_budget
             )) {
             side.close_qty[c] = 0.0f;
@@ -2322,8 +2322,8 @@ inline void finalize_ema_multicoin_reducers_one_side(
     int coin_count,
     bool short_side,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
-    float market_order_slippage_pct,
+    float market_order_near_touch_fraction,
+    float market_order_slippage_fraction,
     float loss_gate_max_drawdown_fraction,
     bool loss_gate_enabled
 ) {
@@ -2334,7 +2334,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     bool resolved[MAX_COINS];
     prepare_ema_multicoin_reducer_candidates(
         side, bars, coin_settings ORGANILLO_PASS, k, coin_count, short_side,
-        market_orders_allowed, market_order_near_touch_threshold,
+        market_orders_allowed, market_order_near_touch_fraction,
         preferred, fallback
     );
     for (int c = 0; c < MAX_COINS; ++c) {
@@ -2374,7 +2374,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
             coin_settings[coin_offset + 4],
             coin_settings[coin_offset + 5],
             coin_settings[coin_offset + 11],
-            market_order_slippage_pct, loss_gate_enabled,
+            market_order_slippage_fraction, loss_gate_enabled,
             remaining_loss_budget
         );
         if (allowed) {
@@ -2394,7 +2394,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     gate_ema_multicoin_side_ordinary_closes(
         market_execution_ticks,
         side, bars, coin_settings ORGANILLO_PASS, k, coin_count, short_side,
-        market_order_slippage_pct, loss_gate_enabled,
+        market_order_slippage_fraction, loss_gate_enabled,
         remaining_loss_budget
     );
 }
@@ -2411,8 +2411,8 @@ inline void finalize_ema_multicoin_reducers_fused(
     bool long_enabled,
     bool short_enabled,
     bool market_orders_allowed,
-    float market_order_near_touch_threshold,
-    float market_order_slippage_pct,
+    float market_order_near_touch_fraction,
+    float market_order_slippage_fraction,
     float loss_gate_max_drawdown_fraction,
     bool loss_gate_enabled
 ) {
@@ -2429,13 +2429,13 @@ inline void finalize_ema_multicoin_reducers_fused(
     prepare_ema_multicoin_reducer_candidates(
         long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false,
         long_enabled && market_orders_allowed,
-        market_order_near_touch_threshold,
+        market_order_near_touch_fraction,
         long_preferred, long_fallback
     );
     prepare_ema_multicoin_reducer_candidates(
         short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true,
         short_enabled && market_orders_allowed,
-        market_order_near_touch_threshold,
+        market_order_near_touch_fraction,
         short_preferred, short_fallback
     );
     for (int c = 0; c < MAX_COINS; ++c) {
@@ -2496,7 +2496,7 @@ inline void finalize_ema_multicoin_reducers_fused(
             coin_settings[coin_offset + 4],
             coin_settings[coin_offset + 5],
             coin_settings[coin_offset + 11],
-            market_order_slippage_pct, loss_gate_enabled,
+            market_order_slippage_fraction, loss_gate_enabled,
             remaining_loss_budget
         );
         if (best_short) {
@@ -2536,7 +2536,7 @@ inline void finalize_ema_multicoin_reducers_fused(
         gate_ema_multicoin_side_ordinary_closes(
             market_execution_ticks,
             long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false,
-            market_order_slippage_pct, loss_gate_enabled,
+            market_order_slippage_fraction, loss_gate_enabled,
             remaining_loss_budget
         );
     }
@@ -2544,7 +2544,7 @@ inline void finalize_ema_multicoin_reducers_fused(
         gate_ema_multicoin_side_ordinary_closes(
             market_execution_ticks,
             short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true,
-            market_order_slippage_pct, loss_gate_enabled,
+            market_order_slippage_fraction, loss_gate_enabled,
             remaining_loss_budget
         );
     }
@@ -2566,7 +2566,7 @@ inline bool process_ema_multicoin_side_fills(
     bool short_side,
     bool alive,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     bool hsl_panic_market,
     float hsl_equity_before_fills,
     thread HslState* opposite_hsl = nullptr,
@@ -2857,7 +2857,7 @@ inline bool force_close_ema_multicoin_delisted_position(
     int coin,
     bool short_side,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close,
     thread HslState* opposite_hsl = nullptr,
     bool opposite_has_position = false
@@ -2936,7 +2936,7 @@ inline bool force_close_ema_multicoin_delisted_one_side(
     int coin_count,
     bool short_side,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close
 ) {
     bool any_close = false;
@@ -2947,7 +2947,7 @@ inline bool force_close_ema_multicoin_delisted_one_side(
             market_execution_ticks,
             side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, short_side,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close
         );
         if (closed) clear_ema_multicoin_coin_orders(side, c);
@@ -2970,7 +2970,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
     int timestep_count,
     int coin_count,
     bool collect_coin_fill_counts,
-    float market_order_slippage_pct,
+    float market_order_slippage_fraction,
     thread float& hsl_equity_before_close
 ) {
     bool any_close = false;
@@ -2985,7 +2985,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
             market_execution_ticks,
             long_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, false,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close, &short_side.hsl, short_has_position
         );
         bool long_has_position = false;
@@ -2996,7 +2996,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
             market_execution_ticks,
             short_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, true,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_equity_before_close, &long_side.hsl, long_has_position
         );
         if (long_closed || short_closed) {
@@ -3173,10 +3173,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const float loss_gate_max_drawdown_fraction = run_settings[5];
     const bool loss_gate_enabled = run_settings[14] > 0.5f;
-    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const bool market_orders_allowed = run_settings[9] > 0.5f;
-    const float market_order_near_touch_threshold = fmax(
+    const float market_order_near_touch_fraction = fmax(
         run_settings[10], 0.0f
     );
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
@@ -3415,7 +3415,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             side, account, fills,
             bars, fill_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
             coin_fill_counts, int(b), k, C, short_side, alive,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             hsl_panic_market, hsl_equity_before_fills
         );
         update_ema_multicoin_side_indicators(
@@ -3567,7 +3567,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, entries_enabled, tradable_count, effective_n_positions,
                 current_hsl_mode, market_orders_allowed,
-                market_order_near_touch_threshold, -2, 0ul
+                market_order_near_touch_fraction, -2, 0ul
             );
             if (!account.realized_decay_valid) {
                 scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
@@ -3576,8 +3576,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
             finalize_ema_multicoin_reducers_one_side(
                 market_execution_ticks,
                 side, account, bars, coin_settings ORGANILLO_PASS, k, C, short_side,
-                market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, loss_gate_max_drawdown_fraction, loss_gate_enabled
+                market_orders_allowed, market_order_near_touch_fraction,
+                market_order_slippage_fraction, loss_gate_max_drawdown_fraction, loss_gate_enabled
             );
             if (!account.realized_decay_valid) {
                 scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
@@ -3595,7 +3595,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 market_execution_ticks,
                 side, account, fills, bars, coin_settings ORGANILLO_PASS,
                 coin_fill_counts, int(b), k, T, C, short_side,
-                collect_coin_fill_counts, market_order_slippage_pct,
+                collect_coin_fill_counts, market_order_slippage_fraction,
                 forced_delist_equity
             );
         }
@@ -4355,12 +4355,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
     const float loss_gate_max_drawdown_fraction = run_settings[5];
     const bool loss_gate_enabled = run_settings[16] > 0.5f;
-    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
     const bool hedge_mode = run_settings[10] > 0.5f;
     const bool market_orders_allowed = run_settings[11] > 0.5f;
-    const float market_order_near_touch_threshold = fmax(
+    const float market_order_near_touch_fraction = fmax(
         run_settings[12], 0.0f
     );
     const bool filter_by_min_effective_cost_long = run_settings[13] > 0.5f;
@@ -4606,7 +4606,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             long_side, account, fills,
             bars, fill_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
             coin_fill_counts, int(b), k, C, false, alive,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             long_hsl_panic_market, long_hsl_equity_before_fills,
             &short_side.hsl, ema_multicoin_side_has_position(short_side, C)
         );
@@ -4626,7 +4626,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             short_side, account, fills,
             bars, fill_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
             coin_fill_counts, int(b), k, C, true, alive,
-            collect_coin_fill_counts, market_order_slippage_pct,
+            collect_coin_fill_counts, market_order_slippage_fraction,
             short_hsl_panic_market, short_hsl_equity_before_fills,
             &long_side.hsl, ema_multicoin_side_has_position(long_side, C)
         );
@@ -4841,7 +4841,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
-                market_orders_allowed, market_order_near_touch_threshold,
+                market_orders_allowed, market_order_near_touch_fraction,
                 long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
@@ -4861,7 +4861,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
-                market_orders_allowed, market_order_near_touch_threshold,
+                market_orders_allowed, market_order_near_touch_fraction,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
@@ -4875,8 +4875,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_side, short_side, account,
                 bars, coin_settings ORGANILLO_PASS, k, C,
                 long_can_generate, short_can_generate,
-                market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, loss_gate_max_drawdown_fraction, loss_gate_enabled
+                market_orders_allowed, market_order_near_touch_fraction,
+                market_order_slippage_fraction, loss_gate_max_drawdown_fraction, loss_gate_enabled
             );
             if (!account.realized_decay_valid) {
                 scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
@@ -4902,7 +4902,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_side, short_side, account, fills,
                 bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
                 int(b), k, T, C, collect_coin_fill_counts,
-                market_order_slippage_pct, forced_delist_equity
+                market_order_slippage_fraction, forced_delist_equity
             );
         }
         any_fill = any_fill || forced_delist_fill;

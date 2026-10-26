@@ -7907,7 +7907,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
                 "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": True,
-                "market_order_near_touch_threshold": 0.0,
+                "market_order_near_touch_fraction": 0.0,
                 "loss_gate_max_drawdown_fraction": 1.0,
             }
             return values.get(key, False)

@@ -277,7 +277,7 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = market_allowed
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = near_touch
     config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
-                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=0.1, threshold_base_fraction=0.01 if ladder == "entry" else 0.5,
                              retracement_base_fraction=0.0, reentry_qty_multiplier=1.0,
@@ -335,7 +335,7 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
     config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
-                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     bot = config["bot"][side]
     bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0,
                        total_exposure_entry_gate_enabled=entry_gate)
@@ -451,7 +451,7 @@ def _decimal_boundary_inputs(side, coin_count, *, price, balance, initial_pct, q
                              factor, threshold, low, high):
     config, candles, markets, _, timestamps = _fixture(side, coin_count, "initial")
     config["backtest"].update(starting_balance=balance, maker_fee_override_fraction=0.0,
-                             taker_fee_override_fraction=0.0, market_order_slippage_pct=0.0)
+                             taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_fraction=initial_pct, threshold_base_fraction=threshold,
         retracement_base_fraction=0.0, reentry_qty_multiplier=factor, threshold_exposure_ratio_coefficient=0.0,

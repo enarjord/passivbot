@@ -4,7 +4,7 @@ pub fn validate_buffer(buffer: f64) -> Result<(), &'static str> {
     if buffer.is_finite() && (0.0..1.0).contains(&buffer) {
         Ok(())
     } else {
-        Err("limit_order_fill_buffer_pct must be finite and in [0, 1)")
+        Err("limit_order_fill_buffer_fraction must be finite and in [0, 1)")
     }
 }
 

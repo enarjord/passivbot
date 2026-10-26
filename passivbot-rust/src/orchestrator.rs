@@ -339,13 +339,13 @@ mod core {
         pub filter_by_min_effective_cost: crate::types::MinimumCostFilter,
         #[serde(default)]
         pub market_orders_allowed: bool,
-        #[serde(default = "default_market_order_near_touch_threshold")]
-        pub market_order_near_touch_threshold: f64,
+        #[serde(default = "default_market_order_near_touch_fraction")]
+        pub market_order_near_touch_fraction: f64,
         /// Synthetic backtest-only market fill slippage used for projected close PnL.
         /// Live callers intentionally omit this field and use the serde default of 0.0;
         /// live execution uses current bid/ask plus exchange-side market order behavior.
         #[serde(default)]
-        pub market_order_slippage_pct: f64,
+        pub market_order_slippage_fraction: f64,
         #[serde(default)]
         pub panic_close_market: bool,
         #[serde(default)]
@@ -386,7 +386,7 @@ mod core {
         true
     }
 
-    fn default_market_order_near_touch_threshold() -> f64 {
+    fn default_market_order_near_touch_fraction() -> f64 {
         0.001
     }
 
@@ -421,7 +421,7 @@ mod core {
     pub struct NextCandle {
         /// Simulation-only distance beyond the limit required for a fill.
         #[serde(default)]
-        pub limit_order_fill_buffer_pct: f64,
+        pub limit_order_fill_buffer_fraction: f64,
         pub low: f64,
         pub high: f64,
         pub tradable: bool,
@@ -789,7 +789,7 @@ mod core {
         } else {
             calc_ask_order_price_gap_fraction(order.price, market_price).abs()
         };
-        diff <= global.market_order_near_touch_threshold.max(0.0)
+        diff <= global.market_order_near_touch_fraction.max(0.0)
     }
 
     fn size_market_close_at_executable_touch(
@@ -1716,13 +1716,13 @@ mod core {
         if !touch_price.is_finite() || touch_price <= 0.0 {
             return None;
         }
-        let slippage_pct = global.market_order_slippage_pct.max(0.0);
+        let slippage_fraction = global.market_order_slippage_fraction.max(0.0);
         let price_step = exchange.price_step.max(f64::EPSILON);
         if order.qty > 0.0 {
-            let slipped = touch_price * (1.0 + slippage_pct);
+            let slipped = touch_price * (1.0 + slippage_fraction);
             Some(round_up(slipped, price_step).max(price_step))
         } else {
-            let slipped = touch_price * (1.0 - slippage_pct);
+            let slipped = touch_price * (1.0 - slippage_fraction);
             Some(round_dn(slipped, price_step).max(price_step))
         }
     }
@@ -3028,7 +3028,7 @@ mod core {
                 position: &side.position,
                 trailing: &side.trailing,
                 next_candle: symbol.next_candle.as_ref().map(|candle| NextStepHint {
-                    limit_order_fill_buffer_pct: candle.limit_order_fill_buffer_pct,
+                    limit_order_fill_buffer_fraction: candle.limit_order_fill_buffer_fraction,
                     low: candle.low,
                     high: candle.high,
                     tradable: candle.tradable,
@@ -3505,7 +3505,7 @@ mod core {
                 )?;
             }
             if let Some(candle) = &s.next_candle {
-                crate::limit_fills::validate_buffer(candle.limit_order_fill_buffer_pct).map_err(
+                crate::limit_fills::validate_buffer(candle.limit_order_fill_buffer_fraction).map_err(
                     |details| OrchestratorError::InvalidNextCandle {
                         symbol_idx: s.symbol_idx,
                         details: details.to_string(),
@@ -5127,8 +5127,8 @@ mod core {
                 forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: false,
-                market_order_near_touch_threshold: 0.001,
-                market_order_slippage_pct: 0.0,
+                market_order_near_touch_fraction: 0.001,
+                market_order_slippage_fraction: 0.0,
                 panic_close_market: false,
                 auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: 0.0,
@@ -5144,10 +5144,10 @@ mod core {
         }
 
         #[test]
-        fn market_execution_uses_near_touch_threshold() {
+        fn market_execution_uses_near_touch_fraction() {
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.001;
+            global.market_order_near_touch_fraction = 0.001;
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
@@ -5179,7 +5179,7 @@ mod core {
         fn promoted_market_closes_use_executable_touch_minimum() {
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.001;
+            global.market_order_near_touch_fraction = 0.001;
             let order_book = OrderBook {
                 bid: 99.95,
                 ask: 100.05,
@@ -5229,7 +5229,7 @@ mod core {
         fn short_market_entry_uses_executable_touch_minimum() {
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.001;
+            global.market_order_near_touch_fraction = 0.001;
             let order_book = OrderBook {
                 bid: 99.95,
                 ask: 100.05,
@@ -5604,8 +5604,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(true),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -5686,7 +5686,7 @@ mod core {
         fn market_execution_uses_crossing_rules_for_buys_and_sells() {
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.0;
+            global.market_order_near_touch_fraction = 0.0;
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
@@ -6058,7 +6058,7 @@ mod core {
                 price: 100.0,
             };
             sym.next_candle = Some(NextCandle {
-                limit_order_fill_buffer_pct: 0.0,
+                limit_order_fill_buffer_fraction: 0.0,
                 low: 1e9,
                 high: 1e9,
                 tradable: true,
@@ -6073,8 +6073,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6105,7 +6105,7 @@ mod core {
                     .next_candle
                     .as_mut()
                     .unwrap()
-                    .limit_order_fill_buffer_pct = buffer;
+                    .limit_order_fill_buffer_fraction = buffer;
                 assert!(matches!(
                     compute_ideal_orders_for_test(&invalid),
                     Err(OrchestratorError::InvalidNextCandle { symbol_idx: 0, .. })
@@ -6122,7 +6122,7 @@ mod core {
 
             let mut sym_fill = sym;
             sym_fill.next_candle = Some(NextCandle {
-                limit_order_fill_buffer_pct: 0.0,
+                limit_order_fill_buffer_fraction: 0.0,
                 low: 0.0,
                 high: 0.0,
                 tradable: true,
@@ -6407,8 +6407,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6466,8 +6466,8 @@ mod core {
                                 filter_by_min_effective_cost:
                                     crate::types::MinimumCostFilter::uniform(false),
                                 market_orders_allowed: false,
-                                market_order_near_touch_threshold: 0.001,
-                                market_order_slippage_pct: 0.0,
+                                market_order_near_touch_fraction: 0.001,
+                                market_order_slippage_fraction: 0.0,
                                 panic_close_market: false,
                                 auto_unstuck_allowed: Some(true),
                                 unstuck_allowance_long: 0.0,
@@ -6540,8 +6540,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6591,8 +6591,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6652,8 +6652,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6710,8 +6710,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6768,8 +6768,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6820,8 +6820,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -6873,8 +6873,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -7093,8 +7093,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -7164,8 +7164,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -7219,8 +7219,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -7414,7 +7414,7 @@ mod core {
             }];
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.01;
+            global.market_order_near_touch_fraction = 0.01;
             let mut current_positions = Vec::new();
             let mut scratch = Vec::new();
             let mut keep = Vec::new();
@@ -7469,7 +7469,7 @@ mod core {
             }];
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.001;
+            global.market_order_near_touch_fraction = 0.001;
             let mut current_positions = Vec::new();
             let mut scratch = Vec::new();
             let mut keep = Vec::new();
@@ -7676,8 +7676,8 @@ mod core {
                 forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: true,
-                market_order_near_touch_threshold: 0.001,
-                market_order_slippage_pct: 0.0,
+                market_order_near_touch_fraction: 0.001,
+                market_order_slippage_fraction: 0.0,
                 panic_close_market: false,
                 auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: 0.0,
@@ -8145,7 +8145,7 @@ mod core {
             };
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.001;
+            global.market_order_near_touch_fraction = 0.001;
             let mut closes = vec![IdealOrder {
                 symbol_idx: 0,
                 pside: PositionSide::Short,
@@ -8281,8 +8281,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -8375,8 +8375,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -8441,8 +8441,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -8535,8 +8535,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -8913,8 +8913,8 @@ mod core {
             exchange.price_step = 0.1;
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
-            global.market_order_near_touch_threshold = 0.0;
-            global.market_order_slippage_pct = 0.01;
+            global.market_order_near_touch_fraction = 0.0;
+            global.market_order_slippage_fraction = 0.01;
             let order = IdealOrder {
                 symbol_idx: 0,
                 pside: PositionSide::Long,
@@ -9003,8 +9003,8 @@ mod core {
                             false,
                         ),
                         market_orders_allowed: false,
-                        market_order_near_touch_threshold: 0.001,
-                        market_order_slippage_pct: 0.0,
+                        market_order_near_touch_fraction: 0.001,
+                        market_order_slippage_fraction: 0.0,
                         panic_close_market: false,
                         auto_unstuck_allowed: Some(true),
                         unstuck_allowance_long: 0.0,
@@ -9097,8 +9097,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -9171,8 +9171,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -9252,8 +9252,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -9315,8 +9315,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -9389,8 +9389,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
@@ -9442,8 +9442,8 @@ mod core {
                     forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
+                    market_order_near_touch_fraction: 0.001,
+                    market_order_slippage_fraction: 0.0,
                     panic_close_market: false,
                     auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 1000.0,

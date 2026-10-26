@@ -143,7 +143,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "universe",
     }
     assert "market_orders_allowed" not in loaded["backtest"]
-    assert "market_order_near_touch_threshold" not in loaded["backtest"]
+    assert "market_order_near_touch_fraction" not in loaded["backtest"]
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["bot"]["portfolio"]["execution"]
     assert "market_order_near_touch_fraction" in loaded["bot"]["portfolio"]["execution"]

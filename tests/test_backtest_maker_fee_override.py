@@ -131,12 +131,12 @@ def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
     assert {item["taker_fee"] for item in exchange_params} == {0.0009}
 
 
-def test_prep_backtest_args_passes_market_order_slippage_pct():
+def test_prep_backtest_args_passes_market_order_slippage_fraction():
     config = _base_config()
     config["backtest"]["market_order_slippage_fraction"] = 0.0015
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_order_slippage_pct"] == 0.0015
+    assert backtest_params["market_order_slippage_fraction"] == 0.0015
 
 
 def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload():
@@ -144,7 +144,7 @@ def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload(
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_order_near_touch_threshold"] == 0.0017
+    assert backtest_params["market_order_near_touch_fraction"] == 0.0017
 
 
 def test_prep_backtest_args_uses_market_orders_allowed_from_live():
@@ -184,7 +184,7 @@ def test_prep_backtest_args_transports_equity_floor_fraction():
     config["backtest"]["equity_floor_fraction"] = 0.07
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["liquidation_threshold"] == 0.07
+    assert backtest_params["equity_floor_fraction"] == 0.07
 
 
 def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():

@@ -451,7 +451,7 @@ def test_execution_validation_matches_rust_for_representation_noisy_aligned_book
     inp = make_input(balance=1_000.0, symbols=[symbol])
     inp["global"].update(
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.0,
+        market_order_near_touch_fraction=0.0,
     )
 
     raw = pbr.compute_ideal_orders_json(json.dumps(inp))
@@ -569,7 +569,7 @@ def test_live_validator_accepts_rust_market_execution_policy():
         symbols=[make_symbol(0, bid=100.0, ask=100.0)],
     )
     inp["global"]["market_orders_allowed"] = True
-    inp["global"]["market_order_near_touch_threshold"] = 0.001
+    inp["global"]["market_order_near_touch_fraction"] = 0.001
     out = compute(pbr, inp)
 
     assert any(order["execution_type"] == "market" for order in out["orders"])
@@ -2030,7 +2030,7 @@ def test_ema_anchor_market_close_uses_executable_touch_minimum():
         symbols=[symbol],
     )
     inp["global"]["market_orders_allowed"] = True
-    inp["global"]["market_order_near_touch_threshold"] = 0.001
+    inp["global"]["market_order_near_touch_fraction"] = 0.001
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
@@ -2076,7 +2076,7 @@ def test_grid_market_close_uses_executable_touch_minimum(strategy_kind):
         symbols=[symbol],
     )
     inp["global"]["market_orders_allowed"] = True
-    inp["global"]["market_order_near_touch_threshold"] = 0.02
+    inp["global"]["market_order_near_touch_fraction"] = 0.02
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
@@ -2294,7 +2294,7 @@ def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
         symbols=[symbol],
     )
     inp["global"]["market_orders_allowed"] = True
-    inp["global"]["market_order_near_touch_threshold"] = 0.001
+    inp["global"]["market_order_near_touch_fraction"] = 0.001
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
@@ -5484,10 +5484,10 @@ def test_next_candle_rejects_invalid_fill_buffer(buffer):
         "low": 99.0,
         "high": 102.0,
         "tradable": True,
-        "limit_order_fill_buffer_pct": buffer,
+        "limit_order_fill_buffer_fraction": buffer,
     }
     inp = make_input(balance=1000.0, symbols=[symbol])
-    with pytest.raises(ValueError, match="limit_order_fill_buffer_pct"):
+    with pytest.raises(ValueError, match="limit_order_fill_buffer_fraction"):
         compute(pbr, inp)
 
 
@@ -5498,5 +5498,5 @@ def test_next_candle_missing_fill_buffer_matches_zero():
     symbol["next_candle"] = {"low": 99.0, "high": 102.0, "tradable": True}
     inp = make_input(balance=1000.0, symbols=[symbol])
     expected = compute(pbr, inp)
-    symbol["next_candle"]["limit_order_fill_buffer_pct"] = 0.0
+    symbol["next_candle"]["limit_order_fill_buffer_fraction"] = 0.0
     assert compute(pbr, inp) == expected
