@@ -33,21 +33,21 @@ def require_real_passivbot_rust_module():
 
 def _sample_config():
     params = {
-        "entry_grid_double_down_factor": 1.0,
+        "entry_grid_reentry_qty_multiplier": 1.0,
         "entry_weight_volatility_1h": 0.0,
         "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.01,
-        "entry_initial_ema_dist": 0.01,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 1.0,
-        "entry_trailing_retracement_pct": 0.01,
-        "entry_trailing_threshold_pct": 0.01,
+        "entry_exposure_ratio_coefficient": 0.0,
+        "entry_grid_threshold_base_fraction": 0.01,
+        "entry_initial_ema_distance_fraction": 0.01,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_trailing_reentry_qty_multiplier": 1.0,
+        "entry_trailing_retracement_base_fraction": 0.01,
+        "entry_trailing_threshold_base_fraction": 0.01,
         "risk_we_excess_allowance_fraction": 0.0,
-        "close_grid_qty_pct": 1.0,
-        "close_trailing_qty_pct": 1.0,
-        "close_trailing_retracement_pct": 0.01,
-        "close_trailing_threshold_pct": 0.01,
+        "close_grid_qty_fraction": 1.0,
+        "close_trailing_qty_fraction": 1.0,
+        "close_trailing_retracement_base_fraction": 0.01,
+        "close_trailing_threshold_base_fraction": 0.01,
         "risk_wel_enforcer_threshold_ratio": 0.0,
         "total_wallet_exposure_limit_ratio": 2.0,
         "n_positions": 10,
@@ -208,12 +208,12 @@ def _hype_trailing_martingale_close_inputs():
         },
         "runtime": {"effective_wallet_exposure_limit_ratio": 0.5},
         "close_params": {
-            "qty_pct": 0.23,
-            "threshold_base_pct": -0.0143,
-            "threshold_we_weight": -0.0278,
+            "qty_fraction": 0.23,
+            "threshold_base_fraction": -0.0143,
+            "threshold_exposure_ratio_coefficient": -0.0278,
             "threshold_volatility_1h_weight": 0.19,
             "threshold_volatility_1m_weight": 7.93,
-            "retracement_base_pct": 0.0001,
+            "retracement_base_fraction": 0.0001,
             "retracement_volatility_1h_weight": 12.11,
             "retracement_volatility_1m_weight": 4.49,
         },
@@ -250,8 +250,8 @@ def test_trailing_martingale_close_diagnostic_uses_rust_dynamic_terms(
     )
 
     assert diagnostic is not None
-    assert diagnostic["threshold_pct"] == pytest.approx(expected_threshold)
-    assert diagnostic["retracement_pct"] == pytest.approx(expected_retracement)
+    assert diagnostic["threshold_fraction"] == pytest.approx(expected_threshold)
+    assert diagnostic["retracement_fraction"] == pytest.approx(expected_retracement)
     assert sum(diagnostic["threshold_terms"].values()) == pytest.approx(expected_threshold)
     assert diagnostic["effective_wallet_exposure_limit_ratio"] == pytest.approx(effective_wel)
     assert diagnostic["wallet_exposure_ratio"] == pytest.approx(wallet_exposure_ratio)
@@ -261,7 +261,7 @@ def test_trailing_martingale_close_diagnostic_uses_rust_dynamic_terms(
     assert diagnostic["volatility_ema_1h"] == pytest.approx(
         inputs["state"]["volatility_ema_1h"]
     )
-    assert diagnostic["threshold_pct"] != pytest.approx(-0.014500652114747214)
+    assert diagnostic["threshold_fraction"] != pytest.approx(-0.014500652114747214)
 
 
 def test_trailing_martingale_reset_extrema_cannot_emit_ordinary_trailing_close(
@@ -381,7 +381,7 @@ def test_build_trailing_diagnostic_matches_monitor_slice():
 
 def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
     config = _sample_config()
-    config["bot"]["long"]["close_trailing_retracement_pct"] = 0.0
+    config["bot"]["long"]["close_trailing_retracement_base_fraction"] = 0.0
     inputs = build_trailing_inputs_from_snapshot(
         config,
         _sample_snapshot(),
@@ -398,7 +398,7 @@ def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
     assert diagnostic["close"]["status"] == "waiting_threshold"
     assert diagnostic["close"]["threshold_met"] is False
     assert diagnostic["close"]["threshold_price"] == pytest.approx(101000.0)
-    assert diagnostic["close"]["retracement_pct"] == pytest.approx(0.0)
+    assert diagnostic["close"]["retracement_fraction"] == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(

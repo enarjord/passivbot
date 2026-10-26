@@ -31,7 +31,7 @@ def test_replaced_rust_metadata_rebuilds_defaults_and_paths(monkeypatch):
     schema.get_template_config()
     old_paths = strategy_spec.strategy_optimize_key_path_map("trailing_martingale")
     selected = next(row for row in original("trailing_martingale")["parameters"]
-                    if row["config_path"] == ["strategy", "long", "entry", "initial_qty_pct"])
+                    if row["config_path"] == ["strategy", "long", "entry", "initial_qty_fraction"])
     key = selected["optimize_key"]
     def changed(kind):
         spec = deepcopy(original(kind))

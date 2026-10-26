@@ -43,7 +43,7 @@ def test_runtime_lowering_preserves_all_native_defaults_and_precise_override(kin
     expected = lower_runtime_strategy_side(kind, source)
     assert build_runtime_strategy_side(source, strategy_kind=kind, pside=side) == expected
     assert project_native_strategy_side(kind, expected) == source
-    native_name = "entry_initial_qty_pct" if kind == "trailing_martingale" else "base_qty_pct"
+    native_name = "entry_initial_qty_fraction" if kind == "trailing_martingale" else "base_qty_fraction"
     parameter = next(item for item in pbr.get_strategy_spec(kind)["parameters"]
                      if item["side"] == side and item["name"] == native_name)
     native_path = parameter["config_path"][2:]
@@ -66,8 +66,8 @@ def test_runtime_lowering_preserves_all_native_defaults_and_precise_override(kin
 
 
 @pytest.mark.parametrize("kind,old,new", [
-    ("trailing_martingale", {"entry": {"initial_qty_pct": 0.1, "initial_qty_fraction": 0.2}}, "initial_qty_fraction"),
-    ("ema_anchor", {"base_qty_pct": 0.1, "base_qty_fraction": 0.2}, "base_qty_fraction"),
+    ("trailing_martingale", {"entry": {"ema_span_0": 0.1, "ema_span_0_minutes": 0.2}}, "ema_span_0_minutes"),
+    ("ema_anchor", {"ema_span_0": 0.1, "ema_span_0_minutes": 0.2}, "ema_span_0_minutes"),
 ])
 def test_tree_projection_rejects_collisions_instead_of_discarding_unknown_fields(kind, old, new):
     with pytest.raises(ValueError, match="conflicting strategy path"):
@@ -83,9 +83,9 @@ def test_future_native_field_cannot_overwrite_an_existing_projected_public_path(
     native = pbr.get_strategy_spec("ema_anchor")
     original = deepcopy(native)
     collision = deepcopy(next(field for field in native["parameters"]
-                              if field["config_path"] == ["strategy", "long", "base_qty_pct"]))
+                              if field["config_path"] == ["strategy", "long", "ema_span_0"]))
     collision.update(name="future_field", optimize_key="long_future_field",
-                     config_path=["strategy", "long", "base_qty_fraction"])
+                     config_path=["strategy", "long", "ema_span_0_minutes"])
     native["parameters"].append(collision)
     with pytest.raises(ValueError, match="conflicting public strategy path"):
         project_strategy_spec("ema_anchor", native)

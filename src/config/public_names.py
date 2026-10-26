@@ -1,12 +1,17 @@
 """Explicit released-config spelling conversion; never used by normal loading.
 
-The values and native IDs are unchanged. This table is deliberately restricted
-to public paths, so metric names and native optimizer keys are not aliases.
+Values are unchanged. Released strategy optimizer IDs are handled by a frozen
+versioned converter; neither table authorizes aliases during ordinary loading.
 """
 
 from copy import deepcopy
 
-from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
+from .migrations.released_v8_strategy import (
+    RELEASED_V8_STRATEGY_PATH_RENAMES,
+    released_strategy_kind,
+    released_strategy_selector,
+    rewrite_released_strategy_bounds,
+)
 
 
 PUBLIC_PATH_RENAMES = {
@@ -70,7 +75,7 @@ def _public_path_renames():
         for root in (("bot", side), ("optimize", "bounds", side)):
             for old, new in SHARED_SIDE_PATH_RENAMES.items():
                 mappings[(*root, *old)] = (*root, *new)
-            for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items():
+            for kind, fields in RELEASED_V8_STRATEGY_PATH_RENAMES.items():
                 for old, new in fields.items():
                     mappings[(*root, "strategy", kind, *old)] = (*root, "strategy", kind, *new)
         root = ("optimize", "bounds", side, "forager")
@@ -78,11 +83,11 @@ def _public_path_renames():
     return mappings
 
 
-def released_fixed_selector(selector):
+def released_fixed_selector(selector, *, strategy_kind=None):
     """Retain the gene membership of released prefix/suffix fixed selectors."""
     from .param_paths import bound_path_matches_selector
 
-    parts = tuple(selector.split("."))
+    parts = released_strategy_selector(selector.split("."), strategy_kind=strategy_kind)
     candidates = set()
     for old, new in _public_path_renames().items():
         if (parts[-1:] == old[-1:] and old[:1] == ("bot",)
@@ -112,12 +117,15 @@ def released_public_path(path):
     return path
 
 
-def rewrite_released_public_names(config, *, path_prefix=(), record=None):
+def rewrite_released_public_names(config, *, path_prefix=(), record=None, strategy_kind=None):
     """Rename in place after released structural conversion, retaining authority.
 
     ``record`` follows the migration callback ``(path, old, new, reason)``.
     Each referenced file and inline patch must be converted before merging.
     """
+    strategy_kind = released_strategy_kind(config, default=strategy_kind)
+    rewrite_released_strategy_bounds(config, strategy_kind=strategy_kind, record=record)
+
     def report(old_path, old, new_path, new):
         if record is not None:
             record(".".join((*path_prefix, *old_path)), deepcopy(old),
@@ -128,7 +136,7 @@ def rewrite_released_public_names(config, *, path_prefix=(), record=None):
         if isinstance(node, list):
             for index, child in enumerate(node):
                 if path[-1:] == ("fixed_params",) and isinstance(child, str):
-                    renamed = released_fixed_selector(child)
+                    renamed = released_fixed_selector(child, strategy_kind=strategy_kind)
                     if child != renamed:
                         node[index] = renamed
                         report((*path, str(index)), child, (*path, str(index)), renamed)

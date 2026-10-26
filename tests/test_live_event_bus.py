@@ -3284,7 +3284,7 @@ def test_console_format_summarizes_min_effective_cost_block():
             "effective_min_cost": 10.0,
             "balance": 250.0,
             "effective_limit": 0.12,
-            "entry_initial_qty_pct": 0.05,
+            "entry_initial_qty_fraction": 0.05,
         },
     )
 
@@ -3334,10 +3334,10 @@ def test_console_format_summarizes_trailing_status():
             "trailing_status": "waiting_threshold",
             "selected_mode": "grid",
             "threshold_met": False,
-            "threshold_pct": 0.0125,
+            "threshold_fraction": 0.0125,
             "threshold_price": 98_750.0,
             "retracement_met": False,
-            "retracement_pct": 0.004,
+            "retracement_fraction": 0.004,
             "retracement_price": 99_145.0,
             "threshold_projection_retracement_price": 99_145.0,
             "current_price": 101_000.0,
@@ -3367,10 +3367,10 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
             "trailing_status": "armed",
             "selected_mode": "auto_reduce",
             "threshold_met": True,
-            "threshold_pct": -0.019649,
+            "threshold_fraction": -0.019649,
             "threshold_price": 887.25,
             "retracement_met": True,
-            "retracement_pct": 0.000212,
+            "retracement_fraction": 0.000212,
             "retracement_price": 1049.58,
             "current_price": 902.465,
             "current_vs_threshold_ratio": -0.140163,
@@ -3740,7 +3740,7 @@ def test_operator_visibility_suppresses_all_operator_sinks_only():
     )
     trailing_event = LiveEvent(
         EventTypes.TRAILING_STATUS,
-        data={"operator_visible": False, "threshold_pct": 0.01},
+        data={"operator_visible": False, "threshold_fraction": 0.01},
     )
     missing_metadata_event = LiveEvent(EventTypes.TRAILING_STATUS, data={})
 

@@ -8,21 +8,21 @@ from tools import trailing_inspect
 def _params():
     return {
         "entry": {
-            "threshold_base_pct": 0.02,
-            "threshold_we_weight": 0.5,
+            "threshold_base_fraction": 0.02,
+            "threshold_exposure_ratio_coefficient": 0.5,
             "threshold_volatility_1h_weight": 2.0,
             "threshold_volatility_1m_weight": 10.0,
-            "retracement_base_pct": 0.005,
-            "retracement_we_weight": 0.1,
+            "retracement_base_fraction": 0.005,
+            "retracement_exposure_ratio_coefficient": 0.1,
             "retracement_volatility_1h_weight": 1.0,
             "retracement_volatility_1m_weight": 3.0,
         },
         "close": {
-            "threshold_base_pct": 0.01,
-            "threshold_we_weight": -0.02,
+            "threshold_base_fraction": 0.01,
+            "threshold_exposure_ratio_coefficient": -0.02,
             "threshold_volatility_1h_weight": 1.0,
             "threshold_volatility_1m_weight": 2.0,
-            "retracement_base_pct": 0.004,
+            "retracement_base_fraction": 0.004,
             "retracement_volatility_1h_weight": 4.0,
             "retracement_volatility_1m_weight": 5.0,
         },
@@ -90,7 +90,7 @@ def _context(
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_distance_fraction": 0.01,
         "entry_initial_qty_fraction": 0.02,
-        "entry_double_down_factor": 1.5,
+        "entry_reentry_qty_multiplier": 1.5,
         "close_qty_fraction": 0.25,
         "log_range_ema_span_minutes": 100.0,
         "log_range_ema_span_1h_candles": 200.0,
@@ -110,14 +110,14 @@ def test_inspect_trailing_matches_current_entry_and_close_formulas():
     assert result["entry"]["threshold_multiplier"]["effective"] == pytest.approx(
         entry_threshold_multiplier
     )
-    assert result["entry"]["threshold_pct"] == pytest.approx(
+    assert result["entry"]["threshold_fraction"] == pytest.approx(
         0.02 * entry_threshold_multiplier
     )
-    assert result["entry"]["retracement_pct"] == pytest.approx(
+    assert result["entry"]["retracement_fraction"] == pytest.approx(
         0.005 * entry_retracement_multiplier
     )
-    assert result["close"]["threshold_pct"] == pytest.approx(close_threshold)
-    assert result["close"]["retracement_pct"] == pytest.approx(
+    assert result["close"]["threshold_fraction"] == pytest.approx(close_threshold)
+    assert result["close"]["retracement_fraction"] == pytest.approx(
         0.004 * close_retracement_multiplier
     )
 
@@ -125,8 +125,8 @@ def test_inspect_trailing_matches_current_entry_and_close_formulas():
 def test_long_geometry_distinguishes_confirmation_from_order_reference():
     result = _inspect()
     entry = result["entry"]
-    threshold = entry["threshold_pct"]
-    retracement = entry["retracement_pct"]
+    threshold = entry["threshold_fraction"]
+    retracement = entry["retracement_fraction"]
     threshold_price = 20.0 * (1.0 - threshold)
 
     assert entry["geometry"]["threshold_direction"] == "below"
@@ -154,8 +154,8 @@ def test_short_reverses_entry_and_close_directions():
 
 def test_non_positive_retracement_reports_passive_mode():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["close"]["retracement_base_pct"] = -0.01
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["close"]["retracement_base_fraction"] = -0.01
 
     result = trailing_inspect.inspect_trailing(
         symbol="COIN",
@@ -171,9 +171,9 @@ def test_non_positive_retracement_reports_passive_mode():
     )
 
     assert result["entry"]["trailing_enabled"] is False
-    assert result["entry"]["retracement_pct"] == 0.0
+    assert result["entry"]["retracement_fraction"] == 0.0
     assert result["close"]["trailing_enabled"] is False
-    assert result["close"]["retracement_pct"] == 0.0
+    assert result["close"]["retracement_fraction"] == 0.0
     report = trailing_inspect.render_report(result)
     assert report.count("trailing disabled") == 2
     assert report.count("Passive analytical reference") == 2
@@ -219,8 +219,8 @@ def test_main_json_applies_parameter_override(monkeypatch, capsys):
     )
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["entry"]["threshold_base_pct"] == pytest.approx(0.03)
-    assert payload["overridden_parameters"] == ["entry.threshold_base_pct"]
+    assert payload["entry"]["threshold_base_fraction"] == pytest.approx(0.03)
+    assert payload["overridden_parameters"] == ["entry.threshold_base_fraction"]
 
 
 def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
@@ -297,11 +297,11 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     )
     expected_entry_threshold = 0.02 * (1.0 + 0.0025 * 2.0 + 0.005 * 10.0 + 0.5 * 0.5)
     expected_close_threshold = 0.01 + 0.5 * -0.02 + 0.0025 * 1.0 + 0.005 * 2.0
-    assert normal_half["entry"]["threshold_pct"] == pytest.approx(expected_entry_threshold)
+    assert normal_half["entry"]["threshold_fraction"] == pytest.approx(expected_entry_threshold)
     assert normal_half["entry"]["geometry"]["threshold_price"] == pytest.approx(
         100.0 * (1.0 - expected_entry_threshold)
     )
-    assert normal_half["close"]["threshold_pct"] == pytest.approx(expected_close_threshold)
+    assert normal_half["close"]["threshold_fraction"] == pytest.approx(expected_close_threshold)
 
     short_row = result["sides"]["short"]["scenarios"][0]
     assert short_row["entry"]["geometry"]["threshold_price"] > 100.0
@@ -806,7 +806,7 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
     assert "exposure-capped" in trailing_inspect.render_overview(trailing)
 
     passive_params = _params()
-    passive_params["entry"]["retracement_base_pct"] = 0.0
+    passive_params["entry"]["retracement_base_fraction"] = 0.0
     passive = trailing_inspect.build_overview(
         sources={"long": {"params": passive_params, "context": _context()}},
         parameter_source="test config",
@@ -819,7 +819,7 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
 
 def test_overview_marks_long_threshold_at_100_percent_unreachable():
     params = _params()
-    params["entry"]["threshold_base_pct"] = 1.0
+    params["entry"]["threshold_base_fraction"] = 1.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -838,8 +838,8 @@ def test_overview_marks_long_threshold_at_100_percent_unreachable():
 
 def test_overview_marks_short_close_threshold_at_100_percent_unreachable():
     params = _params()
-    params["close"]["threshold_base_pct"] = 1.0
-    params["close"]["threshold_we_weight"] = 0.0
+    params["close"]["threshold_base_fraction"] = 1.0
+    params["close"]["threshold_exposure_ratio_coefficient"] = 0.0
     params["close"]["threshold_volatility_1m_weight"] = 0.0
     params["close"]["threshold_volatility_1h_weight"] = 0.0
     result = trailing_inspect.build_overview(
@@ -862,8 +862,8 @@ def test_wel_reducer_precedes_unreachable_short_strategy_close():
     params = _params()
     params["close"].update(
         {
-            "threshold_base_pct": 1.0,
-            "threshold_we_weight": 0.0,
+            "threshold_base_fraction": 1.0,
+            "threshold_exposure_ratio_coefficient": 0.0,
             "threshold_volatility_1m_weight": 0.0,
             "threshold_volatility_1h_weight": 0.0,
         }
@@ -902,11 +902,11 @@ def test_overview_marks_100_percent_retracement_unreachable(
     pside, kind, inactive_reason
 ):
     params = _params()
-    params[kind]["retracement_base_pct"] = 1.0
+    params[kind]["retracement_base_fraction"] = 1.0
     params[kind]["retracement_volatility_1m_weight"] = 0.0
     params[kind]["retracement_volatility_1h_weight"] = 0.0
     if kind == "entry":
-        params[kind]["retracement_we_weight"] = 0.0
+        params[kind]["retracement_exposure_ratio_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={pside: {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -924,8 +924,8 @@ def test_overview_marks_100_percent_retracement_unreachable(
 
 def test_overview_qualifies_full_position_passive_close_sizing():
     params = _params()
-    params["close"]["retracement_base_pct"] = 0.0
-    params["close"]["threshold_we_weight"] = 0.0
+    params["close"]["retracement_base_fraction"] = 0.0
+    params["close"]["threshold_exposure_ratio_coefficient"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -1006,7 +1006,7 @@ def test_overview_qualifies_immediate_close_by_trailing_mode():
 )
 def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected):
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=cooldown)}},
         parameter_source="test config",
@@ -1019,8 +1019,8 @@ def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected)
 
 def test_overview_qualifies_negative_passive_threshold_touch_clamp():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["entry"]["threshold_base_pct"] = -0.1
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["entry"]["threshold_base_fraction"] = -0.1
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
         parameter_source="test config",
@@ -1036,8 +1036,8 @@ def test_overview_qualifies_negative_passive_threshold_touch_clamp():
 
 def test_zero_passive_threshold_reports_touch_and_ema_clamp():
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
-    params["entry"]["threshold_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
+    params["entry"]["threshold_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
         parameter_source="test config",
@@ -1222,9 +1222,9 @@ def test_passive_negative_close_threshold_keeps_rust_analytical_reference(
     params = _params()
     params["close"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
             "threshold_volatility_1m_weight": 0.0,
             "threshold_volatility_1h_weight": 0.0,
         }
@@ -1252,9 +1252,9 @@ def test_negative_threshold_exposure_change_uses_absolute_distance():
     params = _params()
     params["close"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": -0.1,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": -0.1,
             "threshold_volatility_1m_weight": 0.0,
             "threshold_volatility_1h_weight": 0.0,
         }
@@ -1281,9 +1281,9 @@ def test_passive_negative_entry_threshold_keeps_rust_analytical_reference(
     params = _params()
     params["entry"].update(
         {
-            "retracement_base_pct": 0.0,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
+            "retracement_base_fraction": 0.0,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
             "threshold_volatility_1m_weight": 0.0,
             "threshold_volatility_1h_weight": 0.0,
         }
@@ -1297,7 +1297,7 @@ def test_passive_negative_entry_threshold_keeps_rust_analytical_reference(
     )
 
     entry = result["sides"][pside]["scenarios"][0]["entry"]
-    assert entry["threshold_pct"] == pytest.approx(-0.02)
+    assert entry["threshold_fraction"] == pytest.approx(-0.02)
     assert entry["geometry"]["threshold_price"] is None
     assert entry["geometry"]["passive_reference_price"] == pytest.approx(expected_reference)
     table_row = trailing_inspect._scenario_rows(result["sides"][pside], "entry")[0]
@@ -1312,9 +1312,9 @@ def test_trailing_negative_entry_threshold_is_clamped_like_rust():
     params = _params()
     params["entry"].update(
         {
-            "retracement_base_pct": 0.01,
-            "threshold_base_pct": -0.02,
-            "threshold_we_weight": 0.0,
+            "retracement_base_fraction": 0.01,
+            "threshold_base_fraction": -0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
             "threshold_volatility_1m_weight": 0.0,
             "threshold_volatility_1h_weight": 0.0,
         }
@@ -1330,8 +1330,8 @@ def test_trailing_negative_entry_threshold_is_clamped_like_rust():
 
     entry = result["sides"]["long"]["scenarios"][0]["entry"]
     assert entry["trailing_enabled"] is True
-    assert entry["threshold_base_pct"] == 0.0
-    assert entry["threshold_pct"] == 0.0
+    assert entry["threshold_base_fraction"] == 0.0
+    assert entry["threshold_fraction"] == 0.0
 
 
 def test_scenario_prices_preserve_precision_for_small_anchor():
@@ -1352,7 +1352,7 @@ def test_scenario_prices_preserve_precision_for_small_anchor():
 def test_scenario_inputs_preserve_small_custom_values():
     params = _params()
     params["entry"]["threshold_volatility_1m_weight"] = 100_000.0
-    params["entry"]["threshold_we_weight"] = 100.0
+    params["entry"]["threshold_exposure_ratio_coefficient"] = 100.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
@@ -1401,7 +1401,7 @@ def test_overview_describes_effective_cooldown(base, floor, ceiling, weight, exp
     cfg = prepare_config(cfg, verbose=False)
     context = trailing_inspect._extract_side_context(cfg, "long")
     params = _params()
-    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["retracement_base_fraction"] = 0.0
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": context}},
         parameter_source="test config", price_anchor=100.0,
@@ -1431,3 +1431,19 @@ def test_overview_exports_fractional_ema_horizons_with_explicit_units(tmp_path, 
     assert "31.5 minutes" in report
     assert "4.25 one-hour candles" in report
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("stem,section,leaf", [
+    ("entry-threshold", "entry", "threshold_exposure_ratio_coefficient"),
+    ("entry-retracement", "entry", "retracement_exposure_ratio_coefficient"),
+    ("close-threshold", "close", "threshold_exposure_ratio_coefficient"),
+])
+def test_exposure_coefficient_flags_reach_the_actual_parameter_override(stem, section, leaf):
+    parser = trailing_inspect.build_parser()
+    args = parser.parse_args([f"--{stem}-exposure-ratio-coefficient", "0.375"])
+    params, _ = trailing_inspect.load_parameter_source(None, "long")
+    changed = trailing_inspect.apply_parameter_overrides(params, args)
+    assert params[section][leaf] == 0.375
+    assert len(changed) == 1 and leaf in changed[0]
+    with pytest.raises(SystemExit):
+        parser.parse_args([f"--{stem}-we-weight", "0.375"])

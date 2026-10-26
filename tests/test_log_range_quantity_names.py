@@ -272,7 +272,7 @@ def test_disabled_retracement_dead_genes_keep_native_ids_public_paths_and_bound_
     before = deepcopy(prepared)
     dead = optimizer_dead_param_values(prepared, globally_dead_only=globally_dead_only)
     expected = {
-        f"{side}_close_retracement_base_pct": 0.0,
+        f"{side}_close_retracement_base_fraction": 0.0,
         f"{side}_close_retracement_volatility_1h_weight": 0.25,
         f"{side}_close_retracement_volatility_1m_weight": 0.5,
     }

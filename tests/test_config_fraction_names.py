@@ -11,7 +11,7 @@ from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bo
 from config.param_paths import resolve_optimizer_key_path
 from config.public_names import PUBLIC_PATH_RENAMES, SHARED_SIDE_PATH_RENAMES
 from config.schema import get_template_config, get_expanded_config_prototype
-from config.strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
+from config.migrations.released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES
 from released_v8_fixtures import released_v8_policy
 from tools.migrate_config_v9 import migrate
 
@@ -27,7 +27,7 @@ PUBLIC_PAIRS = list(PUBLIC_PATH_RENAMES.items()) + [
     for old, new in SHARED_SIDE_PATH_RENAMES.items()
 ] + [
     (("bot", "long", "strategy", kind, *old), ("bot", "long", "strategy", kind, *new))
-    for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items() for old, new in fields.items()
+    for kind, fields in RELEASED_V8_STRATEGY_PATH_RENAMES.items() for old, new in fields.items()
 ]
 PUBLIC_PAIRS = [(old, new) for old, new in PUBLIC_PAIRS
                 if new[-1].endswith(("_fraction", "_margin"))]
@@ -49,8 +49,8 @@ def test_nondefault_fraction_bounds_keep_stable_native_optimizer_ids(kind):
     config = get_template_config()
     config["bot"]["portfolio"]["strategy_kind"] = kind
     keys = ["long_unstuck_close_pct", "long_unstuck_loss_allowance_pct", "long_risk_we_excess_allowance_fraction"]
-    keys += (["long_entry_initial_qty_pct", "long_entry_initial_ema_dist", "long_close_qty_pct"]
-             if kind == "trailing_martingale" else ["long_base_qty_pct", "long_offset"])
+    keys += (["long_entry_initial_qty_fraction", "long_entry_initial_ema_distance_fraction", "long_close_qty_fraction"]
+             if kind == "trailing_martingale" else ["long_base_qty_fraction", "long_offset_fraction"])
     bounds = {}
     for index, key in enumerate(keys):
         value = 0.012345678901234567 + index / 1000
@@ -110,8 +110,8 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
     ("close_pct", {"long_unstuck_close_pct", "short_unstuck_close_pct"}),
     ("long.unstuck.close_pct", {"long_unstuck_close_pct"}),
     ("bot.*.unstuck.close_pct", {"long_unstuck_close_pct", "short_unstuck_close_pct"}),
-    ("initial_qty_pct", {"long_entry_initial_qty_pct", "short_entry_initial_qty_pct"}),
-    ("strategy.trailing_martingale.close.qty_pct", {"long_close_qty_pct", "short_close_qty_pct"}),
+    ("initial_qty_pct", {"long_entry_initial_qty_fraction", "short_entry_initial_qty_fraction"}),
+    ("strategy.trailing_martingale.close.qty_pct", {"long_close_qty_fraction", "short_close_qty_fraction"}),
 ])
 def test_released_fixed_selector_shorthand_retains_exact_native_gene_membership(selector, expected):
     from config.param_paths import resolve_bound_selectors
@@ -177,7 +177,7 @@ def test_trailing_cli_uses_fraction_flags_at_the_native_calculation_boundary(ste
 
     parser = build_parser()
     args = parser.parse_args([f"--{stem}-base-fraction", "0.0123456789"])
-    assert getattr(args, stem.replace("-", "_") + "_base_pct") == 0.0123456789
+    assert getattr(args, stem.replace("-", "_") + "_base_fraction") == 0.0123456789
     with pytest.raises(SystemExit):
         parser.parse_args([f"--{stem}-base-pct", "0.0123456789"])
 

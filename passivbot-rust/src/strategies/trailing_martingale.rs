@@ -432,9 +432,9 @@ mod tests {
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -491,9 +491,9 @@ mod tests {
         };
         let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
             close: TrailingMartingaleCloseParams {
-                qty_pct: 0.1,
-                threshold_base_pct: 0.01,
-                threshold_we_weight: 0.01,
+                qty_fraction: 0.1,
+                threshold_base_fraction: 0.01,
+                threshold_exposure_ratio_coefficient: 0.01,
                 ..Default::default()
             },
             ..Default::default()
@@ -545,8 +545,8 @@ mod tests {
             };
             let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
                 close: TrailingMartingaleCloseParams {
-                    qty_pct: 1.0, threshold_base_pct: 0.001,
-                    retracement_base_pct: 0.001, ..Default::default()
+                    qty_fraction: 1.0, threshold_base_fraction: 0.001,
+                    retracement_base_fraction: 0.001, ..Default::default()
                 },
                 ..Default::default()
             });

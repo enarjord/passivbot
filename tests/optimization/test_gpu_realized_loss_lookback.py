@@ -166,7 +166,7 @@ def test_ema_shared_decay_gate_close_boundary_matches_rust():
 @pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_ema_loss_gate_memory_reuse_specialization_and_scratch(side, mode):
     proxy, _ = loss_gate_proxy((side,), hsl_mode=mode)
-    candidates = [{}, {f"{side}_base_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{side}_base_qty_fraction": 0.3}, {}]
     runner, expected = raw(proxy, candidates)
     assert expected["balance"][0].item() != expected["balance"][1].item()
     assert runner.dispatch_hsl_disabled
@@ -193,7 +193,7 @@ def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides
     from tools.gpu_parity import _native_dataset
 
     proxy, inputs = loss_gate_proxy(sides, coins)
-    candidates = [{}, {f"{sides[0]}_base_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{sides[0]}_base_qty_fraction": 0.3}, {}]
     expected = proxy.evaluate_results(candidates)
 
     def forbidden(*args, **kwargs):

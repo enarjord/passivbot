@@ -50,8 +50,8 @@ pub fn calc_bid_price(
         psize,
         exchange.c_mult,
         effective_wallet_exposure_limit_ratio,
-    ) * params.offset_psize_weight;
-    let effective_offset = params.offset * calc_offset_multiplier(state, params);
+    ) * params.inventory_offset_exposure_coefficient;
+    let effective_offset = params.offset_fraction * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
     let selected_price = f64::min(state.order_book.bid, target);
     if selected_price <= 0.0 {
@@ -77,8 +77,8 @@ pub fn calc_ask_price(
         psize,
         exchange.c_mult,
         effective_wallet_exposure_limit_ratio,
-    ) * params.offset_psize_weight;
-    let effective_offset = params.offset * calc_offset_multiplier(state, params);
+    ) * params.inventory_offset_exposure_coefficient;
+    let effective_offset = params.offset_fraction * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
     let selected_price = f64::max(state.order_book.ask, target);
     tolerant_round_up_preserve_step(selected_price, exchange.price_step).max(exchange.price_step)
@@ -124,14 +124,14 @@ fn calc_base_clip_qty(
     }
     let effective_limit =
         wallet_exposure_limit_ratio_with_allowance_from_base(bot_params, effective_wallet_exposure_limit_ratio);
-    if effective_limit <= 0.0 || params.base_qty_pct <= 0.0 {
+    if effective_limit <= 0.0 || params.base_qty_fraction <= 0.0 {
         return 0.0;
     }
     f64::max(
         calc_min_entry_qty(price, exchange),
         round_(
             cost_to_qty(
-                balance * effective_limit * params.base_qty_pct,
+                balance * effective_limit * params.base_qty_fraction,
                 price,
                 exchange.c_mult,
             ),
@@ -174,7 +174,7 @@ fn calc_entry_qty(
         StrategySide::Long => signed_we_ratio.max(0.0),
         StrategySide::Short => (-signed_we_ratio).max(0.0),
     };
-    let multiplier = (1.0 + same_side_bias * params.entry_double_down_factor).max(1.0);
+    let multiplier = (1.0 + same_side_bias * params.entry_qty_exposure_coefficient).max(1.0);
     round_(base_qty * multiplier, exchange.qty_step)
 }
 
@@ -399,9 +399,9 @@ mod tests {
 
     fn base_params() -> EmaAnchorParams {
         EmaAnchorParams {
-            base_qty_pct: 0.01,
-            offset: 0.01,
-            offset_psize_weight: 0.1,
+            base_qty_fraction: 0.01,
+            offset_fraction: 0.01,
+            inventory_offset_exposure_coefficient: 0.1,
             ..Default::default()
         }
     }
@@ -712,7 +712,7 @@ mod tests {
         let position = 8192.0_f64;
         let clip = f64::from_bits(position.to_bits() - 1);
         let mut params = base_params();
-        params.base_qty_pct = 1.0;
+        params.base_qty_fraction = 1.0;
         for step in [1e-12, 2.0_f64.powi(-40)] {
             let mut exchange = ExchangeParams {
                 qty_step: step,
@@ -795,8 +795,8 @@ mod tests {
             ..Default::default()
         };
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.01,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.01,
             ..Default::default()
         };
 
@@ -836,8 +836,8 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
 
@@ -862,8 +862,8 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
 
@@ -886,8 +886,8 @@ mod tests {
         let exchange = base_exchange();
         let bot_params = BotParams::default();
         let strategy_params = StrategyParams::EmaAnchor(EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         });
         let position = Position::default();
@@ -929,8 +929,8 @@ mod tests {
             ..base_exchange()
         };
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
 
@@ -950,8 +950,8 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 2.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 2.0,
             ..base_params()
         };
 
@@ -976,8 +976,8 @@ mod tests {
             ..base_exchange()
         };
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
 
@@ -1010,8 +1010,8 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.0,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
 
@@ -1040,8 +1040,8 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.0,
-            offset_psize_weight: 0.2,
+            offset_fraction: 0.0,
+            inventory_offset_exposure_coefficient: 0.2,
             ..base_params()
         };
 
@@ -1097,7 +1097,7 @@ mod tests {
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
-            offset: 0.01,
+            offset_fraction: 0.01,
             offset_volatility_1m_weight: 2.0,
             offset_volatility_1h_weight: 3.0,
             ..base_params()
@@ -1111,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_double_down_factor_only_scales_same_side_entry_qty() {
+    fn entry_qty_exposure_coefficient_only_scales_same_side_entry_qty() {
         let state = StateParams {
             order_book: OrderBook {
                 bid: 1000.0,
@@ -1122,8 +1122,8 @@ mod tests {
         let exchange = base_exchange();
         let bot_params = BotParams::default();
         let params = EmaAnchorParams {
-            entry_double_down_factor: 1.0,
-            offset_psize_weight: 0.0,
+            entry_qty_exposure_coefficient: 1.0,
+            inventory_offset_exposure_coefficient: 0.0,
             ..base_params()
         };
         let strategy_params = StrategyParams::EmaAnchor(params);

@@ -211,7 +211,7 @@ def _format_config_change_message(
     return "changed %s %s -> %s", (full_path, old_value, new_value)
 
 
-Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
+Path = Tuple[str, ...]  # ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_base_fraction")
 FIELD_RUNTIME_RULES = {
     "backtest.offline": {
         "owner": "backtest",

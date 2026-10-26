@@ -3047,7 +3047,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
         metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
         flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
-        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+        for key in ("entry_retracement_base_fraction", "close_retracement_base_fraction"):
             column = keys.index(key)
             underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
             scaled[underflow, column] = np.finfo(np.float32).tiny

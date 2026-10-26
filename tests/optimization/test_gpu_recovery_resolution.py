@@ -245,7 +245,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
             params = inputs[0]["bot"][side]["strategy"][strategy]
             for section in ("entry", "close"):
                 params[section].update(
-                    threshold_base_pct=.9, threshold_exposure_ratio_coefficient=0.,
+                    threshold_base_fraction=.9, threshold_exposure_ratio_coefficient=0.,
                     threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
                 )
     base = mps_kernel._MulticoinReplayRunner

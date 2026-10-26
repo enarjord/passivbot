@@ -1541,7 +1541,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
         "configs/examples/default_trailing_martingale_long.json", log_info=False
     )
-    assert "threshold_we_weight" not in (
+    assert "threshold_exposure_ratio_coefficient" not in (
         source_config["bot"]["long"].get("strategy", {})
         .get("trailing_martingale", {}).get("close", {})
     )

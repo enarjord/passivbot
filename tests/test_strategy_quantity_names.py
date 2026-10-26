@@ -1,4 +1,4 @@
-"""Public strategy quantities keep values and the independently owned native ABI."""
+"""Public and native strategy quantities use the same names and preserve values."""
 
 from copy import deepcopy
 import json
@@ -20,17 +20,17 @@ from tools.migrate_config_v9 import migrate
 
 FIELDS = [
     ("trailing_martingale", ("entry", "double_down_factor"),
-     ("entry", "reentry_qty_multiplier"), "entry_double_down_factor", 1.375),
+     ("entry", "reentry_qty_multiplier"), "entry_reentry_qty_multiplier", 1.375),
     ("trailing_martingale", ("entry", "threshold_we_weight"),
-     ("entry", "threshold_exposure_ratio_coefficient"), "entry_threshold_we_weight", 2.125),
+     ("entry", "threshold_exposure_ratio_coefficient"), "entry_threshold_exposure_ratio_coefficient", 2.125),
     ("trailing_martingale", ("entry", "retracement_we_weight"),
-     ("entry", "retracement_exposure_ratio_coefficient"), "entry_retracement_we_weight", 0.375),
+     ("entry", "retracement_exposure_ratio_coefficient"), "entry_retracement_exposure_ratio_coefficient", 0.375),
     ("trailing_martingale", ("close", "threshold_we_weight"),
-     ("close", "threshold_exposure_ratio_coefficient"), "close_threshold_we_weight", -0.0125),
+     ("close", "threshold_exposure_ratio_coefficient"), "close_threshold_exposure_ratio_coefficient", -0.0125),
     ("ema_anchor", ("entry_double_down_factor",),
-     ("entry_qty_exposure_coefficient",), "entry_double_down_factor", 0.625),
+     ("entry_qty_exposure_coefficient",), "entry_qty_exposure_coefficient", 0.625),
     ("ema_anchor", ("offset_psize_weight",),
-     ("inventory_offset_exposure_coefficient",), "offset_psize_weight", 0.125),
+     ("inventory_offset_exposure_coefficient",), "inventory_offset_exposure_coefficient", 0.125),
 ]
 
 
@@ -90,7 +90,7 @@ def test_new_strategy_quantities_roundtrip_with_unchanged_native_values(kind, ol
     for side in (("long", "short") if scope == "global" else (scope,)):
         public = prepared["bot"][side]["strategy"][kind]
         native = build_runtime_strategy_side(prepared["bot"][side], strategy_kind=kind, pside=side)
-        assert at(native, old) == value
+        assert at(native, new) == value
         assert native == lower_runtime_strategy_side(kind, public)
         assert project_native_strategy_side(kind, native) == public
         assert resolve_optimizer_key_path(prepared, f"{side}_{native_id}") == (
@@ -138,9 +138,9 @@ def test_v8_strategy_quantities_keep_sources_bounds_files_and_final_targets(tmp_
 
 
 @pytest.mark.parametrize("kind,old,new,native_id,value", FIELDS)
-def test_native_metadata_retains_original_names_and_optimizer_ids(kind, old, new, native_id, value):
+def test_native_metadata_uses_the_canonical_quantity_names_and_optimizer_ids(kind, old, new, native_id, value):
     records = [row for row in pbr.get_strategy_spec(kind)["parameters"]
-               if row["side"] == "long" and tuple(row["config_path"][2:]) == old]
+               if row["side"] == "long" and tuple(row["config_path"][2:]) == new]
     assert len(records) == 1
     assert records[0]["name"] == native_id
     assert records[0]["optimize_key"] == f"long_{native_id}"

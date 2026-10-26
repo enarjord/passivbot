@@ -3966,9 +3966,9 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                 symbol="XLM/USDT:USDT",
                 pside="long",
                 data={
-                    "threshold_pct": 0.031,
+                    "threshold_fraction": 0.031,
                     "threshold_price": 0.20123,
-                    "retracement_pct": 0.012,
+                    "retracement_fraction": 0.012,
                     "retracement_price": 0.19876,
                     "projected_retracement_price": 0.19765,
                     "secret_marker": "trailing-secret",

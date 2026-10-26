@@ -27,7 +27,7 @@ For each side (`bot.long` and `bot.short`), forager uses:
 - `unilateralness_ema_span_minutes` (floating-point span, default 60)
 - `ema_span_0_minutes`
 - `ema_span_1_minutes`
-- `entry_initial_ema_dist`
+- `entry_initial_ema_distance_fraction`
 
 It also depends on live/backtest market state:
 
@@ -81,11 +81,11 @@ EMA readiness measures distance to the actual initial-entry threshold, not just 
 
 For long:
 
-`readiness = bid / (ema_lower * (1 - entry_initial_ema_dist)) - 1`
+`readiness = bid / (ema_lower * (1 - entry_initial_ema_distance_fraction)) - 1`
 
 For short:
 
-`readiness = 1 - ask / (ema_upper * (1 + entry_initial_ema_dist))`
+`readiness = 1 - ask / (ema_upper * (1 + entry_initial_ema_distance_fraction))`
 
 Lower is better.
 

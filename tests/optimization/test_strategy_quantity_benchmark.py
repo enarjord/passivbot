@@ -38,10 +38,10 @@ def test_feature_flags_and_frozen_zero_sensitivities_match_native_packets(kind, 
             "unilateralness": 0.0,
         }
         if kind == "trailing_martingale":
-            assert native[side]["entry"]["double_down_factor"] == 1.375
-            assert native[side]["entry"]["threshold_we_weight"] == (0.01 if exposure else 0.0)
-            assert native[side]["close"]["threshold_we_weight"] == (-0.01 if exposure else 0.0)
-            assert native[side]["entry"]["retracement_we_weight"] == 0.0
+            assert native[side]["entry"]["reentry_qty_multiplier"] == 1.375
+            assert native[side]["entry"]["threshold_exposure_ratio_coefficient"] == (0.01 if exposure else 0.0)
+            assert native[side]["close"]["threshold_exposure_ratio_coefficient"] == (-0.01 if exposure else 0.0)
+            assert native[side]["entry"]["retracement_exposure_ratio_coefficient"] == 0.0
             for leg in ("entry", "close"):
                 for role in ("threshold", "retracement"):
                     for horizon in ("1m", "1h"):
@@ -49,8 +49,8 @@ def test_feature_flags_and_frozen_zero_sensitivities_match_native_packets(kind, 
         else:
             # This field used to be a double-down factor, so it must not be
             # newly classified as an optional distance weight by its suffix.
-            assert native[side]["entry_double_down_factor"] == 0.625
-            assert native[side]["offset_psize_weight"] == (0.1 if volatility else 0.0)
+            assert native[side]["entry_qty_exposure_coefficient"] == 0.625
+            assert native[side]["inventory_offset_exposure_coefficient"] == (0.1 if volatility else 0.0)
             for horizon in ("1m", "1h"):
                 assert native[side][f"offset_volatility_{horizon}_weight"] == (0.1 if volatility else 0.0)
     _population, _vectors, bounds = sampled_population(config, case, 3, 7)

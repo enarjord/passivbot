@@ -295,7 +295,7 @@ def reject_retired_gpu_selector(selector, value=None, *, context):
             reject_retired_gpu_selector(f"{selector}.{key}", child, context=context)
 
 
-def canonical_released_v8_path(parts):
+def canonical_released_v8_path(parts, *, strategy_kind=None):
     """Identify one released authored leaf before aliases or defaults can erase it."""
     from config.optimize_bounds import SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY
     FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
@@ -365,6 +365,10 @@ def canonical_released_v8_path(parts):
         parts.insert(len(parts) - 1, "entry")
     from config.public_names import released_public_path
 
+    from .released_v8_strategy import released_strategy_bound_path, released_strategy_selector
+
+    parts = released_strategy_bound_path(parts, strategy_kind=strategy_kind)
+    parts = released_strategy_selector(parts, strategy_kind=strategy_kind)
     return released_public_path(parts)
 
 
@@ -372,6 +376,9 @@ def reject_v8_alias_conflicts(source):
     """Reject two authored spellings of one value before precedence can erase it."""
     from config.authored import _METADATA_KEYS
 
+    from .released_v8_strategy import released_strategy_kind
+
+    kind = released_strategy_kind(source, default="trailing_martingale")
     seen = {}
 
     def visit(node, parts=()):
@@ -386,7 +393,7 @@ def reject_v8_alias_conflicts(source):
             for index, child in enumerate(node):
                 visit(child, (*parts, str(index)))
         else:
-            path = canonical_released_v8_path(parts)
+            path = canonical_released_v8_path(parts, strategy_kind=kind)
             value = [node] if parts[-2:] == ("backtest", "exchange") and isinstance(node, str) else node
             previous = seen.get(path)
             if previous is not None and previous[1] != value:
@@ -459,7 +466,7 @@ def _migrate_shared_fixed_selector(path, *, scope):
     return path
 
 
-def released_runtime_selector(path):
+def released_runtime_selector(path, *, strategy_kind=None):
     """Convert an explicit released selector, including a coin-document prefix.
 
     Ordinary loading never calls this adapter. Referenced coin documents and
@@ -471,7 +478,9 @@ def released_runtime_selector(path):
     from .shared_policy import shared_policy_selector
 
     reject_retired_gpu_selector(path, context="optimizer selector")
-    parts = path.split(".")
+    from .released_v8_strategy import released_strategy_selector
+
+    parts = list(released_strategy_selector(path.split("."), strategy_kind=strategy_kind))
     if (len(parts) >= 2 and parts[0] in {"long", "short"}
             and parts[1] in FLAT_BOT_KEY_TO_GROUP_PATH):
         parts.insert(0, "bot")
@@ -537,6 +546,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from config.public_names import rewrite_released_public_names
 
     result = deepcopy(source)
+    from .released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES, released_strategy_kind
+
+    released_kind = released_strategy_kind(
+        result, default=None if sparse else "trailing_martingale"
+    )
     if not sparse:
         retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes,
                            best_effort=best_effort)
@@ -562,6 +576,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         value = node.pop(old)
         put(node, (new,), value, f"{path}.{old}")
         record(f"{path}.{old}", value, {new: value}, "canonical v9 field rename")
+
+    # Normalize frozen strategy IDs before unstuck migration groups flat bounds
+    # through current native metadata. The final public-name pass is idempotent.
+    from .released_v8_strategy import rewrite_released_strategy_bounds
+
+    rewrite_released_strategy_bounds(result, strategy_kind=released_kind, record=record)
 
     # Released flat bounds are source spellings, independent of current optimizer IDs.
     bound_values = result.get("optimize", {}).get("bounds", {})
@@ -596,11 +616,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 reject_retired_gpu_selector(path, context="optimizer selector")
                 return path
             path = converted
-        converted = released_runtime_selector(path)
+        converted = released_runtime_selector(path, strategy_kind=released_kind)
         if parameter_selector:
             from config.public_names import released_fixed_selector
 
-            converted = released_fixed_selector(converted)
+            converted = released_fixed_selector(converted, strategy_kind=released_kind)
         return converted
 
     def patch(raw, inherited_scope, path):
@@ -809,7 +829,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         migrate_control_sentinels(result, record=record)
         for side in ("long", "short"):
             canonicalize_released_shared_bot_side(result.get("bot", {}).get(side))
-        rewrite_released_public_names(result, record=record)
+        rewrite_released_public_names(result, record=record, strategy_kind=released_kind)
         return result
     # All released-layout structural transforms run only inside this converter.
     from . import apply_migrations, apply_backward_compatibility_renames
@@ -844,6 +864,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         result, verbose=False,
         strategy_defaults={side: released["bot"][side]["strategy"][kind]
                            for side in ("long", "short")},
+        scenario_strategy_paths={
+            key: RELEASED_V8_STRATEGY_PATH_RENAMES[kind][
+                ("entry", key) if kind == "trailing_martingale" else (key,)
+            ]
+            for key in ("ema_span_0", "ema_span_1")
+        },
     )
     move_operational_live(result, record=record)
     from .control_sentinels import migrate_control_sentinels
@@ -872,7 +898,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         old = bounds.pop("hsl")
         put(bounds, ("portfolio", "hsl"), old, "optimize.bounds.hsl")
         record("optimize.bounds.hsl", old, {"portfolio.hsl": old}, "portfolio HSL bound authority")
-    rewrite_released_public_names(result, record=record)
+    rewrite_released_public_names(result, record=record, strategy_kind=kind)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
     from config.scoring import normalize_scoring_config

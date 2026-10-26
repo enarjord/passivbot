@@ -4775,7 +4775,7 @@ def emit_entry_min_effective_cost_blocked_event(
     effective_min_cost: float,
     balance: float,
     effective_limit: float,
-    entry_initial_qty_pct: float,
+    entry_initial_qty_fraction: float,
 ) -> None:
     try:
         bot._emit_live_event(
@@ -4793,7 +4793,7 @@ def emit_entry_min_effective_cost_blocked_event(
                 "effective_min_cost": _safe_float(effective_min_cost),
                 "balance": _safe_float(balance),
                 "effective_limit": _safe_float(effective_limit),
-                "entry_initial_qty_pct": _safe_float(entry_initial_qty_pct),
+                "entry_initial_qty_fraction": _safe_float(entry_initial_qty_fraction),
                 "action": "skip_create",
             },
         )
@@ -4874,16 +4874,16 @@ def _trailing_threshold_projection(
     kind: str,
     pside: str,
     threshold_price: float | None,
-    retracement_pct: float | None,
+    retracement_fraction: float | None,
 ) -> float | None:
-    if threshold_price is None or retracement_pct is None:
+    if threshold_price is None or retracement_fraction is None:
         return None
-    if threshold_price <= 0.0 or retracement_pct < 0.0:
+    if threshold_price <= 0.0 or retracement_fraction < 0.0:
         return None
     if (kind == "entry" and pside == "long") or (kind == "close" and pside == "short"):
-        return threshold_price * (1.0 + retracement_pct)
+        return threshold_price * (1.0 + retracement_fraction)
     if (kind == "entry" and pside == "short") or (kind == "close" and pside == "long"):
-        return threshold_price * (1.0 - retracement_pct)
+        return threshold_price * (1.0 - retracement_fraction)
     return None
 
 
@@ -4891,7 +4891,7 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
     kind = str(payload.get("kind") or "unknown")
     pside = str(payload.get("pside") or "unknown")
     threshold_price = _safe_float(payload.get("threshold_price"))
-    retracement_pct = _safe_float(payload.get("retracement_pct"))
+    retracement_fraction = _safe_float(payload.get("retracement_fraction"))
     out: dict[str, Any] = {
         "kind": kind,
         "diagnostics_supported": bool(payload.get("diagnostics_supported", True)),
@@ -4912,15 +4912,15 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
             if "retracement_met" in payload
             else None
         ),
-        "threshold_pct": _safe_float(payload.get("threshold_pct")),
+        "threshold_fraction": _safe_float(payload.get("threshold_fraction")),
         "threshold_price": threshold_price,
-        "retracement_pct": retracement_pct,
+        "retracement_fraction": retracement_fraction,
         "retracement_price": _safe_float(payload.get("retracement_price")),
         "threshold_projection_retracement_price": _trailing_threshold_projection(
             kind=kind,
             pside=pside,
             threshold_price=threshold_price,
-            retracement_pct=retracement_pct,
+            retracement_fraction=retracement_fraction,
         ),
         "current_price": _safe_float(payload.get("current_price")),
         "position_price": _safe_float(payload.get("position_price")),

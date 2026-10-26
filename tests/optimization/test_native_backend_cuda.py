@@ -108,7 +108,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             node = node.setdefault(part, {})
         node[path[-1]] = values
 
-    quantity_key = "base_qty_pct" if strategy_kind == "ema_anchor" else "entry_initial_qty_pct"
+    quantity_key = "base_qty_fraction" if strategy_kind == "ema_anchor" else "entry_initial_qty_fraction"
     for side in ("long", "short"):
         for key, field in (("n_positions", "max_positions"),
                            ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit_ratio")):

@@ -60,7 +60,7 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
         assert candles.shape == (128, 3, 4)
         assert int(timestamps[-1]) - int(timestamps[0]) == 127 * 60_000
         assert candles[0, 0, 2] < candles[0, 1, 2] < candles[0, 2, 2]
-        quantity = "base_qty_pct" if strategy == "ema_anchor" else "entry_initial_qty_pct"
+        quantity = "base_qty_fraction" if strategy == "ema_anchor" else "entry_initial_qty_fraction"
         quantity_path = ("base_qty_fraction" if strategy == "ema_anchor"
                          else "entry.initial_qty_fraction")
         strategy_bounds = {"base_qty_fraction": [0.01, 0.05]} if strategy == "ema_anchor" else {

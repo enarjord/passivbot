@@ -3614,7 +3614,7 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
                     "pside": "long",
                     "balance": 1000.0,
                     "effective_limit": 0.1,
-                    "entry_initial_qty_pct": 0.01,
+                    "entry_initial_qty_fraction": 0.01,
                     "projected_initial_cost": 1.0,
                     "effective_min_cost": 10.0,
                 }
@@ -4712,8 +4712,8 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
             "status": "waiting_threshold",
             "threshold_met": False,
             "retracement_met": False,
-            "threshold_pct": 0.01,
-            "retracement_pct": 0.004,
+            "threshold_fraction": 0.01,
+            "retracement_fraction": 0.004,
             "threshold_price": 99_000.0,
             "retracement_price": 99_396.0,
         },
@@ -4786,20 +4786,20 @@ def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypa
             "symbol": "BTC/USDT:USDT",
             "pside": "long",
             "kind": "entry",
-            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+            "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
         },
         {
             "symbol": "ETH/USDT:USDT",
             "pside": "long",
             "kind": "entry",
-            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+            "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
         },
     ]
     bot._build_trailing_status_items = lambda: deepcopy(items)
 
     bot._maybe_log_trailing_status()
     now[0] += 5 * 60 * 1000
-    items[0]["payload"]["threshold_pct"] = 0.0105
+    items[0]["payload"]["threshold_fraction"] = 0.0105
     bot._maybe_log_trailing_status()
 
     assert [event["operator_visible"] for event in captured_events] == [
@@ -4826,7 +4826,7 @@ def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
         "symbol": "BTC/USDT:USDT",
         "pside": "long",
         "kind": "entry",
-        "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+        "payload": {"status": "waiting_threshold", "threshold_fraction": 0.01},
     }
     items = [deepcopy(item)]
     bot._build_trailing_status_items = lambda: deepcopy(items)
@@ -7759,7 +7759,7 @@ def test_unstuck_allowance_uses_raw_not_snapped_balance():
 def test_effective_min_cost_filter_uses_snapped_balance():
     bot = _unit_bot()
     bot.config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
-    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_fraction": 0.5}
     bot.balance = 100.0
     bot.balance_raw = 10.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
@@ -7769,7 +7769,7 @@ def test_effective_min_cost_filter_uses_snapped_balance():
         1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot.bp = lambda pside, key, symbol=None: (
-        0.5 if key == "entry_initial_qty_pct" else 0.0
+        0.5 if key == "entry_initial_qty_fraction" else 0.0
     )
 
     # Passes only when snapped balance is used:
@@ -7798,7 +7798,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
     bot.bot_value = lambda pside, key: (
         1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
-    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_fraction": 0.5}
     monkeypatch.setattr(
         passivbot_module, "normalize_strategy_kind", lambda value: "ema_anchor"
     )

@@ -6,6 +6,19 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 flat strategy search bounds when unstuck EMA spans are omitted;
+  convert frozen optimizer IDs before inferring the missing spans.
+
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
+- Align native strategy sizing, price fractions and exposure coefficients with the authored
+  configuration names, including optimizer IDs, calculator keywords and trailing diagnostics.
+  Trailing-inspector exposure sensitivities use `--*-exposure-ratio-coefficient` flags.
+  Numeric values, calculator argument positions and GPU parameter columns are unchanged.
+  Released-v8 conversion retains its frozen source vocabulary; earlier dev-v9 native names
+  are unsupported.
+
 - Align native exposure budgets, enforcer thresholds and optimizer IDs with explicit `_ratio`
   names, and excess allowances with `_fraction`. Update replay packets, GPU parameter labels,
   diagnostics and monitoring together without changing sizing, bounds or parameter slots.
@@ -43,8 +56,8 @@ since the latest release tag; these features may already be available when insta
 
 - Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
   `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses
-  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds,
-  formulas, and native optimizer identifiers are unchanged. Explicit v8 conversion emits the
+  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds
+  and trading formulas are unchanged. Explicit v8 conversion emits the
   new names; earlier development-v9 spellings are unsupported.
 
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
