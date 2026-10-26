@@ -58,7 +58,7 @@ def _forager_score_weights(volume=0.0, ema_readiness=0.0, volatility=0.0):
     return {
         "volume": float(volume),
         "ema_readiness": float(ema_readiness),
-        "volatility": float(volatility),
+        "log_range": float(volatility),
     }
 
 
@@ -889,9 +889,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1019,9 +1019,9 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1135,9 +1135,9 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 760.0 if pside == "long" else 0.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 0.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1145,7 +1145,7 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
                 return {
                     "volume": 1.0 if pside == "long" else 0.0,
                     "ema_readiness": 0.0,
-                    "volatility": 0.0,
+                    "log_range": 0.0,
                 }
             return 0.0
 
@@ -1287,7 +1287,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 0.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1497,9 +1497,9 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1674,9 +1674,9 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1861,9 +1861,9 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -1978,9 +1978,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -2096,9 +2096,9 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -2205,9 +2205,9 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
         is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 5.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 7.0
             if key == "forager_volume_drop_pct":
                 return 0.0
@@ -2287,8 +2287,8 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
             values = {
                 "ema_span_0_minutes": 10.0,
                 "ema_span_1_minutes": 25.0,
-                "forager_volume_ema_span_1m": 7.0,
-                "forager_volatility_ema_span_1m": 11.0,
+                "forager_volume_ema_span_minutes": 7.0,
+                "forager_log_range_ema_span_minutes": 11.0,
                 "entry_volatility_ema_span_hours": 3.0,
             }
             return values.get(key, 0.0)
@@ -3031,9 +3031,9 @@ async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(
             return 0.0
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -3135,8 +3135,8 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
             if key in {
                 "ema_span_0_minutes",
                 "ema_span_1_minutes",
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0
@@ -3222,7 +3222,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return span
             return 0.0
 
@@ -3355,8 +3355,8 @@ async def test_forager_candidate_refresh_does_not_charge_healthy_scan(monkeypatc
 
         def bp(self, _pside, key, _symbol):
             if key in {
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0
@@ -3442,8 +3442,8 @@ async def test_forager_candidate_refresh_skips_unused_native_h1_surface(monkeypa
             if key == "log_range_ema_span_1h_candles":
                 return 100.0
             if key in {
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0
@@ -3526,7 +3526,7 @@ async def test_forager_candidate_refresh_tolerates_tail_within_target_age(monkey
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -3603,7 +3603,7 @@ async def test_forager_candidate_refresh_bounds_and_rotates_health_scans(monkeyp
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -3687,7 +3687,7 @@ async def test_forager_candidate_refresh_keeps_unfetched_stale_surfaces_pending(
             return 0.0
 
         def bp(self, _pside, key, _symbol):
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -3861,7 +3861,7 @@ async def test_forager_candidate_refresh_prioritizes_cold_1m_before_1h(monkeypat
                 return 784.0
             if key == "entry_log_range_1h_coefficient":
                 return 1.0
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -3957,7 +3957,7 @@ async def test_forager_candidate_refresh_interleaves_h1_health_scans(monkeypatch
                 return 10.0
             if key == "entry_log_range_1h_coefficient":
                 return 1.0
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -4084,7 +4084,7 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
                 return self.h1_required
             if key == "entry_log_range_1h_coefficient":
                 return 1.0
-            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+            if key in {"forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes"}:
                 return 10.0
             return 0.0
 
@@ -4214,8 +4214,8 @@ async def test_forager_candidate_refresh_does_not_back_off_empty_h1_result(monke
             if key == "entry_log_range_1h_coefficient":
                 return 1.0
             if key in {
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0
@@ -4294,8 +4294,8 @@ async def test_forager_candidate_refresh_success_detail_is_debug(monkeypatch, ca
 
         def bp(self, pside, key, symbol):
             if key in {
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0
@@ -4399,9 +4399,9 @@ async def test_forager_candidate_refresh_skips_only_urgent_symbols(monkeypatch):
             return 0.0
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -4471,9 +4471,9 @@ async def test_forager_candidate_refresh_caps_accumulated_budget(monkeypatch):
             return 0.0
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -4553,9 +4553,9 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
             return pb_mod.Passivbot._forager_refresh_budget(self, *args, **kwargs)
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -4852,9 +4852,9 @@ async def test_forager_candidate_refresh_sleep_respects_wall_time_cap(monkeypatc
             return 10.0
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -4925,9 +4925,9 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
             return 0.0
 
         def bp(self, pside, key, symbol):
-            if key == "forager_volume_ema_span_1m":
+            if key == "forager_volume_ema_span_minutes":
                 return 10.0
-            if key == "forager_volatility_ema_span_1m":
+            if key == "forager_log_range_ema_span_minutes":
                 return 10.0
             return 0.0
 
@@ -5011,8 +5011,8 @@ async def test_forager_candidate_refresh_skips_non_refreshable_sparse_gap(monkey
 
         def bp(self, _pside, key, _symbol):
             if key in {
-                "forager_volume_ema_span_1m",
-                "forager_volatility_ema_span_1m",
+                "forager_volume_ema_span_minutes",
+                "forager_log_range_ema_span_minutes",
             }:
                 return 10.0
             return 0.0

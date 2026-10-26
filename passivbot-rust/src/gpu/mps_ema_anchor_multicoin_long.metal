@@ -132,8 +132,8 @@ struct EmaMulticoinSideState {
     float volatility_1h[MAX_COINS];
     AdaptiveTiming adaptive[MAX_COINS];
     float effective_cooldown[MAX_COINS];
-    float forager_volume[MAX_COINS];
-    float forager_volatility[MAX_COINS];
+    float forager_volume_ema[MAX_COINS];
+    float forager_log_range_ema[MAX_COINS];
     float psize[MAX_COINS];
     float pprice[MAX_COINS];
     float last_increase_k[MAX_COINS];
@@ -200,11 +200,11 @@ struct EmaMulticoinSideConfig {
     AdaptiveTiming adaptive;
     float cooldown_min;
     float twel;
-    float forager_volume_span;
-    float forager_volatility_span;
+    float forager_volume_ema_span_candles;
+    float forager_log_range_ema_span_candles;
     float w_volume;
     float w_ready;
-    float w_volatility;
+    float w_log_range;
     int n_positions;
     float allowance_fraction;
     bool scale_hsl_budget;
@@ -219,7 +219,7 @@ struct EmaMulticoinSideConfig {
     float unstuck_loss_allowance_fraction;
     float unstuck_exposure_trigger_ratio;
     float alpha_forager_volume;
-    float alpha_forager_volatility;
+    float alpha_forager_log_range;
     HslState hsl_template;
     bool coin_hsl_mode;
 };
@@ -444,21 +444,21 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     config.cooldown_min = params[po + 10];
     config.adaptive = load_adaptive_timing(params, po + 39);
     config.twel = params[po + 11];
-    config.forager_volume_span = params[po + 12];
-    config.forager_volatility_span = params[po + 13];
+    config.forager_volume_ema_span_candles = params[po + 12];
+    config.forager_log_range_ema_span_candles = params[po + 13];
     config.w_volume = params[po + 14];
     config.w_ready = params[po + 15];
-    config.w_volatility = params[po + 16];
-    float weight_sum = config.w_volume + config.w_ready + config.w_volatility + config.adaptive.score_weight;
+    config.w_log_range = params[po + 16];
+    float weight_sum = config.w_volume + config.w_ready + config.w_log_range + config.adaptive.score_weight;
     if (weight_sum > 0.0f) {
         config.w_volume /= weight_sum;
         config.w_ready /= weight_sum;
-        config.w_volatility /= weight_sum;
+        config.w_log_range /= weight_sum;
         config.adaptive.score_weight /= weight_sum;
     } else {
         config.w_volume = 0.0f;
         config.w_ready = 1.0f;
-        config.w_volatility = 0.0f;
+        config.w_log_range = 0.0f;
     }
     config.n_positions = max(1, int(rint(params[po + 17])));
     config.allowance_fraction = params[po + 18];
@@ -473,11 +473,11 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     config.unstuck_ema_distance_fraction = params[po + 27];
     config.unstuck_loss_allowance_fraction = params[po + 28];
     config.unstuck_exposure_trigger_ratio = params[po + 29];
-    config.alpha_forager_volume = config.forager_volume_span > 0.0f
-        ? clamp(2.0f / (config.forager_volume_span + 1.0f), 0.0f, 1.0f)
+    config.alpha_forager_volume = config.forager_volume_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.forager_volume_ema_span_candles + 1.0f), 0.0f, 1.0f)
         : 0.0f;
-    config.alpha_forager_volatility = config.forager_volatility_span > 0.0f
-        ? clamp(2.0f / (config.forager_volatility_span + 1.0f), 0.0f, 1.0f)
+    config.alpha_forager_log_range = config.forager_log_range_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.forager_log_range_ema_span_candles + 1.0f), 0.0f, 1.0f)
         : 0.0f;
     config.hsl_template = load_hsl(params, po, 30);
     config.hsl_template.slot_count = float(config.n_positions);
@@ -526,8 +526,8 @@ inline void init_ema_multicoin_side_state(
         side.ema2[c] = seed_close;
         side.volatility_1m[c] = 0.0f;
         side.volatility_1h[c] = 0.0f;
-        side.forager_volume[c] = seed_volume;
-        side.forager_volatility[c] = 0.0f;
+        side.forager_volume_ema[c] = seed_volume;
+        side.forager_log_range_ema[c] = 0.0f;
         side.adaptive[c] = config.adaptive;
         side.effective_cooldown[c] = 0.0f;
         if (c < coin_count) {
@@ -702,20 +702,20 @@ inline void update_ema_multicoin_side_indicators(
                 side.volatility_1m[c]
             );
         }
-        if (config.alpha_forager_volatility > 0.0f) {
-            side.forager_volatility[c] = fma(
-                config.alpha_forager_volatility,
-                log_range - side.forager_volatility[c],
-                side.forager_volatility[c]
+        if (config.alpha_forager_log_range > 0.0f) {
+            side.forager_log_range_ema[c] = fma(
+                config.alpha_forager_log_range,
+                log_range - side.forager_log_range_ema[c],
+                side.forager_log_range_ema[c]
             );
         }
         if (config.alpha_forager_volume > 0.0f) {
             float typical = (high + low + close) / 3.0f;
             float quote_volume = fmax(volume, 0.0f) * typical;
-            side.forager_volume[c] = fma(
+            side.forager_volume_ema[c] = fma(
                 config.alpha_forager_volume,
-                quote_volume - side.forager_volume[c],
-                side.forager_volume[c]
+                quote_volume - side.forager_volume_ema[c],
+                side.forager_volume_ema[c]
             );
         }
         const bool can_bootstrap = planning_ready && k >= int(coin_settings[coin_offset + 8]);
@@ -740,12 +740,12 @@ inline void update_ema_multicoin_side_indicators(
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     coin_override_or(coin_overrides, c, 9, config.offset_log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
-            if (config.alpha_forager_volatility > 0.0f)
-                side.forager_volatility[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    config.forager_volatility_span, bootstrap_counts[c * 10 + 9], 1, observed);
+            if (config.alpha_forager_log_range > 0.0f)
+                side.forager_log_range_ema[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
+                    config.forager_log_range_ema_span_candles, bootstrap_counts[c * 10 + 9], 1, observed);
             if (config.alpha_forager_volume > 0.0f)
-                side.forager_volume[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    config.forager_volume_span, bootstrap_counts[c * 10 + 8], 2, observed);
+                side.forager_volume_ema[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
+                    config.forager_volume_ema_span_candles, bootstrap_counts[c * 10 + 8], 2, observed);
 #if PASSIVBOT_UNSTUCK_EMA_ENABLED
             const float u0 = coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START, config.unstuck_span0);
             const float u1 = coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START + 1, config.unstuck_span1);
@@ -1015,8 +1015,8 @@ inline void update_ema_multicoin_side_selection(
     thread float* ema0 = side.ema0;
     thread float* ema1 = side.ema1;
     thread float* ema2 = side.ema2;
-    thread float* forager_volume = side.forager_volume;
-    thread float* forager_volatility = side.forager_volatility;
+    thread float* forager_volume_ema = side.forager_volume_ema;
+    thread float* forager_log_range_ema = side.forager_log_range_ema;
     thread float* psize = side.psize;
     thread float* score = side.score;
     thread bool* selected = side.selected;
@@ -1135,8 +1135,8 @@ inline void update_ema_multicoin_side_selection(
     float volume_max = -INFINITY;
     float ready_min = INFINITY;
     float ready_max = -INFINITY;
-    float volatility_min = INFINITY;
-    float volatility_max = -INFINITY;
+    float log_range_min = INFINITY;
+    float log_range_max = -INFINITY;
     for (int c = 0; c < coin_count; ++c) {
         if (!survivor[c]) continue;
         int bar_offset = (k * coin_count + c) * 4;
@@ -1158,12 +1158,12 @@ inline void update_ema_multicoin_side_selection(
             unilateral_min = fmin(unilateral_min, fabs(side.adaptive[c].score));
             unilateral_max = fmax(unilateral_max, fabs(side.adaptive[c].score));
         }
-        volume_min = fmin(volume_min, forager_volume[c]);
-        volume_max = fmax(volume_max, forager_volume[c]);
+        volume_min = fmin(volume_min, forager_volume_ema[c]);
+        volume_max = fmax(volume_max, forager_volume_ema[c]);
         ready_min = fmin(ready_min, readiness);
         ready_max = fmax(ready_max, readiness);
-        volatility_min = fmin(volatility_min, forager_volatility[c]);
-        volatility_max = fmax(volatility_max, forager_volatility[c]);
+        log_range_min = fmin(log_range_min, forager_log_range_ema[c]);
+        log_range_max = fmax(log_range_max, forager_log_range_ema[c]);
     }
     for (int c = 0; c < coin_count; ++c) {
         score[c] = -INFINITY;
@@ -1184,14 +1184,14 @@ inline void update_ema_multicoin_side_selection(
                 : close / threshold - 1.0f)
             : INFINITY;
         float volume_component = volume_max > volume_min
-            ? (forager_volume[c] - volume_min) / (volume_max - volume_min)
+            ? (forager_volume_ema[c] - volume_min) / (volume_max - volume_min)
             : 1.0f;
         float ready_component = ready_max > ready_min
             ? (ready_max - readiness) / (ready_max - ready_min)
             : 1.0f;
-        float volatility_component = volatility_max > volatility_min
-            ? (forager_volatility[c] - volatility_min)
-                / (volatility_max - volatility_min)
+        float log_range_component = log_range_max > log_range_min
+            ? (forager_log_range_ema[c] - log_range_min)
+                / (log_range_max - log_range_min)
             : 1.0f;
         float unilateral_component = 0.0f;
         if (config.adaptive.score_weight > 0.0f) {
@@ -1201,7 +1201,7 @@ inline void update_ema_multicoin_side_selection(
         }
         score[c] = config.w_volume * volume_component
             + config.w_ready * ready_component
-            + config.w_volatility * volatility_component
+            + config.w_log_range * log_range_component
             + config.adaptive.score_weight * unilateral_component;
     }
     for (int pick = 0; pick < slots; ++pick) {

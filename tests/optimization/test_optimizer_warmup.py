@@ -4,7 +4,6 @@ Covers the bug where prepare_hlcvs_mss stamped mss[coin]["warmup_minutes"]
 from the template bot's decorative values (e.g. log_range_ema_span_1h_candles)
 instead of the worst case the optimizer's search space can actually produce.
 """
-from config.shared_bot import native_forager_weight_name
 from config.universe import set_side_universe_sources
 
 from pathlib import Path
@@ -77,14 +76,14 @@ def _make_optimizer_config() -> dict:
     bounds = config["optimize"]["bounds"]
     _set_bounds(config, {"long_entry_ema_span_0_minutes": [1, 100, 1]})
     _set_bounds(config, {"long_entry_ema_span_1_minutes": [1, 100, 1]})
-    _set_bounds(config, {"long_forager_volatility_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"long_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"long_forager_log_range_ema_span_minutes": [0, 0]})
+    _set_bounds(config, {"long_forager_volume_ema_span_minutes": [0, 0]})
     _set_bounds(config, {"long_log_range_ema_span_1h_candles": [0, 0]})
     _set_bounds(config, {"long_log_range_ema_span_minutes": [0, 0]})
     _set_bounds(config, {"short_entry_ema_span_0_minutes": [1, 100, 1]})
     _set_bounds(config, {"short_entry_ema_span_1_minutes": [1, 100, 1]})
-    _set_bounds(config, {"short_forager_volatility_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"short_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_forager_log_range_ema_span_minutes": [0, 0]})
+    _set_bounds(config, {"short_forager_volume_ema_span_minutes": [0, 0]})
     _set_bounds(config, {"short_log_range_ema_span_1h_candles": [0, 0]})
     _set_bounds(config, {"short_log_range_ema_span_minutes": [0, 0]})
     for side in ("long", "short"):
@@ -241,7 +240,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
-    _set_bounds(cfg, {"long_unilateralness_ema_span_1m": [1.0, 60.0]})
+    _set_bounds(cfg, {"long_unilateralness_ema_span_minutes": [1.0, 60.0]})
     if consumer == "forager":
         _set_bounds(cfg, {"long_forager_score_weights_unilateralness": [0.0, 1.0]})
     else:
@@ -318,15 +317,15 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
         _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit_ratio": [float(pside == side)]})
     _set_bounds(cfg, {f"{side}_{weight_key}": [0.1 if consumer == "forager" else 0.0, 1.0]})
-    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0]})
-    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
+    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0]})
+    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_minutes"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
     value = 0.0 if pin == "weight" else 2.5
     expected = 0 if pin == "weight" else 51
     if pin_source == "runtime":
         cfg["optimize"]["fixed_runtime_overrides"] = {".".join(path): value}
     else:
-        other_key = f"{side}_unilateralness_ema_span_1m" if pin == "weight" else f"{side}_{weight_key}"
+        other_key = f"{side}_unilateralness_ema_span_minutes" if pin == "weight" else f"{side}_{weight_key}"
         other_path = ["bot", side, *(span_path if pin == "weight" else weight_path)]
         cfg[ANCHOR_PLAN_KEY] = {
             "anchors": [{"source": "anchor.json", "fixed_values": [{"key": key, "path": path, "value": value}]}],
@@ -520,7 +519,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
             # Keep omitted zero weights zero through normalization, including at
             # the lower corner, while leaving RMS history fully reachable.
             f"{side}_forager_score_weights_unilateralness": [0.1, 1.0],
-            f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
+            f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
         })
     expected = 2000001 if dynamic or slots < 2 else 0
@@ -575,9 +574,9 @@ def _mirrored_weight_config(strategy, short_bounds):
             volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0,
         )
     for index, name in enumerate(("volume", "log_range", "ema_readiness", "unilateralness")):
-        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, float(index + 1)]})
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, float(index + 1)]})
         if short_bounds == "explicit_zero":
-            _set_bounds(config, {f"short_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
+            _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
     return prepare_config(config, verbose=False)
 
 
@@ -628,7 +627,7 @@ def test_mirrored_fixed_zero_source_group_does_not_enable_fallback():
 
     config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
     for name in ("volume", "log_range", "ema_readiness", "unilateralness"):
-        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0]})
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config(
         [bound.low for bound in shape.bounds], config, key_paths=shape.key_paths,
@@ -715,8 +714,8 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
         config["bot"][side]["forager"]["score_weights"] = deepcopy(zero)
     _set_bounds(config, {"long_total_wallet_exposure_limit_ratio": [0.0, 1.0]})
     for name in names:
-        _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, 1.0]})
-        _set_bounds(config, {f"short_forager_score_weights_{native_forager_weight_name(name)}": [0.0]})
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
+        _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
     config = prepare_config(config, verbose=False)
     anchors = [deepcopy(config), deepcopy(config)]
     anchors[1]["bot"]["long"]["forager"]["score_weights"] = deepcopy(positive)
@@ -766,7 +765,7 @@ def test_preflight_validates_effective_zero_weight_activation_without_mutating_g
     _set_bounds(config, {"long_total_wallet_exposure_limit_ratio": [0.0, 1.0]})
     if authority != "dormant":
         for name in names:
-            _set_bounds(config, {f"long_forager_score_weights_{native_forager_weight_name(name)}": [0.0, 1.0]})
+            _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
     if authority == "runtime":
         config["optimize"]["fixed_runtime_overrides"] = {
             f"bot.long.forager.score_weights.{name}": 0.0 for name in names

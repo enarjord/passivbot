@@ -203,7 +203,7 @@ mod core {
         pub score: f64,
         pub volume_component: f64,
         pub ema_readiness_component: f64,
-        pub volatility_component: f64,
+        pub log_range_component: f64,
         pub unilateralness_component: f64,
         pub selected: bool,
         pub incumbent: bool,
@@ -226,7 +226,7 @@ mod core {
         pub pside: PositionSide,
         pub slots_to_fill: usize,
         pub ranking_required: bool,
-        pub score_hysteresis_pct: f64,
+        pub score_hysteresis_margin: f64,
         pub selected_symbol_indices: Vec<usize>,
         pub incumbent_symbol_indices: Vec<usize>,
         pub top_scores: Vec<ForagerScoredCandidateDiagnostic>,
@@ -1082,7 +1082,7 @@ mod core {
                 pside,
                 slots_to_fill: cfg.slots_to_fill,
                 ranking_required: cfg.require_forager,
-                score_hysteresis_pct: cfg.score_hysteresis_pct,
+                score_hysteresis_margin: cfg.score_hysteresis_margin,
                 selected_symbol_indices: result.selected_indices.clone(),
                 incumbent_symbol_indices,
                 top_scores: result
@@ -1095,7 +1095,7 @@ mod core {
                         score: item.score,
                         volume_component: item.volume_component,
                         ema_readiness_component: item.ema_readiness_component,
-                        volatility_component: item.volatility_component,
+                        log_range_component: item.log_range_component,
                         unilateralness_component: item.unilateralness_component,
                         selected: item.selected,
                         incumbent: item.incumbent,
@@ -2262,8 +2262,8 @@ mod core {
         ForagerCandidate {
             index,
             enabled: false,
-            volume_score: 0.0,
-            volatility_score: 0.0,
+            volume_ema: 0.0,
+            log_range_ema: 0.0,
             unilateralness_score: 0.0,
             bid: 0.0,
             ask: 0.0,
@@ -2359,7 +2359,7 @@ mod core {
                     symbol_idx: None,
                 })?;
         let volume_required = cfg.require_forager && normalized_weights.volume != 0.0;
-        let volatility_required = cfg.require_forager && normalized_weights.volatility != 0.0;
+        let log_range_required = cfg.require_forager && normalized_weights.log_range != 0.0;
         let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(candidate_indices.len());
@@ -2380,10 +2380,10 @@ mod core {
                 },
                 side,
             )?;
-            let volume_score = if volume_required {
+            let volume_ema = if volume_required {
                 let value = match ema_lookup(
                     &forager_m1.volume,
-                    side.bot_params.filter_volume_ema_span_1m,
+                    side.bot_params.forager_volume_ema_span_minutes,
                 ) {
                     Some(value) => value,
                     None => {
@@ -2400,14 +2400,14 @@ mod core {
                         continue;
                     }
                 };
-                require_forager_input(s.symbol_idx, "forager_volume_score", value)?
+                require_forager_input(s.symbol_idx, "forager_volume_ema", value)?
             } else {
                 0.0
             };
-            let volatility_score = if volatility_required {
+            let log_range_ema = if log_range_required {
                 let value = match ema_lookup(
                     &forager_m1.log_range,
-                    side.bot_params.filter_volatility_ema_span_1m,
+                    side.bot_params.forager_log_range_ema_span_minutes,
                 ) {
                     Some(value) => value,
                     None => {
@@ -2424,7 +2424,7 @@ mod core {
                         continue;
                     }
                 };
-                require_forager_input(s.symbol_idx, "forager_volatility_score", value)?
+                require_forager_input(s.symbol_idx, "forager_log_range_ema", value)?
             } else {
                 0.0
             };
@@ -2471,8 +2471,8 @@ mod core {
             out.push(ForagerCandidate {
                 index: s.symbol_idx,
                 enabled: true,
-                volume_score,
-                volatility_score,
+                volume_ema,
+                log_range_ema,
                 // Filled below only if this candidate survives volume pruning.
                 unilateralness_score: 0.0,
                 bid,
@@ -2820,7 +2820,7 @@ mod core {
         } else {
             &symbol.emas.m1
         };
-        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
+        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_minutes)
             .ok_or_else(|| {
                 let unavailable = if forager {
                     &symbol.unilateralness_unavailable.forager
@@ -2829,8 +2829,8 @@ mod core {
                 };
                 if symbol
                     .unilateralness_warmup_spans
-                    .contains(&bp.unilateralness_ema_span_1m)
-                    || unavailable.contains(&bp.unilateralness_ema_span_1m)
+                    .contains(&bp.unilateralness_ema_span_minutes)
+                    || unavailable.contains(&bp.unilateralness_ema_span_minutes)
                 {
                     OrchestratorError::UnilateralnessUnavailable {
                         symbol_idx: symbol.symbol_idx,
@@ -3076,11 +3076,11 @@ mod core {
         let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
             && (symbol
                 .unilateralness_warmup_spans
-                .contains(&side.bot_params.unilateralness_ema_span_1m)
+                .contains(&side.bot_params.unilateralness_ema_span_minutes)
                 || symbol
                     .unilateralness_unavailable
                     .current
-                    .contains(&side.bot_params.unilateralness_ema_span_1m));
+                    .contains(&side.bot_params.unilateralness_ema_span_minutes));
         let requests =
             if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
                 && wants_entries
@@ -3671,7 +3671,7 @@ mod core {
                         .clone(),
                     require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Long,
-                    score_hysteresis_pct: input.global.forager_score_hysteresis.long,
+                    score_hysteresis_margin: input.global.forager_score_hysteresis.long,
                     incumbent_indices: input
                         .forager_hysteresis
                         .as_ref()
@@ -3764,7 +3764,7 @@ mod core {
                         .clone(),
                     require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Short,
-                    score_hysteresis_pct: input.global.forager_score_hysteresis.short,
+                    score_hysteresis_margin: input.global.forager_score_hysteresis.short,
                     incumbent_indices: input
                         .forager_hysteresis
                         .as_ref()
@@ -4915,8 +4915,8 @@ mod core {
             bp.ema_span_0_minutes = 10.0;
             bp.ema_span_1_minutes = 20.0;
             bp.entry_log_range_ema_span_1h_candles = 1.0;
-            bp.filter_volume_ema_span_1m = 10.0;
-            bp.filter_volatility_ema_span_1m = 10.0;
+            bp.forager_volume_ema_span_minutes = 10.0;
+            bp.forager_log_range_ema_span_minutes = 10.0;
             bp.total_wallet_exposure_limit_ratio = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit_ratio = 1.0;
@@ -5652,7 +5652,7 @@ mod core {
                     unilateralness: 0.0,
                     volume: 1.0,
                     ema_readiness: 1.0,
-                    volatility: 1.0,
+                    log_range: 1.0,
                 };
             global.global_bot_params.short.n_positions = 0;
             global.global_bot_params.short.total_wallet_exposure_limit_ratio = 0.0;
@@ -6757,7 +6757,7 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.long.forager_score_weights.ema_readiness = 1.0;
             global_bp.long.forager_score_weights.volume = 0.0;
-            global_bp.long.forager_score_weights.volatility = 0.0;
+            global_bp.long.forager_score_weights.log_range = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -6809,7 +6809,7 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.long.forager_score_weights.volume = 0.0;
             global_bp.long.forager_score_weights.ema_readiness = 0.0;
-            global_bp.long.forager_score_weights.volatility = 0.0;
+            global_bp.long.forager_score_weights.log_range = 0.0;
 
             let input = OrchestratorInput {
                 timestamp_ms: 0,
@@ -7080,7 +7080,7 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.long.forager_score_weights.volume = 0.0;
             global_bp.long.forager_score_weights.ema_readiness = 0.0;
-            global_bp.long.forager_score_weights.volatility = 1.0;
+            global_bp.long.forager_score_weights.log_range = 1.0;
             global_bp.short.total_wallet_exposure_limit_ratio = 0.0;
             global_bp.short.n_positions = 0;
 
@@ -7149,8 +7149,8 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit_ratio = 1000.0;
             global_bp.long.n_positions = 4;
-            global_bp.long.filter_volume_ema_span_1m = 10.0;
-            global_bp.long.filter_volatility_ema_span_1m = 10.0;
+            global_bp.long.forager_volume_ema_span_minutes = 10.0;
+            global_bp.long.forager_log_range_ema_span_minutes = 10.0;
             // disable short for this test
             global_bp.short.total_wallet_exposure_limit_ratio = 0.0;
             global_bp.short.n_positions = 0;
@@ -7203,12 +7203,12 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit_ratio = 1000.0;
             global_bp.long.n_positions = 4;
-            global_bp.long.filter_volume_ema_span_1m = 10.0;
-            global_bp.long.filter_volatility_ema_span_1m = 10.0;
+            global_bp.long.forager_volume_ema_span_minutes = 10.0;
+            global_bp.long.forager_log_range_ema_span_minutes = 10.0;
             global_bp.short.total_wallet_exposure_limit_ratio = 1000.0;
             global_bp.short.n_positions = 4;
-            global_bp.short.filter_volume_ema_span_1m = 10.0;
-            global_bp.short.filter_volatility_ema_span_1m = 10.0;
+            global_bp.short.forager_volume_ema_span_minutes = 10.0;
+            global_bp.short.forager_log_range_ema_span_minutes = 10.0;
 
             let input = OrchestratorInput {
                 timestamp_ms: 0,

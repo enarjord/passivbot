@@ -436,11 +436,10 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "risk_wel_enforcer_threshold_ratio" not in prepared["bot"]["long"]
     assert "unstuck_exposure_trigger_ratio" not in prepared["bot"]["long"]
     assert "hsl_drawdown_threshold_fraction" not in prepared["bot"]["long"]
-    assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
-    assert "filter_volume_ema_span_1m" not in prepared["bot"]["long"]
-    assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
-    assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
-    assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
+    assert "forager_volume_ema_span_minutes" not in prepared["bot"]["long"]
+    assert "forager_log_range_ema_span_minutes" not in prepared["bot"]["long"]
+    assert "long_forager_volume_ema_span_minutes" not in prepared["optimize"]["bounds"]
+    assert "long_forager_log_range_ema_span_minutes" not in prepared["optimize"]["bounds"]
     assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert "ema_span_0_minutes" not in get_template_config()["bot"]["long"]
     assert "entry_grid_threshold_base_fraction" not in get_template_config()["bot"]["short"]
@@ -569,15 +568,15 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
-        compiled["bot"]["long"]["forager_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
+        compiled["bot"]["long"]["forager_log_range_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
@@ -794,7 +793,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
         == template["backtest"]["market_order_slippage_fraction"]
     )
     assert (
-        prepared["bot"]["long"]["filter_volume_ema_span_1m"]
+        prepared["bot"]["long"]["forager_volume_ema_span_minutes"]
         == template["bot"]["global"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
@@ -1079,9 +1078,9 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
             "config\\.live\\.api\\.market_snapshot_ticker_strategy must be one of",
         ),
         (
-            "forager_score_hysteresis_pct",
+            "forager_score_hysteresis_margin",
             -0.1,
-            "config\\.live\\.forager_score_hysteresis_pct must be finite and >= 0\\.0",
+            "config\\.live\\.forager_score_hysteresis_margin must be finite and >= 0\\.0",
         ),
         (
             "max_active_candle_tail_gap_minutes",
@@ -1137,7 +1136,7 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
 )
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
     source = get_template_config()
-    if field == "forager_score_hysteresis_pct":
+    if field == "forager_score_hysteresis_margin":
         source["bot"]["global"]["forager"]["score_hysteresis_margin"] = value
         match = r"bot\.global\.forager\.score_hysteresis_margin.*finite"
     else:

@@ -33,7 +33,7 @@ def test_effective_disabled_side_and_canonical_adaptive_values_are_explicit(monk
     assert parameters["short_total_wallet_exposure_limit_ratio"] == 0
     assert parameters["short_n_positions"] == 0
     assert parameters["long_entry_cooldown_max_duration_minutes"] == -1
-    assert parameters["long_unilateralness_window"] >= parameters["long_unilateralness_ema_span_1m"]
+    assert parameters["long_unilateralness_window"] >= parameters["long_unilateralness_ema_span_minutes"]
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

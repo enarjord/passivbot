@@ -351,17 +351,17 @@ def _scale_directional_minute_parameters(
         minute_keys.add("offset_log_range_ema_span_minutes")
     if "log_range_ema_span_minutes" in keys:
         minute_keys.add("log_range_ema_span_minutes")
-    if "forager_volume_ema_span_1m" in keys:
-        minute_keys.add("forager_volume_ema_span_1m")
-    if "forager_volatility_ema_span_1m" in keys:
-        minute_keys.add("forager_volatility_ema_span_1m")
+    if "forager_volume_ema_span_minutes" in keys:
+        minute_keys.add("forager_volume_ema_span_minutes")
+    if "forager_log_range_ema_span_minutes" in keys:
+        minute_keys.add("forager_log_range_ema_span_minutes")
     side_width = len(keys)
     if side_activation is not None and (len(side_activation) != sides
             or any(type(flag) is not bool for flag in side_activation)):
         raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
-        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        span_col = offset + keys.index("unilateralness_ema_span_minutes")
         adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
         score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
         ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]

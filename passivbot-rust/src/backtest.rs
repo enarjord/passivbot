@@ -1303,30 +1303,30 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         }
                     }
                 }
-                let vol_span_long = self.bot_params_master.long.filter_volume_ema_span_1m as f64;
-                let vol_span_short = self.bot_params_master.short.filter_volume_ema_span_1m as f64;
-                let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span_1m as f64;
+                let vol_span_long = self.bot_params_master.long.forager_volume_ema_span_minutes as f64;
+                let vol_span_short = self.bot_params_master.short.forager_volume_ema_span_minutes as f64;
+                let lr_span_long = self.bot_params_master.long.forager_log_range_ema_span_minutes as f64;
                 let lr_span_short =
-                    self.bot_params_master.short.filter_volatility_ema_span_1m as f64;
+                    self.bot_params_master.short.forager_log_range_ema_span_minutes as f64;
 
                 debug_assert_eq!(
-                    self.bot_params[idx].long.filter_volume_ema_span_1m as f64, vol_span_long,
-                    "coin {} long filter_volume_ema_span_1m differs from master",
+                    self.bot_params[idx].long.forager_volume_ema_span_minutes as f64, vol_span_long,
+                    "coin {} long forager_volume_ema_span_minutes differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].short.filter_volume_ema_span_1m as f64, vol_span_short,
-                    "coin {} short filter_volume_ema_span_1m differs from master",
+                    self.bot_params[idx].short.forager_volume_ema_span_minutes as f64, vol_span_short,
+                    "coin {} short forager_volume_ema_span_minutes differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].long.filter_volatility_ema_span_1m as f64, lr_span_long,
-                    "coin {} long filter_volatility_ema_span_1m differs from master",
+                    self.bot_params[idx].long.forager_log_range_ema_span_minutes as f64, lr_span_long,
+                    "coin {} long forager_log_range_ema_span_minutes differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].short.filter_volatility_ema_span_1m as f64, lr_span_short,
-                    "coin {} short filter_volatility_ema_span_1m differs from master",
+                    self.bot_params[idx].short.forager_log_range_ema_span_minutes as f64, lr_span_short,
+                    "coin {} short forager_log_range_ema_span_minutes differs from master",
                     idx
                 );
 
@@ -1924,13 +1924,13 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
         let needs_log_range_long = bot_params
             .iter()
-            .any(|bp| bp.long.forager_score_weights.volatility != 0.0)
+            .any(|bp| bp.long.forager_score_weights.log_range != 0.0)
             || strategy_params_parsed
                 .iter()
                 .any(|sp| strategy_needs_log_range_1m(&sp.long));
         let needs_log_range_short = bot_params
             .iter()
-            .any(|bp| bp.short.forager_score_weights.volatility != 0.0)
+            .any(|bp| bp.short.forager_score_weights.log_range != 0.0)
             || strategy_params_parsed
                 .iter()
                 .any(|sp| strategy_needs_log_range_1m(&sp.short));
@@ -1984,12 +1984,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         if *enabled
                             && !trackers
                                 .iter()
-                                .any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                                .any(|(span, _)| *span == bp.unilateralness_ema_span_minutes)
                         {
                             trackers.push((
-                                bp.unilateralness_ema_span_1m,
+                                bp.unilateralness_ema_span_minutes,
                                 crate::unilateralness::RollingRms::new(
-                                    bp.unilateralness_ema_span_1m,
+                                    bp.unilateralness_ema_span_minutes,
                                 )
                                 .expect("validated unilateralness span"),
                             ));
@@ -4045,28 +4045,28 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     k,
                     alphas.vol_alpha_long,
                     1,
-                    bots.long.filter_volume_ema_span_1m / interval,
+                    bots.long.forager_volume_ema_span_minutes / interval,
                 ),
                 self.bootstrap_market_ema(
                     i,
                     k,
                     alphas.vol_alpha_short,
                     1,
-                    bots.short.filter_volume_ema_span_1m / interval,
+                    bots.short.forager_volume_ema_span_minutes / interval,
                 ),
                 self.bootstrap_market_ema(
                     i,
                     k,
                     alphas.log_range_alpha_long,
                     2,
-                    bots.long.filter_volatility_ema_span_1m / interval,
+                    bots.long.forager_log_range_ema_span_minutes / interval,
                 ),
                 self.bootstrap_market_ema(
                     i,
                     k,
                     alphas.log_range_alpha_short,
                     2,
-                    bots.short.filter_volatility_ema_span_1m / interval,
+                    bots.short.forager_log_range_ema_span_minutes / interval,
                 ),
                 self.bootstrap_market_ema(
                     i,
@@ -4798,16 +4798,16 @@ fn calc_ema_alphas(
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: clamp_alpha(
-            2.0 / (bot_params_pair.long.filter_volume_ema_span_1m as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.long.forager_volume_ema_span_minutes as f64 / interval_f + 1.0),
         ),
         vol_alpha_short: clamp_alpha(
-            2.0 / (bot_params_pair.short.filter_volume_ema_span_1m as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.short.forager_volume_ema_span_minutes as f64 / interval_f + 1.0),
         ),
         log_range_alpha_long: clamp_alpha(
-            2.0 / (bot_params_pair.long.filter_volatility_ema_span_1m as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.long.forager_log_range_ema_span_minutes as f64 / interval_f + 1.0),
         ),
         log_range_alpha_short: clamp_alpha(
-            2.0 / (bot_params_pair.short.filter_volatility_ema_span_1m as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.short.forager_log_range_ema_span_minutes as f64 / interval_f + 1.0),
         ),
         log_range_ema_1m_alpha_long: {
             let span =
@@ -7975,10 +7975,10 @@ mod tests {
         bp.long.ema_span_1_minutes = 200.0;
         bp.short.ema_span_0_minutes = 50.0;
         bp.short.ema_span_1_minutes = 150.0;
-        bp.long.filter_volume_ema_span_1m = 300.0;
-        bp.short.filter_volume_ema_span_1m = 400.0;
-        bp.long.filter_volatility_ema_span_1m = 500.0;
-        bp.short.filter_volatility_ema_span_1m = 600.0;
+        bp.long.forager_volume_ema_span_minutes = 300.0;
+        bp.short.forager_volume_ema_span_minutes = 400.0;
+        bp.long.forager_log_range_ema_span_minutes = 500.0;
+        bp.short.forager_log_range_ema_span_minutes = 600.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
@@ -8170,8 +8170,8 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             } else {
                 0.0
             },
-            pair.long.filter_volume_ema_span_1m as f64,
-            pair.long.filter_volatility_ema_span_1m as f64,
+            pair.long.forager_volume_ema_span_minutes as f64,
+            pair.long.forager_log_range_ema_span_minutes as f64,
             strategy_log_range_ema_span_1h_candles(&strategy_pair.long).unwrap_or(0.0) * 60.0,
         ];
         let spans_short = [
@@ -8201,8 +8201,8 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             } else {
                 0.0
             },
-            pair.short.filter_volume_ema_span_1m as f64,
-            pair.short.filter_volatility_ema_span_1m as f64,
+            pair.short.forager_volume_ema_span_minutes as f64,
+            pair.short.forager_log_range_ema_span_minutes as f64,
             strategy_log_range_ema_span_1h_candles(&strategy_pair.short).unwrap_or(0.0) * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {

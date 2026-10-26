@@ -325,7 +325,7 @@ def _raw_forager_selection(**overrides) -> dict:
         "pside": "long",
         "slots_to_fill": 1,
         "ranking_required": True,
-        "score_hysteresis_pct": 0.1,
+        "score_hysteresis_margin": 0.1,
         "selected_symbol_indices": [0],
         "incumbent_symbol_indices": [0],
         "top_scores": [
@@ -335,7 +335,7 @@ def _raw_forager_selection(**overrides) -> dict:
                 "score": 1.0,
                 "volume_component": 1.0,
                 "ema_readiness_component": 1.0,
-                "volatility_component": 1.0,
+                "log_range_component": 1.0,
                 "unilateralness_component": 0.0,
                 "selected": True,
                 "incumbent": True,

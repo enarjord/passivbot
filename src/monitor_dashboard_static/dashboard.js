@@ -699,7 +699,7 @@
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${escapeHtml(side.enabled ? "enabled" : "off")}</span></p>
         <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(shortSymbol(side.next_symbol))}</p>
-        <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_volatility))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
+        <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_log_range))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
       `;
       els.foragerDetails.appendChild(item);
     }

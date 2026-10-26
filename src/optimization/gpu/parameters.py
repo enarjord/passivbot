@@ -107,11 +107,11 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
         strategy.update({
             "entry_cooldown_minutes": float(bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0),
             "total_wallet_exposure_limit_ratio": float(bot["total_wallet_exposure_limit_ratio"]),
-            "forager_volume_ema_span_1m": float(bot.get("filter_volume_ema_span_1m", 0.0) or 0.0),
-            "forager_volatility_ema_span_1m": float(bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0),
+            "forager_volume_ema_span_minutes": float(bot.get("forager_volume_ema_span_minutes", 0.0) or 0.0),
+            "forager_log_range_ema_span_minutes": float(bot.get("forager_log_range_ema_span_minutes", 0.0) or 0.0),
             "forager_score_weights_volume": float(weights.get("volume", 0.0)),
             "forager_score_weights_ema_readiness": float(weights.get("ema_readiness", 0.0)),
-            "forager_score_weights_volatility": float(weights.get("volatility", 0.0)),
+            "forager_score_weights_log_range": float(weights.get("log_range", 0.0)),
             "n_positions": float(bot["n_positions"]),
         })
         risk = config["bot"][side]["risk"]

@@ -34,8 +34,8 @@ def base_config():
         "bot": {
             "long": {
                 "enabled": False,
-                "forager_volume_ema_span_1m": 2000.0,
-                "forager_volatility_ema_span_1m": 100.0,
+                "forager_volume_ema_span_minutes": 2000.0,
+                "forager_log_range_ema_span_minutes": 100.0,
                 "strategy": {
                     "trailing_martingale": {
                         "entry": {"ema_span_0_minutes": 1000.0, "ema_span_1_minutes": 1500.0},
@@ -45,8 +45,8 @@ def base_config():
             },
             "short": {
                 "enabled": False,
-                "forager_volume_ema_span_1m": 2000.0,
-                "forager_volatility_ema_span_1m": 100.0,
+                "forager_volume_ema_span_minutes": 2000.0,
+                "forager_log_range_ema_span_minutes": 100.0,
                 "strategy": {
                     "trailing_martingale": {
                         "entry": {"ema_span_0_minutes": 1000.0, "ema_span_1_minutes": 1500.0},
@@ -136,7 +136,7 @@ class TestWarmupCalculation:
         """Test with default config."""
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
-        # Max span is forager_volume_ema_span_1m = 2000.0
+        # Max span is forager_volume_ema_span_minutes = 2000.0
         # Warmup = 2000.0 * 3.0 (activation_span_fraction) = 6000 minutes
         expected = int(math.ceil(2000.0 * 3.0))
 
@@ -150,7 +150,7 @@ class TestWarmupCalculation:
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
-        # Max span should still be 2000.0 from forager_volume_ema_span_1m
+        # Max span should still be 2000.0 from forager_volume_ema_span_minutes
         assert warmup_minutes == 6000
 
         # Now test with larger log_range_ema_span_1h_candles
@@ -255,7 +255,7 @@ class TestPerCoinWarmupCalculation:
         # ETH has mixed spans:
         # - ema_span_0_minutes override: 500.0
         # - ema_span_1_minutes from base: 1500.0
-        # - forager_volume_ema_span_1m from base: 2000.0
+        # - forager_volume_ema_span_minutes from base: 2000.0
         # Max is 2000.0, warmup = 2000 * 3.0 = 6000
         assert per_coin_warmup["ETH"] == 6000
 
@@ -307,8 +307,8 @@ class TestPerCoinWarmupCalculation:
         minute_key = "offset_log_range_ema_span_minutes" if strategy == "ema_anchor" else "log_range_ema_span_minutes"
         for pside in ("long", "short"):
             side = base_config["bot"][pside]
-            side["forager_volume_ema_span_1m"] = 1.0
-            side["forager_volatility_ema_span_1m"] = 1.0
+            side["forager_volume_ema_span_minutes"] = 1.0
+            side["forager_log_range_ema_span_minutes"] = 1.0
             spans = {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 1.0}
             side["strategy"] = {strategy: {
                 **({"entry": spans} if strategy == "trailing_martingale" else spans),
@@ -355,17 +355,17 @@ class TestEMASpanExtraction:
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
-        # Reset and test forager_volume_ema_span_1m
+        # Reset and test forager_volume_ema_span_minutes
         base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
             "ema_span_1_minutes"
         ] = 1500.0
-        base_config["bot"]["long"]["forager_volume_ema_span_1m"] = 10000.0
+        base_config["bot"]["long"]["forager_volume_ema_span_minutes"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
-        # Reset and test forager_volatility_ema_span_1m
-        base_config["bot"]["long"]["forager_volume_ema_span_1m"] = 2000.0
-        base_config["bot"]["long"]["forager_volatility_ema_span_1m"] = 10000.0
+        # Reset and test forager_log_range_ema_span_minutes
+        base_config["bot"]["long"]["forager_volume_ema_span_minutes"] = 2000.0
+        base_config["bot"]["long"]["forager_log_range_ema_span_minutes"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
@@ -391,7 +391,7 @@ class TestEMASpanExtraction:
 
         # Now add larger bound for short side
         config_with_bounds["optimize"]["bounds"]["short"]["forager"] = {
-            "forager_volume_ema_span_1m": [1000, 20000]
+            "forager_volume_ema_span_minutes": [1000, 20000]
         }
 
         warmup = compute_backtest_warmup_minutes(config_with_bounds)
@@ -406,8 +406,8 @@ class TestEMASpanExtraction:
         minute_key = "offset_log_range_ema_span_minutes" if strategy == "ema_anchor" else "log_range_ema_span_minutes"
         for pside in ("long", "short"):
             side = base_config["bot"][pside]
-            side["forager_volume_ema_span_1m"] = 1.0
-            side["forager_volatility_ema_span_1m"] = 1.0
+            side["forager_volume_ema_span_minutes"] = 1.0
+            side["forager_log_range_ema_span_minutes"] = 1.0
             spans = {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 1.0}
             side["strategy"] = {strategy: {
                 **({"entry": spans} if strategy == "trailing_martingale" else spans),
@@ -529,23 +529,23 @@ class TestWarmupEdgeCases:
 
     def test_malformed_shared_span_raises(self, base_config):
         """Shared/forager warmup spans must fail loudly when present and malformed."""
-        base_config["bot"]["long"]["forager_volume_ema_span_1m"] = "not-a-number"
+        base_config["bot"]["long"]["forager_volume_ema_span_minutes"] = "not-a-number"
 
         with pytest.raises(
             ValueError,
-            match=r"invalid warmup value for long\.forager_volume_ema_span_1m",
+            match=r"invalid warmup value for long\.forager_volume_ema_span_minutes",
         ):
             compute_backtest_warmup_minutes(base_config)
 
     def test_per_coin_malformed_shared_span_raises_with_coin_context(self, base_config):
         """Per-coin shared warmup spans must not silently collapse to zero."""
         base_config["coin_overrides"] = {
-            "BTC": {"bot": {"long": {"forager_volume_ema_span_1m": None}}}
+            "BTC": {"bot": {"long": {"forager_volume_ema_span_minutes": None}}}
         }
 
         with pytest.raises(
             ValueError,
-            match=r"invalid warmup value for BTC\.long\.forager_volume_ema_span_1m",
+            match=r"invalid warmup value for BTC\.long\.forager_volume_ema_span_minutes",
         ):
             compute_per_coin_warmup_minutes(base_config)
 

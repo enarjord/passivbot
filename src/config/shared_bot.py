@@ -23,9 +23,9 @@ BOT_GROUP_FIELD_MAP = {
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
-        "log_range_ema_span_minutes": "forager_volatility_ema_span_1m",
-        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_minutes",
+        "log_range_ema_span_minutes": "forager_log_range_ema_span_minutes",
+        "volume_ema_span_minutes": "forager_volume_ema_span_minutes",
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
@@ -54,30 +54,7 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for local_key, flat_key in field_map.items()
 }
 STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit_ratio": "wallet_exposure_limit_ratio"}
-FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES = {"volatility": "log_range"}
-FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES = {
-    public: native for native, public in FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES.items()
-}
 _MISSING = object()
-
-
-def native_forager_weight_name(public_name: str) -> str:
-    """Bind one authored ranking coordinate to the unchanged native ID."""
-    return FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES.get(public_name, public_name)
-
-
-def _project_shared_value(flat_key, value, *, to_public):
-    if flat_key != "forager_score_weights" or not isinstance(value, dict):
-        return value
-    names = (FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES if to_public
-             else FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES)
-    result = {}
-    for key, child in value.items():
-        key = names.get(key, key)
-        if key in result:
-            raise ValueError(f"conflicting forager score weight {key}")
-        result[key] = deepcopy(child)
-    return result
 
 
 def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
@@ -107,7 +84,7 @@ def get_grouped_bot_value(
     if group_path is not None:
         value = get_grouped_path(bot_side, group_path, default=_MISSING)
         if value is not _MISSING:
-            return _project_shared_value(flat_key, value, to_public=False)
+            return deepcopy(value) if flat_key == "forager_score_weights" else value
     if flat_key in bot_side:
         return bot_side[flat_key]
     return default
@@ -200,7 +177,7 @@ def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
         target = target.setdefault(part, {})
         if not isinstance(target, dict):
             raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
-    target[path[-1]] = _project_shared_value(flat_key, value, to_public=True)
+    target[path[-1]] = deepcopy(value) if flat_key == "forager_score_weights" else value
 
 
 def resolve_shared_bot_path(
@@ -243,7 +220,9 @@ def canonicalize_shared_bot_side(
     for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in bot_side:
             continue
-        moved_value = _project_shared_value(flat_key, bot_side.pop(flat_key), to_public=True)
+        moved_value = bot_side.pop(flat_key)
+        if flat_key == "forager_score_weights":
+            moved_value = deepcopy(moved_value)
         target = bot_side
         for index, part in enumerate(path[:-1]):
             if part not in target:

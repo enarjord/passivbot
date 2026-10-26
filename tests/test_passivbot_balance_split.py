@@ -3646,7 +3646,7 @@ def test_forager_selection_summary_formatter_exact_format():
         slots_to_fill=1,
         selected_symbols=("DOGE", "SOL", "ETH"),
         incumbent_symbols=("DOGE",),
-        score_hysteresis_pct=0.005,
+        score_hysteresis_margin=0.005,
         reason="selection_changed",
         top_scores=[("SOL", 1, 0.625), ("DOGE", 2, 0.623)],
         hysteresis_events=[("DOGE", "SOL", 0.002, True)],
@@ -3666,7 +3666,7 @@ def test_forager_selection_summary_formatter_bounds_hostile_tokens_for_live_cons
         slots_to_fill=10**20,
         selected_symbols=tuple(hostile for _ in range(10)),
         incumbent_symbols=tuple(hostile for _ in range(10)),
-        score_hysteresis_pct=0.005,
+        score_hysteresis_margin=0.005,
         reason=hostile,
         top_scores=[(hostile, 10**20, 0.625) for _ in range(10)],
         hysteresis_events=[(hostile, hostile, 0.002, True) for _ in range(10)],
@@ -3707,7 +3707,7 @@ def test_forager_selection_diagnostics_preserves_transition_and_cadence(
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
-                    "score_hysteresis_pct": 0.005,
+                    "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [0],
                     "top_scores": [
@@ -3783,7 +3783,7 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
-                    "score_hysteresis_pct": 0.005,
+                    "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [0],
                     "top_scores": [
@@ -3793,7 +3793,7 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
                             "score": 0.625,
                             "volume_component": 0.4,
                             "ema_readiness_component": 0.5,
-                            "volatility_component": 1.0,
+                            "log_range_component": 1.0,
                             "selected": True,
                             "incumbent": True,
                         }
@@ -3846,7 +3846,7 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
             "score": 0.625,
             "volume_component": 0.4,
             "ema_readiness_component": 0.5,
-            "volatility_component": 1.0,
+            "log_range_component": 1.0,
             "selected": True,
             "incumbent": True,
         }
@@ -3871,7 +3871,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
-                    "score_hysteresis_pct": 0.005,
+                    "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [1],
                     "incumbent_symbol_indices": [1],
                     "top_scores": [
@@ -3881,7 +3881,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
                             "score": 0.625,
                             "volume_component": 0.4,
                             "ema_readiness_component": 0.5,
-                            "volatility_component": 1.0,
+                            "log_range_component": 1.0,
                             "selected": False,
                             "incumbent": False,
                         },
@@ -3891,7 +3891,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
                             "score": 0.623,
                             "volume_component": 0.3,
                             "ema_readiness_component": 0.6,
-                            "volatility_component": 0.9,
+                            "log_range_component": 0.9,
                             "selected": True,
                             "incumbent": True,
                         },
@@ -3954,7 +3954,7 @@ def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
                 {
                     "pside": "long",
                     "slots_to_fill": 2,
-                    "score_hysteresis_pct": 0.005,
+                    "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0, 1],
                     "incumbent_symbol_indices": [0, 1],
                     "top_scores": [
@@ -4005,7 +4005,7 @@ def test_forager_selection_diagnostics_demotes_no_incumbent_selection_churn(capl
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
-                    "score_hysteresis_pct": 0.02,
+                    "score_hysteresis_margin": 0.02,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [],
                     "top_scores": [
@@ -12242,7 +12242,7 @@ def test_empty_forager_selection_is_not_repeated_periodically(monkeypatch, caplo
                 {
                     "pside": "short",
                     "slots_to_fill": 1,
-                    "score_hysteresis_pct": 0.02,
+                    "score_hysteresis_margin": 0.02,
                     "selected_symbol_indices": [],
                     "incumbent_symbol_indices": [],
                     "top_scores": [],

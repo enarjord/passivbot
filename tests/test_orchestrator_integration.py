@@ -147,9 +147,9 @@ def bot_params(**overrides):
         "entry_trailing_reentry_qty_multiplier": 0.0,
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
-        "filter_volatility_ema_span_1m": 10.0,
+        "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span_1m": 10.0,
+        "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
         "n_positions": 1,
@@ -739,7 +739,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volatility_ema_span_1m": 1.0,
+                        "forager_log_range_ema_span_minutes": 1.0,
                     },
                 )
             ],
@@ -755,7 +755,7 @@ class TestOrchestratorMultiSymbol:
         import passivbot_rust as pbr
 
         weights = {"volume": 1.0, "ema_readiness": 0.0,
-                   "volatility": 0.0, "unilateralness": 0.0}
+                   "log_range": 0.0, "unilateralness": 0.0}
         inp = make_input(
             balance=1_000.0,
             global_bp=bot_params_pair({"forager_score_weights": weights}),
@@ -764,7 +764,7 @@ class TestOrchestratorMultiSymbol:
                     index, bid=100.0, ask=100.0,
                     emas=ema_bundle(m1_volume=[[10.0, volume]]),
                     long_bp={"forager_score_weights": weights,
-                             "filter_volume_ema_span_1m": 10.0},
+                             "forager_volume_ema_span_minutes": 10.0},
                 )
                 for index, volume in [(0, 100.0), (1, 1000.0)]
             ],

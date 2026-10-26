@@ -831,9 +831,9 @@ def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
             if isinstance(ranking.get("top_volume"), dict)
             else {}
         )
-        top_volatility = (
-            ranking.get("top_volatility", {})
-            if isinstance(ranking.get("top_volatility"), dict)
+        top_log_range = (
+            ranking.get("top_log_range", {})
+            if isinstance(ranking.get("top_log_range"), dict)
             else {}
         )
         top_ema = (
@@ -848,7 +848,7 @@ def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
         )
         next_parts = [
             f"next={_symbol_label(str(next_symbol)) if next_symbol else '-'}",
-            f"dist={_fmt_pct_delta(entry.get('next_entry_distance_ratio'))}",
+            f"dist={_fmt_pct_delta(entry.get('next_entry_price_gap_fraction'))}",
             f"trg={_fmt_compact_float(entry.get('next_entry_trigger_price'), digits=4)}",
             f"uni={universe}",
         ]
@@ -864,10 +864,10 @@ def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
                 f"vol={_symbol_label(str(top_volume.get('symbol', '-')))}"
                 f"({_fmt_compact_float(top_volume.get('raw_score'), digits=3)})"
             )
-        if top_volatility:
+        if top_log_range:
             ranking_parts.append(
-                f"vola={_symbol_label(str(top_volatility.get('symbol', '-')))}"
-                f"({_fmt_compact_float(top_volatility.get('raw_score'), digits=3)})"
+                f"vola={_symbol_label(str(top_log_range.get('symbol', '-')))}"
+                f"({_fmt_compact_float(top_log_range.get('raw_score'), digits=3)})"
             )
         if top_ema:
             ranking_parts.append(

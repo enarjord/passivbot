@@ -15,13 +15,13 @@ def test_compute_live_warmup_windows_forager_toggle():
     values = {
         ("long", "ema_span_0_minutes", "BTC"): 1000.0,
         ("long", "ema_span_1_minutes", "BTC"): 1500.0,
-        ("long", "forager_volume_ema_span_1m", "BTC"): 2000.0,
-        ("long", "forager_volatility_ema_span_1m", "BTC"): 1800.0,
+        ("long", "forager_volume_ema_span_minutes", "BTC"): 2000.0,
+        ("long", "forager_log_range_ema_span_minutes", "BTC"): 1800.0,
         ("long", "entry_log_range_ema_span_1h_candles", "BTC"): 48.0,
         ("short", "ema_span_0_minutes", "ETH"): 900.0,
         ("short", "ema_span_1_minutes", "ETH"): 800.0,
-        ("short", "forager_volume_ema_span_1m", "ETH"): 4000.0,
-        ("short", "forager_volatility_ema_span_1m", "ETH"): 3000.0,
+        ("short", "forager_volume_ema_span_minutes", "ETH"): 4000.0,
+        ("short", "forager_log_range_ema_span_minutes", "ETH"): 3000.0,
         ("short", "entry_log_range_ema_span_1h_candles", "ETH"): 24.0,
     }
 
@@ -79,8 +79,8 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
 
     def forager(pside, key, sym):
         values = {
-            "forager_volume_ema_span_1m": 760.0,
-            "forager_volatility_ema_span_1m": 110.0,
+            "forager_volume_ema_span_minutes": 760.0,
+            "forager_log_range_ema_span_minutes": 110.0,
         }
         return values.get(key, 0.0)
 
@@ -205,7 +205,7 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
 
     with pytest.raises(ValueError, match="invalid live warmup value"):
         pb_mod.Passivbot._live_forager_warmup_value(
-            FakeBot(), "long", "forager_volume_ema_span_1m", ""
+            FakeBot(), "long", "forager_volume_ema_span_minutes", ""
         )
 
 

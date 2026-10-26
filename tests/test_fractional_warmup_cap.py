@@ -181,7 +181,7 @@ async def test_direct_ranking_readers_keep_float_spans_until_acquisition(reader,
     bot = SimpleNamespace(
         config=config,
         cm=CandleReader(),
-        bot_value=lambda _side, key: 2.25 if key == "forager_volume_ema_span_1m" else span,
+        bot_value=lambda _side, key: 2.25 if key == "forager_volume_ema_span_minutes" else span,
         _compute_fetch_budget_ttls=lambda symbols, *_: ({s: 60_000 for s in symbols}, set()),
     )
     result = await getattr(Passivbot, reader)(bot, "long", ["BTC/USDT:USDT"])

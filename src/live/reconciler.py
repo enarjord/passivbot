@@ -2740,7 +2740,7 @@ def validate_rust_orchestrator_output(
         "score",
         "volume_component",
         "ema_readiness_component",
-        "volatility_component",
+        "log_range_component",
         "unilateralness_component",
     )
     event_finite_fields = (
@@ -2768,7 +2768,7 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator {context} has invalid ranking_required"
             )
-        validate_diagnostic_finite_fields(selection, ("score_hysteresis_pct",), context)
+        validate_diagnostic_finite_fields(selection, ("score_hysteresis_margin",), context)
         for field in ("selected_symbol_indices", "incumbent_symbol_indices"):
             validate_diagnostic_symbol_idx_list(
                 selection.get(field), f"{context} {field}"

@@ -2451,7 +2451,7 @@ def _forager_top_score_sample(
         for key in (
             "volume_component",
             "ema_readiness_component",
-            "volatility_component",
+            "log_range_component",
             "unilateralness_component",
         ):
             value = _safe_float(item.get(key))
@@ -3012,7 +3012,7 @@ def _emit_forager_selection_event_unchecked(
     fetch_budget: int | None,
     incumbent_symbols: list[str] | tuple[str, ...] | None = None,
     slots_to_fill: int | None = None,
-    score_hysteresis_pct: float | None = None,
+    score_hysteresis_margin: float | None = None,
     top_scores: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     hysteresis_event_count: int = 0,
     source: str = "python_filter",
@@ -3038,8 +3038,8 @@ def _emit_forager_selection_event_unchecked(
         "volatility_drop_pct": (
             float(volatility_drop_pct) if volatility_drop_pct is not None else None
         ),
-        "score_hysteresis_pct": (
-            float(score_hysteresis_pct) if score_hysteresis_pct is not None else None
+        "score_hysteresis_margin": (
+            float(score_hysteresis_margin) if score_hysteresis_margin is not None else None
         ),
         "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
         "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,

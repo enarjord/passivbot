@@ -1408,7 +1408,7 @@ def _candidate_parameter_matrix(
             offset = side_index * len(param_keys)
             matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
                 20.0
-                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_minutes")]
             )
     return matrix
 
@@ -1692,8 +1692,8 @@ class SharedAccountReplay:
 
         comparable_bot_keys = (
             "total_wallet_exposure_limit_ratio",
-            "filter_volume_ema_span_1m",
-            "filter_volatility_ema_span_1m",
+            "forager_volume_ema_span_minutes",
+            "forager_log_range_ema_span_minutes",
             "forager_score_weights",
             "n_positions",
             "risk_twel_entry_gate_enabled",

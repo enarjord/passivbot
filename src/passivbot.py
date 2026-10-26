@@ -878,8 +878,8 @@ def compute_live_warmup_windows(
             ):
                 max_1m_span = max(
                     max_1m_span,
-                    _get_forager(pside, "forager_volume_ema_span_1m", sym),
-                    _get_forager(pside, "forager_volatility_ema_span_1m", sym),
+                    _get_forager(pside, "forager_volume_ema_span_minutes", sym),
+                    _get_forager(pside, "forager_log_range_ema_span_minutes", sym),
                 )
             for key in STRATEGY_WARMUP_H1_PROBE_KEYS:
                 max_h1_span = max(max_h1_span, _get_strategy(pside, key, sym))
@@ -9953,7 +9953,7 @@ class Passivbot:
                 weights = {
                     "volume": 0.0,
                     "ema_readiness": 0.0,
-                    "volatility": 1.0,
+                    "log_range": 1.0,
                 }
             max_n_positions = self.get_max_n_positions(pside)
             # Apply max_ohlcv_fetches_per_minute in all cases (slots open or full).
@@ -10087,9 +10087,9 @@ class Passivbot:
                 {
                     "index": idx,
                     "enabled": min_cost_flags.get(symbol, True),
-                    "volume_score": float(volumes[symbol]),
-                    "volatility_score": float(log_ranges[symbol]),
-                    "ema_readiness_score": 0.0,
+                    "volume_ema": float(volumes[symbol]),
+                    "log_range_ema": float(log_ranges[symbol]),
+                    "ema_entry_price_gap_fraction": 0.0,
                 }
                 for idx, symbol in enumerate(candidates)
             ]
@@ -10148,12 +10148,12 @@ class Passivbot:
         bounded cached value are omitted from the returned maps.
         """
         span_volume = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_volume_ema_span_1m"),
-            context=f"forager {pside}.forager_volume_ema_span_1m", symbol=None,
+            self.bot_value(pside, "forager_volume_ema_span_minutes"),
+            context=f"forager {pside}.forager_volume_ema_span_minutes", symbol=None,
         )
         span_volatility = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_volatility_ema_span_1m"),
-            context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
+            self.bot_value(pside, "forager_log_range_ema_span_minutes"),
+            context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
         )
         try:
             activation_span_fraction = float(
@@ -13635,7 +13635,7 @@ class Passivbot:
         slots_to_fill: Any,
         selected_symbols: tuple[str, ...],
         incumbent_symbols: tuple[str, ...],
-        score_hysteresis_pct: Any,
+        score_hysteresis_margin: Any,
         reason: Any,
         top_scores: list[tuple[str, Any, Any]],
         hysteresis_events: list[tuple[str, str, Any, bool]],
@@ -13675,7 +13675,7 @@ class Passivbot:
             f"slots={integer(slots_to_fill)} "
             f"selected={compact_symbols(selected_symbols)} "
             f"incumbents={compact_symbols(incumbent_symbols)} "
-            f"hyst={number(score_hysteresis_pct)} "
+            f"hyst={number(score_hysteresis_margin)} "
             f"reason={reason_token}"
         )
         event_samples = [
@@ -13744,7 +13744,7 @@ class Passivbot:
                 if with_components:
                     vol = float(item.get("volume_component", 0.0) or 0.0)
                     ema = float(item.get("ema_readiness_component", 0.0) or 0.0)
-                    vlt = float(item.get("volatility_component", 0.0) or 0.0)
+                    vlt = float(item.get("log_range_component", 0.0) or 0.0)
                     parts.append(
                         f"{rank}:{symbol}={score:.6f}{suffix}"
                         f"[vol={vol:.3f},ema={ema:.3f},vlt={vlt:.3f}]"
@@ -13831,8 +13831,8 @@ class Passivbot:
                         "ema_readiness_component": float(
                             item.get("ema_readiness_component") or 0.0
                         ),
-                        "volatility_component": float(
-                            item.get("volatility_component") or 0.0
+                        "log_range_component": float(
+                            item.get("log_range_component") or 0.0
                         ),
                         "selected": bool(item.get("selected")),
                         "incumbent": bool(item.get("incumbent")),
@@ -13855,8 +13855,8 @@ class Passivbot:
                 max_n_positions=None,
                 slots_to_fill=slots_to_fill,
                 volatility_drop_pct=None,
-                score_hysteresis_pct=float(
-                    selection.get("score_hysteresis_pct") or 0.0
+                score_hysteresis_margin=float(
+                    selection.get("score_hysteresis_margin") or 0.0
                 ),
                 max_age_ms=None,
                 fetch_budget=None,
@@ -13913,7 +13913,7 @@ class Passivbot:
                         slots_to_fill=selection.get("slots_to_fill", 0),
                         selected_symbols=selected_symbols,
                         incumbent_symbols=incumbent_symbols,
-                        score_hysteresis_pct=selection.get("score_hysteresis_pct", 0.0),
+                        score_hysteresis_margin=selection.get("score_hysteresis_margin", 0.0),
                         reason=reason,
                         top_scores=[
                             (
@@ -13945,7 +13945,7 @@ class Passivbot:
                     pside,
                     int(selection.get("slots_to_fill", 0) or 0),
                     ",".join(selected_symbols) if selected_symbols else "-",
-                    float(selection.get("score_hysteresis_pct", 0.0) or 0.0),
+                    float(selection.get("score_hysteresis_margin", 0.0) or 0.0),
                     _fmt_top(top_scores, 5, with_components=False),
                 )
                 state["info_key"] = info_key
@@ -13957,7 +13957,7 @@ class Passivbot:
                     int(selection.get("slots_to_fill", 0) or 0),
                     ",".join(selected_symbols) if selected_symbols else "-",
                     ",".join(incumbent_symbols) if incumbent_symbols else "-",
-                    float(selection.get("score_hysteresis_pct", 0.0) or 0.0),
+                    float(selection.get("score_hysteresis_margin", 0.0) or 0.0),
                     _fmt_top(top_scores, 12, with_components=True),
                     _fmt_events(events, limit=12),
                 )
@@ -15006,14 +15006,14 @@ class Passivbot:
             "entry_trailing_reentry_qty_multiplier",
             "entry_trailing_retracement_base_fraction",
             "entry_trailing_threshold_base_fraction",
-            "forager_volatility_ema_span_1m",
-            "forager_volume_ema_span_1m",
+            "forager_log_range_ema_span_minutes",
+            "forager_volume_ema_span_minutes",
             "forager_score_weights",
             "risk_entry_cooldown_minutes",
             "entry_cooldown_min_duration_minutes",
             "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes",
-            "unilateralness_ema_span_1m",
+            "unilateralness_ema_span_minutes",
             "n_positions",
             "total_wallet_exposure_limit_ratio",
             "wallet_exposure_limit_ratio",
@@ -15058,10 +15058,6 @@ class Passivbot:
                     else self.bp(pside, key)
                 )
             out_key = key
-            if key == "forager_volatility_ema_span_1m":
-                out_key = "filter_volatility_ema_span_1m"
-            elif key == "forager_volume_ema_span_1m":
-                out_key = "filter_volume_ema_span_1m"
             if key == "forager_score_weights":
                 if not isinstance(val, dict):
                     raise TypeError(
@@ -15070,7 +15066,7 @@ class Passivbot:
                 out[out_key] = {
                     "volume": float(val["volume"]),
                     "ema_readiness": float(val["ema_readiness"]),
-                    "volatility": float(val["volatility"]),
+                    "log_range": float(val["log_range"]),
                     "unilateralness": float(val["unilateralness"]),
                 }
             elif key == "entry_cooldown_weights_minutes":
@@ -15655,25 +15651,25 @@ class Passivbot:
         # Forager metrics use global spans (per side); include them for all symbols.
         vol_span_long = float(
             Passivbot._live_forager_warmup_value(
-                self, "long", "forager_volume_ema_span_1m", ""
+                self, "long", "forager_volume_ema_span_minutes", ""
             )
             or 0.0
         )
         lr_span_long = float(
             Passivbot._live_forager_warmup_value(
-                self, "long", "forager_volatility_ema_span_1m", ""
+                self, "long", "forager_log_range_ema_span_minutes", ""
             )
             or 0.0
         )
         vol_span_short = float(
             Passivbot._live_forager_warmup_value(
-                self, "short", "forager_volume_ema_span_1m", ""
+                self, "short", "forager_volume_ema_span_minutes", ""
             )
             or 0.0
         )
         lr_span_short = float(
             Passivbot._live_forager_warmup_value(
-                self, "short", "forager_volatility_ema_span_1m", ""
+                self, "short", "forager_log_range_ema_span_minutes", ""
             )
             or 0.0
         )
@@ -15711,7 +15707,7 @@ class Passivbot:
                 required_forager_volume_spans.add(vol_span_long)
             if (
                 lr_span_long > 0.0
-                and _forager_score_weight("long", "volatility") != 0.0
+                and _forager_score_weight("long", "log_range") != 0.0
             ):
                 required_forager_m1_lr_spans.add(lr_span_long)
         if bool(is_forager_mode("short")):
@@ -15721,7 +15717,7 @@ class Passivbot:
                 required_forager_volume_spans.add(vol_span_short)
             if (
                 lr_span_short > 0.0
-                and _forager_score_weight("short", "volatility") != 0.0
+                and _forager_score_weight("short", "log_range") != 0.0
             ):
                 required_forager_m1_lr_spans.add(lr_span_short)
         if not hasattr(self, "_orchestrator_prev_close_ema"):
@@ -17714,7 +17710,7 @@ class Passivbot:
             ("short", vol_span_short, lr_span_short),
         ):
             if pside in directional_scoring_sides:
-                span = float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+                span = float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
                 rank_feature_unavailable_by_side[pside].update(
                     s for s in symbols if span not in ranking_directional.get(s, {})
                 )
@@ -17725,7 +17721,7 @@ class Passivbot:
             )
             log_range_required = (
                 log_range_span > 0.0
-                and _forager_score_weight(pside, "volatility") != 0.0
+                and _forager_score_weight(pside, "log_range") != 0.0
             )
             for symbol in symbols:
                 if (
@@ -19831,8 +19827,8 @@ class Passivbot:
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
         span = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_volatility_ema_span_1m"),
-            context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
+            self.bot_value(pside, "forager_log_range_ema_span_minutes"),
+            context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
         )
         try:
             activation_span_fraction = float(

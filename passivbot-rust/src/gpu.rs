@@ -871,7 +871,7 @@ mod tests {
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(!source.contains("volume_drop"));
-        assert!(source.contains("config.forager_volume_span = params[po + 12]"));
+        assert!(source.contains("config.forager_volume_ema_span_candles = params[po + 12]"));
         assert!(source.contains("config.w_volume = params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains(

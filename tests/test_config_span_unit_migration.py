@@ -53,7 +53,7 @@ def test_released_root_bounds_fixed_scenario_and_millisecond_values_keep_their_u
     assert config["optimize"]["fixed_runtime_overrides"] == {selector: 234.5}
     assert config["backtest"]["scenarios"][0]["overrides"][selector] == 345.25
     assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_minutes"] == [400.5, 500.75]
-    assert get_grouped_bot_value(config["bot"]["long"], "forager_volume_ema_span_1m") == 456.25
+    assert get_grouped_bot_value(config["bot"]["long"], "forager_volume_ema_span_minutes") == 456.25
     assert get_grouped_bot_value(config["bot"]["long"], "hsl_cooldown_minutes_after_red") == 0.125
     assert config["live"]["api"]["recv_window_milliseconds"] == 2345
     assert config["live"]["fills"]["fee_conversion_max_age_milliseconds"] == 987654
@@ -111,7 +111,7 @@ def test_released_span_selector_suffixes_preserve_native_gene_membership(prefix)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = ["long"] if "long" in prefix else ["long", "short"]
-    assert set(selected) == {f"{side}_forager_volume_ema_span_1m" for side in sides}
+    assert set(selected) == {f"{side}_forager_volume_ema_span_minutes" for side in sides}
     assert [value.removeprefix("bot.") for value in config["optimize"]["fixed_params"]] == [
         f"{prefix}volume_ema_span_minutes".removeprefix("bot.")
     ]

@@ -505,7 +505,7 @@ pub enum TwelEnforcerPolicy {
 pub struct ForagerScoreWeights {
     pub volume: f64,
     pub ema_readiness: f64,
-    pub volatility: f64,
+    pub log_range: f64,
     #[serde(default)]
     pub unilateralness: f64,
 }
@@ -515,7 +515,7 @@ impl Default for ForagerScoreWeights {
         Self {
             volume: 0.0,
             ema_readiness: 0.0,
-            volatility: 1.0,
+            log_range: 1.0,
             unilateralness: 0.0,
         }
     }
@@ -526,7 +526,7 @@ impl ForagerScoreWeights {
         let values = [
             self.volume,
             self.ema_readiness,
-            self.volatility,
+            self.log_range,
             self.unilateralness,
         ];
         if values
@@ -535,19 +535,19 @@ impl ForagerScoreWeights {
         {
             return Err("forager_score_weights must be finite and non-negative".to_string());
         }
-        let total = self.volume + self.ema_readiness + self.volatility + self.unilateralness;
+        let total = self.volume + self.ema_readiness + self.log_range + self.unilateralness;
         if total <= 0.0 {
             return Ok(Self {
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
                 unilateralness: 0.0,
             });
         }
         Ok(Self {
             volume: self.volume / total,
             ema_readiness: self.ema_readiness / total,
-            volatility: self.volatility / total,
+            log_range: self.log_range / total,
             unilateralness: self.unilateralness / total,
         })
     }
@@ -592,8 +592,8 @@ pub struct BotParams {
     pub entry_trailing_retracement_base_fraction: f64,
     #[serde(default)]
     pub entry_trailing_threshold_base_fraction: f64,
-    pub filter_volatility_ema_span_1m: f64,
-    pub filter_volume_ema_span_1m: f64,
+    pub forager_log_range_ema_span_minutes: f64,
+    pub forager_volume_ema_span_minutes: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
     pub _legacy_filter_volatility_drop_pct: f64,
     #[serde(default)]
@@ -624,7 +624,7 @@ pub struct BotParams {
     #[serde(default)]
     pub entry_cooldown_weights_minutes: crate::entry_cooldown::CooldownWeights,
     #[serde(default = "default_unilateralness_span")]
-    pub unilateralness_ema_span_1m: f64,
+    pub unilateralness_ema_span_minutes: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
@@ -670,8 +670,8 @@ impl Default for BotParams {
             entry_trailing_reentry_qty_multiplier: 0.0,
             entry_trailing_retracement_base_fraction: 0.0,
             entry_trailing_threshold_base_fraction: 0.0,
-            filter_volatility_ema_span_1m: 0.0,
-            filter_volume_ema_span_1m: 0.0,
+            forager_log_range_ema_span_minutes: 0.0,
+            forager_volume_ema_span_minutes: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
@@ -684,7 +684,7 @@ impl Default for BotParams {
             entry_cooldown_min_duration_minutes: 0.0,
             entry_cooldown_max_duration_minutes: None,
             entry_cooldown_weights_minutes: Default::default(),
-            unilateralness_ema_span_1m: 60.0,
+            unilateralness_ema_span_minutes: 60.0,
             n_positions: 0,
             total_wallet_exposure_limit_ratio: 0.0,
             wallet_exposure_limit_ratio: 0.0,

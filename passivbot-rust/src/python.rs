@@ -2733,6 +2733,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         "forager_volume_drop_pct",
         "filter_volume_drop_pct",
         "risk_twel_entry_gate_enabled",
+        "unilateralness_ema_span_1m",
     ] {
         if dict.contains(key)? {
             return Err(PyValueError::new_err(format!(
@@ -2809,23 +2810,8 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "entry_trailing_retracement_base_fraction",
         )?,
         entry_trailing_threshold_base_fraction: extract_optional_f64(dict, "entry_trailing_threshold_base_fraction")?,
-        filter_volatility_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volatility_ema_span_1m",
-            "filter_volatility_ema_span_1m",
-        )
-        .or_else(|_| {
-            extract_value_with_fallback(
-                dict,
-                "filter_volatility_ema_span_1m",
-                "filter_log_range_ema_span",
-            )
-        })?,
-        filter_volume_ema_span_1m: extract_value_with_fallback(
-            dict,
-            "forager_volume_ema_span_1m",
-            "filter_volume_ema_span_1m",
-        )?,
+        forager_log_range_ema_span_minutes: extract_value(dict, "forager_log_range_ema_span_minutes")?,
+        forager_volume_ema_span_minutes: extract_value(dict, "forager_volume_ema_span_minutes")?,
         _legacy_filter_volatility_drop_pct: 0.0,
         forager_score_weights: dict
             .get_item("forager_score_weights")
@@ -2860,7 +2846,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             }
             None => Default::default(),
         },
-        unilateralness_ema_span_1m: match dict.get_item("unilateralness_ema_span_1m")? {
+        unilateralness_ema_span_minutes: match dict.get_item("unilateralness_ema_span_minutes")? {
             Some(v) => v.extract()?,
             None => 60.0,
         },
@@ -2892,7 +2878,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         unstuck_exposure_trigger_ratio: extract_value(dict, "unstuck_exposure_trigger_ratio")?,
     };
     crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
-    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_1m)
+    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_minutes)
         .map_err(PyValueError::new_err)?;
     Ok(params)
 }
@@ -2912,7 +2898,7 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
     let weights = ForagerScoreWeights {
         volume: extract_value(weights_dict, "volume")?,
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
-        volatility: extract_value(weights_dict, "volatility")?,
+        log_range: extract_value(weights_dict, "log_range")?,
         unilateralness: extract_optional_f64(weights_dict, "unilateralness")?,
     };
     weights.canonicalize().map_err(PyValueError::new_err)
@@ -3148,23 +3134,6 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
             ))
         })
         .and_then(pyo3::FromPyObject::extract)
-}
-
-fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
-    dict: &'a PyDict,
-    primary: &str,
-    fallback: &str,
-) -> PyResult<T> {
-    if let Some(item) = dict.get_item(primary)? {
-        return item.extract::<T>();
-    }
-    if let Some(item) = dict.get_item(fallback)? {
-        return item.extract::<T>();
-    }
-    Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
-        "Keys '{}' or '{}' not found",
-        primary, fallback
-    )))
 }
 
 fn make_trailing_martingale_entry_params(
@@ -4453,7 +4422,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     for symbol in &input.symbols {
         for side in [&symbol.long, &symbol.short] {
             crate::entry_cooldown::validate(&side.bot_params).map_err(PyValueError::new_err)?;
-            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_1m)
+            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_minutes)
                 .map_err(PyValueError::new_err)?;
         }
     }

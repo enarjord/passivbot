@@ -944,7 +944,7 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             if (
                 hint
                 and hint["weights"] == out[pside]["score_weights"]
-                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
             ):
                 out[pside]["ranking"] = deepcopy(hint["ranking"])
             continue
@@ -977,8 +977,8 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             if not isinstance(candidate, dict):
                 continue
             enabled = bool(candidate.get("enabled", False))
-            volume_score = float(candidate.get("volume_score", 0.0) or 0.0)
-            volatility_score = float(candidate.get("volatility_score", 0.0) or 0.0)
+            volume_ema = float(candidate.get("volume_ema", 0.0) or 0.0)
+            log_range_ema = float(candidate.get("log_range_ema", 0.0) or 0.0)
             ema_readiness_raw = None
             entry_trigger_price = None
             try:
@@ -1003,9 +1003,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                 {
                     "symbol": symbol,
                     "enabled": enabled,
-                    "volume_score_raw": volume_score,
-                    "volatility_score_raw": volatility_score,
-                    "ema_readiness_score_raw": ema_readiness_raw,
+                    "volume_ema": volume_ema,
+                    "log_range_ema": log_range_ema,
+                    "ema_entry_price_gap_fraction": ema_readiness_raw,
                     "entry_trigger_price": entry_trigger_price,
                 }
             )
@@ -1013,30 +1013,30 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         if not enabled_features:
             continue
         volume_norm = _normalize_higher_is_better(
-            [float(feature["volume_score_raw"]) for feature in enabled_features]
+            [float(feature["volume_ema"]) for feature in enabled_features]
         )
-        volatility_norm = _normalize_higher_is_better(
-            [float(feature["volatility_score_raw"]) for feature in enabled_features]
+        log_range_scores = _normalize_higher_is_better(
+            [float(feature["log_range_ema"]) for feature in enabled_features]
         )
         ema_norm = _normalize_lower_is_better(
             [
                 (
-                    float(feature["ema_readiness_score_raw"])
-                    if feature["ema_readiness_score_raw"] is not None
+                    float(feature["ema_entry_price_gap_fraction"])
+                    if feature["ema_entry_price_gap_fraction"] is not None
                     else float("nan")
                 )
                 for feature in enabled_features
             ]
         )
         for feature, vol_norm, vola_norm, ema_score_norm in zip(
-            enabled_features, volume_norm, volatility_norm, ema_norm
+            enabled_features, volume_norm, log_range_scores, ema_norm
         ):
             feature["volume_score_normalized"] = vol_norm
-            feature["volatility_score_normalized"] = vola_norm
+            feature["log_range_score"] = vola_norm
             feature["ema_readiness_score_normalized"] = ema_score_norm
             feature["total_score"] = (
                 float(weights.get("volume", 0.0) or 0.0) * vol_norm
-                + float(weights.get("volatility", 0.0) or 0.0) * vola_norm
+                + float(weights.get("log_range", 0.0) or 0.0) * vola_norm
                 + float(weights.get("ema_readiness", 0.0) or 0.0) * ema_score_norm
             )
         top_total = max(
@@ -1045,24 +1045,24 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         )
         top_volume = max(
             enabled_features,
-            key=lambda feature: (feature["volume_score_raw"], feature["symbol"]),
+            key=lambda feature: (feature["volume_ema"], feature["symbol"]),
         )
-        top_volatility = max(
+        top_log_range = max(
             enabled_features,
-            key=lambda feature: (feature["volatility_score_raw"], feature["symbol"]),
+            key=lambda feature: (feature["log_range_ema"], feature["symbol"]),
         )
         top_ema = None
         ema_candidates = [
             feature
             for feature in enabled_features
-            if feature["ema_readiness_score_raw"] is not None
-            and math.isfinite(float(feature["ema_readiness_score_raw"]))
+            if feature["ema_entry_price_gap_fraction"] is not None
+            and math.isfinite(float(feature["ema_entry_price_gap_fraction"]))
         ]
         if ema_candidates:
             top_ema = min(
                 ema_candidates,
                 key=lambda feature: (
-                    feature["ema_readiness_score_raw"],
+                    feature["ema_entry_price_gap_fraction"],
                     feature["symbol"],
                 ),
             )
@@ -1092,13 +1092,13 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         out[pside]["ranking"] = {
             "top_total": _ranking_payload(top_total, "total_score", "total_score"),
             "top_volume": _ranking_payload(
-                top_volume, "volume_score_raw", "volume_score_normalized"
+                top_volume, "volume_ema", "volume_score_normalized"
             ),
-            "top_volatility": _ranking_payload(
-                top_volatility, "volatility_score_raw", "volatility_score_normalized"
+            "top_log_range": _ranking_payload(
+                top_log_range, "log_range_ema", "log_range_score"
             ),
             "top_ema_readiness": _ranking_payload(
-                top_ema, "ema_readiness_score_raw", "ema_readiness_score_normalized"
+                top_ema, "ema_entry_price_gap_fraction", "ema_readiness_score_normalized"
             ),
         }
         if out[pside]["next_symbol"] is not None:
@@ -1116,9 +1116,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                     out[pside]["next_entry_trigger_price"] = float(
                         next_feature["entry_trigger_price"]
                     )
-                if next_feature.get("ema_readiness_score_raw") is not None:
-                    out[pside]["next_entry_distance_ratio"] = float(
-                        next_feature["ema_readiness_score_raw"]
+                if next_feature.get("ema_entry_price_gap_fraction") is not None:
+                    out[pside]["next_entry_price_gap_fraction"] = float(
+                        next_feature["ema_entry_price_gap_fraction"]
                     )
     return out
 
@@ -1378,7 +1378,7 @@ def _update_monitor_runtime_hints(
         score = float(top["score"])
         self._monitor_runtime_forager_hints[pside] = {
             "weights": weights,
-            "span": float(self.bot_value(pside, "unilateralness_ema_span_1m")),
+            "span": float(self.bot_value(pside, "unilateralness_ema_span_minutes")),
             "ranking": {
                 "source": "rust_orchestrator",
                 "observed_at_ms": int(utc_ms()),
@@ -1391,7 +1391,7 @@ def _update_monitor_runtime_hints(
                         key: float(top[key])
                         for key in (
                             "volume_component",
-                            "volatility_component",
+                            "log_range_component",
                             "ema_readiness_component",
                             "unilateralness_component",
                         )

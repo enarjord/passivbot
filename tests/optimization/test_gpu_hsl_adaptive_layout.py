@@ -28,7 +28,7 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy):
         unstuck_ema_span_0_minutes=11., unstuck_ema_span_1_minutes=19.,
         entry_cooldown_min_duration_minutes=2., entry_cooldown_max_duration_minutes=55.,
         entry_cooldown_exposure_weight=13., entry_cooldown_adverse_weight=17.,
-        unilateralness_ema_span_1m=3.25, forager_score_weights_unilateralness=.5,
+        unilateralness_ema_span_minutes=3.25, forager_score_weights_unilateralness=.5,
         unilateralness_window=65.,
     )
     params = np.tile(np.array([values[key] for key in keys], np.float32), 2)

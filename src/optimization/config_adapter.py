@@ -441,8 +441,6 @@ def _validate_forager_weight_context(
             )
         return configured, pinned
 
-    from config.shared_bot import native_forager_weight_name
-
     names = ("volume", "log_range", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
         weight_source = optimizer_numeric_group_source_side(config, side, "forager")
@@ -478,7 +476,7 @@ def _validate_forager_weight_context(
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
         for name in names:
-            key = f"{weight_source}_forager_score_weights_{native_forager_weight_name(name)}"
+            key = f"{weight_source}_forager_score_weights_{name}"
             configured, runtime_pinned = pinned_value(
                 ("bot", weight_source, "forager", "score_weights", name),
                 weights[name], runtime_pins,

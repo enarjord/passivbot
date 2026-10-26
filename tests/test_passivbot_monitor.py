@@ -2405,7 +2405,7 @@ def test_forager_debug_profile_adds_bounded_selection_shape():
         fetch_budget=2,
         incumbent_symbols=["ETH/USDT:USDT"],
         slots_to_fill=1,
-        score_hysteresis_pct=0.03,
+        score_hysteresis_margin=0.03,
         top_scores=[
             {
                 "symbol": "BTC/USDT:USDT",
@@ -6640,12 +6640,12 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             self._coin_bot_values = {
                 ("long", "forager_score_weights"): {
                     "volume": 1.0,
-                    "volatility": 0.5,
+                    "log_range": 0.5,
                     "ema_readiness": 0.25,
                 },
                 ("short", "forager_score_weights"): {
                     "volume": 1.0,
-                    "volatility": 0.5,
+                    "log_range": 0.5,
                     "ema_readiness": 0.25,
                 },
                 ("long", "wallet_exposure_limit_ratio"): 0.2,
@@ -6844,8 +6844,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     payloads.append(
                         {
                             "enabled": min_cost_flags[symbol],
-                            "volume_score": 100.0,
-                            "volatility_score": 0.03,
+                            "volume_ema": 100.0,
+                            "log_range_ema": 0.03,
                             "bid": 100500.0,
                             "ask": 100500.0,
                             "ema_lower": 100200.0,
@@ -6857,8 +6857,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     payloads.append(
                         {
                             "enabled": min_cost_flags[symbol],
-                            "volume_score": 120.0,
-                            "volatility_score": 0.05,
+                            "volume_ema": 120.0,
+                            "log_range_ema": 0.05,
                             "bid": 2500.0,
                             "ask": 2500.0,
                             "ema_lower": 2550.0,
@@ -6972,7 +6972,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["forager"]["long"]["next_entry_trigger_price"] == pytest.approx(
         2550.0 * 0.99
     )
-    assert snapshot["forager"]["long"]["next_entry_distance_ratio"] == pytest.approx(
+    assert snapshot["forager"]["long"]["next_entry_price_gap_fraction"] == pytest.approx(
         2500.0 / (2550.0 * 0.99) - 1.0
     )
     assert (
@@ -6980,7 +6980,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         == "ETH/USDT:USDT"
     )
     assert (
-        snapshot["forager"]["long"]["ranking"]["top_volatility"]["symbol"]
+        snapshot["forager"]["long"]["ranking"]["top_log_range"]["symbol"]
         == "ETH/USDT:USDT"
     )
     assert (
@@ -7725,7 +7725,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     names = ["AAA/USDT:USDT", "BBB/USDT:USDT", "ZZZ/USDT:USDT"]
     weights = {
         "volume": volume_weight,
-        "volatility": 0.0,
+        "log_range": 0.0,
         "ema_readiness": 0.0,
         "unilateralness": 1.0 - volume_weight,
     }
@@ -7734,7 +7734,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
         "filter_volatility_drop_pct": volatility_drop_pct,
-        "unilateralness_ema_span_1m": 60.0,
+        "unilateralness_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     for symbol, score, volume in zip(symbols, [0.9, -0.1, 0.6], [900.0, 100.0, 600.0]):
@@ -7785,7 +7785,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "unilateralness_ema_span_1m" else volatility_drop_pct)
+            else (60.0 if key == "unilateralness_ema_span_minutes" else volatility_drop_pct)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,
@@ -7811,7 +7811,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     assert calls == []  # Rendering diagnostics performs no feature fetch/recalculation.
     # A config change cannot relabel the previous selection with a new span.
     original = bot.bot_value
-    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_1m" else original(s, key)
+    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_minutes" else original(s, key)
     assert "ranking" not in (await monitor._build_monitor_forager_section(bot))[side]
     bot.bot_value = original
     # No scoring diagnostic means no fabricated or retained legacy total.
