@@ -34,7 +34,7 @@ def test_feature_flags_and_frozen_zero_sensitivities_match_native_packets(kind, 
         assert bot_params[0][side]["forager_score_weights"] == {
             "volume": 0.3 if topology == "forager" else 0.0,
             "ema_readiness": 0.4 if topology == "forager" else 0.0,
-            "volatility": 0.3 if topology == "forager" else 0.0,
+            "log_range": 0.3 if topology == "forager" else 0.0,
             "unilateralness": 0.0,
         }
         if kind == "trailing_martingale":

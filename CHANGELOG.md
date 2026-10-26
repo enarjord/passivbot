@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
 - Name native maker and taker rates explicitly as fee fractions across CPU and GPU execution.
   Preserve signed rebates, zero fees, exchange fallback and external market-cache formats;
   reject retired native fee fields without changing monetary fee outputs.
