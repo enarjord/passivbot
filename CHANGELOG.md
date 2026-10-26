@@ -14,6 +14,8 @@ since the latest release tag; these features may already be available when insta
   Comparison values and plot slicing stay unchanged; human summaries still display percentages.
 - Name crash-finder thresholds and event fields explicitly as log returns or log ratios;
   report and CSV values retain natural-log units and existing directional ranking.
+- Spell scale-100 diagnostic and telemetry values with `_percent`; preserve values, rounding,
+  missing-value behavior and human percentage formatting across producers and report consumers.
 
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
