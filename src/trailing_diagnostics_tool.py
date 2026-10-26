@@ -601,8 +601,8 @@ def _render_side_box(title: str, payload: Optional[dict[str, Any]], width: int) 
             f"ret_pct={_fmt_ratio_pct(payload.get('retracement_fraction'))}"
         ),
         (
-            f"vs_thr={_fmt_ratio_pct(payload.get('current_vs_threshold_ratio'))} "
-            f"vs_ret={_fmt_ratio_pct(payload.get('current_vs_retracement_ratio'))}"
+            f"vs_thr={_fmt_ratio_pct(payload.get('current_price_change_from_threshold_fraction'))} "
+            f"vs_ret={_fmt_ratio_pct(payload.get('current_price_change_from_retracement_fraction'))}"
         ),
     ]
     if payload.get("kind") == "entry":

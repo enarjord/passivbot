@@ -1195,8 +1195,8 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             for key in (
                 "next_symbol",
                 "next_target_price",
-                "next_target_distance_ratio",
-                "next_unstuck_trigger_distance_ratio",
+                "next_target_price_offset_fraction",
+                "next_unstuck_trigger_price_offset_fraction",
             ):
                 if key in hint and hint[key] is not None:
                     side_payload[key] = hint[key]
@@ -1305,13 +1305,13 @@ def _build_monitor_runtime_unstuck_hints(
         pside = "long" if "long" in order_type_str else "short"
         target_price = float(order.get("price", 0.0) or 0.0)
         current_price = float(last_prices.get(symbol, 0.0) or 0.0)
-        distance_ratio = None
+        target_price_offset_fraction = None
         if current_price > 0.0 and target_price > 0.0:
-            distance_ratio = float(target_price / current_price - 1.0)
+            target_price_offset_fraction = float(target_price / current_price - 1.0)
         hint = {
             "next_symbol": symbol,
             "next_target_price": target_price,
-            "next_target_distance_ratio": distance_ratio,
+            "next_target_price_offset_fraction": target_price_offset_fraction,
         }
         market_hint = market_hints.get(symbol, {})
         if isinstance(market_hint, dict):
@@ -1332,7 +1332,7 @@ def _build_monitor_runtime_unstuck_hints(
                     side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0
                 )
                 if current_price > 0.0 and trigger_price > 0.0:
-                    hint["next_unstuck_trigger_distance_ratio"] = float(
+                    hint["next_unstuck_trigger_price_offset_fraction"] = float(
                         trigger_price / current_price - 1.0
                     )
         out[pside] = hint

@@ -454,8 +454,8 @@ def test_monitor_tui_render_screen_includes_core_panels():
                             "allowance_live": 0.0,
                             "next_symbol": "BTC/USDT:USDT",
                             "next_target_price": 71000.0,
-                            "next_target_distance_ratio": 0.007,
-                            "next_unstuck_trigger_distance_ratio": 0.003,
+                            "next_target_price_offset_fraction": 0.007,
+                            "next_unstuck_trigger_price_offset_fraction": 0.003,
                             "ema_bands": {
                                 "lower": 70000.0,
                                 "upper": 70600.0,

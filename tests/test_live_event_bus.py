@@ -3341,8 +3341,8 @@ def test_console_format_summarizes_trailing_status():
             "retracement_price": 99_145.0,
             "threshold_projection_retracement_price": 99_145.0,
             "current_price": 101_000.0,
-            "current_vs_threshold_ratio": 101_000.0 / 98_750.0 - 1.0,
-            "current_vs_retracement_ratio": 101_000.0 / 99_145.0 - 1.0,
+            "current_price_change_from_threshold_fraction": 101_000.0 / 98_750.0 - 1.0,
+            "current_price_change_from_retracement_fraction": 101_000.0 / 99_145.0 - 1.0,
         },
     )
 
@@ -3373,8 +3373,8 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
             "retracement_fraction": 0.000212,
             "retracement_price": 1049.58,
             "current_price": 902.465,
-            "current_vs_threshold_ratio": -0.140163,
-            "current_vs_retracement_ratio": -0.140163,
+            "current_price_change_from_threshold_fraction": -0.140163,
+            "current_price_change_from_retracement_fraction": -0.140163,
             "threshold_projection_retracement_price": 1030.0,
         },
     )
@@ -3386,8 +3386,8 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
         "gates=t:y/r:y threshold=-1.9649%@887.25 retracement=0.0212%@1049.58 cur=902.465"
     )
     assert len(rendered) <= 240
-    assert event.data["current_vs_threshold_ratio"] == -0.140163
-    assert event.data["current_vs_retracement_ratio"] == -0.140163
+    assert event.data["current_price_change_from_threshold_fraction"] == -0.140163
+    assert event.data["current_price_change_from_retracement_fraction"] == -0.140163
     assert event.data["threshold_projection_retracement_price"] == 1030.0
 
 
@@ -3428,8 +3428,8 @@ def test_console_format_summarizes_unstuck_status():
                     "over_budget": True,
                     "next_symbol": "BTC/USDT:USDT",
                     "next_target_price": 101_000.0,
-                    "next_target_distance_ratio": 0.005,
-                    "next_unstuck_trigger_distance_ratio": 0.0125,
+                    "next_target_price_offset_fraction": 0.005,
+                    "next_unstuck_trigger_price_offset_fraction": 0.0125,
                 },
                 "short": {"status": "disabled"},
             },

@@ -12,6 +12,9 @@ since the latest release tag; these features may already be available when insta
 - Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
   including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
 
+- Identify signed diagnostic price changes and target offsets as scale-one fractions,
+  preserving monitor/trailing values and percentage display.
+
 - Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
   price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
   replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing

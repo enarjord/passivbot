@@ -2675,10 +2675,10 @@ def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
             target_price = _data_number(info, "next_target_price")
             if target_price:
                 bit += f" target={target_price:g}"
-            target_dist = _data_number(info, "next_target_distance_ratio")
+            target_dist = _data_number(info, "next_target_price_offset_fraction")
             if target_dist is not None:
                 bit += f" target_dist={target_dist * 100.0:.4f}%"
-            trigger_dist = _data_number(info, "next_unstuck_trigger_distance_ratio")
+            trigger_dist = _data_number(info, "next_unstuck_trigger_price_offset_fraction")
             if trigger_dist is not None:
                 bit += f" ema_gate_dist={trigger_dist * 100.0:.4f}%"
             side_parts.append(bit)
