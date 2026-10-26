@@ -30,7 +30,7 @@ def query(value, now, mark, sources=None):
 
 def test_current_quote_replacement_does_not_reseed_the_committed_initializer():
     value = bot()
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
+    value.config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     initial, replay = query(value, NOW, 90.0)
     advances = replay.cache_info()["advanced_events"]
     recovered, same = query(value, NOW + 1, 100.0)
@@ -75,7 +75,7 @@ def test_policy_change_reuses_the_raw_initializer_with_the_current_policy():
     value = bot()
     initial, replay = query(value, NOW, 90.0)
     anchor = replay.anchor
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
+    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     current, same = query(value, NOW + 1, 90.0)
     assert initial.action == "panic" and current.action == "normal"
     assert same is replay and replay.anchor is anchor

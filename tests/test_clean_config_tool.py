@@ -78,7 +78,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     cfg["backtest"]["coins"] = {"binance": ["BTCUSDT"]}
     cfg["live"]["base_config_path"] = "old-runtime-path"
     cfg["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.risk.total_wallet_exposure_limit": 2.5
+        "bot.long.risk.total_wallet_exposure_limit_ratio": 2.5
     }
     cfg["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 3.0}}}}
     cfg["_raw"] = {"bad": "metadata"}
@@ -109,8 +109,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert "strategy" not in result["bot"]["long"]
     assert result["coin_overrides"]["BTC"] == {"live": {"account": {"leverage": 3.0}}}
     assert (
-        result["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
-        == cfg["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
+        result["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"]
+        == cfg["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
         result["optimize"]["fixed_runtime_overrides"]
@@ -457,7 +457,7 @@ def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field
 
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("field", [
-    "drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
+    "drawdown_threshold_fraction", "drawdown_fraction_ema_span_minutes", "memory_ema_span_minutes",
     "cooldown_after_red_minutes",
 ])
 def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
@@ -513,7 +513,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     cfg["backtest"]["reducer"] = {"default": "mean", "adg_strategy_eq": "min"}
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
-        cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)
+        cfg["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = rng.uniform(0.1, 2.0)
         cfg["bot"][side]["risk"]["max_positions"] = rng.randint(1, 10)
         cfg["bot"][side]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.5)
         cfg["bot"][side]["unstuck"]["ema_span_0_minutes"] = rng.uniform(5.1, 1000.9)

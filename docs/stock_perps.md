@@ -185,7 +185,7 @@ XYZ-XYZ100/USDC:USDC: margin=ok (cross)
 
 **Risk isolation**: This is how isolated margin works at the exchange level. Passivbot currently does not support live HIP-3 isolated trading, but the distinction is still useful context for understanding the exchange.
 
-**Practical consideration**: Isolated margin positions lock up capital, reducing what's available for cross-margin positions. Plan your `n_positions` and `total_wallet_exposure_limit` accordingly.
+**Practical consideration**: Isolated margin positions lock up capital, reducing what's available for cross-margin positions. Plan your `n_positions` and `total_wallet_exposure_limit_ratio` accordingly.
 
 ### Automatic Detection
 
@@ -254,7 +254,7 @@ Minimal test config for stock perps:
             },
             "risk": {
                 "max_positions": 2,
-                "total_wallet_exposure_limit": 1.0
+                "total_wallet_exposure_limit_ratio": 1.0
             },
             "strategy": {
                 "trailing_martingale": {
@@ -268,7 +268,7 @@ Minimal test config for stock perps:
             "enabled": false,
             "risk": {
                 "max_positions": 0,
-                "total_wallet_exposure_limit": 0.0
+                "total_wallet_exposure_limit_ratio": 0.0
             }
         }
     },

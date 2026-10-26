@@ -710,7 +710,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
                 },
             },
         }
-        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0 + adg
+        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 + adg
         (pareto_dir / f"candidate_{idx}.json").write_text(
             json.dumps(artifact),
             encoding="utf-8",
@@ -727,7 +727,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     assert len(selected) == 1
     assert selected[0]["_starting_config_source"].endswith("candidate_1.json")
     assert selected[0]["bot"]["long"]["risk"][
-        "total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio"
     ] == pytest.approx(1.002)
 
 
@@ -1235,7 +1235,7 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
 
     args = parser.parse_args(
         [
-            "--optimize.bounds.long.risk.total_wallet_exposure_limit",
+            "--optimize.bounds.long.risk.total_wallet_exposure_limit_ratio",
             "0",
             "-l",
             "adg_strategy_pnl_rebased>0.0",
@@ -1243,7 +1243,7 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
     )
 
     assert args.limit_entries == ["adg_strategy_pnl_rebased>0.0"]
-    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") == [
+    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio") == [
         0.0
     ]
 
@@ -1488,7 +1488,7 @@ class TestIndividualToConfig:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
                     },
-                    "hsl": {"drawdown_ratio_threshold": 0.25},
+                    "hsl": {"drawdown_threshold_fraction": 0.25},
                 },
             },
             "optimize": {
@@ -1512,14 +1512,14 @@ class TestIndividualToConfig:
         )
 
         assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == pytest.approx(60.0)
-        assert result["bot"]["short"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.22)
+        assert result["bot"]["short"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.22)
 
     def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
         individual = [1.0, 2.0, 0.25, 3.0, 4.0]
         template = {
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_ratio_threshold": 0.2, "cooldown_after_red_minutes": 0.3},
+                    "hsl": {"drawdown_threshold_fraction": 0.2, "cooldown_after_red_minutes": 0.3},
                     "hsl_cooldown_minutes_after_red": 0.3,
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
@@ -1547,11 +1547,11 @@ class TestIndividualToConfig:
         original_template = deepcopy(template)
         result = individual_to_config(individual, lambda x, y, z: y, [], template)
 
-        assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
             "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
-        assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
             "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
@@ -1576,7 +1576,7 @@ class TestIndividualToConfig:
             "live": {},
             "bot": {
                 "long": {
-                    "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.55},
+                    "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.55},
                     "forager": {
                         "volume_ema_span_minutes": 520,
                         "volatility_ema_span_minutes": 225,
@@ -1588,7 +1588,7 @@ class TestIndividualToConfig:
                             "volatility": 1.0,
                         },
                     },
-                    "hsl": {"enabled": False, "drawdown_ratio_threshold": 0.2},
+                    "hsl": {"enabled": False, "drawdown_threshold_fraction": 0.2},
                     "unstuck": {"close_fraction": 0.05, "ema_distance_fraction": -0.05},
                     "strategy": {
                         "ema_anchor": {
@@ -1606,7 +1606,7 @@ class TestIndividualToConfig:
                         "ema_readiness": 0.05,
                         "volatility": 0.05,
                     },
-                    "risk": {"max_positions": 3, "total_wallet_exposure_limit": 0.25},
+                    "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 0.25},
                     "forager": {
                         "volume_ema_span_minutes": 360,
                         "volatility_ema_span_minutes": 10,
@@ -1618,7 +1618,7 @@ class TestIndividualToConfig:
                             "volatility": 0.5,
                         },
                     },
-                    "hsl": {"enabled": True, "drawdown_ratio_threshold": 0.1},
+                    "hsl": {"enabled": True, "drawdown_threshold_fraction": 0.1},
                     "unstuck": {"close_fraction": 0.11, "ema_distance_fraction": -0.11},
                     "strategy": {
                         "ema_anchor": {
@@ -1636,7 +1636,7 @@ class TestIndividualToConfig:
                 "enable_overrides": ["mirror_short_from_long"],
                 "bounds": {
                     "long": {
-                        "risk": {"total_wallet_exposure_limit": [0.35, 0.8, 0.01]},
+                        "risk": {"total_wallet_exposure_limit_ratio": [0.35, 0.8, 0.01]},
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_fraction": [0.006, 0.03, 0.0005],
@@ -1648,7 +1648,7 @@ class TestIndividualToConfig:
                         },
                     },
                     "short": {
-                        "risk": {"total_wallet_exposure_limit": [0.15, 0.5, 0.01]},
+                        "risk": {"total_wallet_exposure_limit_ratio": [0.15, 0.5, 0.01]},
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_fraction": [0.004, 0.02, 0.0005],
@@ -1690,8 +1690,8 @@ class TestIndividualToConfig:
             == result["bot"]["long"]["risk"]["max_positions"]
         )
         assert (
-            result["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
-            == result["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+            result["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"]
+            == result["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
         )
         assert (
             result["bot"]["short"]["forager"]["score_weights"]
@@ -1703,7 +1703,7 @@ class TestIndividualToConfig:
             "live": {},
             "bot": {
                 "long": {
-                    "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.9},
+                    "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.9},
                     "forager": {
                         "volume_ema_span_minutes": 520,
                         "volatility_ema_span_minutes": 225,
@@ -1719,7 +1719,7 @@ class TestIndividualToConfig:
                     },
                 },
                 "short": {
-                    "risk": {"max_positions": 2, "total_wallet_exposure_limit": 0.1},
+                    "risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": 0.1},
                     "forager": {
                         "volume_ema_span_minutes": 10,
                         "volatility_ema_span_minutes": 20,
@@ -1782,11 +1782,11 @@ class TestIndividualToConfig:
             "live": {},
             "bot": {
                 "long": {
-                    "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.0},
                     "strategy": {strategy_kind: {}},
                 },
                 "short": {
-                    "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                    "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
                     "strategy": {strategy_kind: {}},
                 },
                 "portfolio": {"strategy_kind": strategy_kind},
@@ -1919,14 +1919,14 @@ class TestIndividualToConfig:
             "close"
         ]["retracement_base_fraction"] = [-0.001, 0.01, 0.00001]
         template["bot"]["short"].setdefault("risk", {})["max_positions"] = 1.0
-        template["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+        template["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
         template["bot"]["short"]["enabled"] = True
         template["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
             "close"
         ]["retracement_volatility_1h_weight"] = [0.01, 70.0, 0.01]
         template["optimize"]["bounds"]["short"].setdefault("risk", {})["max_positions"] = [1.0, 1.0]
         template["optimize"]["bounds"]["short"]["risk"][
-            "total_wallet_exposure_limit"
+            "total_wallet_exposure_limit_ratio"
         ] = [
             1.0,
             3.0,
@@ -2118,9 +2118,9 @@ class TestIndividualToConfig:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_we_weight": 0.75}},
                     },
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
             },
             "optimize": {
                 "bounds": _bounds_from_flat(
@@ -2143,9 +2143,9 @@ class TestIndividualToConfig:
                                 "strategy": {
                                     "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}},
                                 },
-                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
-                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                         },
                         "fixed_values": [
                             {
@@ -2169,9 +2169,9 @@ class TestIndividualToConfig:
                                 "strategy": {
                                     "trailing_martingale": {"entry": {"initial_qty_fraction": 0.3, "threshold_we_weight": 0.4}},
                                 },
-                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
-                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                         },
                         "fixed_values": [
                             {
@@ -2285,7 +2285,7 @@ class TestConfigToIndividual:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 3.0, "threshold_we_weight": 4.0}},
                     },
-                    "hsl": {"drawdown_ratio_threshold": 0.22},
+                    "hsl": {"drawdown_threshold_fraction": 0.22},
                 },
             },
             "optimize": {
@@ -2362,9 +2362,9 @@ class TestConfigToIndividual:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_we_weight": 0.75}},
                     },
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
             },
             "optimize": {
                 "bounds": _bounds_from_flat(
@@ -2386,9 +2386,9 @@ class TestConfigToIndividual:
                                 "strategy": {
                                     "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}},
                                 },
-                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                                "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
-                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                            "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                         },
                     },
                 ],
@@ -2555,8 +2555,8 @@ class TestValidateArray:
             "__meta__": override_meta,
         }
         original_bot = {
-            "long": {"risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0}},
-            "short": {"risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0}},
+            "long": {"risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0}},
+            "short": {"risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.0}},
         }
         config = {
             "backtest": {
@@ -2847,7 +2847,7 @@ class TestApplyPolishBounds:
                     "long": {
                         "risk": {
                             "max_positions": [1.0, 10.0, 1.0],
-                            "total_wallet_exposure_limit": [0.1, 3.0, 0.1],
+                            "total_wallet_exposure_limit_ratio": [0.1, 3.0, 0.1],
                         },
                         "strategy": {
                             "trailing_martingale": {
@@ -2858,12 +2858,12 @@ class TestApplyPolishBounds:
                 },
                 "fixed_params": [
                     "bot.long.risk.max_positions",
-                    "bot.long.risk.total_wallet_exposure_limit",
+                    "bot.long.risk.total_wallet_exposure_limit_ratio",
                 ],
             },
             "bot": {
                 "long": {
-                    "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.5},
+                    "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 1.5},
                     "strategy": {
                         "trailing_martingale": {"entry": {"threshold_base_fraction": 0.05}}
                     },
@@ -2877,7 +2877,7 @@ class TestApplyPolishBounds:
 
         long_bounds = config["optimize"]["bounds"]["long"]
         assert long_bounds["risk"]["max_positions"] == [3.0, 3.0]
-        assert long_bounds["risk"]["total_wallet_exposure_limit"] == [1.5, 1.5]
+        assert long_bounds["risk"]["total_wallet_exposure_limit_ratio"] == [1.5, 1.5]
         assert long_bounds["strategy"]["trailing_martingale"]["entry"][
             "threshold_base_fraction"
         ] == pytest.approx([0.0375, 0.0625, 0.001])
@@ -3010,7 +3010,7 @@ class TestApplyFineTuneBounds:
                     "long": {
                         "risk": {
                             "we_excess_allowance_fraction": [0.0, 0.1],
-                            "total_wallet_exposure_limit": [0.3, 0.8],
+                            "total_wallet_exposure_limit_ratio": [0.3, 0.8],
                         }
                     },
                     "short": {"risk": {"we_excess_allowance_fraction": [0.0, 0.1]}},
@@ -3020,7 +3020,7 @@ class TestApplyFineTuneBounds:
                 "long": {
                     "risk": {
                         "we_excess_allowance_fraction": 0.04,
-                        "total_wallet_exposure_limit": 0.55,
+                        "total_wallet_exposure_limit_ratio": 0.55,
                     }
                 },
                 "short": {"risk": {"we_excess_allowance_fraction": 0.05}},
@@ -3042,7 +3042,7 @@ class TestApplyFineTuneBounds:
             0.1,
         ]
         assert config["optimize"]["bounds"]["long"]["risk"][
-            "total_wallet_exposure_limit"
+            "total_wallet_exposure_limit_ratio"
         ] == [
             0.55,
             0.55,
@@ -3052,7 +3052,7 @@ class TestApplyFineTuneBounds:
             "(bot.long.risk.we_excess_allowance_fraction)"
         ) in caplog.text
         assert "  long.risk.we_excess_allowance_fraction" in caplog.text
-        assert "  long.risk.total_wallet_exposure_limit" in caplog.text
+        assert "  long.risk.total_wallet_exposure_limit_ratio" in caplog.text
         assert "long_risk_we_excess_allowance_pct" not in caplog.text
 
     def test_cli_override_single_value_becomes_fixed(self):
@@ -3079,7 +3079,7 @@ class TestApplyFineTuneBounds:
             "optimize": {
                 "bounds": {
                     "long": {
-                        "risk": {"total_wallet_exposure_limit": [0.35, 0.8, 0.01]},
+                        "risk": {"total_wallet_exposure_limit_ratio": [0.35, 0.8, 0.01]},
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_fraction": [0.006, 0.03, 0.0005],
@@ -3091,7 +3091,7 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
-                    "risk": {"total_wallet_exposure_limit": 0.55},
+                    "risk": {"total_wallet_exposure_limit_ratio": 0.55},
                     "strategy": {"ema_anchor": {"base_qty_fraction": 0.012, "offset_fraction": 0.009}},
                 },
                 "portfolio": {"strategy_kind": "ema_anchor"},
@@ -3114,7 +3114,7 @@ class TestApplyFineTuneBounds:
             0.012,
         ]
         assert config["optimize"]["bounds"]["long"]["risk"][
-            "total_wallet_exposure_limit"
+            "total_wallet_exposure_limit_ratio"
         ] == [
             0.55,
             0.55,
@@ -3272,20 +3272,20 @@ class TestApplyFineTuneBounds:
         config = {
             "optimize": {
                 "bounds": {
-                    "long": {"hsl": {"drawdown_ratio_threshold": [0.1, 0.3]}},
+                    "long": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.3]}},
                 },
-                "fixed_params": ["long.hsl.drawdown_ratio_threshold"],
+                "fixed_params": ["long.hsl.drawdown_threshold_fraction"],
             },
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_ratio_threshold": 0.22},
+                    "hsl": {"drawdown_threshold_fraction": 0.22},
                 },
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
+        assert config["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] == [
             0.22,
             0.22,
         ]
@@ -3297,7 +3297,7 @@ class TestApplyFineTuneBounds:
                     "long": {
                         "risk": {
                             "we_excess_allowance_fraction": [0.0, 0.1],
-                            "total_wallet_exposure_limit": [0.3, 0.8],
+                            "total_wallet_exposure_limit_ratio": [0.3, 0.8],
                         }
                     },
                     "short": {"risk": {"we_excess_allowance_fraction": [0.0, 0.1]}},
@@ -3308,7 +3308,7 @@ class TestApplyFineTuneBounds:
                 "long": {
                     "risk": {
                         "we_excess_allowance_fraction": 0.04,
-                        "total_wallet_exposure_limit": 0.55,
+                        "total_wallet_exposure_limit_ratio": 0.55,
                     }
                 },
                 "short": {"risk": {"we_excess_allowance_fraction": 0.05}},
@@ -3330,7 +3330,7 @@ class TestApplyFineTuneBounds:
             0.05,
         ]
         assert config["optimize"]["bounds"]["long"]["risk"][
-            "total_wallet_exposure_limit"
+            "total_wallet_exposure_limit_ratio"
         ] == [
             0.3,
             0.8,
@@ -3485,9 +3485,9 @@ class TestApplyFineTuneBounds:
                             "close": {"qty_fraction": 0.3},
                         }
                     },
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
@@ -3511,9 +3511,9 @@ class TestApplyFineTuneBounds:
                                 "close": {"qty_fraction": values[2]},
                             }
                         },
-                        "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                        "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                     },
-                    "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                    "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                     "portfolio": {"strategy_kind": "trailing_martingale"},
                 },
             }))
@@ -3561,9 +3561,9 @@ class TestApplyFineTuneBounds:
                             "entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}
                         }
                     },
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
@@ -3607,9 +3607,9 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.1}}},
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
@@ -3644,9 +3644,9 @@ class TestApplyFineTuneBounds:
                     "bot": {
                         "long": {
                             "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.3}}},
-                            "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                            "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                         },
-                        "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                        "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                     },
                     "_starting_config_source": "anchor_2.json",
                 },
@@ -3677,9 +3677,9 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.1}}},
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
@@ -3742,9 +3742,9 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.1}}},
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
@@ -3802,9 +3802,9 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.2}}},
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
-                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
@@ -5297,7 +5297,7 @@ class TestEvaluator:
                         "overrides": {
                             "live": {},
                             "bot": {
-                                "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
+                                "short": {"risk": {"total_wallet_exposure_limit_ratio": 0.0}},
                                 "portfolio": {"hedge_mode": True},
                             },
                         },
@@ -5338,7 +5338,7 @@ class TestEvaluator:
         assert scenario_config['bot']["portfolio"]['hedge_mode'] is True
         assert scenario_config["bot"]["long"]["risk"]["max_positions"] == 7
         assert (
-            scenario_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
+            scenario_config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"]
             == 0.0
         )
 

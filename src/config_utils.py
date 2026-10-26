@@ -345,7 +345,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.portfolio.loss_gate.max_drawdown_ratio": {
+    "bot.portfolio.loss_gate.max_drawdown_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -1189,9 +1189,9 @@ RESERVED_CLI_ARGS = {
             "when market orders are allowed; this is not a live slippage cap."
         ),
     },
-    "bot.portfolio.loss_gate.max_drawdown_ratio": {
-        "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_ratio"],
+    "bot.portfolio.loss_gate.max_drawdown_fraction": {
+        "visible": ["--loss-gate-max-drawdown-fraction"],
+        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1539,7 +1539,7 @@ RESERVED_CLI_ARGS = {
 # Keep these convenience aliases stable across config grouping changes.
 for _pside in ("long", "short"):
     for _param, _acronym, _help in (
-        ("total_wallet_exposure_limit", "twel", "Total wallet exposure limit"),
+        ("total_wallet_exposure_limit_ratio", "twel", "Total wallet exposure limit ratio"),
         ("max_positions", "np", "Target number of concurrent position slots"),
     ):
         _key = f"bot.{_pside}.risk.{_param}"
@@ -1555,7 +1555,7 @@ for _pside in ("long", "short"):
 
 # Optimizer shortcuts set search bounds rather than live/backtest bot values.
 for _pside in ("long", "short"):
-    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit"
+    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit_ratio"
     RESERVED_CLI_ARGS[_key] = {
         "visible": [f"--{_key}"],
         "command_aliases": {"optimize": [f"-{_pside[0]}twel"]},
@@ -1567,7 +1567,7 @@ for _pside in ("long", "short"):
         "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
     }
 
-for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_ratio", "bot.portfolio.hsl.scope"):
+for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_fraction", "bot.portfolio.hsl.scope"):
     FIELD_RUNTIME_RULES[_path]["owner"] = "bot"
 FIELD_RUNTIME_RULES["bot.portfolio.loss_gate.memory_ema_span_minutes"] = deepcopy(
     FIELD_RUNTIME_RULES["bot.portfolio.unstuck.memory_ema_span_minutes"]
@@ -1815,10 +1815,10 @@ for _pside in ("long", "short"):
                 "Default false; allows coin overrides in coin HSL scope."
             ),
             f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
-            f"bot.{_pside}.hsl.drawdown_ratio_threshold": (
+            f"bot.{_pside}.hsl.drawdown_threshold_fraction": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
             ),
-            f"bot.{_pside}.hsl.drawdown_ratio_ema_span_minutes": (
+            f"bot.{_pside}.hsl.drawdown_fraction_ema_span_minutes": (
                 f"EMA span, in minutes, for the {_pside} HSL drawdown signal."
             ),
             f"bot.{_pside}.hsl.cooldown_after_red_minutes": (
@@ -1848,7 +1848,7 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.risk.max_positions": (
                 f"Target number of concurrent {_pside} position slots."
             ),
-            f"bot.{_pside}.risk.total_wallet_exposure_limit": (
+            f"bot.{_pside}.risk.total_wallet_exposure_limit_ratio": (
                 f"Total wallet exposure limit for the {_pside} side."
             ),
         }
@@ -1888,7 +1888,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.recovery.exchange_symbol_unavailable_cooldown_hours",
         "live.account.leverage",
         "bot.portfolio.execution.market_orders_allowed",
-        "bot.portfolio.loss_gate.max_drawdown_ratio",
+        "bot.portfolio.loss_gate.max_drawdown_fraction",
         "live.execution.limit_order_create_max_market_distance_fraction",
         "live.execution.order_match_tolerance_fraction",
         "live.execution.order_replacement_churn_gate_activation_count",
@@ -2358,7 +2358,7 @@ def add_arguments_recursively(
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
-            elif full_name.endswith((".memory_ema_span_minutes", ".drawdown_ratio_ema_span_minutes")):
+            elif full_name.endswith((".memory_ema_span_minutes", ".drawdown_fraction_ema_span_minutes")):
                 type_ = normalize_memory_ema_span_minutes
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float

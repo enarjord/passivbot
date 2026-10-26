@@ -141,7 +141,7 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
             threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
-            enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit",
+            enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         normalize_twel_enforcer_policy(
@@ -159,12 +159,12 @@ def validate_bot_config(result: dict) -> None:
         n_positions = int(round(n_positions_value))
         if twel < 0.0 or not math.isfinite(twel):
             raise ValueError(
-                f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0"
+                f"bot.{pside}.risk.total_wallet_exposure_limit_ratio must be finite and >= 0.0"
             )
         if twel > 0.0 and n_positions <= 0:
             raise ValueError(
                 f"bot.{pside}.risk.max_positions must be > 0 when "
-                f"bot.{pside}.risk.total_wallet_exposure_limit is > 0"
+                f"bot.{pside}.risk.total_wallet_exposure_limit_ratio is > 0"
             )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
@@ -657,7 +657,7 @@ def normalize_bot_forager_config(
                         raw_total = math.nan
                         break
             pside_enabled = (
-                float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
+                float(risk_cfg["total_wallet_exposure_limit_ratio"]) > 0.0
                 and int(round(float(risk_cfg["max_positions"]))) > 0
             )
             if raw_total <= 0.0 and not pside_enabled:
@@ -833,7 +833,7 @@ def validate_forager_config(
         forager_cfg = get_bot_group(bot_cfg, "forager")
         risk_cfg = get_bot_group(bot_cfg, "risk")
         pside_enabled = (
-            float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
+            float(risk_cfg["total_wallet_exposure_limit_ratio"]) > 0.0
             and int(round(float(risk_cfg["max_positions"]))) > 0
         )
 
@@ -894,7 +894,7 @@ def format_bot_config(
         if pside not in result["bot"]:
             seeded = deepcopy(template["bot"][pside])
             if isinstance(seeded.get("risk"), dict):
-                seeded["risk"]["total_wallet_exposure_limit"] = 0.0
+                seeded["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
             else:
                 seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded

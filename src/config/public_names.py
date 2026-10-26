@@ -26,6 +26,7 @@ PUBLIC_PATH_RENAMES = {
     ("live", "execution", "order_match_tolerance_pct"): ("live", "execution", "order_match_tolerance_fraction"),
     ("live", "execution", "order_replacement_churn_gate_market_dist_pct"): ("live", "execution", "order_replacement_churn_gate_market_distance_fraction"),
     ("bot", "global", "forager", "score_hysteresis_pct"): ("bot", "global", "forager", "score_hysteresis_margin"),
+    ("bot", "portfolio", "loss_gate", "max_drawdown_ratio"): ("bot", "portfolio", "loss_gate", "max_drawdown_fraction"),
 }
 
 SHARED_SIDE_PATH_RENAMES = {
@@ -35,6 +36,10 @@ SHARED_SIDE_PATH_RENAMES = {
     ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
     ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
     ("hsl", "cooldown_minutes_after_red"): ("hsl", "cooldown_after_red_minutes"),
+    ("hsl", "drawdown_ratio_threshold"): ("hsl", "drawdown_threshold_fraction"),
+    ("hsl", "drawdown_ratio_ema_span_minutes"): ("hsl", "drawdown_fraction_ema_span_minutes"),
+    ("risk", "total_wallet_exposure_limit"): ("risk", "total_wallet_exposure_limit_ratio"),
+    ("wallet_exposure_limit",): ("wallet_exposure_limit_ratio",),
     ("risk", "we_excess_allowance_pct"): ("risk", "we_excess_allowance_fraction"),
     ("unstuck", "close_pct"): ("unstuck", "close_fraction"),
     ("unstuck", "loss_allowance_pct"): ("unstuck", "loss_allowance_fraction"),
@@ -43,6 +48,11 @@ SHARED_SIDE_PATH_RENAMES = {
 
 def _public_path_renames():
     mappings = dict(PUBLIC_PATH_RENAMES)
+    for scope in ("global", "portfolio"):
+        for root in (("bot", scope), ("optimize", "bounds", scope)):
+            for old, new in SHARED_SIDE_PATH_RENAMES.items():
+                if old[0] in {"hsl", "risk"}:
+                    mappings[(*root, *old)] = (*root, *new)
     for side in ("long", "short"):
         for root in (("bot", side), ("optimize", "bounds", side)):
             for old, new in SHARED_SIDE_PATH_RENAMES.items():
@@ -121,7 +131,7 @@ def rewrite_released_public_names(config, *, path_prefix=(), record=None):
             renamed = ".".join(renamed_parts) if selectors else renamed_parts[-1]
             value = node[key]
             if renamed != key:
-                if renamed in node:
+                if renamed in node and node[renamed] != value:
                     raise ValueError(f"{'.'.join(old_path)} conflicts with {'.'.join(new_path)}")
                 del node[key]
                 node[renamed] = value

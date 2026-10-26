@@ -95,12 +95,12 @@ for _side in BOT_POSITION_SIDES:
 CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
     {
         "hsl.cooldown_after_red_minutes",
-        "hsl.drawdown_ratio_ema_span_minutes",
+        "hsl.drawdown_fraction_ema_span_minutes",
         "hsl.memory_ema_span_minutes",
         "hsl.scale_budget_with_excess_allowance",
         "hsl.enabled",
         "hsl.panic_close_order_type",
-        "hsl.drawdown_ratio_threshold",
+        "hsl.drawdown_threshold_fraction",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
@@ -124,7 +124,7 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     }
     | CONDITIONAL_HSL_OVERRIDE_PATHS
 )
-OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
+OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit_ratio"})
 
 
 LIVE_COIN_OVERRIDE_KEYS = ("forced_mode_long", "forced_mode_short", "leverage")

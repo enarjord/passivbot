@@ -171,8 +171,8 @@
             },
             "hsl": {
                 "cooldown_after_red_minutes": 0.0,
-                "drawdown_ratio_ema_span_minutes": 60.0,
-                "drawdown_ratio_threshold": 0.2,
+                "drawdown_fraction_ema_span_minutes": 60.0,
+                "drawdown_threshold_fraction": 0.2,
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
@@ -182,7 +182,7 @@
                 "max_positions": 10,
                 "position_exposure_enforcer": {"enabled": true, "threshold_ratio": 0.994},
                 "total_exposure_enforcer": {"enabled": true, "policy": "reduce_overweight", "threshold_ratio": 1.0},
-                "total_wallet_exposure_limit": 1.25,
+                "total_wallet_exposure_limit_ratio": 1.25,
                 "we_excess_allowance_fraction": 0.37
             },
             "strategy": {
@@ -260,15 +260,15 @@
             "hedge_mode": false,
             "hsl": {
                 "cooldown_after_red_minutes": 0.0,
-                "drawdown_ratio_ema_span_minutes": 60.0,
+                "drawdown_fraction_ema_span_minutes": 60.0,
                 "enabled": true,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "drawdown_ratio_threshold": 0.2,
+                "drawdown_threshold_fraction": 0.2,
                 "scale_budget_with_excess_allowance": false,
                 "scope": "portfolio"
             },
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+            "loss_gate": {"max_drawdown_fraction": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "trailing_martingale",
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
@@ -392,7 +392,7 @@
                 },
                 "risk": {
                     "max_positions": [10, 10, 1],
-                    "total_wallet_exposure_limit": [1.25, 1.25],
+                    "total_wallet_exposure_limit_ratio": [1.25, 1.25],
                     "we_excess_allowance_fraction": [0, 0.3, 0.01],
                     "position_exposure_enforcer": {"threshold_ratio": [0.95, 1.01, 0.001]},
                     "total_exposure_enforcer": {"threshold_ratio": [0.95, 1.01, 0.001]}
@@ -440,9 +440,9 @@
             "portfolio": {
                 "hsl": {
                     "cooldown_after_red_minutes": [1, 2880, 10],
-                    "drawdown_ratio_ema_span_minutes": [1, 2880, 10],
+                    "drawdown_fraction_ema_span_minutes": [1, 2880, 10],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "drawdown_ratio_threshold": [0.01, 0.12, 0.001]
+                    "drawdown_threshold_fraction": [0.01, 0.12, 0.001]
                 },
                 "loss_gate": {"memory_ema_span_minutes": [43200.0, 43200.0]},
                 "unstuck": {"memory_ema_span_minutes": [43200.0, 43200.0]}

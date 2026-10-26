@@ -189,11 +189,11 @@ def fixture_inputs(args):
     for side in ("long", "short"):
         bot = config["bot"][side]
         bot["enabled"] = side in active
-        bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         bot["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "position_side"},
-            drawdown_ratio_threshold=args.hsl_red_threshold,
-            drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
+            drawdown_threshold_fraction=args.hsl_red_threshold,
+            drawdown_fraction_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
@@ -201,8 +201,8 @@ def fixture_inputs(args):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "portfolio":
         config["bot"]["portfolio"]["hsl"].update(
-            enabled=True, drawdown_ratio_threshold=args.hsl_red_threshold,
-            drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
+            enabled=True, drawdown_threshold_fraction=args.hsl_red_threshold,
+            drawdown_fraction_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )

@@ -64,7 +64,7 @@ def _request_owned_paths(config):
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
         if path is not None:
             yield path
-    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
+    for key in ("drawdown_threshold_fraction", "memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes"):
         yield ("bot", "portfolio", "hsl", key)
 
 
@@ -110,7 +110,7 @@ def _static_contract(config):
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
         if path is not None:
             _remove_path(result, path)
-    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
+    for key in ("drawdown_threshold_fraction", "memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes"):
         _remove_path(result, ("bot", "portfolio", "hsl", key))
     for path in _request_owned_paths(config):
         _remove_path(result, path)

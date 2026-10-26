@@ -272,10 +272,10 @@ def test_adverse_force_mode_isolates_market_wide_side():
 
     scenarios = {item["label"]: item for item in payload["backtest"]["scenarios"]}
     assert scenarios["crash_market"]["overrides"] == {
-        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "bot.short.risk.total_wallet_exposure_limit_ratio": 0.0,
     }
     assert scenarios["pump_market"]["overrides"] == {
-        "bot.long.risk.total_wallet_exposure_limit": 0.0,
+        "bot.long.risk.total_wallet_exposure_limit_ratio": 0.0,
     }
 
 

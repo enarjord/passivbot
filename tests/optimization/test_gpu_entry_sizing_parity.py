@@ -28,7 +28,7 @@ def _fixture(side, coin_count, entry_kind):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
-        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
+        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
             ema_span_0=2.0,
@@ -139,7 +139,7 @@ def test_flat_selection_tracks_readiness_without_fills(side):
     inputs = _fixture(side, 2, "initial")
     config, candles, _, _, _ = inputs
     bot = config["bot"][side]
-    bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0)
     bot["forager"].update(
         score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 1.0},
     )
@@ -179,7 +179,7 @@ def test_partial_initial_top_up_preserves_venue_steps(side, coin_count, retracem
     config, candles, mss, btc, timestamps = _fixture(side, coin_count, "initial")
     config["backtest"].update(starting_balance=case["balance"],
                              maker_fee_override=0.0, taker_fee_override=0.0)
-    config["bot"][side]["risk"]["total_wallet_exposure_limit"] = case["wel"] * coin_count
+    config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = case["wel"] * coin_count
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
     strategy["entry"].update(initial_qty_pct=case["initial_pct"], threshold_base_pct=0.5,
                              retracement_base_pct=retracement)
@@ -334,7 +334,7 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
                              taker_fee_override=0.0, market_order_slippage_pct=0.0)
     bot = config["bot"][side]
-    bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0,
+    bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0,
                        total_exposure_entry_gate_enabled=entry_gate)
     bot["forager"].update(score_weights={"volume": 0.01, "volatility": 0.99, "ema_readiness": 0.0},
                           volume_ema_span_1m=1.0, volatility_ema_span_1m=1.0,

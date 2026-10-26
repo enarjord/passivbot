@@ -111,7 +111,7 @@ def replay_inputs(kind, topology, margins):
     config["bot"]["portfolio"]["strategy_kind"] = kind
     config["bot"]["portfolio"]["hedge_mode"] = topology != "oneway"
     config["bot"]["portfolio"]["warmup"].update(max_minutes=1.0, span_multiplier=1.0)
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
     config["bot"]["portfolio"]["execution"]["market_orders_allowed"] = False
     coins = ["AAA", "BBB", "CCC"]
     enabled = (topology,) if topology in ("long", "short") else ("long", "short")
@@ -122,7 +122,7 @@ def replay_inputs(kind, topology, margins):
         bot = config["bot"][side]
         bot["enabled"] = side in enabled
         bot["universe"]["minimum_coin_age_days"] = 0.0
-        bot["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0,
+        bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0,
                            we_excess_allowance_fraction=0.0)
         bot["risk"]["position_exposure_enforcer"]["enabled"] = False
         bot["risk"]["total_exposure_enforcer"]["enabled"] = False

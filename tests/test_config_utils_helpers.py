@@ -682,7 +682,7 @@ def test_migrate_config_version_sets_current_schema_version():
 
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
-    assert template["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert template["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
     assert template["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert template["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
@@ -695,14 +695,14 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
         "coin_overrides": {},
     }
     formatted = format_config(sparse, verbose=False)
-    assert formatted["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert formatted["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
     assert formatted["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert formatted["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
     loaded = load_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
-    assert loaded["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert loaded["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
     assert loaded["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert loaded["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
@@ -1218,7 +1218,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["hsl_red_threshold"]
-        == config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
+        == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
         compiled["bot"]["long"]["filter_volume_ema_span_1m"]
@@ -1357,7 +1357,7 @@ def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):
 
 def test_parse_overrides_records_transform_log():
     cfg = get_template_config()
-    cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}}
+    cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.5}}}}
     out = parse_overrides(cfg, verbose=False)
     assert out["_transform_log"][-1]["step"] == "parse_overrides"
 
@@ -1472,7 +1472,7 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(
     args, allowed_config_keys = _parse_backtest_args(
         [
             str(path),
-            "--bot.long.hsl.drawdown_ratio_ema_span_minutes",
+            "--bot.long.hsl.drawdown_fraction_ema_span_minutes",
             "1440",
             start_flag,
             "2025-10-11",
@@ -1484,7 +1484,7 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(
     )
 
     assert source_config["backtest"]["start_date"] == "2025-10-11"
-    assert source_config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == pytest.approx(
+    assert source_config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(
         1440.0
     )
     assert (
@@ -1850,7 +1850,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
+    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
     assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
     assert "--realized-loss-gate-lookback-minutes" not in help_text
@@ -1881,7 +1881,7 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
+    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
     assert "--bot.long.hsl.enabled Y/N" in help_text
     assert "--bot.short.hsl.enabled Y/N" in help_text
     assert "--bot.long.hsl.orange_tier_mode VALUE" not in help_text
@@ -1907,13 +1907,13 @@ def test_optimize_fixed_params_cli_parses_csv_selectors():
     args = parser.parse_args(
         [
             "--optimize.fixed_params",
-            "bot.long.risk.max_positions,bot.long.risk.total_wallet_exposure_limit",
+            "bot.long.risk.max_positions,bot.long.risk.total_wallet_exposure_limit_ratio",
         ]
     )
 
     assert getattr(args, "optimize.fixed_params") == [
         "bot.long.risk.max_positions",
-        "bot.long.risk.total_wallet_exposure_limit",
+        "bot.long.risk.total_wallet_exposure_limit_ratio",
     ]
 
 
@@ -1962,7 +1962,7 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
+    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
     assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
     assert "--realized-loss-gate-lookback-minutes" not in help_text
@@ -2022,7 +2022,7 @@ def test_risk_cli_aliases_apply_to_grouped_config(command, help_all, alias_style
     expected = {"long": (1.5, 6.0), "short": (0.75, 3.0)}
     for pside, values in expected.items():
         for (param, acronym), value in zip(
-            [("total_wallet_exposure_limit", "twel"), ("max_positions", "np")], values
+            [("total_wallet_exposure_limit_ratio", "twel"), ("max_positions", "np")], values
         ):
             key = f"bot.{pside}.risk.{param}"
             flag = {
@@ -2037,7 +2037,7 @@ def test_risk_cli_aliases_apply_to_grouped_config(command, help_all, alias_style
     update_config_with_args(target, parser.parse_args(argv), allowed_keys=allowed_keys)
 
     for pside, (twel, n_positions) in expected.items():
-        assert target["bot"][pside]["risk"]["total_wallet_exposure_limit"] == twel
+        assert target["bot"][pside]["risk"]["total_wallet_exposure_limit_ratio"] == twel
         assert target["bot"][pside]["risk"]["max_positions"] == n_positions
         assert "total_wallet_exposure_limit" not in target["bot"][pside]
         assert "n_positions" not in target["bot"][pside]
@@ -2056,7 +2056,7 @@ def test_risk_cli_overrides_do_not_hide_retired_authored_flat_fields(
     command, source_shape, wrapped, use_dotted, disable
 ):
     source = get_expanded_config_prototype()
-    params = [("total_wallet_exposure_limit", "total_wallet_exposure_limit", "twel"),
+    params = [("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit", "twel"),
               ("max_positions", "n_positions", "np")]
     for pside in ("long", "short"):
         for canonical, retired, _ in params:
@@ -2085,7 +2085,7 @@ def test_risk_cli_noop_does_not_delete_conflicting_retired_flat_fields():
     source = get_expanded_config_prototype()
     source["bot"]["long"]["total_wallet_exposure_limit"] = 9.0
     source["bot"]["long"]["n_positions"] = 8.0
-    source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     parser = argparse.ArgumentParser()
     allowed_keys = add_config_arguments(parser, get_expanded_config_prototype(), command="live")
     original = deepcopy(source)
@@ -2101,7 +2101,7 @@ def test_risk_cli_aliases_visible_in_default_help(command):
     help_text = _format_parser_help_with_config(command, config, help_all=False)
     for pside in ("long", "short"):
         for param, acronym in [
-            ("total_wallet_exposure_limit", "twel"),
+            ("total_wallet_exposure_limit_ratio", "twel"),
             ("max_positions", "np"),
         ]:
             _assert_help_option_aliases(
@@ -2116,11 +2116,11 @@ def test_risk_cli_aliases_visible_in_default_help(command):
 def test_risk_cli_aliases_last_value_wins(legacy_last):
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, get_template_config(), command="live")
-    argv = ["-ltwel", "1.5", "--bot.long.risk.total_wallet_exposure_limit", "2.0"]
+    argv = ["-ltwel", "1.5", "--bot.long.risk.total_wallet_exposure_limit_ratio", "2.0"]
     if legacy_last:
         argv = argv[2:] + argv[:2]
     args = parser.parse_args(argv)
-    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit") == (
+    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit_ratio") == (
         1.5 if legacy_last else 2.0
     )
 
@@ -2133,11 +2133,11 @@ def test_live_independent_risk_memory_and_gate_fraction_flags_parse():
     parsed = parser.parse_args([
         "--unstuck-memory-ema-span-minutes", "14.5",
         "--loss-gate-memory-ema-span-minutes", "21.5",
-        "--loss-gate-max-drawdown-ratio", "0.1",
+        "--loss-gate-max-drawdown-fraction", "0.1",
     ])
     assert getattr(parsed, "bot.portfolio.unstuck.memory_ema_span_minutes") == 14.5
     assert getattr(parsed, "bot.portfolio.loss_gate.memory_ema_span_minutes") == 21.5
-    assert getattr(parsed, "bot.portfolio.loss_gate.max_drawdown_ratio") == 0.1
+    assert getattr(parsed, "bot.portfolio.loss_gate.max_drawdown_fraction") == 0.1
     with pytest.raises(SystemExit):
         parser.parse_args(["--lookback-ema-span-minutes", "14"])
 
@@ -2277,7 +2277,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_hedge = parser.parse_args(["-hm", "n"])
     parsed_near_touch = parser.parse_args(["-montf", "0.002"])
     parsed_lookback = parser.parse_args(["--unstuck-memory-ema-span-minutes", "14.5"])
-    parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-ratio", "0.75"])
+    parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-fraction", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
     parsed_fee_sanity = parser.parse_args(["--max-abs-fee-fraction", "0.002"])
     parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
@@ -2291,7 +2291,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(parsed_lookback, "bot.portfolio.unstuck.memory_ema_span_minutes") == pytest.approx(
         14.5
     )
-    assert getattr(parsed_loss, "bot.portfolio.loss_gate.max_drawdown_ratio") == pytest.approx(0.75)
+    assert getattr(parsed_loss, "bot.portfolio.loss_gate.max_drawdown_fraction") == pytest.approx(0.75)
     assert getattr(parsed_fee_fallback, "live.fills.fallback_fee_fraction") == pytest.approx(
         0.0
     )
@@ -2401,8 +2401,8 @@ def test_retired_hsl_recovery_controls_are_not_runtime_inputs(key, value):
 @pytest.mark.parametrize("short_value", ["2", "2,2", "1,2,0.25"])
 def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, short_value):
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
-    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 2.5
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     original_bot = deepcopy(source["bot"])
     for side in ("long", "short"):
         original_bot[side]["universe"]["approved_coins"] = ["BTC"]
@@ -2413,8 +2413,8 @@ def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, sh
     allowed = add_config_arguments(parser, template, command="optimize")
     short_args = parser.parse_args(["-ltwel", "0", "-stwel", short_value, "-s", "BTC"])
     long_args = parser.parse_args([
-        "--optimize.bounds.long.risk.total_wallet_exposure_limit", "0",
-        "--optimize.bounds.short.risk.total_wallet_exposure_limit", short_value,
+        "--optimize.bounds.long.risk.total_wallet_exposure_limit_ratio", "0",
+        "--optimize.bounds.short.risk.total_wallet_exposure_limit_ratio", short_value,
         "-s", "BTC",
     ])
     assert vars(short_args) == vars(long_args)
@@ -2425,13 +2425,13 @@ def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, sh
         return
     prepared = prepare_config(source, target="optimize", verbose=False)
     assert (source.get("config", source))["bot"] == original_bot
-    assert prepared["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.5
-    assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
-    assert prepared["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [0.0, 0.0]
+    assert prepared["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.5
+    assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == [0.0, 0.0]
     expected = [float(value) for value in short_value.split(",")]
     if len(expected) == 1:
         expected *= 2
-    assert prepared["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] == expected
+    assert prepared["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == expected
 
 
 @pytest.mark.parametrize("alias_last", [False, True])
@@ -2440,7 +2440,7 @@ def test_optimizer_twel_aliases_last_value_wins(side, alias_last):
     parser = argparse.ArgumentParser()
     template = project_template_config_for_cli(get_template_config(), "optimize")
     add_config_arguments(parser, template, command="optimize")
-    key = f"optimize.bounds.{side}.risk.total_wallet_exposure_limit"
+    key = f"optimize.bounds.{side}.risk.total_wallet_exposure_limit_ratio"
     argv = [f"-{side[0]}twel", "0", f"--{key}", "1,2"]
     if alias_last:
         argv = argv[2:] + argv[:2]
@@ -2451,16 +2451,16 @@ def test_optimizer_twel_aliases_visible_in_default_help():
     config = project_template_config_for_cli(get_template_config(), "optimize")
     text = _format_parser_help_with_config("optimize", config, help_all=False)
     for side in ("long", "short"):
-        _assert_help_option_aliases(text, f"--optimize.bounds.{side}.risk.total_wallet_exposure_limit", f"-{side[0]}twel", "VALUE_OR_RANGE")
+        _assert_help_option_aliases(text, f"--optimize.bounds.{side}.risk.total_wallet_exposure_limit_ratio", f"-{side[0]}twel", "VALUE_OR_RANGE")
 
 
 def test_unscoped_config_parser_preserves_bot_twel_aliases():
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, get_template_config())
     args = parser.parse_args(["-ltwel", "1.5", "-stwel", "2.0"])
-    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit") == 1.5
-    assert getattr(args, "bot.short.risk.total_wallet_exposure_limit") == 2.0
-    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") is None
+    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit_ratio") == 1.5
+    assert getattr(args, "bot.short.risk.total_wallet_exposure_limit_ratio") == 2.0
+    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio") is None
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -2469,4 +2469,4 @@ def test_optimizer_generated_twel_alias_remains_supported(side):
     template = project_template_config_for_cli(get_template_config(), "optimize")
     add_config_arguments(parser, template, command="optimize")
     args = parser.parse_args([f"-{side[0]}rtwel", "1,2"])
-    assert getattr(args, f"optimize.bounds.{side}.risk.total_wallet_exposure_limit") == [1.0, 2.0]
+    assert getattr(args, f"optimize.bounds.{side}.risk.total_wallet_exposure_limit_ratio") == [1.0, 2.0]

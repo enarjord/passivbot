@@ -2450,7 +2450,7 @@ async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     cfg = _dummy_config()
     # PnL enrichment blocks authoritative fills when an enabled risk consumer
     # needs it; trailing confirmation itself can still use the matching fill.
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     old_fill = _DummyFillEvent(

@@ -20,9 +20,9 @@ For most perpetuals, `initial_notional ≈ balance * effective_wel * strategy_in
 
 With:
 - `balance`: current account balance in quote currency (e.g., USDT/USDC).
-- `twel = total_wallet_exposure_limit`: side-level cap; divided by `n_positions` to get per-position WE.
-- `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
-- `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
+- `twel = total_wallet_exposure_limit_ratio`: side-level cap; divided by `n_positions` to get per-position WE.
+- `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit_ratio - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit_ratio` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
+- `effective_wel = wallet_exposure_limit_ratio * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
   order. For `bot.portfolio.strategy_kind = "trailing_martingale"`, this is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
@@ -45,7 +45,7 @@ Rearrange the inequality to solve for the minimum balance:
 
 Use the highest effective_min_cost among the symbols you want to trade. Example:
 - `effective_min_cost = 10 USDT`
-- `total_wallet_exposure_limit = 0.6`, `n_positions = 3` → `wallet_exposure_limit = 0.2`
+- `total_wallet_exposure_limit_ratio = 0.6`, `n_positions = 3` → `wallet_exposure_limit_ratio = 0.2`
 - `risk.we_excess_allowance_fraction = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
 - `strategy_initial_sizing_fraction = 0.015`
 → `balance_required >= 10 / (0.3 * 0.015) ≈ 2,222.22 USDT`
@@ -57,7 +57,7 @@ other risk checks (total exposure, n_positions) aren’t immediately binding.
 
 - To lower the required balance (while preserving filtering):
   - Increase the active strategy initial sizing fraction (if risk allows).
-  - Increase `wallet_exposure_limit` (raises per-position sizing; increases risk).
+  - Increase `wallet_exposure_limit_ratio` (raises per-position sizing; increases risk).
   - Reduce `n_positions` so fewer symbols compete for balance.
 - Avoid disabling `filter_by_min_effective_cost` unless you accept higher initial qty.
 - If using very small balances, prioritize symbols with low min cost and lower price levels.

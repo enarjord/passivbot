@@ -61,8 +61,8 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
         if config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio":
             field = {
-                "red_threshold": "drawdown_ratio_threshold",
-                "drawdown_ratio_ema_span_minutes": "drawdown_ratio_ema_span_minutes",
+                "red_threshold": "drawdown_threshold_fraction",
+                "drawdown_ratio_ema_span_minutes": "drawdown_fraction_ema_span_minutes",
                 "memory_ema_span_minutes": "memory_ema_span_minutes",
                 "cooldown_minutes_after_red": "cooldown_after_red_minutes",
             }.get(canonical_key.removeprefix("hsl_"))
@@ -82,7 +82,10 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if pside not in BOT_POSITION_SIDES:
         return None
     if flat_key in {"hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes"}:
-        return ("bot", pside, "hsl", flat_key.removeprefix("hsl_"))
+        field = ("drawdown_fraction_ema_span_minutes"
+                 if flat_key == "hsl_drawdown_ratio_ema_span_minutes"
+                 else "memory_ema_span_minutes")
+        return ("bot", pside, "hsl", field)
     bot_side = config.get("bot", {}).get(pside, {})
     if flat_key == "hsl_ema_span_minutes":
         return None

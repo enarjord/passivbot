@@ -88,8 +88,8 @@ async def test_assigned_scenario_fact_demand_follows_fixed_then_scenario_owner(
 
     config = _cache_config(tmp_path, base_ages)
     config["optimize"]["bounds"] = {
-        "long": {"risk": {"total_wallet_exposure_limit": [1.0, 1.0]}},
-        "short": {"risk": {"total_wallet_exposure_limit": [0.0, 1.0], "max_positions": [1, 1]}},
+        "long": {"risk": {"total_wallet_exposure_limit_ratio": [1.0, 1.0]}},
+        "short": {"risk": {"total_wallet_exposure_limit_ratio": [0.0, 1.0], "max_positions": [1, 1]}},
     }
     if fixed_age is not None:
         config["optimize"]["fixed_runtime_overrides"] = {
@@ -132,7 +132,7 @@ async def test_combined_and_individual_fact_demand_uses_only_assigned_scenarios(
     scenarios, _ = build_scenarios({"scenarios": [
         {"label": "combined", "exchanges": ["binance", "bybit"], "overrides": {
             "bot.short.universe.minimum_coin_age_days": 7.25,
-            "bot.short.risk.total_wallet_exposure_limit": 1.0, "bot.short.risk.max_positions": 1}},
+            "bot.short.risk.total_wallet_exposure_limit_ratio": 1.0, "bot.short.risk.max_positions": 1}},
         {"label": "single", "exchanges": ["binance"]},
     ]}, config["backtest"]["exchanges"])
     calls = {}
@@ -193,7 +193,7 @@ async def test_individual_only_scenarios_do_not_require_facts_for_unused_combine
     scenarios, _ = build_scenarios({"scenarios": [
         {"label": "single", "exchanges": ["binance"], "coins": ["AAA"], "overrides": {
             "bot.short.universe.minimum_coin_age_days": 7.25,
-            "bot.short.risk.total_wallet_exposure_limit": 1.0, "bot.short.risk.max_positions": 1}},
+            "bot.short.risk.total_wallet_exposure_limit_ratio": 1.0, "bot.short.risk.max_positions": 1}},
     ]}, config["backtest"]["exchanges"])
     calls = {}
     async def prepare(effective, exchange, **kwargs):

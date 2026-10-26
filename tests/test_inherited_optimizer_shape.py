@@ -98,14 +98,14 @@ def test_runtime_patch_owner_retains_unrelated_direct_edits_and_authored_bound_r
     from config.universe import universe_source_view
     from optimization.warmup import _apply_config_overrides
     config = real_prepared()
-    config["bot"]["global"]["risk"]["total_wallet_exposure_limit"] = 2.3
+    config["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = 2.3
     bounds = {"short": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
     _apply_config_overrides(config, {"optimize.bounds": bounds,
                                    "bot.global.unstuck.close_fraction": 0.05})
     assert optimize_bounds_source_view(config)["optimize"]["bounds"] == bounds
-    assert universe_source_view(config)["bot"]["global"]["risk"]["total_wallet_exposure_limit"] == 2.3
-    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.3
-    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 2.3
+    assert universe_source_view(config)["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
+    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
 
 
 def test_runtime_patch_owner_leaves_plain_preflight_ranges_to_their_existing_owner():
@@ -125,15 +125,15 @@ def test_explicit_plan_rebuild_installs_reconciled_public_values_before_candidat
     from optimization.shape import build_optimization_shape
     from optimization.warmup import build_optimizer_vector_config
     config = real_prepared()
-    config["bot"]["global"]["risk"]["total_wallet_exposure_limit"] = 2.3
+    config["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = 2.3
     if owner == "prepare":
         prepare_bound_plan(config)
     else:
         apply_inherited_bounds_patch(config, {"optimize.bounds": {}})
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
-    assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.3
-    assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 2.3
+    assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
+    assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
 
 
 def test_fine_tune_effective_target_freezes_common_domain_without_a_side_copy():
@@ -193,7 +193,7 @@ def test_fixed_source_install_preserves_sparse_policy_and_leaves_numeric_pins_fo
     source.write_text('["BTC"]')
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.global.universe.approved_coins": str(source),
-        "bot.global.risk.total_wallet_exposure_limit": 99.0,
+        "bot.global.risk.total_wallet_exposure_limit_ratio": 99.0,
     }
     before = universe_source_view(config)
     apply_optimizer_universe_sources(config)
@@ -294,7 +294,7 @@ def test_actual_anchor_install_uses_effective_targets_and_preserves_base_side_pi
     anchor["bot"]["global"]["unstuck"]["close_fraction"] = 0.045
     anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
     anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.052 if not side_pin else 0.041}}
-    install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+    install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit_ratio"],
                                   "unused", starting_configs_override=[anchor])
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
@@ -314,7 +314,7 @@ def test_anchor_and_seed_reject_values_that_one_shared_coordinate_cannot_represe
     anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
     anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.048}}
     with pytest.raises(ValueError, match="at least one valid"):
-        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit_ratio"],
                                       "unused", starting_configs_override=[anchor])
     assert "declare explicit side bounds" in caplog.text
     seed = _build_starting_seed_config(anchor)

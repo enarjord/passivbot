@@ -57,7 +57,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     )
     assert first["long_n_positions"] == ("bot", "long", "risk", "max_positions")
     assert second["long_n_positions"] == ("bot", "long", "risk", "max_positions")
-    assert second["hsl_red_threshold"] == ("bot", "portfolio", "hsl", "drawdown_ratio_threshold")
+    assert second["hsl_red_threshold"] == ("bot", "portfolio", "hsl", "drawdown_threshold_fraction")
 
 
 def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
@@ -68,9 +68,9 @@ def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
     config = {"bot": {"portfolio": {'hsl': {'scope': 'portfolio'}}}}
     assert list(param_paths.iter_optimizer_key_paths(config, [])) == []
     assert list(param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold"])) == [
-        ("hsl_red_threshold", ("bot", "portfolio", "hsl", "drawdown_ratio_threshold"))
+        ("hsl_red_threshold", ("bot", "portfolio", "hsl", "drawdown_threshold_fraction"))
     ]
     paths = param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold", "long_n_positions"])
-    assert next(paths) == ("hsl_red_threshold", ("bot", "portfolio", "hsl", "drawdown_ratio_threshold"))
+    assert next(paths) == ("hsl_red_threshold", ("bot", "portfolio", "hsl", "drawdown_threshold_fraction"))
     with pytest.raises(RuntimeError, match="metadata unavailable"):
         next(paths)

@@ -180,7 +180,7 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
         "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
-        "bot.portfolio.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
+        "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
@@ -263,12 +263,12 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
-        hsl.cooldown_after_red_minutes hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
+        hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
-        risk.total_wallet_exposure_limit risk.we_excess_allowance_fraction
+        risk.total_wallet_exposure_limit_ratio risk.we_excess_allowance_fraction
         unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
         unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
@@ -344,7 +344,7 @@ def get_field_registry() -> FieldRegistry:
         add(f"bot.{side}.entry_cooldown.max_duration_minutes", FieldType.FLOAT,
             nullable=True, unit="minutes", description="Null means an unbounded duration.")
         # This setting exists only inside coin patches, never as a root bot field.
-        add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit", FieldType.FLOAT,
+        add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit_ratio", FieldType.FLOAT,
             coin_override=CoinOverridePolicy.ALLOWED)
     for side in ("long", "short"):
         add(f"bot.{side}.forager.always_include.*", FieldType.STRING,
@@ -355,7 +355,7 @@ def get_field_registry() -> FieldRegistry:
     for name in ("enabled", "scale_budget_with_excess_allowance"):
         add(f"bot.portfolio.hsl.{name}", FieldType.BOOLEAN)
     add("bot.portfolio.hsl.panic_close_order_type", FieldType.STRING)
-    for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
+    for name in ("drawdown_threshold_fraction", "drawdown_fraction_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_after_red_minutes"):
         add(f"bot.portfolio.hsl.{name}", FieldType.FLOAT)
 

@@ -21,8 +21,8 @@ FIELDS = frozenset(
     {
         "enabled",
         "scale_budget_with_excess_allowance",
-        "drawdown_ratio_threshold",
-        "drawdown_ratio_ema_span_minutes",
+        "drawdown_threshold_fraction",
+        "drawdown_fraction_ema_span_minutes",
         "memory_ema_span_minutes",
         "panic_close_order_type",
         "cooldown_after_red_minutes",
@@ -216,13 +216,13 @@ def normalize_block(
         raise TypeError(f"{path}.scale_budget_with_excess_allowance must be a boolean")
     from .risk_memory import normalize_memory_ema_span_minutes
 
-    for field in ("drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes"):
+    for field in ("drawdown_fraction_ema_span_minutes", "memory_ema_span_minutes"):
         block[field] = normalize_memory_ema_span_minutes(
             block[field], field=f"{path}.{field}"
         )
-    block["drawdown_ratio_threshold"] = _number(
-        block["drawdown_ratio_threshold"],
-        f"{path}.drawdown_ratio_threshold",
+    block["drawdown_threshold_fraction"] = _number(
+        block["drawdown_threshold_fraction"],
+        f"{path}.drawdown_threshold_fraction",
         minimum=0,
         maximum=1,
         strict=True,
@@ -576,7 +576,8 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
 def native_hsl_policy(policy):
     """Transport public HSL field names to the stable native HSL ABI."""
     result = deepcopy(policy)
-    result["red_threshold"] = result.pop("drawdown_ratio_threshold")
+    result["red_threshold"] = result.pop("drawdown_threshold_fraction")
+    result["drawdown_ratio_ema_span_minutes"] = result.pop("drawdown_fraction_ema_span_minutes")
     result["cooldown_minutes_after_red"] = result.pop("cooldown_after_red_minutes")
     return result
 

@@ -800,11 +800,11 @@ def _scenario_payload_item(
     if force_normal == "adverse" and spec["market_wide"]:
         if str(spec.get("direction") or "down") == "up":
             scenario["overrides"] = {
-                "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                "bot.long.risk.total_wallet_exposure_limit_ratio": 0.0,
             }
         else:
             scenario["overrides"] = {
-                "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                "bot.short.risk.total_wallet_exposure_limit_ratio": 0.0,
             }
     overrides = _forced_normal_overrides(
         force_coins,

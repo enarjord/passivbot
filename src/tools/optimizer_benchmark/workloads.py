@@ -58,7 +58,7 @@ def apply_features(config, case, coins, markets, bars):
     config["backtest"].update(offline=True, dynamic_wel_by_tradability="dynamic_wel_off" not in flags)
     config['bot']["portfolio"]['hedge_mode'] = case.sides == "both" and "one_way" not in flags
     if "loss_gate" in flags:
-        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.001
+        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.001
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
     if "fill_buffer" in flags:
@@ -73,7 +73,7 @@ def apply_features(config, case, coins, markets, bars):
     for side in ("long", "short"):
         bot = config["bot"][side]
         slots = 1 if case.topology == "single" else max(1, len(coins) // 2) if case.topology == "forager" else len(coins)
-        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
+        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
         bot["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
                               ema_gating_enabled="unstuck_no_ema" not in flags)
         bot["entry_cooldown"].update(base_duration_minutes=5.0 if flags & {"cooldown", "adaptive_cooldown"} else 0.0)
@@ -165,13 +165,13 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
             enabled = False
         if path[-1] == "we_excess_allowance_fraction" and "excess" not in flags:
             enabled = False
-        if path[2] == "risk" and path[-1] == "total_wallet_exposure_limit" and path[1] in active:
+        if path[2] == "risk" and path[-1] == "total_wallet_exposure_limit_ratio" and path[1] in active:
             # The public short template pins TWEL=0. The short class needs positive bounds.
             bound = Bound(0.5, 1.5, 0.01) if bounds_config is None else bound
             if bound.low <= 0:
                 raise ValueError("active-side exposure bounds must stay positive")
         if path[2] == "hsl" and enabled and bounds_config is None:
-            bound = {"drawdown_ratio_threshold": Bound(.002, .01, .001), "drawdown_ratio_ema_span_minutes": Bound(2, 20, 1),
+            bound = {"drawdown_threshold_fraction": Bound(.002, .01, .001), "drawdown_fraction_ema_span_minutes": Bound(2, 20, 1),
                      "cooldown_after_red_minutes": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))

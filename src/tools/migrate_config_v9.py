@@ -380,7 +380,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     reason="explicit released-v8 enforcer conversion before file/inline merge",
                 ))
             for group, old, new in (
-                ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+                ("hsl", "red_threshold", "drawdown_threshold_fraction"),
                 ("unstuck", "ema_dist", "ema_distance_fraction"),
             ):
                 block = values.get(group, {})

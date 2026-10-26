@@ -43,7 +43,7 @@ def inputs(manager, *, n_obj=2):
         side: {
             "risk": {
                 key: [config["bot"][side]["risk"][key]] * 2
-                for key in ("max_positions", "total_wallet_exposure_limit")
+                for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             },
             "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": [0.01, 0.05]}}},
         }

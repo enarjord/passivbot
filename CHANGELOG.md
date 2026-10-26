@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
+  `drawdown_fraction_ema_span_minutes`, the loss gate uses `max_drawdown_fraction`, and wallet
+  exposure limits use `_ratio` names. Defaults, numeric values, bounds, and native execution
+  remain unchanged. Released-v8 migration reports the final names; unpublished v9 spellings
+  are rejected instead of silently aliased.
+
 - Publish immutable analysis quantity metadata and a generated reference covering units,
   denominators, observation populations, aggregation and weighting without changing formulas.
 

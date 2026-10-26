@@ -303,7 +303,7 @@ Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
 exposure thresholds and close sizing retain their existing policies. The global
 `bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
-`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_ratio`,
+`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_fraction`,
 without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
 configs still produce gate memory. Each enabled filter consumes each fill once and the
 economic ledger records it once.

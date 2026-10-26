@@ -46,12 +46,12 @@ def _minimal_bot_config(approved_coins):
         "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         "long": {
             "enabled": True,
-            "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+            "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 1.0},
             "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["long"], "ignored_coins": []},
         },
         "short": {
             "enabled": False,
-            "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+            "risk": {"max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0},
             "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["short"], "ignored_coins": []},
         },
     }

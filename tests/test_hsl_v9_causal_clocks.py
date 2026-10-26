@@ -566,7 +566,7 @@ def test_real_utc_capture_latency_cannot_retime_monotonic_account_facts(processi
     from test_hsl_runtime import NOW, SYMBOL, bot
 
     value, executions = bot(), []
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.012
+    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.012
     value._pnls_manager.get_events = lambda **_: list(executions)
 
     def read(utc, now, source, size, mark):

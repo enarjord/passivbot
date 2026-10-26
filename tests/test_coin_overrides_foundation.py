@@ -224,7 +224,7 @@ def test_unknown_and_disallowed_inline_paths_fail():
         ValueError, match=r"total_wallet_exposure_limit.*not overridable"
     ):
         _parse(
-            {"BTC": {"bot": {"long": {"risk": {"total_wallet_exposure_limit": 1.0}}}}}
+            {"BTC": {"bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}}}}}
         )
 
 
@@ -304,19 +304,19 @@ def test_invalid_normalized_coin_fails():
 def test_wallet_exposure_limit_from_partial_file_is_retained_and_validated():
     parsed = _parse(
         {"BTC": {"override_config_path": "unused-by-test.json"}},
-        loaded={"bot": {"short": {"wallet_exposure_limit": 0.125}}},
+        loaded={"bot": {"short": {"wallet_exposure_limit_ratio": 0.125}}},
     )
     assert (
-        parsed["coin_overrides"]["BTC"]["bot"]["short"]["wallet_exposure_limit"]
+        parsed["coin_overrides"]["BTC"]["bot"]["short"]["wallet_exposure_limit_ratio"]
         == 0.125
     )
 
     with pytest.raises(
-        ValueError, match=r"wallet_exposure_limit .*must be finite and >= 0\.0"
+        ValueError, match=r"wallet_exposure_limit_ratio .*must be finite and >= 0\.0"
     ):
         _parse(
             {"BTC": {"override_config_path": "unused-by-test.json"}},
-            loaded={"bot": {"short": {"wallet_exposure_limit": -0.1}}},
+            loaded={"bot": {"short": {"wallet_exposure_limit_ratio": -0.1}}},
         )
 
 
@@ -417,7 +417,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                                 "exposure_trigger_ratio"
                             ],
                         },
-                        "wallet_exposure_limit": 0.1,
+                        "wallet_exposure_limit_ratio": 0.1,
                     }
                 },
                 "live": {
@@ -428,4 +428,4 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
         }
     )
 
-    assert parsed["coin_overrides"]["BTC"]["bot"][pside]["wallet_exposure_limit"] == 0.1
+    assert parsed["coin_overrides"]["BTC"]["bot"][pside]["wallet_exposure_limit_ratio"] == 0.1

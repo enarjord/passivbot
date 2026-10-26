@@ -35,7 +35,7 @@ def config():
     side = result["bot"]["long"]
     side["enabled"] = True
     side["risk"].update(
-        max_positions=1, total_wallet_exposure_limit=1.0, we_excess_allowance_fraction=0.0
+        max_positions=1, total_wallet_exposure_limit_ratio=1.0, we_excess_allowance_fraction=0.0
     )
     side["entry_cooldown"].update(base_duration_minutes=5.0)
     strategy = side["strategy"]["trailing_martingale"]
@@ -248,7 +248,7 @@ def test_zero_global_wel_derives_capacity_but_zero_coin_wel_disables_entry(
     candidate["bot"]["long"]["wallet_exposure_limit"] = 100
     assert config_prefilter(candidate, policy(max=0.1)) == pytest.approx(56000)
     candidate["coin_overrides"] = {
-        "TEST": {"bot": {"long": {"wallet_exposure_limit": 0}}}
+        "TEST": {"bot": {"long": {"wallet_exposure_limit_ratio": 0}}}
     }
     assert config_prefilter(candidate, policy(max=0.1)) == 0
 
@@ -352,7 +352,7 @@ def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
     candidate["bot"]["long"]["risk"]["max_positions"] = 4
     # Explicit allocations do not depend on the grow-only tradability count.
     candidate["coin_overrides"] = {
-        coin: {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
+        coin: {"bot": {"long": {"wallet_exposure_limit_ratio": 0.25}}}
         for coin in ("TEST", "OTHER")
     }
     assert config_prefilter(candidate, policy(max=0.2)) == 0

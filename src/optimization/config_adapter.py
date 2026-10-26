@@ -103,16 +103,16 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
 
             name = resolved[-1]
             constraints = {
-                "drawdown_ratio_threshold": dict(minimum=0, maximum=1, strict=True),
+                "drawdown_threshold_fraction": dict(minimum=0, maximum=1, strict=True),
                 "memory_ema_span_minutes": dict(minimum=1),
-                "drawdown_ratio_ema_span_minutes": dict(minimum=1),
+                "drawdown_fraction_ema_span_minutes": dict(minimum=1),
                 "cooldown_after_red_minutes": dict(minimum=0),
             }
             if name in constraints:
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
-                    if name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
+                    if name in {"memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes"}:
                         from config.risk_memory import normalize_memory_ema_span_minutes
 
                         normalize_memory_ema_span_minutes(
@@ -384,7 +384,7 @@ def _validate_inherited_forager_weight_context(
     for side in ("long", "short"):
         if not side_enabled(scenario, side) or any(
             field_domain(side, "risk", (field,)).high <= 0
-            for field in ("max_positions", "total_wallet_exposure_limit")
+            for field in ("max_positions", "total_wallet_exposure_limit_ratio")
         ):
             continue
         domains = {name: field_domain(side, "forager", ("score_weights", name)) for name in names}
@@ -458,7 +458,7 @@ def _validate_forager_weight_context(
         risk_source = optimizer_numeric_group_source_side(config, side, "risk")
         risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
         for field, key in (("max_positions", "n_positions"),
-                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+                           ("total_wallet_exposure_limit_ratio", "total_wallet_exposure_limit")):
             bound_key = f"{risk_source}_{key}"
             value, runtime_pinned = pinned_value(
                 ("bot", risk_source, "risk", field), risk.get(field, 0.0), runtime_pins
@@ -612,7 +612,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
              else float(bot_config[pside]["risk"][field])) > 0.0
             for key, field in ((f"{pside}_n_positions", "max_positions"),
-                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit"))
+                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit_ratio"))
         )
 
     for bound_key, path in key_paths:
@@ -644,7 +644,7 @@ def _inherited_optimization_bounds(config, plan):
     enabled = {}
     for side in ("long", "short"):
         enabled[side] = optimizer_side_may_activate(config, side)
-        for name in ("max_positions", "total_wallet_exposure_limit"):
+        for name in ("max_positions", "total_wallet_exposure_limit_ratio"):
             target = ("bot", side, "risk", name)
             binding = by_target.get(target)
             value = (binding.bound.high if binding is not None else

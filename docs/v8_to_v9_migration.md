@@ -14,16 +14,18 @@ before backtesting a proposed replacement.
 | Released field | Final v9 field or action |
 |---|---|
 | `live.hsl_signal_mode` | `bot.portfolio.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
-| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_ratio_threshold`, with the same fractional value |
+| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_threshold_fraction`, with the same fractional value |
 | `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.portfolio.hsl` alongside its scope |
-| HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
+| HSL `ema_span_minutes` | `drawdown_fraction_ema_span_minutes` in the same policy |
 | HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
 | Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
-| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_ratio` |
+| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_fraction` |
+| `bot.<side>.risk.total_wallet_exposure_limit` | `bot.<side>.risk.total_wallet_exposure_limit_ratio`, with the same notional-to-balance value |
+| `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |

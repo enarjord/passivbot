@@ -41,7 +41,7 @@ def test_common_bound_flags_are_discovered_without_authoring_any_default_range()
     parser = argparse.ArgumentParser()
     raw = get_template_config()
     registered = add_config_arguments(parser, raw)
-    path = "optimize.bounds.global.risk.total_wallet_exposure_limit"
+    path = "optimize.bounds.global.risk.total_wallet_exposure_limit_ratio"
     assert path in registered
     assert getattr(parser.parse_args([]), path) is None
     args = parser.parse_args(["--" + path, "1,3,0.1"])
@@ -149,7 +149,7 @@ async def test_actual_optimizer_suite_formatter_keeps_common_gene_authority(monk
     raw["bot"]["global"]["universe"]["ignored_coins"] = []
     raw["backtest"] = {"start_date": "2024-01-01", "end_date": "2024-01-02",
         "exchanges": ["binance"], "suite_enabled": True, "scenarios": [{"label": "base"}]}
-    raw["optimize"] = {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 3.0]}}}}
+    raw["optimize"] = {"bounds": {"global": {"risk": {"total_wallet_exposure_limit_ratio": [1.0, 3.0]}}}}
     config = prepare_config(raw, verbose=False)
     async def no_io(*args, **kwargs):
         return {}
@@ -177,6 +177,6 @@ async def test_actual_optimizer_suite_formatter_keeps_common_gene_authority(monk
     assert "risk" not in exported["bot"].get("short", {})
     assert exported["optimize"]["bounds"] == raw["optimize"]["bounds"]
     binding = next(item for item in get_bound_plan(result).bindings
-                   if item.key == "bot.global.risk.total_wallet_exposure_limit")
-    assert binding.effective_targets == (("bot", "long", "risk", "total_wallet_exposure_limit"),
-                                          ("bot", "short", "risk", "total_wallet_exposure_limit"))
+                   if item.key == "bot.global.risk.total_wallet_exposure_limit_ratio")
+    assert binding.effective_targets == (("bot", "long", "risk", "total_wallet_exposure_limit_ratio"),
+                                          ("bot", "short", "risk", "total_wallet_exposure_limit_ratio"))

@@ -106,7 +106,7 @@ def test_coin_override_enables_forward_risk_with_inherited_policy_off(reference,
     from test_gpu_hsl_multicoin import make_proxy, raw
 
     proxy = make_proxy("coin", strategy, ("long",), minutes=128, coin_count=1,
-                       enabled=False, override={"enabled": True, "drawdown_ratio_threshold": 1e-8})
+                       enabled=False, override={"enabled": True, "drawdown_threshold_fraction": 1e-8})
     runner, actual = raw(proxy, [{}])
     assert actual["hsl_triggers_long"].item() > 0
     assert runner.hsl_fact_capacity == 0

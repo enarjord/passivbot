@@ -1102,7 +1102,7 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "default": 720.0,
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
@@ -1123,7 +1123,7 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "default": 0.15,
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
@@ -1320,7 +1320,7 @@
                       },
                       "additionalProperties": false
                     },
-                    "total_wallet_exposure_limit": {
+                    "total_wallet_exposure_limit_ratio": {
                       "type": "number",
                       "default": 1.5,
                       "minimum": 0.0,
@@ -2608,7 +2608,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "default": 720.0,
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
@@ -2630,7 +2630,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "default": 0.15,
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
@@ -2832,7 +2832,7 @@
                       },
                       "additionalProperties": false
                     },
-                    "total_wallet_exposure_limit": {
+                    "total_wallet_exposure_limit_ratio": {
                       "type": "number",
                       "default": 1.5,
                       "minimum": 0.0,
@@ -3905,7 +3905,7 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
                       "minimum": 1.0,
@@ -3926,7 +3926,7 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
                       "exclusiveMinimum": 0.0,
@@ -4025,7 +4025,7 @@
                 "loss_gate": {
                   "type": "object",
                   "properties": {
-                    "max_drawdown_ratio": {
+                    "max_drawdown_fraction": {
                       "type": "number",
                       "default": 1.0,
                       "description": "Values at least 1 disable the gate; zero blocks lossy non-panic closes.",
@@ -4471,7 +4471,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "default": 720.0,
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
@@ -4493,7 +4493,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "default": 0.15,
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
@@ -4695,7 +4695,7 @@
                       },
                       "additionalProperties": false
                     },
-                    "total_wallet_exposure_limit": {
+                    "total_wallet_exposure_limit_ratio": {
                       "type": "number",
                       "default": 1.5,
                       "minimum": 0.0,
@@ -6910,7 +6910,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "drawdown_ratio_threshold": {
+                        "drawdown_threshold_fraction": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -6936,7 +6936,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_ratio_threshold",
+                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_threshold_fraction",
                           "examples": [
                             [
                               0.15,
@@ -6945,7 +6945,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_ema_span_minutes": {
+                        "drawdown_fraction_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -6971,7 +6971,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_ratio_ema_span_minutes",
+                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_fraction_ema_span_minutes",
                           "examples": [
                             [
                               720,
@@ -7172,7 +7172,7 @@
                             }
                           }
                         },
-                        "total_wallet_exposure_limit": {
+                        "total_wallet_exposure_limit_ratio": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -7198,7 +7198,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.risk.total_wallet_exposure_limit",
+                          "x-passivbot-target": "bot.long.risk.total_wallet_exposure_limit_ratio",
                           "examples": [
                             [
                               1.5,
@@ -7554,7 +7554,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_ema_span_minutes": {
+                        "drawdown_fraction_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -7580,7 +7580,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.hsl.drawdown_ratio_ema_span_minutes",
+                          "x-passivbot-target": "bot.long.hsl.drawdown_fraction_ema_span_minutes",
                           "examples": [
                             [
                               720,
@@ -7589,7 +7589,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_threshold": {
+                        "drawdown_threshold_fraction": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -7615,7 +7615,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.hsl.drawdown_ratio_threshold",
+                          "x-passivbot-target": "bot.long.hsl.drawdown_threshold_fraction",
                           "examples": [
                             [
                               0.15,
@@ -9313,7 +9313,7 @@
                             }
                           }
                         },
-                        "total_wallet_exposure_limit": {
+                        "total_wallet_exposure_limit_ratio": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -9339,7 +9339,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.short.risk.total_wallet_exposure_limit",
+                          "x-passivbot-target": "bot.short.risk.total_wallet_exposure_limit_ratio",
                           "examples": [
                             [
                               0,
@@ -9694,7 +9694,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_ema_span_minutes": {
+                        "drawdown_fraction_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -9720,7 +9720,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.short.hsl.drawdown_ratio_ema_span_minutes",
+                          "x-passivbot-target": "bot.short.hsl.drawdown_fraction_ema_span_minutes",
                           "examples": [
                             [
                               1,
@@ -9729,7 +9729,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_threshold": {
+                        "drawdown_threshold_fraction": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -9755,7 +9755,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.short.hsl.drawdown_ratio_threshold",
+                          "x-passivbot-target": "bot.short.hsl.drawdown_threshold_fraction",
                           "examples": [
                             [
                               0.01,
@@ -11453,7 +11453,7 @@
                             }
                           }
                         },
-                        "total_wallet_exposure_limit": {
+                        "total_wallet_exposure_limit_ratio": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -11479,7 +11479,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.risk.total_wallet_exposure_limit",
+                          "x-passivbot-target": "bot.global.risk.total_wallet_exposure_limit_ratio",
                           "examples": [
                             [
                               1.5,
@@ -11835,7 +11835,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_ema_span_minutes": {
+                        "drawdown_fraction_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -11861,7 +11861,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.drawdown_ratio_ema_span_minutes",
+                          "x-passivbot-target": "bot.global.hsl.drawdown_fraction_ema_span_minutes",
                           "examples": [
                             [
                               720,
@@ -11870,7 +11870,7 @@
                             ]
                           ]
                         },
-                        "drawdown_ratio_threshold": {
+                        "drawdown_threshold_fraction": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -11896,7 +11896,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.drawdown_ratio_threshold",
+                          "x-passivbot-target": "bot.global.hsl.drawdown_threshold_fraction",
                           "examples": [
                             [
                               0.15,
@@ -13641,7 +13641,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
                       "minimum": 1.0,
@@ -13662,7 +13662,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
                       "exclusiveMinimum": 0.0,
@@ -14030,7 +14030,7 @@
                     }
                   }
                 },
-                "wallet_exposure_limit": {
+                "wallet_exposure_limit_ratio": {
                   "type": "number",
                   "x-passivbot-unit": "ratio",
                   "x-passivbot-denominator": "raw balance",
@@ -14757,7 +14757,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_ema_span_minutes": {
+                    "drawdown_fraction_ema_span_minutes": {
                       "type": "number",
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
                       "minimum": 1.0,
@@ -14778,7 +14778,7 @@
                       ],
                       "x-passivbot-coin-override": "coin HSL scope only"
                     },
-                    "drawdown_ratio_threshold": {
+                    "drawdown_threshold_fraction": {
                       "type": "number",
                       "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
                       "exclusiveMinimum": 0.0,
@@ -15146,7 +15146,7 @@
                     }
                   }
                 },
-                "wallet_exposure_limit": {
+                "wallet_exposure_limit_ratio": {
                   "type": "number",
                   "x-passivbot-unit": "ratio",
                   "x-passivbot-denominator": "raw balance",
@@ -16211,7 +16211,7 @@
                     }
                   }
                 },
-                "wallet_exposure_limit": {
+                "wallet_exposure_limit_ratio": {
                   "type": "number",
                   "x-passivbot-unit": "ratio",
                   "x-passivbot-denominator": "raw balance",
@@ -17204,7 +17204,7 @@
                     }
                   }
                 },
-                "wallet_exposure_limit": {
+                "wallet_exposure_limit_ratio": {
                   "type": "number",
                   "x-passivbot-unit": "ratio",
                   "x-passivbot-denominator": "raw balance",
@@ -18075,11 +18075,11 @@
         "bot.global.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bot.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bot.global.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bot.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "bot.global.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bot.global.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
@@ -18120,8 +18120,8 @@
         "bot.global.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bot.global.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "bot.global.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bot.global.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -18351,11 +18351,11 @@
         "bot.long.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bot.long.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bot.long.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bot.long.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "bot.long.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bot.long.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/enabled"
@@ -18396,8 +18396,8 @@
         "bot.long.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bot.long.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "bot.long.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bot.long.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -18582,11 +18582,11 @@
         "bot.portfolio.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bot.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bot.portfolio.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bot.portfolio.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "bot.portfolio.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bot.portfolio.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
@@ -18606,8 +18606,8 @@
         "bot.portfolio.loss_gate": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate"
         },
-        "bot.portfolio.loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        "bot.portfolio.loss_gate.max_drawdown_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_fraction"
         },
         "bot.portfolio.loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
@@ -18696,11 +18696,11 @@
         "bot.short.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bot.short.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bot.short.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bot.short.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "bot.short.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bot.short.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/enabled"
@@ -18741,8 +18741,8 @@
         "bot.short.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bot.short.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "bot.short.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bot.short.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -19317,11 +19317,11 @@
         "optimize.bounds.portfolio.hsl": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "optimize.bounds.portfolio.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "optimize.bounds.portfolio.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
-        "optimize.bounds.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "optimize.bounds.portfolio.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
         "optimize.bounds.portfolio.hsl.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
@@ -19350,8 +19350,8 @@
         "optimize.bounds.long.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "optimize.bounds.long.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "optimize.bounds.long.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -19392,11 +19392,11 @@
         "optimize.bounds.long.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "optimize.bounds.long.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "optimize.bounds.long.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "optimize.bounds.long.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "optimize.bounds.long.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "optimize.bounds.long.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/entry_cooldown"
@@ -19575,8 +19575,8 @@
         "optimize.bounds.short.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "optimize.bounds.short.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "optimize.bounds.short.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "optimize.bounds.short.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -19617,11 +19617,11 @@
         "optimize.bounds.short.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "optimize.bounds.short.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "optimize.bounds.short.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "optimize.bounds.short.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "optimize.bounds.short.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "optimize.bounds.short.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/entry_cooldown"
@@ -19800,8 +19800,8 @@
         "optimize.bounds.global.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "optimize.bounds.global.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "optimize.bounds.global.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "optimize.bounds.global.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -19842,11 +19842,11 @@
         "optimize.bounds.global.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "optimize.bounds.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "optimize.bounds.global.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "optimize.bounds.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "optimize.bounds.global.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "optimize.bounds.global.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/entry_cooldown"
@@ -20045,11 +20045,11 @@
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.cooldown_after_red_minutes$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.drawdown_ratio_ema_span_minutes$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.drawdown_fraction_ema_span_minutes$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.drawdown_ratio_threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.drawdown_threshold_fraction$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/hsl/properties/enabled"
@@ -20123,8 +20123,8 @@
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.unstuck\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/unstuck/properties/enabled"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.wallet_exposure_limit$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/wallet_exposure_limit"
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.wallet_exposure_limit_ratio$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/wallet_exposure_limit_ratio"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.strategy$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/strategy"
@@ -20255,11 +20255,11 @@
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.cooldown_after_red_minutes$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.drawdown_ratio_ema_span_minutes$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.drawdown_fraction_ema_span_minutes$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.drawdown_ratio_threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.drawdown_threshold_fraction$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.hsl\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/hsl/properties/enabled"
@@ -20333,8 +20333,8 @@
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.unstuck\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/unstuck/properties/enabled"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.wallet_exposure_limit$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/wallet_exposure_limit"
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.wallet_exposure_limit_ratio$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/wallet_exposure_limit_ratio"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.strategy$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/strategy"
@@ -20680,11 +20680,11 @@
         "global.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "global.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "global.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "global.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
@@ -20725,8 +20725,8 @@
         "global.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "global.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "global.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "global.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -20956,11 +20956,11 @@
         "long.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "long.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "long.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "long.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "long.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "long.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/enabled"
@@ -21001,8 +21001,8 @@
         "long.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "long.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "long.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "long.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -21187,11 +21187,11 @@
         "portfolio.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "portfolio.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "portfolio.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "portfolio.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "portfolio.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "portfolio.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
@@ -21211,8 +21211,8 @@
         "portfolio.loss_gate": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate"
         },
-        "portfolio.loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        "portfolio.loss_gate.max_drawdown_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_fraction"
         },
         "portfolio.loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
@@ -21301,11 +21301,11 @@
         "short.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "short.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "short.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "short.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "short.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "short.hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/enabled"
@@ -21346,8 +21346,8 @@
         "short.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "short.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "short.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "short.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -21578,11 +21578,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
@@ -21623,8 +21623,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -21892,11 +21892,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
@@ -21941,8 +21941,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -22419,11 +22419,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/enabled"
@@ -22464,8 +22464,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -22733,11 +22733,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/hsl/properties/enabled"
@@ -22782,8 +22782,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -23215,11 +23215,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
@@ -23239,8 +23239,8 @@
         "loss_gate": {
           "$ref": "#/$defs/scenarioPatch:bot.portfolio.loss_gate"
         },
-        "loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        "loss_gate.max_drawdown_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_fraction"
         },
         "loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
@@ -23286,11 +23286,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
@@ -23314,8 +23314,8 @@
     "scenarioPatch:bot.portfolio.loss_gate": {
       "type": "object",
       "properties": {
-        "max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        "max_drawdown_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_fraction"
         },
         "memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
@@ -23413,11 +23413,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "hsl.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/enabled"
@@ -23458,8 +23458,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -23727,11 +23727,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/hsl/properties/enabled"
@@ -23776,8 +23776,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -24808,11 +24808,11 @@
         "bounds.portfolio.hsl": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "bounds.portfolio.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "bounds.portfolio.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
-        "bounds.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bounds.portfolio.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
         "bounds.portfolio.hsl.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
@@ -24841,8 +24841,8 @@
         "bounds.long.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bounds.long.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "bounds.long.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bounds.long.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -24883,11 +24883,11 @@
         "bounds.long.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bounds.long.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bounds.long.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bounds.long.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "bounds.long.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bounds.long.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/entry_cooldown"
@@ -25066,8 +25066,8 @@
         "bounds.short.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bounds.short.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "bounds.short.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bounds.short.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -25108,11 +25108,11 @@
         "bounds.short.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bounds.short.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bounds.short.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bounds.short.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "bounds.short.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bounds.short.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/entry_cooldown"
@@ -25291,8 +25291,8 @@
         "bounds.global.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "bounds.global.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "bounds.global.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "bounds.global.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -25333,11 +25333,11 @@
         "bounds.global.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "bounds.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bounds.global.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "bounds.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "bounds.global.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "bounds.global.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/entry_cooldown"
@@ -25726,11 +25726,11 @@
         "portfolio.hsl": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "portfolio.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "portfolio.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
-        "portfolio.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "portfolio.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
         "portfolio.hsl.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
@@ -25759,8 +25759,8 @@
         "long.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "long.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "long.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "long.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -25801,11 +25801,11 @@
         "long.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "long.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "long.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "long.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "long.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "long.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/entry_cooldown"
@@ -25984,8 +25984,8 @@
         "short.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "short.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "short.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "short.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -26026,11 +26026,11 @@
         "short.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "short.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "short.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "short.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "short.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "short.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/entry_cooldown"
@@ -26209,8 +26209,8 @@
         "global.risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "global.risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "global.risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "global.risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -26251,11 +26251,11 @@
         "global.hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "global.hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "global.hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "global.entry_cooldown": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/entry_cooldown"
@@ -26435,11 +26435,11 @@
         "hsl": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.hsl"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
         "hsl.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
@@ -26474,11 +26474,11 @@
     "scenarioPatch:optimize.bounds.portfolio.hsl": {
       "type": "object",
       "properties": {
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_threshold_fraction"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
         "memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
@@ -26511,8 +26511,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -26553,11 +26553,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.entry_cooldown"
@@ -26737,8 +26737,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_fraction"
@@ -26826,11 +26826,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/hsl/properties/drawdown_threshold_fraction"
         }
       },
       "patternProperties": {},
@@ -27234,8 +27234,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -27276,11 +27276,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.entry_cooldown"
@@ -27460,8 +27460,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_fraction"
@@ -27549,11 +27549,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/hsl/properties/drawdown_threshold_fraction"
         }
       },
       "patternProperties": {},
@@ -27957,8 +27957,8 @@
         "risk.total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "risk.total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "risk.total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "risk.we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -27999,11 +27999,11 @@
         "hsl.cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "hsl.drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "hsl.drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.entry_cooldown"
@@ -28183,8 +28183,8 @@
         "total_exposure_enforcer.threshold_ratio": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
-        "total_wallet_exposure_limit": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit"
+        "total_wallet_exposure_limit_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/total_wallet_exposure_limit_ratio"
         },
         "we_excess_allowance_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/risk/properties/we_excess_allowance_fraction"
@@ -28272,11 +28272,11 @@
         "cooldown_after_red_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
         },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_fraction_ema_span_minutes"
         },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "drawdown_threshold_fraction": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_threshold_fraction"
         }
       },
       "patternProperties": {},

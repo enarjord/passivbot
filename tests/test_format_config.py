@@ -57,7 +57,7 @@ def test_format_config_missing_short_side_stays_disabled():
         "config_version": _template()["config_version"],
         "bot": {
             "long": {
-                "risk": {"total_wallet_exposure_limit": 0.7},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.7},
             }
         },
         "live": {},
@@ -69,7 +69,7 @@ def test_format_config_missing_short_side_stays_disabled():
 
     out = format_config(current, verbose=False)
 
-    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.7
     assert out["bot"]["short"]["enabled"] is False
     assert out["bot"]["short"]["risk"] == _template()["bot"]["global"]["risk"]
 
@@ -79,7 +79,7 @@ def test_format_config_missing_long_side_stays_disabled():
         "config_version": _template()["config_version"],
         "bot": {
             "short": {
-                "risk": {"total_wallet_exposure_limit": 0.7},
+                "risk": {"total_wallet_exposure_limit_ratio": 0.7},
             }
         },
         "live": {},
@@ -91,7 +91,7 @@ def test_format_config_missing_long_side_stays_disabled():
 
     out = format_config(current, verbose=False)
 
-    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.7
     assert out["bot"]["long"]["enabled"] is False
     assert out["bot"]["long"]["risk"] == _template()["bot"]["long"]["risk"]
 
@@ -522,8 +522,8 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = [
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = [
         10.0,
         120.0,
         5.0,
@@ -531,12 +531,12 @@ def test_format_config_preserves_live_optimize_bounds():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,

@@ -59,7 +59,7 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     # This explicit demonstration span is not a converted rolling-window policy.
     assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
-    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == 1.0
+    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 1.0
     assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
     assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
@@ -81,7 +81,7 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     for side in ("long", "short"):
         assert config["bot"][side]["hsl"]["enabled"] is False
         assert config["bot"][side]["risk"]["max_positions"] == 2.0
-        assert config["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+        assert config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
         for key, expected in expected_strategy.items():
             assert _strategy_side(config, side)[key] == expected
             assert _strategy_side(compiled, side)[key] == expected
@@ -118,7 +118,7 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
     source = get_template_config()
     source["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.threshold_base_fraction": 0.123,
-        "bot.short.hsl.drawdown_ratio_threshold": 0.1,
+        "bot.short.hsl.drawdown_threshold_fraction": 0.1,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -257,7 +257,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
         ({"bot.long.not_a_setting": 1}, ValueError, "unknown configuration field"),
         (
             {
-                "bot.long.risk.total_wallet_exposure_limit": 1.0,
+                "bot.long.risk.total_wallet_exposure_limit_ratio": 1.0,
                 "bot.long.total_wallet_exposure_limit": 2.0,
             },
             ValueError,
@@ -554,7 +554,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["total_wallet_exposure_limit"]
-        == canonical["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+        == canonical["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
@@ -566,7 +566,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["hsl_red_threshold"]
-        == canonical["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
+        == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
         compiled["bot"]["long"]["forager_volume_ema_span_1m"]
@@ -677,7 +677,7 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
 def test_prepare_config_rejects_positive_twel_with_zero_positions():
     source = get_expanded_config_prototype()
     risk = source["bot"]["long"]["risk"]
-    risk["total_wallet_exposure_limit"] = 1.0
+    risk["total_wallet_exposure_limit_ratio"] = 1.0
     risk["max_positions"] = 0
     risk['total_exposure_enforcer']['enabled'] = False
 
@@ -685,7 +685,7 @@ def test_prepare_config_rejects_positive_twel_with_zero_positions():
         ValueError,
         match=(
             r"bot\.long\.risk\.max_positions must be > 0 when "
-            r"bot\.long\.risk\.total_wallet_exposure_limit is > 0"
+            r"bot\.long\.risk\.total_wallet_exposure_limit_ratio is > 0"
         ),
     ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -695,7 +695,7 @@ def test_prepare_config_rejects_positive_twel_with_zero_positions():
 def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_positions):
     source = get_expanded_config_prototype()
     risk = source["bot"]["short"]["risk"]
-    risk["total_wallet_exposure_limit"] = 0.0
+    risk["total_wallet_exposure_limit_ratio"] = 0.0
     risk["max_positions"] = n_positions
 
     with pytest.raises((TypeError, ValueError), match=r"bot\.short\.risk\.max_positions"):
@@ -1152,16 +1152,16 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
 
 def test_prepare_config_preserves_fractional_hsl_ema_span():
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.25
+    source["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.25
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == pytest.approx(1.25)
+    assert prepared["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(1.25)
 
 
 def test_prepare_config_rejects_retired_hsl_terminal_threshold():
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.20
+    source["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
     with pytest.raises(ValueError, match="removed in v9"):
@@ -1171,7 +1171,7 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
 @pytest.mark.parametrize(
     ("group", "field", "value", "match"),
     [
-        ("hsl", "drawdown_ratio_threshold", 0.0, r"bot\.long\.hsl\.drawdown_ratio_threshold"),
+        ("hsl", "drawdown_threshold_fraction", 0.0, r"bot\.long\.hsl\.drawdown_threshold_fraction"),
         (
             "hsl",
             "cooldown_after_red_minutes",
@@ -1427,7 +1427,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
 
 def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
     source = get_expanded_config_prototype()
-    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     source["bot"]["short"]["risk"]["max_positions"] = 1
     source["bot"]["short"]["forager"]["score_weights"] = {
         "volume": 0.0,

@@ -22,8 +22,7 @@ def validate_simulation_config(config, *, resolved=False, context=None):
         reasons.append("Both position sides are disabled. Enable bot.long.enabled and/or bot.short.enabled.")
     elif not active:
         reasons.append(
-            "Enabled position sides have no trading capacity. Set a positive "
-            "risk.total_wallet_exposure_limit and risk.max_positions on at least one enabled side."
+            'Enabled position sides have no trading capacity. Set a positive risk.total_wallet_exposure_limit_ratio and risk.max_positions on at least one enabled side.'
         )
 
     approved = require_side_universe_sources(config, "approved_coins")
