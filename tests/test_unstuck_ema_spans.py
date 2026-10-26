@@ -275,6 +275,60 @@ def test_legacy_scenario_span_override_migrates():
     )
 
 
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("index", [0, 1])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("mode", ["positive", "explicit", "inactive_zero"])
+def test_released_scenario_span_inference_survives_public_path_projection(
+    kind, index, nested, mode, caplog,
+):
+    from suite_runner import _normalize_scenario_overrides
+
+    source = legacy_config(kind)
+    # Match the strategy-owned shapes in the public released-v8 defaults.
+    if kind == "trailing_martingale":
+        for root in (source["bot"], source["optimize"]["bounds"]):
+            for side in ("long", "short"):
+                strategy = root[side]["strategy"][kind]
+                for key in ("ema_span_0", "ema_span_1"):
+                    strategy["entry"][key] = strategy.pop(key)
+    side = "short" if mode == "inactive_zero" else "long"
+    key = f"ema_span_{index}"
+    value = 0.0 if mode == "inactive_zero" else 401.5
+    strategy = {key: value}
+    if kind == "trailing_martingale":
+        strategy = {"entry": strategy}
+    patch = {"strategy": {kind: strategy}}
+    if mode == "explicit":
+        patch["unstuck"] = {key: 91.5}
+    elif mode == "inactive_zero":
+        patch["unstuck"] = {"enabled": False}
+    overrides = {"bot": {side: patch}}
+    if not nested:
+        overrides = _normalize_scenario_overrides(overrides)
+    source["backtest"]["scenarios"] = [{"label": mode, "overrides": overrides}]
+    before = deepcopy(source)
+
+    result = migrate_v8_to_v9(source, memory_span_minutes=43200.0)
+    assert source == before
+    prepared = prepare_config(result.config, verbose=False)
+    migrated = _normalize_scenario_overrides(
+        prepared["backtest"]["scenarios"][0]["overrides"]
+    )
+    entry = "entry." if kind == "trailing_martingale" else ""
+    assert migrated[f"bot.{side}.strategy.{kind}.{entry}{key}_minutes"] == value
+    if mode == "inactive_zero":
+        released = get_released_v8_defaults(strategy_kind=kind)
+        defaults = released["bot"][side]["strategy"][kind]
+        expected = (defaults["entry"] if kind == "trailing_martingale" else defaults)[key]
+        assert expected > 0
+        assert "Cannot copy zero strategy span" in caplog.text
+    else:
+        expected = 91.5 if mode == "explicit" else 401.5
+    assert migrated[f"bot.{side}.unstuck.{key}_minutes"] == expected
+    assert isinstance(migrated[f"bot.{side}.unstuck.{key}_minutes"], float)
+
+
 def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
     from optimization.config_adapter import get_optimization_key_paths
 
