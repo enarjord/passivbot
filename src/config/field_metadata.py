@@ -128,6 +128,15 @@ def _bot_metadata(path):
         elif name in {"volatility_ema_span_1h_candles", "offset_volatility_ema_span_1h_candles"}:
             data["unit"] = "one-hour candles"
         if path[3] == "trailing_martingale":
+            if tuple(path[4:]) == ("entry", "reentry_qty_multiplier"):
+                data.update(unit="multiplier", denominator="absolute current position quantity",
+                            description="Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.")
+            elif name in {"threshold_exposure_ratio_coefficient", "retracement_exposure_ratio_coefficient"}:
+                data.update(unit=("distance multiplier per exposure ratio" if path[4] == "entry" else "price fraction per exposure ratio"),
+                            denominator="position wallet exposure divided by effective per-position wallet exposure limit",
+                            description=("Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one."
+                                         if path[4] == "entry" else
+                                         "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed."))
             denominators = {
                 ("entry", "initial_qty_fraction"): "raw balance times effective per-position wallet exposure limit, converted at entry price",
                 ("entry", "initial_ema_distance_fraction"): "entry EMA band reference price",
@@ -145,6 +154,12 @@ def _bot_metadata(path):
             data.update(unit="fraction", denominator=(
                 "raw balance times effective per-position wallet exposure limit, converted at order price"
                 if name == "base_qty_fraction" else "EMA anchor reference price"))
+        elif path[3] == "ema_anchor" and name == "entry_qty_exposure_coefficient":
+            data.update(unit="quantity multiplier per exposure ratio", denominator="nonnegative same-side wallet exposure at the book midpoint divided by effective wallet exposure limit",
+                        description="Entry quantity uses base quantity times max(1, 1 + same-side exposure ratio times this coefficient); long uses max(0, signed ratio), short uses max(0, -signed ratio).")
+        elif path[3] == "ema_anchor" and name == "inventory_offset_exposure_coefficient":
+            data.update(unit="price fraction per signed exposure ratio", denominator="signed wallet exposure at the book midpoint divided by effective wallet exposure limit",
+                        description="Signed exposure ratio times this coefficient is a price fraction subtracted from both bid and ask EMA anchor factors.")
         return data  # Native metadata still owns defaults, bounds and choices.
     if local == "strategy_kind":
         from .strategy_spec import get_supported_strategy_kinds

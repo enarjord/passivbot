@@ -1379,12 +1379,12 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                 },
             },
@@ -1403,9 +1403,9 @@ class TestIndividualToConfig:
         )
 
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 1.0
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 2.0
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 2.0
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 3.0
-        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 4.0
+        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 4.0
 
     def test_sorted_keys(self):
         # Keys should be sorted alphabetically
@@ -1414,12 +1414,12 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 0.0, "initial_qty_fraction": 0.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 0.0, "initial_qty_fraction": 0.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 0.0, "initial_qty_fraction": 0.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 0.0, "initial_qty_fraction": 0.0}},
                     },
                 },
             },
@@ -1439,9 +1439,9 @@ class TestIndividualToConfig:
 
         # sorted: long.strategy.trailing_martingale.entry.initial_qty_pct, long.strategy.trailing_martingale.entry.threshold_we_weight, short.strategy.trailing_martingale.entry.initial_qty_pct, short.strategy.trailing_martingale.entry.threshold_we_weight
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 10.0
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 20.0
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 20.0
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 30.0
-        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 40.0
+        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 40.0
 
     def test_does_not_modify_template(self):
         individual = [1.0, 2.0, 3.0, 4.0]
@@ -1449,12 +1449,12 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 99.0, "threshold_we_weight": 99.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 99.0, "threshold_exposure_ratio_coefficient": 99.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 99.0, "threshold_we_weight": 99.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 99.0, "threshold_exposure_ratio_coefficient": 99.0}},
                     },
                 },
             },
@@ -1480,13 +1480,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                     "hsl": {"memory_ema_span_minutes": 120.0},
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                     "hsl": {"drawdown_threshold_fraction": 0.25},
                 },
@@ -1522,12 +1522,12 @@ class TestIndividualToConfig:
                     "hsl": {"drawdown_threshold_fraction": 0.2, "cooldown_after_red_minutes": 0.3},
                     "hsl_cooldown_minutes_after_red": 0.3,
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
                 },
             },
@@ -1596,7 +1596,7 @@ class TestIndividualToConfig:
                             "ema_span_0_minutes": 72.0,
                             "ema_span_1_minutes": 432.0,
                             "offset_fraction": 0.009,
-                            "offset_psize_weight": 0.4,
+                            "inventory_offset_exposure_coefficient": 0.4,
                         }
                     },
                 },
@@ -1626,7 +1626,7 @@ class TestIndividualToConfig:
                             "ema_span_0_minutes": 48.0,
                             "ema_span_1_minutes": 288.0,
                             "offset_fraction": 0.02,
-                            "offset_psize_weight": 0.2,
+                            "inventory_offset_exposure_coefficient": 0.2,
                         }
                     },
                 },
@@ -1643,7 +1643,7 @@ class TestIndividualToConfig:
                                 "ema_span_0_minutes": [48, 120, 1],
                                 "ema_span_1_minutes": [288, 720, 1],
                                 "offset_fraction": [0.006, 0.02, 0.0005],
-                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                                "inventory_offset_exposure_coefficient": [0.2, 0.8, 0.01],
                             }
                         },
                     },
@@ -1655,7 +1655,7 @@ class TestIndividualToConfig:
                                 "ema_span_0_minutes": [48, 120, 1],
                                 "ema_span_1_minutes": [288, 720, 1],
                                 "offset_fraction": [0.007, 0.02, 0.0005],
-                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                                "inventory_offset_exposure_coefficient": [0.2, 0.8, 0.01],
                             }
                         },
                     },
@@ -1853,12 +1853,12 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 0.0, "initial_qty_fraction": 0.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 0.0, "initial_qty_fraction": 0.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 0.0, "initial_qty_fraction": 0.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 0.0, "initial_qty_fraction": 0.0}},
                     },
                 },
             },
@@ -1880,9 +1880,9 @@ class TestIndividualToConfig:
         )
 
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 10.0
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 20.0
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 20.0
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 30.0
-        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 40.0
+        assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 40.0
 
     def test_canonicalizes_disabled_close_retracement_params_in_config(self):
         template = _independent_close_fixture()
@@ -1979,14 +1979,14 @@ class TestIndividualToConfig:
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}
+                            "entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2}
                         }
                     }
                 },
                 "short": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"initial_qty_fraction": 0.3, "threshold_we_weight": 0.4}
+                            "entry": {"initial_qty_fraction": 0.3, "threshold_exposure_ratio_coefficient": 0.4}
                         }
                     }
                 },
@@ -2015,7 +2015,7 @@ class TestIndividualToConfig:
                                     "trailing_martingale": {
                                         "entry": {
                                             "initial_qty_fraction": 0.11,
-                                            "threshold_we_weight": 0.22,
+                                            "threshold_exposure_ratio_coefficient": 0.22,
                                         }
                                     }
                                 }
@@ -2025,7 +2025,7 @@ class TestIndividualToConfig:
                                     "trailing_martingale": {
                                         "entry": {
                                             "initial_qty_fraction": 0.33,
-                                            "threshold_we_weight": 0.44,
+                                            "threshold_exposure_ratio_coefficient": 0.44,
                                         }
                                     }
                                 }
@@ -2040,7 +2040,7 @@ class TestIndividualToConfig:
                                     "strategy",
                                     "trailing_martingale",
                                     "entry",
-                                    "threshold_we_weight",
+                                    "threshold_exposure_ratio_coefficient",
                                 ],
                                 "value": 0.22,
                             }
@@ -2054,7 +2054,7 @@ class TestIndividualToConfig:
                                     "trailing_martingale": {
                                         "entry": {
                                             "initial_qty_fraction": 0.55,
-                                            "threshold_we_weight": 0.66,
+                                            "threshold_exposure_ratio_coefficient": 0.66,
                                         }
                                     }
                                 }
@@ -2064,7 +2064,7 @@ class TestIndividualToConfig:
                                     "trailing_martingale": {
                                         "entry": {
                                             "initial_qty_fraction": 0.77,
-                                            "threshold_we_weight": 0.88,
+                                            "threshold_exposure_ratio_coefficient": 0.88,
                                         }
                                     }
                                 }
@@ -2079,7 +2079,7 @@ class TestIndividualToConfig:
                                     "strategy",
                                     "trailing_martingale",
                                     "entry",
-                                    "threshold_we_weight",
+                                    "threshold_exposure_ratio_coefficient",
                                 ],
                                 "value": 0.66,
                             }
@@ -2104,7 +2104,7 @@ class TestIndividualToConfig:
         result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], template)
 
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(0.9)
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == pytest.approx(0.66)
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(0.66)
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(0.3)
         assert result["backtest"]["start_date"] == "2024-01-01"
         assert result["_optimizer_anchor"]["id"] == 1
@@ -2116,7 +2116,7 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_we_weight": 0.75}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_exposure_ratio_coefficient": 0.75}},
                     },
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
@@ -2141,7 +2141,7 @@ class TestIndividualToConfig:
                         "seed_bot": {
                             "long": {
                                 "strategy": {
-                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}},
+                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2}},
                                 },
                                 "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
@@ -2156,7 +2156,7 @@ class TestIndividualToConfig:
                                     "strategy",
                                     "trailing_martingale",
                                     "entry",
-                                    "threshold_we_weight",
+                                    "threshold_exposure_ratio_coefficient",
                                 ],
                                 "value": 0.2,
                             },
@@ -2167,7 +2167,7 @@ class TestIndividualToConfig:
                         "seed_bot": {
                             "long": {
                                 "strategy": {
-                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.3, "threshold_we_weight": 0.4}},
+                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.3, "threshold_exposure_ratio_coefficient": 0.4}},
                                 },
                                 "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
@@ -2182,7 +2182,7 @@ class TestIndividualToConfig:
                                     "strategy",
                                     "trailing_martingale",
                                     "entry",
-                                    "threshold_we_weight",
+                                    "threshold_exposure_ratio_coefficient",
                                 ],
                                 "value": 0.4,
                             },
@@ -2200,7 +2200,7 @@ class TestIndividualToConfig:
         result = build_optimizer_max_config(template)
 
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(1.0)
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == pytest.approx(0.4)
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(0.4)
         assert result["_optimizer_anchor"]["id"] == 1
 
 
@@ -2212,12 +2212,12 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.5, "threshold_we_weight": 2.5}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.5, "threshold_exposure_ratio_coefficient": 2.5}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.5, "threshold_we_weight": 4.5}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.5, "threshold_exposure_ratio_coefficient": 4.5}},
                     },
                 },
             },
@@ -2245,12 +2245,12 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 100.0, "initial_qty_fraction": 200.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 100.0, "initial_qty_fraction": 200.0}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_we_weight": 300.0, "initial_qty_fraction": 400.0}},
+                        "trailing_martingale": {"entry": {"threshold_exposure_ratio_coefficient": 300.0, "initial_qty_fraction": 400.0}},
                     },
                 },
             },
@@ -2277,13 +2277,13 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.0, "threshold_we_weight": 2.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.0, "threshold_exposure_ratio_coefficient": 2.0}},
                     },
                     "hsl": {"memory_ema_span_minutes": 60.0},
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.0, "threshold_we_weight": 4.0}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.0, "threshold_exposure_ratio_coefficient": 4.0}},
                     },
                     "hsl": {"drawdown_threshold_fraction": 0.22},
                 },
@@ -2313,12 +2313,12 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.5, "threshold_we_weight": 2.5}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 1.5, "threshold_exposure_ratio_coefficient": 2.5}},
                     },
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.5, "threshold_we_weight": 4.5}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 3.5, "threshold_exposure_ratio_coefficient": 4.5}},
                     },
                 },
             },
@@ -2327,7 +2327,7 @@ class TestConfigToIndividual:
         key_paths = [
             (
                 "long_entry_threshold_we_weight",
-                ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_we_weight"),
+                ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_exposure_ratio_coefficient"),
             ),
             (
                 "long_entry_initial_qty_pct",
@@ -2335,7 +2335,7 @@ class TestConfigToIndividual:
             ),
             (
                 "short_entry_threshold_we_weight",
-                ("bot", "short", "strategy", "trailing_martingale", "entry", "threshold_we_weight"),
+                ("bot", "short", "strategy", "trailing_martingale", "entry", "threshold_exposure_ratio_coefficient"),
             ),
             (
                 "short_entry_initial_qty_pct",
@@ -2360,7 +2360,7 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_we_weight": 0.75}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.25, "threshold_exposure_ratio_coefficient": 0.75}},
                     },
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                 },
@@ -2384,7 +2384,7 @@ class TestConfigToIndividual:
                         "bot": {
                             "long": {
                                 "strategy": {
-                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}},
+                                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2}},
                                 },
                                 "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
                             },
@@ -2618,7 +2618,7 @@ class TestApplyPolishBounds:
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_fraction": [0.01, 0.1, 0.001]},
-                                "close": {"threshold_we_weight": [-1.0, 1.0]},
+                                "close": {"threshold_exposure_ratio_coefficient": [-1.0, 1.0]},
                             }
                         }
                     }
@@ -2629,7 +2629,7 @@ class TestApplyPolishBounds:
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.05},
-                            "close": {"threshold_we_weight": -0.0796},
+                            "close": {"threshold_exposure_ratio_coefficient": -0.0796},
                         }
                     }
                 },
@@ -2645,7 +2645,7 @@ class TestApplyPolishBounds:
         assert long_tm_bounds["entry"]["threshold_base_fraction"] == pytest.approx(
             [0.04, 0.06, 0.001]
         )
-        assert long_tm_bounds["close"]["threshold_we_weight"] == pytest.approx(
+        assert long_tm_bounds["close"]["threshold_exposure_ratio_coefficient"] == pytest.approx(
             [-0.09552, -0.06368]
         )
 
@@ -2665,7 +2665,7 @@ class TestApplyPolishBounds:
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.05},
-                            "close": {"threshold_we_weight": -0.0796},
+                            "close": {"threshold_exposure_ratio_coefficient": -0.0796},
                         }
                     }
                 },
@@ -2698,7 +2698,7 @@ class TestApplyPolishBounds:
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.05},
-                            "close": {"threshold_we_weight": -0.07},
+                            "close": {"threshold_exposure_ratio_coefficient": -0.07},
                         }
                     }
                 },
@@ -2790,7 +2790,7 @@ class TestApplyPolishBounds:
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.05},
-                            "close": {"threshold_we_weight": -0.07},
+                            "close": {"threshold_exposure_ratio_coefficient": -0.07},
                         }
                     }
                 },
@@ -2822,7 +2822,7 @@ class TestApplyPolishBounds:
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.05},
-                            "close": {"threshold_we_weight": -0.07},
+                            "close": {"threshold_exposure_ratio_coefficient": -0.07},
                         }
                     }
                 },
@@ -2948,7 +2948,7 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.5, "threshold_we_weight": 0.7}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.5, "threshold_exposure_ratio_coefficient": 0.7}},
                     },
                 },
             },
@@ -3171,12 +3171,12 @@ class TestApplyFineTuneBounds:
                         "long_entry_threshold_we_weight": [0.0, 1.0],
                     },
                 ),
-                "fixed_params": ["bot.long.strategy.trailing_martingale.entry.threshold_we_weight"],
+                "fixed_params": ["bot.long.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient"],
             },
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.5, "threshold_we_weight": 0.7}},
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.5, "threshold_exposure_ratio_coefficient": 0.7}},
                     },
                 },
             },
@@ -3445,7 +3445,7 @@ class TestApplyFineTuneBounds:
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"initial_qty_fraction": 0.5, "threshold_we_weight": 0.7},
+                            "entry": {"initial_qty_fraction": 0.5, "threshold_exposure_ratio_coefficient": 0.7},
                             "close": {"qty_fraction": 0.9},
                         },
                     },
@@ -3481,7 +3481,7 @@ class TestApplyFineTuneBounds:
                     "hsl": {"enabled": True, "cooldown_after_red_minutes": 3.0},
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2},
+                            "entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2},
                             "close": {"qty_fraction": 0.3},
                         }
                     },
@@ -3506,7 +3506,7 @@ class TestApplyFineTuneBounds:
                             "trailing_martingale": {
                                 "entry": {
                                     "initial_qty_fraction": values[0],
-                                    "threshold_we_weight": values[1],
+                                    "threshold_exposure_ratio_coefficient": values[1],
                                 },
                                 "close": {"qty_fraction": values[2]},
                             }
@@ -3526,7 +3526,7 @@ class TestApplyFineTuneBounds:
         assert _flat_bounds(config)["long_entry_threshold_we_weight"] == [0.0, 1.0]
         assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_entry_initial_qty_pct"]
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(0.9)
-        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(1.0)
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["qty_fraction"] == pytest.approx(0.66)
         assert result["bot"]["long"]["hsl"]["enabled"] is True
         assert result["_optimizer_anchor"]["id"] == 1
@@ -3558,7 +3558,7 @@ class TestApplyFineTuneBounds:
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2}
+                            "entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2}
                         }
                     },
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
@@ -4051,15 +4051,15 @@ class TestConfigsToIndividuals:
         stale_seed["optimize"]["bounds"]["long"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["optimize"]["bounds"]["short"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"].pop(
-            "entry_double_down_factor"
+            "entry_qty_exposure_coefficient"
         )
         stale_seed["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"].pop(
-            "entry_double_down_factor"
+            "entry_qty_exposure_coefficient"
         )
         stale_seed["bot"]["long"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["bot"]["short"]["entry_cooldown"].pop("base_duration_minutes")
-        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
-        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_qty_exposure_coefficient")
+        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_qty_exposure_coefficient")
 
         result = configs_to_individuals(
             [stale_seed],

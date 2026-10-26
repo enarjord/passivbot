@@ -342,7 +342,7 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     for key in (
         "threshold_volatility_1h_weight",
         "threshold_volatility_1m_weight",
-        "threshold_we_weight",
+        "threshold_exposure_ratio_coefficient",
         "retracement_base_fraction",
     ):
         trailing_martingale["entry"].pop(key)
@@ -377,8 +377,8 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(
         default_strategy["entry"]["threshold_volatility_1m_weight"]
     )
-    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
-        default_strategy["entry"]["threshold_we_weight"]
+    assert long_strategy["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(
+        default_strategy["entry"]["threshold_exposure_ratio_coefficient"]
     )
     assert long_strategy["entry"]["retracement_base_fraction"] == pytest.approx(
         default_strategy["entry"]["retracement_base_fraction"]

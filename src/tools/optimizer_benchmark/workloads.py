@@ -13,6 +13,14 @@ VERSION = 2
 CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "backtest_completion_ratio"]
 
 
+def _is_distance_sensitivity(key):
+    return "weight" in key or key in {
+        "threshold_exposure_ratio_coefficient",
+        "retracement_exposure_ratio_coefficient",
+        "inventory_offset_exposure_coefficient",
+    }
+
+
 def harness_digest():
     result = hashlib.sha256()
     for path in sorted(Path(__file__).parent.glob("*.py")):
@@ -97,7 +105,7 @@ def apply_features(config, case, coins, markets, bars):
         if case.strategy == "trailing_martingale":
             for leg in ("entry", "close"):
                 for key in list(strategy[leg]):
-                    if "weight" in key:
+                    if _is_distance_sensitivity(key):
                         strategy[leg][key] = 0.0
                 strategy[leg]["retracement_base_fraction"] = 0.001 if f"{leg}_trailing" in flags else 0.0
             for flag, mode in (("gate_disabled", "disabled"), ("gate_all", "all"), ("gate_reentry", "reentry")):
@@ -106,14 +114,14 @@ def apply_features(config, case, coins, markets, bars):
             if "volatility" in flags:
                 for leg in ("entry", "close"):
                     for key in strategy[leg]:
-                        if "volatility" in key and "weight" in key:
+                        if "volatility" in key and _is_distance_sensitivity(key):
                             strategy[leg][key] = 0.1
             if "exposure_weight" in flags:
-                strategy["entry"]["threshold_we_weight"] = 0.01
-                strategy["close"]["threshold_we_weight"] = -0.01
+                strategy["entry"]["threshold_exposure_ratio_coefficient"] = 0.01
+                strategy["close"]["threshold_exposure_ratio_coefficient"] = -0.01
         elif case.strategy == "ema_anchor":
             for key in strategy:
-                if "weight" in key:
+                if _is_distance_sensitivity(key):
                     strategy[key] = 0.1 if "volatility" in flags else 0.0
     if "overrides" in flags:
         config["coin_overrides"] = {coins[0]: {"bot": {side: {"entry_cooldown": {"base_duration_minutes": 3.0},
@@ -159,7 +167,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
         # Preserve the class: policies are fixed; zero weights/retracements stay zero.
         if value is None or isinstance(value, bool):
             continue
-        if path[-1] == "max_positions" or value == 0.0 and ("weight" in path[-1] or "retracement" in path[-1]):
+        if path[-1] == "max_positions" or value == 0.0 and (_is_distance_sensitivity(path[-1]) or "retracement" in path[-1]):
             enabled = False
         if path[-1] == "memory_ema_span_minutes" and bounds_config is None:
             enabled = False
@@ -175,7 +183,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
                      "cooldown_after_red_minutes": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))
-        elif value != 0 and ("weight" in path[-1] or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:
+        elif value != 0 and (_is_distance_sensitivity(path[-1]) or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:
             bound = Bound(float(value), float(value))
         specs.append((key, path, bound))
     bounds = [item[2] for item in specs]

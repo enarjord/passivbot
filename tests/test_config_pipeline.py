@@ -617,17 +617,17 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
         "base_qty_fraction": 0.02,
         "ema_span_0_minutes": 55.0,
         "ema_span_1_minutes": 144.0,
-        "entry_double_down_factor": 0.8,
+        "entry_qty_exposure_coefficient": 0.8,
         "offset_fraction": 0.003,
-        "offset_psize_weight": 0.2,
+        "inventory_offset_exposure_coefficient": 0.2,
     }
     source["bot"]["short"]["strategy"]["ema_anchor"] = {
         "base_qty_fraction": 0.03,
         "ema_span_0_minutes": 34.0,
         "ema_span_1_minutes": 89.0,
-        "entry_double_down_factor": 0.4,
+        "entry_qty_exposure_coefficient": 0.4,
         "offset_fraction": 0.004,
-        "offset_psize_weight": 0.1,
+        "inventory_offset_exposure_coefficient": 0.1,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -637,11 +637,11 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     assert prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")[
-        "entry_double_down_factor"
+        "entry_qty_exposure_coefficient"
     ] == pytest.approx(0.8)
     assert _strategy_side(prepared, "short")["offset_fraction"] == pytest.approx(0.004)
     assert _strategy_side(prepared, "short")[
-        "entry_double_down_factor"
+        "entry_qty_exposure_coefficient"
     ] == pytest.approx(0.4)
     assert "base_qty_pct" not in compiled["bot"]["long"]
     assert "offset" not in compiled["bot"]["short"]
@@ -660,7 +660,7 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
     assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.01)
     assert _strategy_side(prepared, "long")["ema_span_0_minutes"] == pytest.approx(200.0)
     assert _strategy_side(prepared, "long")[
-        "entry_double_down_factor"
+        "entry_qty_exposure_coefficient"
     ] == pytest.approx(0.0)
     assert _strategy_side(prepared, "short")["offset_fraction"] == pytest.approx(0.002)
     assert "base_qty_pct" not in prepared["bot"]["long"]
@@ -1306,7 +1306,7 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     for key in (
         "threshold_volatility_1h_weight",
         "threshold_volatility_1m_weight",
-        "threshold_we_weight",
+        "threshold_exposure_ratio_coefficient",
     ):
         trailing_martingale["entry"].pop(key)
     risk["total_exposure_enforcer"].pop("policy")
@@ -1335,8 +1335,8 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(
         template_strategy["entry"]["threshold_volatility_1m_weight"]
     )
-    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
-        template_strategy["entry"]["threshold_we_weight"]
+    assert long_strategy["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(
+        template_strategy["entry"]["threshold_exposure_ratio_coefficient"]
     )
     assert long_risk['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(
         template_risk['total_exposure_enforcer']['threshold_ratio']

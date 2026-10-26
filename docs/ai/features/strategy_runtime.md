@@ -376,7 +376,7 @@ Close orders are computed recursively when the close threshold depends on wallet
 4. Recompute wallet-exposure ratio.
 5. Repeat until the position is exhausted or the ladder is complete.
 
-If `close.retracement_base_fraction <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+If `close.retracement_base_fraction <= 0.0` and `close.threshold_exposure_ratio_coefficient == 0.0`, recursive closes all
 have the same price. Rust intentionally emits one full-position close in that case; `close.qty_fraction`
 is effectively moot because multiple same-price slices would be redundant.
 

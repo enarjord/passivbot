@@ -130,8 +130,8 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
             ema_span_0=2,
             ema_span_1=3,
             offset=0.01,
-            offset_psize_weight=0,
-            entry_double_down_factor=0.1,
+            inventory_offset_exposure_coefficient=0,
+            entry_qty_exposure_coefficient=0.1,
             offset_volatility_1h_weight=0,
             offset_volatility_1m_weight=0,
         )
@@ -201,7 +201,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
                 offset=0,
                 ema_span_0=2,
                 ema_span_1=3,
-                entry_double_down_factor=0,
+                entry_qty_exposure_coefficient=0,
             )
     cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in ("BTC", "ETH"):
@@ -440,7 +440,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         if strategy == "ema_anchor":
             bot["strategy"][strategy].update(
                 base_qty_pct=0.1, offset=0.05, ema_span_0=2, ema_span_1=3,
-                entry_double_down_factor=0,
+                entry_qty_exposure_coefficient=0,
             )
         else:
             bot["strategy"][strategy]["entry"].update(
@@ -560,7 +560,7 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
     candles[:, :, 0] = candles[:, :, 2] * 1.001
     candles[:, :, 1] = candles[:, :, 2] * 0.999
     cfg["bot"][side]["strategy"]["ema_anchor"].update(
-        ema_span_0=2, ema_span_1=3, offset=0.01, offset_psize_weight=0,
+        ema_span_0=2, ema_span_1=3, offset=0.01, inventory_offset_exposure_coefficient=0,
         offset_volatility_1h_weight=0, offset_volatility_1m_weight=0,
     )
     cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {

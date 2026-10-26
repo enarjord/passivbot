@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
+  `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses
+  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds,
+  formulas, and native optimizer identifiers are unchanged. Explicit v8 conversion emits the
+  new names; earlier development-v9 spellings are unsupported.
+
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
   `drawdown_fraction_ema_span_minutes`, the loss gate uses `max_drawdown_fraction`, and wallet
   exposure limits use `_ratio` names. Defaults, numeric values, bounds, and native execution

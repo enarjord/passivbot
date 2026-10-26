@@ -2993,7 +2993,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
                     "ema_span_0": 2.0,
                     "ema_span_1": 3.0,
                     "offset": 0.1,
-                    "offset_psize_weight": 0.0,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 }
             )
         else:
@@ -3002,7 +3002,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
             strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
-            strategy["entry"]["double_down_factor"] = 0.0
+            strategy["entry"]["reentry_qty_multiplier"] = 0.0
             strategy["close"]["threshold_base_pct"] = 0.5
 
     # Exercise the canonical pre-fill BTC replay before the delayed entry.
@@ -3184,7 +3184,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
                     "ema_span_0": 2.0,
                     "ema_span_1": 3.0,
                     "offset": 0.1,
-                    "offset_psize_weight": 0.0,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 }
             )
         else:
@@ -3193,7 +3193,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
-            strategy["entry"]["double_down_factor"] = 0.0
+            strategy["entry"]["reentry_qty_multiplier"] = 0.0
             strategy["close"]["threshold_base_pct"] = 0.5
 
     proxy = SharedAccountReplay(
@@ -4085,9 +4085,9 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
                     "base_qty_pct": 1.0,
                     "ema_span_0": 2.0,
                     "ema_span_1": 3.0,
-                    "entry_double_down_factor": 0.0,
+                    "entry_qty_exposure_coefficient": 0.0,
                     "offset": 0.1,
-                    "offset_psize_weight": 0.0,
+                    "inventory_offset_exposure_coefficient": 0.0,
                 }
             )
         else:
@@ -4096,7 +4096,7 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
             strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
-            strategy["entry"]["double_down_factor"] = 0.0
+            strategy["entry"]["reentry_qty_multiplier"] = 0.0
             strategy["close"]["threshold_base_pct"] = 0.5
     config["coin_overrides"] = {
         coin: {"live": {f"forced_mode_{side}": "normal" for side in enabled_sides}}

@@ -51,7 +51,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
         # Zero exposure slope makes duplicate recursive rungs one full close.
         # Its price is flat, so only the projected fee consumes the allowance.
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
-            qty_pct=1.0, threshold_base_pct=0.0, threshold_we_weight=0.0,
+            qty_pct=1.0, threshold_base_pct=0.0, threshold_exposure_ratio_coefficient=0.0,
             threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0,
             retracement_base_pct=0.0, retracement_volatility_1h_weight=0.0,
             retracement_volatility_1m_weight=0.0,
@@ -105,7 +105,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     for side in sides:
         config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': reducer == 'wel', 'threshold_ratio': 0.3}, 'total_exposure_enforcer': {'enabled': reducer == 'twel', 'threshold_ratio': 0.2, 'policy': 'reduce_portfolio'}})
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
-            qty_pct=0.1, threshold_base_pct=0.005, threshold_we_weight=slope,
+            qty_pct=0.1, threshold_base_pct=0.005, threshold_exposure_ratio_coefficient=slope,
         )
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,

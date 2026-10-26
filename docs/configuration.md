@@ -272,6 +272,17 @@ behavior.
   - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 
+### EMA-Anchor Exposure Coefficients
+
+`strategy.ema_anchor.entry_qty_exposure_coefficient` scales additional entry quantity by
+`max(1, 1 + same_side_exposure_ratio * coefficient)`. The ratio uses signed position exposure
+at the order-book midpoint divided by the effective per-position exposure limit. This sizing
+adjustment uses `max(0, signed_ratio)` for long and `max(0, -signed_ratio)` for short.
+
+`strategy.ema_anchor.inventory_offset_exposure_coefficient` multiplies that signed exposure
+ratio without the same-side clamp. The resulting price fraction is subtracted from both bid
+and ask EMA anchor factors. Exchange rounding, sizing floors, and exposure caps still apply.
+
 ### Trailing Martingale Entries
 
 The retained strategy kinds are `trailing_martingale` and `ema_anchor`.
@@ -280,24 +291,24 @@ acts as recursive DCA spacing; with retracement enabled it is the required excur
 confirmation. The v7 strategy and its dedicated migration command have been removed.
 Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 
-- **strategy.trailing_martingale.entry.double_down_factor**:
-  - Quantity of the next re-entry is position size times the double down factor.
-  - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
+- **strategy.trailing_martingale.entry.reentry_qty_multiplier**:
+  - Additional re-entry quantity starts from absolute current position size times this multiplier, before minimum/initial sizing floors, exchange rounding, and exposure caps.
+  - Example: Absolute position size `1.4` and multiplier `0.9` give `1.4 * 0.9 = 1.26` before those safeguards; multiplier `1.0` adds the current position quantity.
 - **strategy.trailing_martingale.entry.threshold_base_fraction**:
   - Re-entry threshold from the current position price.
   - If entry retracement is disabled:
     - `next_reentry_price_long = pos_price * (1 - effective_threshold)`
     - `next_reentry_price_short = pos_price * (1 + effective_threshold)`
   - If entry retracement is enabled, price must first move at least this far in the favorable direction before the retracement condition may place an order.
-- **strategy.trailing_martingale.entry.threshold_we_weight**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
   - Entry threshold is widened multiplicatively:
-    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
+    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_exposure_ratio_coefficient + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
   - `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
   - Positive weights make entries less eager as exposure or volatility rises.
 - **strategy.trailing_martingale.entry.retracement_base_fraction**:
   - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
-- **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
+- **strategy.trailing_martingale.entry.retracement_exposure_ratio_coefficient**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
 - **strategy.trailing_martingale.volatility_ema_span_1h_candles**, **volatility_ema_span_minutes**:
   - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
@@ -334,9 +345,9 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
     - `close_price_long = pos_price * (1 + effective_threshold)`
     - `close_price_short = pos_price * (1 - effective_threshold)`
   - With retracement enabled, this is the first trailing condition: market price must first reach the threshold before retracement can trigger the close.
-- **strategy.trailing_martingale.close.threshold_we_weight**:
+- **strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient**:
   - Close threshold is adjusted additively by exposure:
-    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
+    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_exposure_ratio_coefficient + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
   - Negative values make closes more eager as position exposure grows, including break-even or negative-markup closes.
   - Positive values make closes less eager as exposure grows.
 - **strategy.trailing_martingale.close.threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
@@ -418,12 +429,12 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       ```
       [
         entry.ema_span_0_minutes, entry.ema_span_1_minutes, volatility_ema_span_1h_candles, volatility_ema_span_minutes,
-        entry.double_down_factor, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
-        entry.threshold_base_fraction, entry.threshold_we_weight,
+        entry.reentry_qty_multiplier, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
+        entry.threshold_base_fraction, entry.threshold_exposure_ratio_coefficient,
         entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
-        entry.retracement_base_fraction, entry.retracement_we_weight,
+        entry.retracement_base_fraction, entry.retracement_exposure_ratio_coefficient,
         entry.retracement_volatility_1h_weight, entry.retracement_volatility_1m_weight,
-        close.qty_fraction, close.threshold_base_fraction, close.threshold_we_weight,
+        close.qty_fraction, close.threshold_base_fraction, close.threshold_exposure_ratio_coefficient,
         close.threshold_volatility_1h_weight, close.threshold_volatility_1m_weight,
         close.retracement_base_fraction,
         close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
