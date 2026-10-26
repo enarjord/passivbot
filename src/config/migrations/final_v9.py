@@ -556,7 +556,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from config.public_names import rewrite_released_public_names
 
     result = deepcopy(source)
-    from .released_v8_strategy import released_strategy_kind
+    from .released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES, released_strategy_kind
 
     released_kind = released_strategy_kind(
         result, default=None if sparse else "trailing_martingale"
@@ -873,6 +873,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         result, verbose=False,
         strategy_defaults={side: released["bot"][side]["strategy"][kind]
                            for side in ("long", "short")},
+        scenario_strategy_paths={
+            key: RELEASED_V8_STRATEGY_PATH_RENAMES[kind][
+                ("entry", key) if kind == "trailing_martingale" else (key,)
+            ]
+            for key in ("ema_span_0", "ema_span_1")
+        },
     )
     move_operational_live(result, record=record)
     from .control_sentinels import migrate_control_sentinels
