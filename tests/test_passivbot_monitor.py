@@ -6640,12 +6640,12 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             self._coin_bot_values = {
                 ("long", "forager_score_weights"): {
                     "volume": 1.0,
-                    "volatility": 0.5,
+                    "log_range": 0.5,
                     "ema_readiness": 0.25,
                 },
                 ("short", "forager_score_weights"): {
                     "volume": 1.0,
-                    "volatility": 0.5,
+                    "log_range": 0.5,
                     "ema_readiness": 0.25,
                 },
                 ("long", "wallet_exposure_limit_ratio"): 0.2,
