@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
+  signed fee override fractions, and the starting-balance equity floor fraction. Warmup
+  now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
+  backtest/activation still uses `span * r`, with fractional-minute caps preserved.
+  Released-v8 migration emits the final names without rescaling values.
+
 - Make optimizer prefilter assumptions explicit with `exposure_probe_fractions`,
   `adverse_directionality_score` and log-range EMA inputs. Geometry checks use `_fraction`
   metric names; measurements, rule arithmetic and the native probe protocol are unchanged.

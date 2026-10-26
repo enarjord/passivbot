@@ -32,7 +32,7 @@ def test_compute_live_warmup_windows_forager_toggle():
         symbols_by_side,
         bp,
         forager_enabled={"long": True, "short": False},
-        warmup_ratio=0.5,
+        activation_span_fraction=0.5,
     )
 
     assert wins["BTC"] == 3000
@@ -90,7 +90,7 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
         forager_enabled={"long": True},
         strategy_lookup=strategy,
         forager_lookup=forager,
-        warmup_ratio=0.3,
+        activation_span_fraction=0.3,
     )
 
     assert wins["HYPE"] == 988
@@ -254,7 +254,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
             bot, side, symbol, mode
         ),
         forager_enabled={pside: True},
-        warmup_ratio=0.0,
+        activation_span_fraction=0.0,
         span_buffer=1.0,
     )
     assert windows["FLAT"] == 20

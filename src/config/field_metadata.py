@@ -55,6 +55,7 @@ def enrich_fields(fields):
         elif path[:1] == ("backtest",):
             data["consumers"] = ("backtest", "optimize")
             data.update(_operational_fraction_metadata(path))
+            data.update(_backtest_quantity_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
             if path[:2] == ("optimize", "prefilter"):
@@ -143,6 +144,25 @@ def _operational_fraction_metadata(path):
     return {}
 
 
+def _backtest_quantity_metadata(path):
+    name = path[-1]
+    if name == "btc_collateral_target_ratio":
+        return dict(unit="ratio", denominator="account equity",
+                    description="Target BTC collateral value / equity; values above one retain leveraged BTC collateral and negative USD balances.")
+    if name == "max_usd_debt_to_equity_ratio":
+        return dict(unit="ratio", denominator="account equity",
+                    description="Optional USD debt / equity ceiling when topping up BTC collateral; Null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.")
+    if name in {"maker_fee_override_fraction", "taker_fee_override_fraction"}:
+        return dict(unit="fraction", denominator="absolute fill quote notional",
+                    domain=FieldDomain(finite=True),
+                    description="Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.")
+    if name == "equity_floor_fraction":
+        return dict(unit="fraction", denominator="starting balance",
+                    domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_maximum=True, finite=True),
+                    description="Early-stop floor: equity at or below this fraction of starting balance ends replay.")
+    return {}
+
+
 def _bot_metadata(path):
     if path in {("bot", owner, "enabled") for owner in ("long", "short")}:
         return dict(description=(
@@ -212,11 +232,13 @@ def _bot_metadata(path):
     elif local == "forager.score_hysteresis_margin":
         data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")
-    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction"}:
-        denominators = {"warmup.span_multiplier": "indicator span",
+    elif local in {"warmup.activation_span_fraction", "execution.market_order_near_touch_fraction"}:
+        denominators = {"warmup.activation_span_fraction": "indicator span",
                         "execution.market_order_near_touch_fraction": "market price"}
-        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
+        data.update(unit="fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
+        if local == "warmup.activation_span_fraction":
+            data["description"] = "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements."
     elif local == "warmup.max_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                     description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")

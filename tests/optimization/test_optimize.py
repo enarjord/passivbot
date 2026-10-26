@@ -870,7 +870,7 @@ def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "pymoo"
     config['bot']["portfolio"]['strategy_kind'] = "trailing_grid_v7"
-    config["backtest"]["btc_collateral_cap"] = 1.0
+    config["backtest"]["btc_collateral_target_ratio"] = 1.0
 
     original_import = builtins.__import__
 
@@ -930,12 +930,12 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
-        "backtest.btc_collateral_cap": 0.5,
+        "backtest.btc_collateral_target_ratio": 0.5,
     }
 
     with pytest.raises(
         ValueError,
-        match=r"btc_collateral_cap=0.*CPU",
+        match=r"btc_collateral_target_ratio=0.*CPU",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
@@ -4498,7 +4498,7 @@ class TestEvaluator:
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
         mock_config["optimize"]["limits"] = [
             {
@@ -4526,7 +4526,7 @@ class TestEvaluator:
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_btc"]
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
@@ -4555,7 +4555,7 @@ class TestEvaluator:
             evaluator.limit_checks,
         )
 
-        mock_config["backtest"]["btc_collateral_cap"] = 1.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 1.0
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
             hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config

@@ -52,7 +52,7 @@ def _make_optimizer_config() -> dict:
     config = get_template_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.3
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.3
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
     config["backtest"]["exchanges"] = ["combined"]
@@ -298,7 +298,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
@@ -353,7 +353,7 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
     cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 2.5
@@ -372,7 +372,7 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {s: ["BTC", "ETH"] for s in ("long", "short")})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     cfg["optimize"]["bounds"] = {}
@@ -412,7 +412,7 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]} if dataset_known else {}
     cfg["optimize"]["bounds"] = {}
@@ -457,7 +457,7 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': [coin], 'short': [coin]})
     cfg["backtest"]["coins"] = {"binance": [coin]}
     cfg["optimize"]["bounds"] = {}
@@ -500,7 +500,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': ['BTC', 'ETH']})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
     cfg["optimize"]["bounds"] = {}
@@ -542,7 +542,7 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     cfg = get_template_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
     cfg["optimize"]["bounds"] = {}

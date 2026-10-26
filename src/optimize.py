@@ -624,12 +624,12 @@ def _optimizer_can_skip_btc_analysis(
     limit_checks: Sequence[Dict[str, Any]],
 ) -> bool:
     try:
-        btc_collateral_cap = float(
-            get_optional_config_value(config, "backtest.btc_collateral_cap", 0.0) or 0.0
+        btc_collateral_target_ratio = float(
+            get_optional_config_value(config, "backtest.btc_collateral_target_ratio", 0.0) or 0.0
         )
     except (TypeError, ValueError):
         return False
-    if btc_collateral_cap > 0.0:
+    if btc_collateral_target_ratio > 0.0:
         return False
     if any(
         _metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs
@@ -837,8 +837,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     backtest_keys = {
         "reducer",
         "balance_sample_divider",
-        "btc_collateral_cap",
-        "btc_collateral_ltv_cap",
+        "btc_collateral_target_ratio",
+        "max_usd_debt_to_equity_ratio",
         "candle_interval_minutes",
         "coins",
         "coin_sources",
@@ -849,8 +849,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "filter_by_min_effective_cost",
         "gap_tolerance_ohlcvs_minutes",
         "hlcvs_data_override_mode",
-        "equity_floor_ratio",
-        "maker_fee_override",
+        "equity_floor_fraction",
+        "maker_fee_override_fraction",
         "market_order_slippage_fraction",
         "limit_order_fill_buffer_fraction",
         "market_settings",
@@ -861,7 +861,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "start_date",
         "starting_balance",
         "suite_enabled",
-        "taker_fee_override",
+        "taker_fee_override_fraction",
         "volume_normalization",
     }
     old_bt_compare = _resume_subset(old_bt, backtest_keys)

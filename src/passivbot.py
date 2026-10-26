@@ -770,7 +770,7 @@ def compute_live_warmup_windows(
     strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
-    warmup_ratio: float = 0.0,
+    activation_span_fraction: float = 0.0,
     max_warmup_minutes: Optional[float] = None,
     span_buffer: Optional[float] = None,
     large_span_threshold: int = 2 * 24 * 60,
@@ -794,7 +794,7 @@ def compute_live_warmup_windows(
 
     if span_buffer is None:
         try:
-            ratio = float(warmup_ratio)
+            ratio = float(activation_span_fraction)
         except Exception:
             ratio = 0.0
         span_buffer = 1.0 + max(0.0, ratio)
@@ -4817,14 +4817,14 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         # Determine window per symbol based on actual EMA needs (lazy & frugal).
-        # Fetch max-span * (1 + warmup_ratio) to give EMAs enough runway without overfetching.
+        # Fetch max-span * (1 + activation_span_fraction) to give EMAs enough runway without overfetching.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         large_span_threshold = (
             2 * 24 * 60
@@ -4846,7 +4846,7 @@ class Passivbot:
                     self, pside, key, sym
                 ),
                 window_candles=window_candles,
-                warmup_ratio=warmup_ratio,
+                activation_span_fraction=activation_span_fraction,
                 max_warmup_minutes=max_warmup_minutes,
                 large_span_threshold=large_span_threshold,
             )
@@ -4883,13 +4883,13 @@ class Passivbot:
                 f"[warmup] {context}: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             try:
-                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
+                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + activation_span_fraction))))
             except Exception:
                 longest_span = wmax
             logging.debug(
-                "[warmup] target | longest_span=%dm span_multiplier=%.3g max_minutes=%s",
+                "[warmup] target | longest_span=%dm activation_span_fraction=%.3g max_minutes=%s",
                 int(longest_span),
-                float(warmup_ratio),
+                float(activation_span_fraction),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
             )
             try:
@@ -5475,11 +5475,11 @@ class Passivbot:
         }
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5496,7 +5496,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
 
@@ -5633,11 +5633,11 @@ class Passivbot:
             return {}
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -5654,7 +5654,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         windows: Dict[str, Dict[str, int]] = {}
@@ -10156,13 +10156,13 @@ class Passivbot:
             context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         max_span = max(span_volume, span_volatility)
         window_candles = (
             max(1, int(math.ceil(max_span * span_buffer))) if max_span > 0 else 1
@@ -19034,11 +19034,11 @@ class Passivbot:
             return
 
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0) or 0.0
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0) or 0.0
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
@@ -19054,7 +19054,7 @@ class Passivbot:
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
-            warmup_ratio=warmup_ratio,
+            activation_span_fraction=activation_span_fraction,
             max_warmup_minutes=max_warmup_minutes,
         )
         try:
@@ -19835,13 +19835,13 @@ class Passivbot:
             context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
         )
         try:
-            warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
+            activation_span_fraction = float(
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
             )
         except Exception:
-            warmup_ratio = 0.0
+            activation_span_fraction = 0.0
         max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        span_buffer = 1.0 + max(0.0, activation_span_fraction)
         window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
         if max_warmup_minutes > 0:
             window_candles = min(int(window_candles), int(max_warmup_minutes))

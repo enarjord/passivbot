@@ -10,6 +10,13 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 
 PUBLIC_PATH_RENAMES = {
+    ("backtest", "btc_collateral_cap"): ("backtest", "btc_collateral_target_ratio"),
+    ("backtest", "btc_collateral_ltv_cap"): ("backtest", "max_usd_debt_to_equity_ratio"),
+    ("backtest", "maker_fee_override"): ("backtest", "maker_fee_override_fraction"),
+    ("backtest", "taker_fee_override"): ("backtest", "taker_fee_override_fraction"),
+    ("backtest", "equity_floor_ratio"): ("backtest", "equity_floor_fraction"),
+    ("bot", "portfolio", "warmup", "span_multiplier"): ("bot", "portfolio", "warmup", "activation_span_fraction"),
+
     ("optimize", "pymoo", "shared", "crossover_eta"): ("optimize", "pymoo", "shared", "crossover_distribution_index"),
     ("optimize", "pymoo", "shared", "crossover_prob_var"): ("optimize", "pymoo", "shared", "crossover_probability_per_variable"),
     ("optimize", "pymoo", "shared", "mutation_eta"): ("optimize", "pymoo", "shared", "mutation_distribution_index"),
