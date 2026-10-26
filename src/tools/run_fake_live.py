@@ -11,6 +11,7 @@ import sys
 import weakref
 from types import MethodType
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -515,6 +516,106 @@ class _FakeHslFactClocks:
         return row[1][observed_utc]
 
 
+@dataclass(frozen=True)
+class _FakeOrdinaryExecutionReceipt:
+    generation: int
+    pending: bool
+    progress: bool
+
+
+def _fake_account_generation(bot):
+    # The production planner/owner use generation zero until the first external
+    # account invalidation. This counter is deliberately initialized lazily.
+    return int(getattr(bot, "_account_invalidation_generation", 0) or 0)
+
+
+def _fake_ordinary_execution_pending(bot):
+    receipt = getattr(bot, "_fake_ordinary_execution_receipt", None)
+    return receipt is not None and (
+        receipt.pending or receipt.generation != _fake_account_generation(bot)
+    )
+
+
+def _install_fake_ordinary_execution_receipts(bot) -> None:
+    """Observe real execution progress without retaining an executable plan."""
+    from contextvars import ContextVar
+    from live.executor import DeferredOrderCreation, DeferredOrderCancellation
+
+    receipt_context = ContextVar("fake_ordinary_execution_receipt", default=None)
+    bot._fake_ordinary_execution_receipt = None
+    execute_plan = bot.execute_order_plan_to_exchange
+    request_confirmation = bot._request_authoritative_confirmation
+
+    def record_progress():
+        scope = receipt_context.get()
+        if scope is not None and scope["active"]:
+            scope["progress"] = True
+            # A caught availability error can return from Owner.cycle. Record
+            # new debt immediately, even if this plan subsequently raises.
+            bot._fake_ordinary_execution_receipt = _FakeOrdinaryExecutionReceipt(
+                scope["generation"], pending=True, progress=True
+            )
+
+    def observed_confirmation(surfaces, *, min_epoch=None):
+        result = request_confirmation(surfaces, min_epoch=min_epoch)
+        scope = receipt_context.get()
+        if scope is not None and scope["active"]:
+            requested = {surfaces} if isinstance(surfaces, str) else set(surfaces)
+            account = requested & {"balance", "positions", "open_orders"}
+            if account:
+                ledger = bot._ensure_freshness_ledger()
+                if any(bot._authoritative_pending_confirmations[surface]
+                       > ledger.surfaces[surface].epoch for surface in account):
+                    record_progress()
+        return result
+
+    bot._request_authoritative_confirmation = observed_confirmation
+
+    def observe(operation, deferred_type):
+        async def execute(orders):
+            result = await operation(orders)
+            if any(isinstance(item, deferred_type) for item in result):
+                record_progress()
+            return result
+
+        return execute
+
+    bot.execute_orders = observe(bot.execute_orders, DeferredOrderCreation)
+    bot.execute_cancellations = observe(bot.execute_cancellations, DeferredOrderCancellation)
+
+    async def execute_ordinary_plan(cancels, creates, *, configure_creations=True):
+        # Protection uses a separate scope and cannot supersede ordinary debt.
+        scope = dict(
+            generation=bot._current_planning_snapshot.account_invalidation_generation,
+            progress=False, active=True,
+        ) if configure_creations else None
+        token = receipt_context.set(scope)
+        try:
+            result = await execute_plan(
+                cancels, creates, configure_creations=configure_creations
+            )
+            if scope is not None and not bot._shutdown_requested():
+                # Only a completed, currently accepted ordinary plan supersedes
+                # an earlier receipt. A fresh empty plan also retires old debt.
+                stale = scope["generation"] != _fake_account_generation(bot)
+                previous = bot._fake_ordinary_execution_receipt
+                bot._fake_ordinary_execution_receipt = _FakeOrdinaryExecutionReceipt(
+                    scope["generation"], pending=scope["progress"] or stale,
+                    progress=scope["progress"] or (
+                        stale and previous is not None and previous.progress
+                    ),
+                )
+            return result
+        finally:
+            if scope is not None:
+                # Spawned tasks can retain the context, but not extend a sealed
+                # plan or mutate its immutable published receipt.
+                scope["active"] = False
+            receipt_context.reset(token)
+
+    bot.execute_order_plan_to_exchange = execute_ordinary_plan
+
+
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
@@ -667,6 +768,7 @@ def _refuse_unsettled_fake_bar(result, summaries, snapshot_dir):
     reason = (
         "input_acquisition_pending" if result.get("input_acquisition_pending", False)
         else "confirmation_pending" if result.get("confirmation_pending", False)
+        else "ordinary_execution_pending" if result.get("ordinary_execution_pending", False)
         else None
     )
     if reason is None:
@@ -846,10 +948,12 @@ async def _run_fake_cycle_ready(bot):
     def raise_finished_failures(tasks):
         _raise_fake_input_failures(bot, instance, tasks)
 
-    # Settle fast fake reads/planning at one scenario timestamp. An outage
-    # remains pending after a bounded number of production passes; never
-    # await arbitrary ordinary work to completion before protection.
-    for attempt in range(8):
+    # Settle fast fake reads/planning at one scenario timestamp. Real ordinary
+    # execution progress earns one additional finite drain budget; arbitrary slow
+    # preparation retains the original bound. Every pass still runs protection.
+    initial_pass_budget, execution_pass_budget = 8, 8
+    execution_seen = False
+    for attempt in range(initial_pass_budget + execution_pass_budget):
         advance = getattr(bot, "_advance_fake_hsl_readiness", None)
         if advance is not None:
             advance(instance)
@@ -863,12 +967,14 @@ async def _run_fake_cycle_ready(bot):
         raise_finished_failures(input_tasks)
         inputs_consumed = all(task in completed_before for task in input_tasks)
         in_flight = any(not task.done() for task in input_tasks)
-        confirmation_pending = (
-            result["updated"] and _fake_confirmation_pending(bot, instance)
-        )
-        if ((not result["updated"] and not in_flight)
+        confirmation_pending = _fake_confirmation_pending(bot, instance)
+        ordinary_pending = _fake_ordinary_execution_pending(bot)
+        receipt = getattr(bot, "_fake_ordinary_execution_receipt", None)
+        execution_seen = execution_seen or (receipt is not None and receipt.progress)
+        if not ordinary_pending and not confirmation_pending and (
+                (not result["updated"] and not in_flight)
                 or (result["updated"] and result["ordinary_executed"]
-                    and inputs_consumed and not confirmation_pending)):
+                    and inputs_consumed)):
             return dict(result, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
@@ -886,12 +992,13 @@ async def _run_fake_cycle_ready(bot):
         # deciding whether the final pass may advance the fake market clock.
         input_tasks = inputs()
         raise_finished_failures(input_tasks)
+        if attempt + 1 == initial_pass_budget and not execution_seen:
+            break
     return dict(
-        result, engine="hsl", passes=8, preparation_pending=True,
+        result, engine="hsl", passes=attempt + 1, preparation_pending=True,
         input_acquisition_pending=any(not task.done() for task in input_tasks),
-        confirmation_pending=(
-            result["updated"] and _fake_confirmation_pending(bot, instance)
-        ),
+        confirmation_pending=_fake_confirmation_pending(bot, instance),
+        ordinary_execution_pending=_fake_ordinary_execution_pending(bot),
     )
 
 
@@ -1106,6 +1213,7 @@ async def _run_fake_case(
         bot.debug_mode = True
         if not isinstance(bot.cca, FakeCCXTClient):
             raise TypeError("Fake harness expected bot.cca to be FakeCCXTClient")
+        _install_fake_ordinary_execution_receipts(bot)
         live_event_sink, restore_live_event_capture = _install_live_event_capture(bot)
         candle_remote_fetches, restore_candle_trace = (
             _install_candle_remote_fetch_trace(bot)

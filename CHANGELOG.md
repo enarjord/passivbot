@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- The offline fake runner settles ordinary writes and typed create/cancel admission deferrals
+  through fresh current-account plans before advancing a market bar. It reports bounded exhaustion
+  explicitly; protective passes and live execution admission remain unchanged.
+
 - Preserve released-v8 flat strategy search bounds when unstuck EMA spans are omitted;
   convert frozen optimizer IDs before inferring the missing spans.
 
