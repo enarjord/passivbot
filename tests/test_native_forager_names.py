@@ -265,14 +265,20 @@ def test_released_unilateralness_duration_and_bounds_use_frozen_source_names(sha
     ]
 
 
-def test_fractional_unilateralness_span_keeps_derived_window_and_minute_admission():
-    import numpy as np
-    from optimization.gpu.model import adaptive_params, EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+def test_fractional_unilateralness_span_keeps_derived_window():
+    from optimization.gpu.model import adaptive_params
 
     derived = adaptive_params({"unilateralness_ema_span_minutes": 3.75})
     assert derived["unilateralness_ema_span_minutes"] == 3.75
     assert derived["unilateralness_window"] == 75
+
+
+def test_unilateralness_span_keeps_minute_admission():
+    pytest.importorskip("torch")
+    import numpy as np
+    from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+
     keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     values = np.ones((1, len(keys)), dtype=np.float64)
     with pytest.raises(ValueError, match="1m|one-minute|1-minute"):
