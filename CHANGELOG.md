@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
+  explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
+  stay unchanged; retired native names are not accepted as aliases.
+
 - Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
   public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
 

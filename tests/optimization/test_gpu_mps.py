@@ -2588,8 +2588,8 @@ _UNSTUCK_DISABLED_VALUES = {
 
 _HSL_DISABLED_VALUES = {
     "hsl_enabled": 0.0,
-    "hsl_red_threshold": 0.2,
-    "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+    "hsl_drawdown_threshold_fraction": 0.2,
+    "hsl_drawdown_fraction_ema_span_minutes": 60.0,
     'hsl_cooldown_ms_lo': 0.0,
     'hsl_memory_ema_span_minutes': 43200.0,
     "hsl_signal_mode": 0.0,
@@ -2625,7 +2625,7 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             minute_span_key: 120.0,
             hour_span_key: 24.0,
             "entry_cooldown_minutes": 2.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 450000.0,
         }
     )
@@ -2656,7 +2656,7 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             == 450000.0
         )
         assert scaled[0, offset + keys.index(hour_span_key)] == 24.0
-        hsl_span = scaled[0, offset + keys.index("hsl_drawdown_ratio_ema_span_minutes")]
+        hsl_span = scaled[0, offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")]
         alpha_1m = 2.0 / 61.0
         alpha_5m = 2.0 / (hsl_span + 1.0)
         assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
@@ -2669,7 +2669,7 @@ def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
         for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
     }
     side.update(_ADAPTIVE_DISABLED_VALUES)
-    side["hsl_drawdown_ratio_ema_span_minutes"] = span
+    side["hsl_drawdown_fraction_ema_span_minutes"] = span
     original = np.asarray(
         [[side[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS] * 2],
         dtype=np.float64,
@@ -2687,7 +2687,7 @@ def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
         offset = side_index * len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         effective_span = scaled[
             0,
-            offset + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_ratio_ema_span_minutes"),
+            offset + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_fraction_ema_span_minutes"),
         ]
         alpha_5m = 2.0 / (effective_span + 1.0)
         assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
@@ -2709,7 +2709,7 @@ def test_single_coin_interval_packing_preserves_one_minute_hsl_span_exactly():
         values[
             0,
             side_index * len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
-            + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_ratio_ema_span_minutes"),
+            + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_fraction_ema_span_minutes"),
         ] = 5.5
 
     scaled = _scale_directional_minute_parameters(
@@ -2748,7 +2748,7 @@ def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
             "forager_volume_ema_span_1m": 180.0,
             "forager_volatility_ema_span_1m": 240.0,
             "entry_cooldown_minutes": 15.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
         }
     )
@@ -2834,7 +2834,7 @@ def test_multicoin_tm_interval_packing_scales_forager_and_directional_spans():
             "forager_volume_ema_span_1m": 180.0,
             "forager_volatility_ema_span_1m": 240.0,
             "entry_cooldown_minutes": 15.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
         }
     )
@@ -3595,8 +3595,8 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
             ("unstuck_ema_span_1", 133.5),
             ("hsl_enabled", 1.0),
             ("hsl_signal_mode", 2.0),
-            ("hsl_red_threshold", 0.02),
-            ("hsl_drawdown_ratio_ema_span_minutes", 1.0),
+            ("hsl_drawdown_threshold_fraction", 0.02),
+            ("hsl_drawdown_fraction_ema_span_minutes", 1.0),
             ("hsl_cooldown_ms_lo", 3.0),
         ):
             row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
@@ -4257,8 +4257,8 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.9,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.9,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0,
@@ -4375,8 +4375,8 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
         fused_runner_cls = MpsTrailingMartingaleMulticoinFusedRunner
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.9,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.9,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0,
@@ -4450,8 +4450,8 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.01,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.01,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 120000.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 1.0,
@@ -5337,8 +5337,8 @@ def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0 if signal_mode == "portfolio" else 1.0,
@@ -5408,8 +5408,8 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5506,8 +5506,8 @@ def test_mps_multicoin_coin_hsl_override_controls_enablement(
     )
     for key, value in {
         "hsl_enabled": float(global_enabled),
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5563,8 +5563,8 @@ def test_mps_multicoin_coin_hsl_recovery_uses_total_exposure_contract(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5699,8 +5699,8 @@ def test_mps_multicoin_coin_hsl_reselects_around_blocked_forager_coin(
     for key, value in {
         "n_positions": 1.0,
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5756,8 +5756,8 @@ def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 1.0,
@@ -7961,7 +7961,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     def side_row(signal_mode):
         hsl = dict(_HSL_DISABLED_VALUES)
         hsl["hsl_enabled"] = 1.0
-        hsl["hsl_red_threshold"] = 0.9
+        hsl["hsl_drawdown_threshold_fraction"] = 0.9
         hsl["hsl_signal_mode"] = float(signal_mode)
         row = base + list(hsl.values()) + [2.0, 3.0] + list(_ADAPTIVE_DISABLED_VALUES.values()) + [43200.0, 43200.0]
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -8222,7 +8222,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
     metric_rows = []
-    red_threshold_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_red_threshold")
+    red_threshold_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_threshold_fraction")
     slow_span_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_memory_ema_span_minutes")
     for signal_mode in range(3):
         row = side_row(signal_mode) + side_row(signal_mode)
@@ -8622,7 +8622,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     def side_row(signal_mode):
         side_values = dict(values)
         side_values["hsl_enabled"] = 1.0
-        side_values["hsl_red_threshold"] = 0.9
+        side_values["hsl_drawdown_threshold_fraction"] = 0.9
         side_values["hsl_signal_mode"] = float(signal_mode)
         return [side_values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -8877,7 +8877,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     metric_rows = []
     red_threshold_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
-        "hsl_red_threshold"
+        "hsl_drawdown_threshold_fraction"
     )
     slow_span_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
         "hsl_memory_ema_span_minutes"
@@ -12208,8 +12208,8 @@ def test_multicoin_excess_allowance_changes_coin_hsl_signal(strategy_kind, side)
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,

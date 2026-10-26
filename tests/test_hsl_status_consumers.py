@@ -57,7 +57,7 @@ def test_current_scope_proximity_and_raw_pending_survive_reporting():
     assert pending["total"] == 1
     assert pending["pending"][0]["ema_gap_to_red_percent"] == 50.0
     shareable = report._shareable_hsl_status(status)
-    assert "red_threshold" not in shareable["closest_to_red"][0]
+    assert "drawdown_threshold_fraction" not in shareable["closest_to_red"][0]
     assert shareable["observations"][0]["omitted_scopes"] == 2
 
 

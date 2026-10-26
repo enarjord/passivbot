@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from config import prepare_config
 from config.hsl import generated_template
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from optimization.gpu.service import SharedAccountReplay
 from tools.synthetic_backtest_data import synthetic_hlcvs as _synthetic_hlcvs
 
@@ -33,7 +33,7 @@ def make_proxy(
     override_side="long",
     dispatch_budget=1000000,
 ):
-    config = generated_template(get_template_config(), mode)
+    config = generated_template(get_expanded_config_prototype(), mode)
     assert coin_count >= 1
     coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
     config['bot']["portfolio"]['strategy_kind'] = strategy
@@ -41,16 +41,18 @@ def make_proxy(
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     config["backtest"].update(
-        coins={"binance": coins}, starting_balance=1000.0, btc_collateral_target_ratio=0.0
+        starting_balance=1000.0, btc_collateral_target_ratio=0.0
     )
     for side in ("long", "short"):
+        config["bot"][side]["enabled"] = side in sides
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
         config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit_ratio': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
         config["bot"][side]["hsl"].update(
             enabled=enabled and mode != "portfolio",
             drawdown_threshold_fraction=0.02,
             drawdown_fraction_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
-            cooldown_minutes_after_red=5,
+            cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
         config["bot"]["portfolio"]["hsl"].update(
@@ -58,7 +60,7 @@ def make_proxy(
             drawdown_threshold_fraction=0.02,
             drawdown_fraction_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
-            cooldown_minutes_after_red=5,
+            cooldown_after_red_minutes=5,
         )
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = memory_span
     config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
@@ -159,9 +161,9 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
         proxy,
         [
             {
-                "long_hsl_red_threshold": 1e-6,
-                "short_hsl_red_threshold": 1e-6,
-                "hsl_red_threshold": 1e-6,
+                "long_hsl_drawdown_threshold_fraction": 1e-6,
+                "short_hsl_drawdown_threshold_fraction": 1e-6,
+                "hsl_drawdown_threshold_fraction": 1e-6,
             }
         ],
     )
@@ -174,9 +176,9 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_temporal_replay_and_scratch_batches(mode):
     candidates = [
-        {f"long_hsl_red_threshold": 1e-6, "hsl_red_threshold": 1e-6},
-        {"long_hsl_red_threshold": 0.002, "hsl_red_threshold": 0.002},
-        {"long_hsl_red_threshold": 0.006, "hsl_red_threshold": 0.006},
+        {f"long_hsl_drawdown_threshold_fraction": 1e-6, "hsl_drawdown_threshold_fraction": 1e-6},
+        {"long_hsl_drawdown_threshold_fraction": 0.002, "hsl_drawdown_threshold_fraction": 0.002},
+        {"long_hsl_drawdown_threshold_fraction": 0.006, "hsl_drawdown_threshold_fraction": 0.006},
     ]
     full = make_proxy(mode, sides=("long",))
     _, expected = raw(full, candidates)
@@ -199,9 +201,9 @@ def test_multicoin_candidates_do_not_share_history(strategy, mode):
     candidates = [
         {},
         {
-            "long_hsl_red_threshold": 1e-6,
-            "short_hsl_red_threshold": 1e-6,
-            "hsl_red_threshold": 1e-6,
+            "long_hsl_drawdown_threshold_fraction": 1e-6,
+            "short_hsl_drawdown_threshold_fraction": 1e-6,
+            "hsl_drawdown_threshold_fraction": 1e-6,
         },
     ]
     runner, first = raw(p, candidates)
@@ -223,9 +225,9 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
         p,
         [
             {
-                "long_hsl_red_threshold": 1e-6,
-                "short_hsl_red_threshold": 1e-6,
-                "hsl_red_threshold": 1e-6,
+                "long_hsl_drawdown_threshold_fraction": 1e-6,
+                "short_hsl_drawdown_threshold_fraction": 1e-6,
+                "hsl_drawdown_threshold_fraction": 1e-6,
             },
             {},
         ],
@@ -242,8 +244,8 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
 def test_multicoin_static_policy_does_not_replace_other_coin_base(strategy):
     p = make_proxy("coin", strategy, override={"enabled": False, "drawdown_threshold_fraction": 0.7})
     assert p.base_params["long"]["hsl_enabled"] == 1.0
-    assert p.base_params["long"]["hsl_red_threshold"] == pytest.approx(0.02)
-    _, r = raw(p, [{"long_hsl_red_threshold": 1e-6, "short_hsl_red_threshold": 1e-6}])
+    assert p.base_params["long"]["hsl_drawdown_threshold_fraction"] == pytest.approx(0.02)
+    _, r = raw(p, [{"long_hsl_drawdown_threshold_fraction": 1e-6, "short_hsl_drawdown_threshold_fraction": 1e-6}])
     assert r["alive"].all()
 
 
@@ -289,9 +291,9 @@ def test_metal_hsl_capacity_matches_full_arrays(strategy, mode, sides):
     candidates = [
         {},
         {
-            "long_hsl_red_threshold": 1e-6,
-            "short_hsl_red_threshold": 1e-6,
-            "hsl_red_threshold": 1e-6,
+            "long_hsl_drawdown_threshold_fraction": 1e-6,
+            "short_hsl_drawdown_threshold_fraction": 1e-6,
+            "hsl_drawdown_threshold_fraction": 1e-6,
         },
     ]
     small = make_proxy(mode, strategy, sides, coin_count=3)

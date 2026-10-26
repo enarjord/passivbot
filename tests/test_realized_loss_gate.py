@@ -1122,8 +1122,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         assert hs["portfolio"] is None
         expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
         for policy in expected:
-            policy["red_threshold"] = policy.pop("drawdown_threshold_fraction")
-            policy["drawdown_ratio_ema_span_minutes"] = policy.pop("drawdown_fraction_ema_span_minutes")
             policy["cooldown_minutes_after_red"] = policy.pop("cooldown_after_red_minutes")
         assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
@@ -1140,8 +1138,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         expected = {**policy, "scale_budget_with_excess_allowance": False}
-        expected["red_threshold"] = expected.pop("drawdown_threshold_fraction")
-        expected["drawdown_ratio_ema_span_minutes"] = expected.pop("drawdown_fraction_ema_span_minutes")
         expected["cooldown_minutes_after_red"] = expected.pop("cooldown_after_red_minutes")
         assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 

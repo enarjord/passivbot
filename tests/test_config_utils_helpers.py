@@ -1197,7 +1197,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert "n_positions" not in config["bot"]["long"]
     assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
     assert "unstuck_threshold" not in config["bot"]["long"]
-    assert "hsl_red_threshold" not in config["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in config["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
     assert "filter_volume_ema_span_1m" not in config["bot"]["long"]
     assert "long_filter_volume_ema_span_1m" not in config["optimize"]["bounds"]
@@ -1217,7 +1217,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["hsl_red_threshold"]
+        compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
         == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (

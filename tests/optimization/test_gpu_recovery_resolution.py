@@ -236,7 +236,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
 
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "512",
-        "--hsl", "portfolio", "--hsl-red-threshold", ".99",
+        "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".99",
     ]))
     if strategy == "trailing_martingale":
         # Keep factual activity below the retained estimate: this control isolates

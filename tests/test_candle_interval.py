@@ -232,10 +232,10 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
         timestamps,
     )
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][0][
-        "drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes"
     ] == pytest.approx(1.0)
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][1][
-        "drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes"
     ] == pytest.approx(1.0)
 
 

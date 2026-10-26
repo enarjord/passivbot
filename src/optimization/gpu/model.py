@@ -136,8 +136,8 @@ GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_e
 
 HSL_PARAM_KEYS = (
     "hsl_enabled",
-    "hsl_red_threshold",
-    "hsl_drawdown_ratio_ema_span_minutes",
+    "hsl_drawdown_threshold_fraction",
+    "hsl_drawdown_fraction_ema_span_minutes",
     "hsl_cooldown_ms_lo",
     "hsl_memory_ema_span_minutes",
     "hsl_signal_mode",
@@ -146,8 +146,8 @@ HSL_PARAM_KEYS = (
 
 HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_enabled", ("enabled",)),
-    ("hsl_red_threshold", ("drawdown_threshold_fraction",)),
-    ("hsl_drawdown_ratio_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
+    ("hsl_drawdown_threshold_fraction", ("drawdown_threshold_fraction",)),
+    ("hsl_drawdown_fraction_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
     ("hsl_cooldown_ms_lo", ("cooldown_after_red_minutes",)),
     ("hsl_cooldown_ms_hi", ("cooldown_after_red_minutes",)),
     ("hsl_panic_market", ("panic_close_order_type",)),

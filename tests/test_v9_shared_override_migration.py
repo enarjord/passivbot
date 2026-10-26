@@ -194,10 +194,10 @@ def test_shared_conversion_preserves_separate_gate_acknowledgment(owner):
     ("unstuck.threshold", "unstuck.exposure_trigger_ratio", "unstuck_threshold", {"long", "short"}),
     ("*.unstuck.threshold", "bot.*.unstuck.exposure_trigger_ratio", "unstuck_threshold", {"long", "short"}),
     ("short.unstuck_threshold", "bot.short.unstuck.exposure_trigger_ratio", "unstuck_threshold", {"short"}),
-    ("ema_span_minutes", "drawdown_fraction_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes", {"long", "short"}),
-    ("hsl.ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes", {"long", "short"}),
-    ("*.hsl.ema_span_minutes", "bot.*.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes", {"long", "short"}),
-    ("long.hsl_ema_span_minutes", "bot.long.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes", {"long"}),
+    ("ema_span_minutes", "drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
+    ("hsl.ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
+    ("*.hsl.ema_span_minutes", "bot.*.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
+    ("long.hsl_ema_span_minutes", "bot.long.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long"}),
     ("entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long", "short"}),
     ("risk.entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long", "short"}),
     ("long.risk.entry_cooldown_minutes", "bot.long.entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long"}),
@@ -284,7 +284,7 @@ def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(sele
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
                                      strategy_kind=converted["bot"]["portfolio"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [expected], bounds) == {
-        "hsl_drawdown_ratio_ema_span_minutes": ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
+        "hsl_drawdown_fraction_ema_span_minutes": ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
     }
 
 

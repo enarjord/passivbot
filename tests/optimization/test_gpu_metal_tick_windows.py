@@ -352,7 +352,7 @@ def _tick_window_fixture(sides, hsl):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--coins", "2", "--sides", sides,
         "--bars", "1537", "--seed", "43", "--hsl", hsl, "--unstuck",
-        "--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "120", "--hsl-memory-ema-span-minutes", "1440",
         "--price-shock", "0", "701", ".7", "--price-shock", "1", "911", "1.3",
     ]))

@@ -96,7 +96,7 @@ def test_native_hsl_transport_and_report(mode):
     args = payload(mode)
     hsl = args[-1]["equity_hard_stop_loss"]
     selected = hsl["portfolio"] if mode == "portfolio" else hsl["sides"][0]
-    assert selected["drawdown_ratio_ema_span_minutes"] == 1.5
+    assert selected["drawdown_fraction_ema_span_minutes"] == 1.5
     assert all("restart_after_red_policy" not in policy for policy in hsl["sides"])
     assert selected["memory_ema_span_minutes"] == 1440.0
     assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
@@ -151,8 +151,8 @@ def test_effective_coin_override_has_single_authority():
     }
     args = payload(cfg=cfg, mss=mss)
     hsl = args[-1]["equity_hard_stop_loss"]
-    assert hsl["sides"][0]["drawdown_ratio_ema_span_minutes"] == 1.5
-    assert hsl["coins"]["AAA"][0]["drawdown_ratio_ema_span_minutes"] == 2.75
+    assert hsl["sides"][0]["drawdown_fraction_ema_span_minutes"] == 1.5
+    assert hsl["coins"]["AAA"][0]["drawdown_fraction_ema_span_minutes"] == 2.75
     assert hsl["coins"]["AAA"][0]["panic_close_order_type"] == "limit"
 
 
@@ -169,7 +169,7 @@ def test_effective_coin_override_has_single_authority():
             "unknown HSL field",
         ),
         (
-            lambda p: p["coins"]["AAA"][0].update(drawdown_ratio_ema_span_minutes=float("nan")),
+            lambda p: p["coins"]["AAA"][0].update(drawdown_fraction_ema_span_minutes=float("nan")),
             "finite v9 risk domain",
         ),
         (
@@ -230,7 +230,7 @@ def test_portfolio_ignores_conflicting_inactive_side_policies():
     args = payload("portfolio")
     expected = run(args)
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
-        policy.update(enabled=True, red_threshold=0.9)
+        policy.update(enabled=True, drawdown_threshold_fraction=0.9)
     actual = run(args)
     np.testing.assert_array_equal(actual[0], expected[0])
     assert actual[4]["hsl"] == expected[4]["hsl"]
@@ -292,7 +292,7 @@ def test_cached_payload_cannot_change_effective_policy():
     cfg, mss, _ = inputs()
     args = payload()
     cached = deepcopy(args[-1])
-    cached["equity_hard_stop_loss"]["coins"]["AAA"][0]["red_threshold"] = 0.9
+    cached["equity_hard_stop_loss"]["coins"]["AAA"][0]["drawdown_threshold_fraction"] = 0.9
     with pytest.raises(ValueError, match="effective config"):
         prep_backtest_args(cfg, mss, "binance", backtest_params=cached)
     cached["equity_hard_stop_loss"]["engine"] = "legacy"

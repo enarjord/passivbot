@@ -32,20 +32,20 @@ pub struct Policy {
     pub slow_beta: f32,
     pub fast_alpha: f32,
     pub fast_beta: f32,
-    pub threshold: f32,
+    pub drawdown_threshold_fraction: f32,
     pub cooldown_ms: i64,
 }
 
 impl Policy {
     pub fn new(
         memory_ema_span_minutes: f64,
-        drawdown_ratio_ema_span_minutes: f64,
-        red_threshold: f64,
+        drawdown_fraction_ema_span_minutes: f64,
+        drawdown_threshold_fraction: f64,
         cooldown_ms: i64,
     ) -> Result<Self, String> {
         let (slow_alpha, slow_beta) = coefficients(memory_ema_span_minutes)?;
-        let (fast_alpha, fast_beta) = coefficients(drawdown_ratio_ema_span_minutes)?;
-        let threshold = number(red_threshold, "HSL threshold")?;
+        let (fast_alpha, fast_beta) = coefficients(drawdown_fraction_ema_span_minutes)?;
+        let threshold = number(drawdown_threshold_fraction, "HSL threshold")?;
         if !(0.0..=1.0).contains(&threshold) || cooldown_ms < 0 {
             return Err("invalid v9 HSL threshold or cooldown".into());
         }
@@ -54,7 +54,7 @@ impl Policy {
             slow_beta,
             fast_alpha,
             fast_beta,
-            threshold,
+            drawdown_threshold_fraction: threshold,
             cooldown_ms,
         })
     }
@@ -132,7 +132,7 @@ impl ScopeState {
         }
         Ok((
             raw,
-            nonpositive || raw.min(self.m) > policy.threshold,
+            nonpositive || raw.min(self.m) > policy.drawdown_threshold_fraction,
             nonpositive,
         ))
     }
@@ -288,7 +288,7 @@ impl ScopeState {
         next.minute_prior_m = raw;
         let mut result = next.last.clone().unwrap();
         result.ema = raw as f64;
-        result.red = nonpositive || raw > policy.threshold;
+        result.red = nonpositive || raw > policy.drawdown_threshold_fraction;
         result.action = if result.red {
             Action::Panic
         } else {

@@ -78,8 +78,8 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
     }
     native = flatten_optimize_bounds(converted["optimize"]["bounds"], strategy_kind=kind)
     assert native["long_total_wallet_exposure_limit"] == [0.25, 3.5]
-    assert native["long_hsl_red_threshold"] == [0.01, 0.3]
-    assert native["long_hsl_drawdown_ratio_ema_span_minutes"] == [12.5, 22.5]
+    assert native["long_hsl_drawdown_threshold_fraction"] == [0.01, 0.3]
+    assert native["long_hsl_drawdown_fraction_ema_span_minutes"] == [12.5, 22.5]
     report_targets = {
         name for row in result.changes if isinstance(row["new"], dict)
         for name in row["new"]
@@ -97,3 +97,36 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
     loaded = prepare_config(converted, live_only=True, verbose=False,
                             base_config_path=str(tmp_path / "moved.json"))
     assert loaded["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.375
+
+
+@pytest.mark.parametrize("source_key,target,value", [
+    ("hsl_red_threshold", "drawdown_threshold_fraction", [0.0125, 0.25, 0.001]),
+    ("hsl_ema_span_minutes", "drawdown_fraction_ema_span_minutes", [12.5, 22.5, 0.5]),
+])
+def test_released_flat_hsl_bounds_keep_their_source_keys_after_native_id_rename(
+    source_key, target, value
+):
+    source = get_released_v8_defaults()
+    source["backtest"]["visible_metrics"] = [
+        name for name in source["backtest"]["visible_metrics"]
+        if not name.endswith("_w") and not name.startswith("strategy_eq_underwater_pct_")
+    ]
+    source["optimize"]["scoring"] = [
+        row for row in source["optimize"]["scoring"]
+        if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")
+    ]
+    released_leaf = "red_threshold" if source_key == "hsl_red_threshold" else "ema_span_minutes"
+    source["optimize"]["bounds"]["long"]["hsl"].pop(released_leaf)
+    source["optimize"]["bounds"][f"long_{source_key}"] = value
+    original = deepcopy(source)
+
+    result = migrate(source, memory_span_minutes=123.5)
+
+    assert source == original
+    assert result.config["optimize"]["bounds"]["long"]["hsl"][target] == value
+    assert any(
+        row["path"] == f"optimize.bounds.long_{source_key}"
+        and row["old"] == value
+        and row["new"] == {f"optimize.bounds.long.hsl.{target}": value}
+        for row in result.changes
+    )

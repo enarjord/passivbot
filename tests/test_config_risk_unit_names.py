@@ -86,10 +86,10 @@ def test_new_public_hsl_spans_and_threshold_lower_once_without_rescaling():
     policy = prepared["bot"]["long"]["hsl"]
     original = deepcopy(policy)
     native = native_hsl_policy(policy)
-    assert native["red_threshold"] == 0.125
-    assert native["drawdown_ratio_ema_span_minutes"] == 12.5
-    assert "drawdown_threshold_fraction" not in native
-    assert "drawdown_fraction_ema_span_minutes" not in native
+    assert native["drawdown_threshold_fraction"] == 0.125
+    assert native["drawdown_fraction_ema_span_minutes"] == 12.5
+    assert "red_threshold" not in native
+    assert "drawdown_ratio_ema_span_minutes" not in native
     assert policy == original
 
 
@@ -110,13 +110,13 @@ def test_per_coin_exposure_ratio_remains_public_and_lowers_to_native_wallet_limi
         prepare_config(config, live_only=True, verbose=False)
 
 
-def test_public_exposure_ratios_keep_the_native_optimizer_ids():
+def test_public_exposure_and_hsl_quantities_resolve_current_native_optimizer_ids():
     config = prepare_config(source_for("bot.long.hsl"), live_only=True, verbose=False)
     assert resolve_optimizer_key_path(config, "long_total_wallet_exposure_limit") == (
         "bot", "long", "risk", "total_wallet_exposure_limit_ratio")
-    assert resolve_optimizer_key_path(config, "long_hsl_red_threshold") == (
+    assert resolve_optimizer_key_path(config, "long_hsl_drawdown_threshold_fraction") == (
         "bot", "long", "hsl", "drawdown_threshold_fraction")
-    assert resolve_optimizer_key_path(config, "long_hsl_drawdown_ratio_ema_span_minutes") == (
+    assert resolve_optimizer_key_path(config, "long_hsl_drawdown_fraction_ema_span_minutes") == (
         "bot", "long", "hsl", "drawdown_fraction_ema_span_minutes")
     assert flatten_shared_bot_side(config["bot"]["long"])["total_wallet_exposure_limit"] == 1.5
 

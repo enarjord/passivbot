@@ -850,10 +850,10 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     )
     assert not unavailable
     (request,) = requests
-    assert json.loads(request.payload)["threshold"] == (
+    assert json.loads(request.payload)["drawdown_threshold_fraction"] == (
         0.99 if mode == "coin" else 0.05
     )
-    assert json.loads(request.payload)["drawdown_ratio_ema_span_minutes"] == 1_000_000.0
+    assert json.loads(request.payload)["drawdown_fraction_ema_span_minutes"] == 1_000_000.0
     assert request.execution_type == ("limit" if mode == "position_side" else "market")
     assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")
 

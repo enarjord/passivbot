@@ -110,17 +110,17 @@ def _complete_hsl_payload(payload):
 
 def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pins():
     payload = SimpleNamespace(bot_params_list=[{
-        "long": {"hsl_red_threshold": 0.27},
+        "long": {"hsl_drawdown_threshold_fraction": 0.27},
         "short": {},
     }])
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
-    assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
+    assert native["coins"]["BTC"][0]["drawdown_threshold_fraction"] == 0.27
     default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_threshold_fraction"]
-    assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
-    assert native["portfolio"]["red_threshold"] == default_threshold
+    assert native["coins"]["BTC"][1]["drawdown_threshold_fraction"] == default_threshold
+    assert native["portfolio"]["drawdown_threshold_fraction"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
-        assert "drawdown_threshold_fraction" not in policy
+        assert "red_threshold" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
@@ -1487,8 +1487,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         {
             "hsl_enabled": True,
             "hsl_scale_budget_with_excess_allowance": False,
-            "hsl_red_threshold": 0.2,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_threshold_fraction": 0.2,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             "hsl_cooldown_minutes_after_red": 120.0,
             "hsl_memory_ema_span_minutes": 43200.5,
             "n_positions": 4,
@@ -1500,8 +1500,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
     assert packed == {
         "hsl_enabled": 1.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 60.0,
         "hsl_cooldown_ms_lo": 7200000.0,
         "hsl_memory_ema_span_minutes": 43200.5,
         "hsl_signal_mode": 2.0,
@@ -1519,8 +1519,8 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
             "hsl_enabled": False,
             "hsl_scale_budget_with_excess_allowance": False,
             "hsl_memory_ema_span_minutes": 43200.0,
-            "hsl_red_threshold": 0.1,
-            "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+            "hsl_drawdown_threshold_fraction": 0.1,
+            "hsl_drawdown_fraction_ema_span_minutes": 1.0,
             "hsl_cooldown_minutes_after_red": 0.0,
             "hsl_slot_count": 1,
         },
@@ -2099,8 +2099,8 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     strategy = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
     effective_hsl = {
         "hsl_enabled": False,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 5.5,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 5.5,
         "hsl_memory_ema_span_minutes": 7.5,
         "hsl_scale_budget_with_excess_allowance": True,
         "hsl_cooldown_minutes_after_red": 12.5,

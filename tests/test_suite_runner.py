@@ -699,7 +699,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
 
     assert cfg["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(1.0)
     assert cfg["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
-    assert "hsl_red_threshold" not in cfg["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 
 

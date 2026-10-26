@@ -2196,7 +2196,7 @@ def _console_hsl_transition_summary(event: LiveEvent) -> list[str]:
     for label, key in (
         ("dist_to_red", "dist_to_red"),
         ("drawdown_score", "drawdown_score"),
-        ("red_threshold", "red_threshold"),
+        ("drawdown_threshold_fraction", "drawdown_threshold_fraction"),
     ):
         value = _format_console_ratio(_data_float(data, key))
         if value is not None:
@@ -2522,7 +2522,7 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
     for label, key in (
         ("dist_to_red", "dist_to_red"),
         ("drawdown_score", "drawdown_score"),
-        ("red_threshold", "red_threshold"),
+        ("drawdown_threshold_fraction", "drawdown_threshold_fraction"),
     ):
         value = _format_console_ratio(_data_float(data, key))
         if value is not None:
