@@ -16,6 +16,11 @@ since the latest release tag; these features may already be available when insta
   suite aggregation maps. Rename supported metric selectors without changing reducer methods,
   retain custom rules, and require the existing consent for retired metric formulas.
 
+- Give current HSL observations explicit units: raw and smoothed signal fractions, the selected
+  trigger fraction, USD drawdown memory, and signed threshold gaps. Current report percentages
+  use `_percent` names without rescaling. Update native reports, live diagnostics, previews,
+  plots and monitors together; trading formulas are unchanged and historical event tapes remain readable.
+
 - Make analysis metric units explicit and put curve, position side and exponential weighting
   modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
   strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without

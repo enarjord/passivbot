@@ -59,11 +59,11 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         lines = {line.get_label(): line for line in signal_ax.lines}
         np.testing.assert_equal(
             lines["Raw drawdown"].get_ydata(),
-            np.array([r["raw"] for r in rows], dtype=float),
+            np.array([r["signal_raw_fraction"] for r in rows], dtype=float),
         )
         np.testing.assert_equal(
             lines["EMA drawdown"].get_ydata(),
-            np.array([r["ema"] for r in rows], dtype=float),
+            np.array([r["signal_ema_fraction"] for r in rows], dtype=float),
         )
         assert (
             lines["RED threshold"].get_ydata() == [scope["policy"]["drawdown_threshold_fraction"]] * 2
@@ -163,7 +163,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
             ]
             np.testing.assert_equal(
                 fig.axes[0].lines[0].get_ydata(),
-                np.array([row["raw"] for row in rows], dtype=float),
+                np.array([row["signal_raw_fraction"] for row in rows], dtype=float),
             )
             assert (
                 fig.axes[0].lines[2].get_ydata()
@@ -281,7 +281,7 @@ def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
     rows = data["hsl"]["samples"]
     assert rows
     assert all(
-        row["action"] is None and row["raw"] is None and row["ema"] is None
+        row["action"] is None and row["signal_raw_fraction"] is None and row["signal_ema_fraction"] is None
         for row in rows
     )
     assert all("inactive_scope" in row["reasons"] for row in rows)
@@ -301,7 +301,7 @@ def test_report_rows_and_reason_lists_are_independent():
     report = run(payload("coin"))[4]["hsl"]
     before = deepcopy(report)
     assert len(report["samples"]) > 2
-    report["samples"][0]["raw"] = -123.0
+    report["samples"][0]["signal_raw_fraction"] = -123.0
     report["samples"][0]["reasons"].append("caller annotation")
     assert report["samples"][1:] == before["samples"][1:]
     assert report["events"] == before["events"]

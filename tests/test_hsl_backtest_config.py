@@ -120,7 +120,7 @@ def test_native_hsl_transport_and_report(mode):
     assert full[2]["hsl_trigger_count"] == report["summary"]["triggers"]
     assert (
         full[2]["hsl_panic_fill_loss_sum_usd"]
-        == report["summary"]["panic_close_loss"]
+        == report["summary"]["panic_fill_loss_sum_usd"]
     )
     assert full[2]["drawdown_max_fraction_strategy_equity"] > 0.0
     assert full[2]["hsl_signal_ema_max_fraction"] > 0.0

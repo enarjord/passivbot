@@ -86,10 +86,10 @@ def _row(scope, *, action=None, reason=None, decision=None):
         estimated=bool(estimates),
         estimates=estimates[:32],
         omitted_estimates=max(0, len(estimates) - 32),
-        raw=None if native is None else native["raw"],
-        ema=None if native is None else native["ema"],
-        score=None if native is None else min(native["raw"], native["ema"]),
-        threshold=None if decision is None else decision.threshold,
+        signal_raw_fraction=None if native is None else native["signal_raw_fraction"],
+        signal_ema_fraction=None if native is None else native["signal_ema_fraction"],
+        trigger_signal_fraction=None if native is None else min(native["signal_raw_fraction"], native["signal_ema_fraction"]),
+        drawdown_threshold_fraction=None if decision is None else decision.drawdown_threshold_fraction,
         red_at=None if native is None else native["red_at"],
         flat_at=None if native is None else native["flat_at"],
     )
@@ -98,9 +98,9 @@ def _row(scope, *, action=None, reason=None, decision=None):
 def _raw_pending(row):
     return (
         row["action"] == "normal"
-        and row["raw"] is not None
-        and row["raw"] > row["threshold"]
-        and row["score"] <= row["threshold"]
+        and row["signal_raw_fraction"] is not None
+        and row["signal_raw_fraction"] > row["drawdown_threshold_fraction"]
+        and row["trigger_signal_fraction"] <= row["drawdown_threshold_fraction"]
     )
 
 

@@ -199,7 +199,7 @@ class Unavailable:
 
 @dataclass(frozen=True)
 class Decision:
-    threshold: float
+    drawdown_threshold_fraction: float
     scope: Scope
     action: str | None
     execution_type: str
@@ -804,10 +804,10 @@ def _evaluate(requests):
                 or type(risk["exposed"]) is not bool or risk["exposed"] != exposed
                 or type(risk["red"]) is not bool
                 or type(risk["nonpositive_equity"]) is not bool
-                or any(not _finite(risk[key]) or risk[key] < 0 for key in ("raw", "ema", "drawdown"))
-                or risk["raw"] != decision["raw"] or risk["ema"] != decision["ema"]
+                or any(not _finite(risk[key]) or risk[key] < 0 for key in ("signal_raw_fraction", "signal_ema_fraction", "drawdown_memory_usd"))
+                or risk["signal_raw_fraction"] != decision["signal_raw_fraction"] or risk["signal_ema_fraction"] != decision["signal_ema_fraction"]
                 or risk["action"] != decision["action"]
-                or risk["red"] != (risk["nonpositive_equity"] or min(risk["raw"], risk["ema"]) > threshold)
+                or risk["red"] != (risk["nonpositive_equity"] or min(risk["signal_raw_fraction"], risk["signal_ema_fraction"]) > threshold)
                 or (deadline is not None and (type(deadline) is not int or deadline < 0))
                 or (exposed and decision["action"] != ("panic" if risk["red"] else "normal"))
                 or (not exposed and decision["action"] != ("halted" if deadline is not None and snapshot["now"] < deadline else "normal"))
@@ -820,7 +820,7 @@ def _evaluate(requests):
                 or decision["action"] not in {"normal", "panic", "halted"}
                 or any(
                     not _finite(decision[key]) or decision[key] < 0
-                    for key in ("raw", "ema")
+                    for key in ("signal_raw_fraction", "signal_ema_fraction")
                 )
                 or any(
                     t is not None

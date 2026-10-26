@@ -59,19 +59,19 @@ def test_monitor_topology_is_native_scope_and_numeric_evidence(observed, mode):
     assert row["symbol"] == (SYMBOL if mode == "coin" else None)
     assert row["pside"] == (None if mode == "portfolio" else "long")
     native = json.loads(wave.decisions[0].payload)["decision"]
-    assert row["score"] == min(native["raw"], native["ema"])
-    assert row["threshold"] == wave.decisions[0].threshold
+    assert row["trigger_signal_fraction"] == min(native["signal_raw_fraction"], native["signal_ema_fraction"])
+    assert row["drawdown_threshold_fraction"] == wave.decisions[0].drawdown_threshold_fraction
     assert row["estimated"] and row["estimates"]
     assert len(events) == 1
 
 
 def test_same_state_refreshes_numbers_without_repeating_status(observed):
     bot, owner, wave, events = observed()
-    original = diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["score"]
+    original = diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["trigger_signal_fraction"]
     capture_report(
         owner, {SYMBOL: replace(quotes()[SYMBOL], bid=80.0, ask=80.0, last=80.0)}
     )
-    assert diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["score"] > original
+    assert diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["trigger_signal_fraction"] > original
     assert len(events) == 1
     # Readers cannot mutate the diagnostic store or Rust decisions.
     result = diagnostics.snapshot(bot, now_ms=NOW)
@@ -365,7 +365,7 @@ def test_current_input_absence_is_not_misreported_green(observed):
     capture_report(owner)
     (row,) = diagnostics.snapshot(bot, now_ms=NOW)["scopes"]
     assert row["availability"] == "unavailable" and row["tier"] is None
-    assert row["score"] is None and row["unavailable_reason"]
+    assert row["trigger_signal_fraction"] is None and row["unavailable_reason"]
 
 
 def test_tui_shows_portfolio_scope_and_observation_status(observed):
@@ -931,12 +931,12 @@ def test_raw_pending_changes_emit_status_without_changing_green_permission(obser
     bot, owner, wave, events = observed()
     native = json.loads(wave.decisions[0].payload)
     native["decision"].update(
-        action="normal", red_at=None, flat_at=None, raw=0.02, ema=0.02
+        action="normal", red_at=None, flat_at=None, signal_raw_fraction=0.02, signal_ema_fraction=0.02
     )
     decision = replace(wave.decisions[0], action="normal", payload=json.dumps(native))
     owner.report(replace(wave, decisions=(decision,)))
     count = len(events)
-    native["decision"].update(raw=0.1, ema=0.02)
+    native["decision"].update(signal_raw_fraction=0.1, signal_ema_fraction=0.02)
     pending = replace(decision, payload=json.dumps(native))
     owner.report(replace(wave, decisions=(pending,)))
     assert len(events) == count + 1
@@ -944,7 +944,7 @@ def test_raw_pending_changes_emit_status_without_changing_green_permission(obser
     assert data["action_counts"] == {"normal": 1}
     assert data["raw_pending_scope_count"] == 1
     assert data["scopes"][0]["action"] == "normal"
-    native["decision"]["raw"] = 0.11
+    native["decision"]["signal_raw_fraction"] = 0.11
     owner.report(
         replace(wave, decisions=(replace(pending, payload=json.dumps(native)),))
     )
@@ -958,14 +958,14 @@ def test_pending_scope_is_prioritized_before_estimated_green_samples(observed):
     bot, owner, wave, events = observed()
     native = json.loads(wave.decisions[0].payload)
     native["decision"].update(
-        action="normal", red_at=None, flat_at=None, raw=0.01, ema=0.01
+        action="normal", red_at=None, flat_at=None, signal_raw_fraction=0.01, signal_ema_fraction=0.01
     )
     ordinary = replace(wave.decisions[0], action="normal", payload=json.dumps(native))
     decisions = [
         replace(ordinary, scope=Scope("coin", "long", f"A{i}/USDT:USDT"))
         for i in range(10)
     ]
-    native["decision"].update(raw=0.1, ema=0.02)
+    native["decision"].update(signal_raw_fraction=0.1, signal_ema_fraction=0.02)
     decisions.append(
         replace(
             ordinary,
