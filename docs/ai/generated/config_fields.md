@@ -456,21 +456,21 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.objective_scenario` | string \| null | `null` | — | —; optimize | — | — | — | python |
 | `optimize.pareto_max_size` | integer | `1000` | — | —; optimize | — | — | — | python |
 | `optimize.population_size` | integer \| null | `null` | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.adverse_directionality` | float | `0.0` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.adverse_directionality_score` | float | `0.0` | score | —; optimize | — | — | >= 0.0; <= 1.0; finite | python |
 | `optimize.prefilter.checks` | array | `[]` | — | —; optimize | — | — | — | python |
 | `optimize.prefilter.checks.*.enabled` | boolean | Not declared | — | —; optimize | — | — | — | python |
 | `optimize.prefilter.checks.*.max` | float \| null | Not declared | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.checks.*.metric` | string | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.metric` | string | Not declared | — | —; optimize | — | — | `close_retracement_fraction`, `entry_close_span_fraction`, `entry_cooldown_minutes`, `entry_retracement_fraction`, `grid_span_fraction` | python |
 | `optimize.prefilter.checks.*.min` | float \| null | Not declared | — | —; optimize | — | — | — | python |
 | `optimize.prefilter.checks.*.scale` | float | Not declared | — | —; optimize | — | — | — | python |
 | `optimize.prefilter.checks.*.sides` | array | Not declared | — | —; optimize | — | — | — | python |
 | `optimize.prefilter.checks.*.weight` | float | Not declared | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.exposure_ratios` | array | 4 items (see template) | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.exposure_ratios.*` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.exposure_probe_fractions` | array | 4 items (see template) | fraction / effective per-position allowance including bounded excess allowance | —; optimize | — | — | — | python |
+| `optimize.prefilter.exposure_probe_fractions.*` | float | Not declared | fraction / effective per-position allowance including bounded excess allowance | —; optimize | — | — | >= 0.0; < 0.999; finite | python |
 | `optimize.prefilter.grid_max_entries` | integer | `1024` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.log_range_ema_1h` | float | `0.0` | log range / candle low, inside ln(high / low) | —; optimize | — | — | >= 0.0; finite | python |
+| `optimize.prefilter.log_range_ema_1m` | float | `0.0` | log range / candle low, inside ln(high / low) | —; optimize | — | — | >= 0.0; finite | python |
 | `optimize.prefilter.penalty_weight` | float | `1000000.0` | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.volatility_ema_1h` | float | `0.0` | — | —; optimize | — | — | — | python |
-| `optimize.prefilter.volatility_ema_1m` | float | `0.0` | — | —; optimize | — | — | — | python |
 | `optimize.pymoo.algorithm` | string | `"auto"` | — | —; optimize | — | — | — | python |
 | `optimize.pymoo.algorithms.nsga2` | object | `{}` | — | —; optimize | — | — | — | python |
 | `optimize.pymoo.algorithms.nsga3.ref_dirs.method` | string | `"das_dennis"` | — | —; optimize | — | — | — | python |

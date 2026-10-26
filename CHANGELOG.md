@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make optimizer prefilter assumptions explicit with `exposure_probe_fractions`,
+  `adverse_directionality_score` and log-range EMA inputs. Geometry checks use `_fraction`
+  metric names; measurements, rule arithmetic and the native probe protocol are unchanged.
+
 - Spell pymoo crossover and mutation controls explicitly with `_probability`,
   `_probability_per_variable`, and `_distribution_index`. Values, automatic defaults, and
   external pymoo arguments are unchanged; released-v8 conversion reports the final paths.

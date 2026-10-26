@@ -52,7 +52,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     )
     if prefilter:
         config["optimize"]["prefilter"] = {"checks": [
-            {"metric": "entry_close_span", "enabled": True, "max": 100},
+            {"metric": "entry_close_span_fraction", "enabled": True, "max": 100},
         ]}
     if generated_seed:
         import session_artifacts

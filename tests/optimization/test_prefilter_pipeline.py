@@ -16,7 +16,7 @@ def rejecting_policy():
     return {
         "checks": [
             {
-                "metric": "entry_retracement",
+                "metric": "entry_retracement_fraction",
                 "enabled": True,
                 "min": 100,
                 "sides": ["long"],
@@ -66,7 +66,7 @@ def test_passing_cpu_prefilter_continues_into_existing_payload_path(monkeypatch)
         base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.config["optimize"]["prefilter"] = {
             "checks": [
-                {"metric": "entry_retracement", "enabled": True, "max": 100},
+                {"metric": "entry_retracement_fraction", "enabled": True, "max": 100},
             ]
         }
         base.use_duplicate_guard = False
