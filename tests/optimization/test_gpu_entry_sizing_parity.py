@@ -31,8 +31,8 @@ def _fixture(side, coin_count, entry_kind):
         bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit_ratio': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
-            ema_span_0=2.0,
-            ema_span_1=3.0,
+            ema_span_0_minutes=2.0,
+            ema_span_1_minutes=3.0,
             ema_gate_mode="disabled",
             initial_qty_fraction=0.1,
             threshold_base_fraction=0.5,
@@ -146,8 +146,8 @@ def test_flat_selection_tracks_readiness_without_fills(side):
     bot["strategy"]["trailing_martingale"]["entry"].update(
         ema_gate_mode="all",
         initial_ema_distance_fraction=0.1,
-        ema_span_0=1000.0,
-        ema_span_1=1000.0,
+        ema_span_0_minutes=1000.0,
+        ema_span_1_minutes=1000.0,
     )
     # Both initial orders are away from the touch. ETH then becomes more ready
     # without a fill or eligibility change, and must replace the flat incumbent.
@@ -337,7 +337,7 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     bot["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1.0,
                        total_exposure_entry_gate_enabled=entry_gate)
     bot["forager"].update(score_weights={"volume": 0.01, "log_range": 0.99, "ema_readiness": 0.0},
-                          volume_ema_span_1m=1.0, volatility_ema_span_1m=1.0,
+                          volume_ema_span_1m=1.0, log_range_ema_span_minutes=1.0,
                           volume_drop_pct=0.0)
     bot["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=0.1, initial_ema_distance_fraction=0.25, ema_gate_mode="initial",
@@ -474,7 +474,7 @@ def _compound_boundary_inputs(side, coin_count, kind, offset, coin_pin):
         initial_pct=.1, qty_step=.001, factor=1., threshold=.9, low=43.19, high=43.21)
     config, candles, markets, _, _ = inputs
     values = dict(threshold_base_fraction=.1 + offset, retracement_base_fraction=.09375,
-        retracement_volatility_1h_weight=0., retracement_volatility_1m_weight=0.)
+        retracement_log_range_1h_coefficient=0., retracement_log_range_1m_coefficient=0.)
     target = config["bot"][side]["strategy"]["trailing_martingale"][kind]
     target.update(values)
     if kind == "entry":
@@ -641,7 +641,7 @@ def test_tm_decimal_packing_declines_original_nonzero_modifiers():
                 params[:, side * len(keys) + column] = 0.0
     # Underflow in the public float32 column does not license a static proof.
     params[0, keys.index("entry_threshold_exposure_ratio_coefficient")] = 1e-100
-    params[0, len(keys) + keys.index("close_retracement_volatility_1m_weight")] = 1e-100
+    params[0, len(keys) + keys.index("close_retracement_log_range_1m_coefficient")] = 1e-100
     packed = _pack_tm_parameter_matrix(params, keys, sides=2)
     width = len(keys) + _TM_DECIMAL_WORDS
     assert packed[0, keys.index("entry_threshold_exposure_ratio_coefficient")] == 0.0

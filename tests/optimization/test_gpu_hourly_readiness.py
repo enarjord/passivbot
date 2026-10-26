@@ -18,8 +18,8 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
     columns = getattr(model, kind + "_COIN_OVERRIDE_COLS")
     strategy = (model.EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS if kind == "EMA_ANCHOR" else
                 tuple(key for key, _ in model.TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS))
-    hour = "offset_volatility_ema_span_1h" if kind == "EMA_ANCHOR" else "volatility_ema_span_1h"
-    weight = "offset_volatility_1h_weight" if kind == "EMA_ANCHOR" else "entry_threshold_volatility_1h_weight"
+    hour = "offset_log_range_ema_span_1h_candles" if kind == "EMA_ANCHOR" else "log_range_ema_span_1h_candles"
+    weight = "offset_log_range_1h_coefficient" if kind == "EMA_ANCHOR" else "entry_threshold_log_range_1h_coefficient"
     matrix = np.zeros((2, sides * len(keys)), dtype=np.float64)
     for side in range(sides):
         for key, value in ((hour, 3.0), (weight, 1.0), ("n_positions", 1),
@@ -64,7 +64,7 @@ def test_disabled_entries_retain_close_hourly_readiness(monkeypatch, kind, sides
         # Close-only volatility remains a consumer when entry admission is off.
         for side in range(sides):
             matrix[:, side * len(keys) + keys.index(entry_weight)] = 0.0
-            matrix[:, side * len(keys) + keys.index("close_threshold_volatility_1h_weight")] = 1.0
+            matrix[:, side * len(keys) + keys.index("close_threshold_log_range_1h_coefficient")] = 1.0
     with pytest.raises(ValueError, match="unavailable hourly EMA.*candidate.*coin"):
         mps_kernel._MulticoinReplayRunner._run_factual_attempt(runner, matrix)
     runner._hourly_first_observed[:] = 2

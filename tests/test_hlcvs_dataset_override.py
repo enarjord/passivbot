@@ -173,7 +173,7 @@ def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tm
     config["backtest"]["start_date"] = "2025-01-02"
     config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1440
-    config["bot"]["long"]["ema_span_0"] = 1440.0
+    config["bot"]["long"]["ema_span_0_minutes"] = 1440.0
 
     _cache_dir, _coins, _hlcvs, mss, _results_path, _btc, out_timestamps = (
         load_hlcvs_data_override(config, "binance")

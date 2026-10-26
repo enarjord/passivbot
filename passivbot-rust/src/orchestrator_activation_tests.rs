@@ -15,8 +15,8 @@ fn activation_input(kind: StrategyKind, side: PositionSide, held: bool) -> Orche
             }
             StrategyKind::EmaAnchor => {
                 StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
-                    ema_span_0: 10.0,
-                    ema_span_1: 20.0,
+                    ema_span_0_minutes: 10.0,
+                    ema_span_1_minutes: 20.0,
                     base_qty_fraction: 0.1,
                     inventory_offset_exposure_coefficient: 0.0,
                     ..Default::default()

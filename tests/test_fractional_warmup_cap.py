@@ -41,7 +41,7 @@ def test_live_and_backtest_acquire_the_same_whole_minutes(span, cap, expected):
     live_cap = live_warmup_cap_minutes(config)
     windows, _, _ = compute_live_warmup_windows(
         {"long": {"BTC"}},
-        lambda _side, key, _coin: span if key in {"ema_span_0", "ema_span_1"} else 0.0,
+        lambda _side, key, _coin: span if key in {"ema_span_0_minutes", "ema_span_1_minutes"} else 0.0,
         max_warmup_minutes=live_cap,
     )
     assert windows == {"BTC": expected}
@@ -69,7 +69,7 @@ def test_direct_live_windows_round_cap_and_keep_native_hour_alignment(
     windows, hours, _ = compute_live_warmup_windows(
         {"long": {"BTC"}},
         lambda _side, key, _coin: {
-            "ema_span_0": 180.25, "entry_volatility_ema_span_1h": 3.25,
+            "ema_span_0_minutes": 180.25, "entry_log_range_ema_span_1h_candles": 3.25,
         }.get(key, 0.0),
         max_warmup_minutes=cap,
         window_candles=181 if explicit_window else None,

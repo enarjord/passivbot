@@ -434,7 +434,7 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
     prescribed = apply_recommended_bounds(source)
     assert source == before
     assert sum(bound.low != bound.high for bound in gene_bounds(prescribed).values()) > 1
-    assert flattened(prescribed)["long_ema_span_0"] == [100.0, 2880.0, 10.0]
+    assert flattened(prescribed)["long_entry_ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
     infile, outfile = tmp_path / "input.json", tmp_path / "search.json"
     infile.write_text(json.dumps(source))
     assert main([str(infile), str(outfile)]) == 0
@@ -471,7 +471,7 @@ def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missi
     source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
     migrated = migrate(source, memory_span_minutes=123.5)
     bounds = flattened(prepare_config(migrated.config, verbose=False))
-    assert bounds["long_ema_span_0"] == [100.0, 2880.0, 10.0]
+    assert bounds["long_entry_ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
     assert bounds["long_hsl_drawdown_threshold_fraction"] == [0.15, 0.15, 0.001]
     assert bounds["long_unstuck_ema_dist"] == [-0.2, 0.01, 0.0001]
     assert bounds["long_unilateralness_ema_span_1m"] == [42.5, 42.5]

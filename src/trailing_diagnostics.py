@@ -20,8 +20,8 @@ ENTRY_CONFIG_KEYS = [
     "entry_trailing_reentry_qty_multiplier",
     "entry_trailing_retracement_base_fraction",
     "entry_trailing_threshold_base_fraction",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
     "entry_exposure_ratio_coefficient",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
@@ -34,8 +34,8 @@ CLOSE_CONFIG_KEYS = [
     "close_trailing_qty_fraction",
     "close_trailing_retracement_base_fraction",
     "close_trailing_threshold_base_fraction",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
+    "close_log_range_1h_coefficient",
+    "close_log_range_1m_coefficient",
     "wallet_exposure_limit_ratio",
     "total_wallet_exposure_limit_ratio",
     "risk_we_excess_allowance_fraction",
@@ -249,8 +249,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("entry_trailing_reentry_qty_multiplier")),
         _float(inputs.get("entry_trailing_retracement_base_fraction")),
         _float(inputs.get("entry_trailing_threshold_base_fraction")),
-        _float(inputs.get("entry_weight_volatility_1h")),
-        _float(inputs.get("entry_weight_volatility_1m")),
+        _float(inputs.get("entry_log_range_1h_coefficient")),
+        _float(inputs.get("entry_log_range_1m_coefficient")),
         _float(inputs.get("entry_exposure_ratio_coefficient")),
         _float(inputs.get("wallet_exposure_limit_ratio")),
         effective_allowance_fraction,
@@ -277,8 +277,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     entry_multiplier = max(
         1.0,
         1.0
-        + entry_volatility_1h * _float(inputs.get("entry_weight_volatility_1h"))
-        + entry_volatility_1m * _float(inputs.get("entry_weight_volatility_1m"))
+        + entry_volatility_1h * _float(inputs.get("entry_log_range_1h_coefficient"))
+        + entry_volatility_1m * _float(inputs.get("entry_log_range_1m_coefficient"))
         + (
             (wallet_exposure / limit_cap) * _float(inputs.get("entry_exposure_ratio_coefficient"))
             if limit_cap > 0.0
@@ -394,8 +394,8 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         0.0,
         close_volatility_1h,
         close_volatility_1m,
-        _float(inputs.get("close_weight_volatility_1h")),
-        _float(inputs.get("close_weight_volatility_1m")),
+        _float(inputs.get("close_log_range_1h_coefficient")),
+        _float(inputs.get("close_log_range_1m_coefficient")),
     ]
     if pside == "long":
         qty, price, order_type = pbr.calc_next_close_long_py(*common_args)
@@ -408,8 +408,8 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     close_multiplier = max(
         1.0,
         1.0
-        + close_volatility_1h * _float(inputs.get("close_weight_volatility_1h"))
-        + close_volatility_1m * _float(inputs.get("close_weight_volatility_1m")),
+        + close_volatility_1h * _float(inputs.get("close_log_range_1h_coefficient"))
+        + close_volatility_1m * _float(inputs.get("close_log_range_1m_coefficient")),
     )
     threshold_fraction = _float(inputs.get("close_trailing_threshold_base_fraction")) * close_multiplier
     retracement_fraction = _float(inputs.get("close_trailing_retracement_base_fraction")) * close_multiplier

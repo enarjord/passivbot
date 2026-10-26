@@ -42,8 +42,8 @@ impl EmaGateMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleParams {
-    pub volatility_ema_span_1h: f64,
-    pub volatility_ema_span_1m: f64,
+    pub log_range_ema_span_1h_candles: f64,
+    pub log_range_ema_span_minutes: f64,
     pub entry: TrailingMartingaleEntryParams,
     pub close: TrailingMartingaleCloseParams,
 }
@@ -51,20 +51,20 @@ pub struct TrailingMartingaleParams {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleEntryParams {
-    pub ema_span_0: f64,
-    pub ema_span_1: f64,
+    pub ema_span_0_minutes: f64,
+    pub ema_span_1_minutes: f64,
     pub reentry_qty_multiplier: f64,
     pub ema_gate_mode: EmaGateMode,
     pub initial_ema_distance_fraction: f64,
     pub initial_qty_fraction: f64,
     pub threshold_base_fraction: f64,
     pub threshold_exposure_ratio_coefficient: f64,
-    pub threshold_volatility_1h_weight: f64,
-    pub threshold_volatility_1m_weight: f64,
+    pub threshold_log_range_1h_coefficient: f64,
+    pub threshold_log_range_1m_coefficient: f64,
     pub retracement_base_fraction: f64,
     pub retracement_exposure_ratio_coefficient: f64,
-    pub retracement_volatility_1h_weight: f64,
-    pub retracement_volatility_1m_weight: f64,
+    pub retracement_log_range_1h_coefficient: f64,
+    pub retracement_log_range_1m_coefficient: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
@@ -73,11 +73,11 @@ pub struct TrailingMartingaleCloseParams {
     pub qty_fraction: f64,
     pub threshold_base_fraction: f64,
     pub threshold_exposure_ratio_coefficient: f64,
-    pub threshold_volatility_1h_weight: f64,
-    pub threshold_volatility_1m_weight: f64,
+    pub threshold_log_range_1h_coefficient: f64,
+    pub threshold_log_range_1m_coefficient: f64,
     pub retracement_base_fraction: f64,
-    pub retracement_volatility_1h_weight: f64,
-    pub retracement_volatility_1m_weight: f64,
+    pub retracement_log_range_1h_coefficient: f64,
+    pub retracement_log_range_1m_coefficient: f64,
 }
 
 impl TrailingMartingaleParams {
@@ -99,14 +99,14 @@ impl TrailingMartingaleParams {
 #[serde(default, deny_unknown_fields)]
 pub struct EmaAnchorParams {
     pub base_qty_fraction: f64,
-    pub ema_span_0: f64,
-    pub ema_span_1: f64,
+    pub ema_span_0_minutes: f64,
+    pub ema_span_1_minutes: f64,
     pub entry_qty_exposure_coefficient: f64,
     pub offset_fraction: f64,
-    pub offset_volatility_ema_span_1m: f64,
-    pub offset_volatility_1m_weight: f64,
-    pub offset_volatility_ema_span_1h: f64,
-    pub offset_volatility_1h_weight: f64,
+    pub offset_log_range_ema_span_minutes: f64,
+    pub offset_log_range_1m_coefficient: f64,
+    pub offset_log_range_ema_span_1h_candles: f64,
+    pub offset_log_range_1h_coefficient: f64,
     pub inventory_offset_exposure_coefficient: f64,
 }
 
@@ -114,14 +114,14 @@ impl Default for EmaAnchorParams {
     fn default() -> Self {
         Self {
             base_qty_fraction: 0.01,
-            ema_span_0: 200.0,
-            ema_span_1: 800.0,
+            ema_span_0_minutes: 200.0,
+            ema_span_1_minutes: 800.0,
             entry_qty_exposure_coefficient: 0.0,
             offset_fraction: 0.002,
-            offset_volatility_ema_span_1m: 60.0,
-            offset_volatility_1m_weight: 0.0,
-            offset_volatility_ema_span_1h: 24.0,
-            offset_volatility_1h_weight: 0.0,
+            offset_log_range_ema_span_minutes: 60.0,
+            offset_log_range_1m_coefficient: 0.0,
+            offset_log_range_ema_span_1h_candles: 24.0,
+            offset_log_range_1h_coefficient: 0.0,
             inventory_offset_exposure_coefficient: 0.1,
         }
     }
@@ -202,26 +202,26 @@ pub fn parse_strategy_params(
     }
 }
 
-pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
+pub fn strategy_price_ema_spans_minutes(params: &StrategyParams) -> (f64, f64) {
     match params {
         StrategyParams::TrailingMartingale(params) => {
-            (params.entry.ema_span_0, params.entry.ema_span_1)
+            (params.entry.ema_span_0_minutes, params.entry.ema_span_1_minutes)
         }
-        StrategyParams::EmaAnchor(params) => (params.ema_span_0, params.ema_span_1),
+        StrategyParams::EmaAnchor(params) => (params.ema_span_0_minutes, params.ema_span_1_minutes),
     }
 }
 
-pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
+pub fn strategy_log_range_ema_span_1h_candles(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1h),
-        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1h),
+        StrategyParams::TrailingMartingale(params) => Some(params.log_range_ema_span_1h_candles),
+        StrategyParams::EmaAnchor(params) => Some(params.offset_log_range_ema_span_1h_candles),
     }
 }
 
-pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Option<f64> {
+pub fn strategy_log_range_ema_span_minutes(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1m),
-        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1m),
+        StrategyParams::TrailingMartingale(params) => Some(params.log_range_ema_span_minutes),
+        StrategyParams::EmaAnchor(params) => Some(params.offset_log_range_ema_span_minutes),
     }
 }
 
@@ -262,17 +262,17 @@ pub fn strategy_needs_log_range_1m_for_request(
     match params {
         StrategyParams::TrailingMartingale(params) => {
             ((wants_entries
-                && (params.entry.threshold_volatility_1m_weight != 0.0
-                    || params.entry.retracement_volatility_1m_weight != 0.0))
+                && (params.entry.threshold_log_range_1m_coefficient != 0.0
+                    || params.entry.retracement_log_range_1m_coefficient != 0.0))
                 || (wants_closes
-                    && (params.close.threshold_volatility_1m_weight != 0.0
-                        || params.close.retracement_volatility_1m_weight != 0.0)))
-                && params.volatility_ema_span_1m > 0.0
+                    && (params.close.threshold_log_range_1m_coefficient != 0.0
+                        || params.close.retracement_log_range_1m_coefficient != 0.0)))
+                && params.log_range_ema_span_minutes > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
             (wants_entries || wants_closes)
-                && params.offset_volatility_1m_weight != 0.0
-                && params.offset_volatility_ema_span_1m > 0.0
+                && params.offset_log_range_1m_coefficient != 0.0
+                && params.offset_log_range_ema_span_minutes > 0.0
         }
     }
 }
@@ -289,17 +289,17 @@ pub fn strategy_needs_log_range_1h_for_request(
     match params {
         StrategyParams::TrailingMartingale(params) => {
             ((wants_entries
-                && (params.entry.threshold_volatility_1h_weight != 0.0
-                    || params.entry.retracement_volatility_1h_weight != 0.0))
+                && (params.entry.threshold_log_range_1h_coefficient != 0.0
+                    || params.entry.retracement_log_range_1h_coefficient != 0.0))
                 || (wants_closes
-                    && (params.close.threshold_volatility_1h_weight != 0.0
-                        || params.close.retracement_volatility_1h_weight != 0.0)))
-                && params.volatility_ema_span_1h > 0.0
+                    && (params.close.threshold_log_range_1h_coefficient != 0.0
+                        || params.close.retracement_log_range_1h_coefficient != 0.0)))
+                && params.log_range_ema_span_1h_candles > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
             (wants_entries || wants_closes)
-                && params.offset_volatility_1h_weight != 0.0
-                && params.offset_volatility_ema_span_1h > 0.0
+                && params.offset_log_range_1h_coefficient != 0.0
+                && params.offset_log_range_ema_span_1h_candles > 0.0
         }
     }
 }
@@ -366,8 +366,8 @@ mod tests {
     #[test]
     fn martingale_entry_volatility_is_not_required_for_close_only_request() {
         let mut params = TrailingMartingaleParams::default();
-        params.entry.threshold_volatility_1h_weight = 1.0;
-        params.volatility_ema_span_1h = 4.0;
+        params.entry.threshold_log_range_1h_coefficient = 1.0;
+        params.log_range_ema_span_1h_candles = 4.0;
         let params = StrategyParams::TrailingMartingale(params);
         assert!(strategy_needs_log_range_1h(&params));
         assert!(strategy_needs_log_range_1h_for_request(

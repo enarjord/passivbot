@@ -846,6 +846,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             grouped = get_grouped_path(values, path, default=missing)
             if flat_key in values and grouped is not missing and values[flat_key] != grouped:
                 raise ValueError(f"bot.{side}.{flat_key} conflicts with bot.{side}.{'.'.join(path)}")
+    # Released optimizer IDs must move before legacy migration helpers consult
+    # the current strategy metadata to interpret flat bounds.
+    from .released_v8_strategy import rewrite_released_strategy_bounds
+
+    rewrite_released_strategy_bounds(result, strategy_kind=released_kind, record=record)
     before = deepcopy(result)
     apply_migrations(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)

@@ -25,8 +25,8 @@ from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 # Authored quantities have one spelling; the native probe protocol stays unchanged.
 PREFILTER_PROBE_NATIVE_FIELDS = {
     "exposure_probe_fractions": "exposure_ratios",
-    "log_range_ema_1m": "volatility_ema_1m",
-    "log_range_ema_1h": "volatility_ema_1h",
+    "log_range_ema_1m": "log_range_ema_1m",
+    "log_range_ema_1h": "log_range_ema_1h",
     "adverse_directionality_score": "adverse_directionality",
     "grid_max_entries": "grid_max_entries",
 }

@@ -28,8 +28,8 @@ struct Probe {
     cooldown_exposure_weight: f64,
     cooldown_adverse_weight: f64,
     exposure_ratios: Vec<f64>,
-    volatility_ema_1m: f64,
-    volatility_ema_1h: f64,
+    log_range_ema_1m: f64,
+    log_range_ema_1h: f64,
     adverse_directionality: f64,
     grid_max_entries: usize,
     calculate_grid: bool,
@@ -76,16 +76,16 @@ fn distances(p: &Probe, exposure: f64, allowed: f64) -> (f64, f64) {
                 exposure,
                 allowed,
                 e,
-                p.volatility_ema_1h,
-                p.volatility_ema_1m,
+                p.log_range_ema_1h,
+                p.log_range_ema_1m,
             ),
         e.retracement_base_fraction.max(0.0)
             * calc_entry_retracement_multiplier(
                 exposure,
                 allowed,
                 e,
-                p.volatility_ema_1h,
-                p.volatility_ema_1m,
+                p.log_range_ema_1h,
+                p.log_range_ema_1m,
             ),
     )
 }
@@ -156,8 +156,8 @@ fn grid(
                 lower: 1.0,
                 upper: 1.0,
             },
-            volatility_ema_1m: p.volatility_ema_1m,
-            volatility_ema_1h: p.volatility_ema_1h,
+            log_range_ema_1m: p.log_range_ema_1m,
+            log_range_ema_1h: p.log_range_ema_1h,
         };
         let entry = if long {
             calc_next_entry_long(
@@ -233,8 +233,8 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         p.wallet_exposure_limit_ratio,
         p.total_wallet_exposure_limit_ratio,
         p.risk_we_excess_allowance_fraction,
-        p.volatility_ema_1m,
-        p.volatility_ema_1h,
+        p.log_range_ema_1m,
+        p.log_range_ema_1h,
         p.adverse_directionality,
     ] {
         if !value.is_finite() || value < 0.0 {
@@ -275,8 +275,8 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             lower: 1.0,
             upper: 1.0,
         },
-        volatility_ema_1m: p.volatility_ema_1m,
-        volatility_ema_1h: p.volatility_ema_1h,
+        log_range_ema_1m: p.log_range_ema_1m,
+        log_range_ema_1h: p.log_range_ema_1h,
     };
     let flat = Position {
         size: 0.0,
@@ -319,8 +319,8 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         }
         let state = StateParams {
             balance: 1.0,
-            volatility_ema_1m: p.volatility_ema_1m,
-            volatility_ema_1h: p.volatility_ema_1h,
+            log_range_ema_1m: p.log_range_ema_1m,
+            log_range_ema_1h: p.log_range_ema_1h,
             ..Default::default()
         };
         let position = Position {
@@ -406,8 +406,8 @@ mod tests {
             cooldown_exposure_weight: 0.0,
             cooldown_adverse_weight: 0.0,
             exposure_ratios: vec![0.8],
-            volatility_ema_1m: 0.0,
-            volatility_ema_1h: 0.0,
+            log_range_ema_1m: 0.0,
+            log_range_ema_1h: 0.0,
             adverse_directionality: 0.0,
             grid_max_entries: 1024,
             calculate_grid: true,

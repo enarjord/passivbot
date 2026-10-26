@@ -1,3 +1,4 @@
+from copy import deepcopy
 from config.universe import set_side_universe_sources
 import sys
 from functools import partial
@@ -9,7 +10,7 @@ import pytest
 from config.shared_bot import flatten_shared_bot_side
 from config.hsl import native_hsl_policy
 from config.schema import get_template_config, get_expanded_config_prototype
-from config.strategy_paths import lower_runtime_strategy_side
+
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -1102,9 +1103,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         ],
         strategy_params_list=[
             {
-                side: lower_runtime_strategy_side(
-                    strategy_kind, config["bot"][side]["strategy"][strategy_kind]
-                )
+                side: deepcopy(config["bot"][side]["strategy"][strategy_kind])
                 for side in ("long", "short")
             }
             for _ in range(2)
@@ -1716,7 +1715,7 @@ def test_multicoin_tm_parameter_matrix_keeps_dual_side_values_separate():
 
 def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     strategy_base = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
-    strategy_override = dict(strategy_base, offset_fraction=0.25, ema_span_0=90.0)
+    strategy_override = dict(strategy_base, offset_fraction=0.25, ema_span_0_minutes=90.0)
     payload = SimpleNamespace(
         strategy_params_list=[
             {"long": strategy_base},
@@ -1791,7 +1790,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert matrix.shape == (2, EMA_ANCHOR_COIN_OVERRIDE_COLS)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset_fraction")] == pytest.approx(0.25)
-    assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
+    assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0_minutes")] == pytest.approx(90.0)
     assert matrix[1, 10] == pytest.approx(15.0)
     assert matrix[1, 11] == pytest.approx(0.4)
     assert matrix[1, 12] == pytest.approx(0.25)
@@ -2192,33 +2191,33 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         == TRAILING_MARTINGALE_PARAM_KEYS[:23]
     )
     strategy_base = {
-        "volatility_ema_span_1h": 30.0,
-        "volatility_ema_span_1m": 40.0,
+        "log_range_ema_span_1h_candles": 30.0,
+        "log_range_ema_span_minutes": 40.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
             "ema_gate_mode": "all",
             "reentry_qty_multiplier": 1.1,
             "initial_ema_distance_fraction": 0.01,
             "initial_qty_fraction": 0.02,
             "threshold_base_fraction": 0.03,
             "threshold_exposure_ratio_coefficient": 0.04,
-            "threshold_volatility_1h_weight": 0.05,
-            "threshold_volatility_1m_weight": 0.06,
+            "threshold_log_range_1h_coefficient": 0.05,
+            "threshold_log_range_1m_coefficient": 0.06,
             "retracement_base_fraction": 0.007,
             "retracement_exposure_ratio_coefficient": 0.08,
-            "retracement_volatility_1h_weight": 0.09,
-            "retracement_volatility_1m_weight": 0.1,
+            "retracement_log_range_1h_coefficient": 0.09,
+            "retracement_log_range_1m_coefficient": 0.1,
         },
         "close": {
             "qty_fraction": 0.2,
             "threshold_base_fraction": 0.03,
             "threshold_exposure_ratio_coefficient": 0.04,
-            "threshold_volatility_1h_weight": 0.05,
-            "threshold_volatility_1m_weight": 0.06,
+            "threshold_log_range_1h_coefficient": 0.05,
+            "threshold_log_range_1m_coefficient": 0.06,
             "retracement_base_fraction": 0.007,
-            "retracement_volatility_1h_weight": 0.09,
-            "retracement_volatility_1m_weight": 0.1,
+            "retracement_log_range_1h_coefficient": 0.09,
+            "retracement_log_range_1m_coefficient": 0.1,
         },
     }
     strategy_override = {
@@ -2399,33 +2398,33 @@ def test_trailing_martingale_flattening_preserves_nested_params_and_gates(
     mode, expected
 ):
     strategy = {
-        "volatility_ema_span_1h": 30.0,
-        "volatility_ema_span_1m": 40.0,
+        "log_range_ema_span_1h_candles": 30.0,
+        "log_range_ema_span_minutes": 40.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
             "ema_gate_mode": mode,
             "reentry_qty_multiplier": 1.1,
             "initial_ema_distance_fraction": 0.01,
             "initial_qty_fraction": 0.02,
             "threshold_base_fraction": 0.03,
             "threshold_exposure_ratio_coefficient": 0.04,
-            "threshold_volatility_1h_weight": 0.05,
-            "threshold_volatility_1m_weight": 0.06,
+            "threshold_log_range_1h_coefficient": 0.05,
+            "threshold_log_range_1m_coefficient": 0.06,
             "retracement_base_fraction": 0.007,
             "retracement_exposure_ratio_coefficient": 0.08,
-            "retracement_volatility_1h_weight": 0.09,
-            "retracement_volatility_1m_weight": 0.1,
+            "retracement_log_range_1h_coefficient": 0.09,
+            "retracement_log_range_1m_coefficient": 0.1,
         },
         "close": {
             "qty_fraction": 0.2,
             "threshold_base_fraction": 0.03,
             "threshold_exposure_ratio_coefficient": 0.04,
-            "threshold_volatility_1h_weight": 0.05,
-            "threshold_volatility_1m_weight": 0.06,
+            "threshold_log_range_1h_coefficient": 0.05,
+            "threshold_log_range_1m_coefficient": 0.06,
             "retracement_base_fraction": 0.007,
-            "retracement_volatility_1h_weight": 0.09,
-            "retracement_volatility_1m_weight": 0.1,
+            "retracement_log_range_1h_coefficient": 0.09,
+            "retracement_log_range_1m_coefficient": 0.1,
         },
     }
     flattened = flatten_trailing_martingale_params(
@@ -2452,9 +2451,9 @@ def test_trailing_martingale_flattening_rejects_unknown_gate_mode():
 
 def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
     strategy = {
-        "volatility_ema_span_1h": 30.0,
-        "volatility_ema_span_1m": 40.0,
-        "entry": {"ema_span_0": 10.0, "ema_span_1": 20.0, "ema_gate_mode": "all"},
+        "log_range_ema_span_1h_candles": 30.0,
+        "log_range_ema_span_minutes": 40.0,
+        "entry": {"ema_span_0_minutes": 10.0, "ema_span_1_minutes": 20.0, "ema_gate_mode": "all"},
         "close": {},
     }
     for key in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS:
@@ -2595,17 +2594,17 @@ def test_suite_batching_rejects_unsupported_topologies(monkeypatch, device):
 
 def test_suite_materialization_preserves_parameter_and_metric_defaults():
     proxy = _suite_batch_proxy()
-    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit_ratio", "ema_span_0"]
+    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit_ratio", "ema_span_0_minutes"]
     proxy.base_params = {"long": dict(zip(proxy.param_keys, [4, 1.5, 32]))}
     proxy.base_total_wallet_exposure_limit_ratios = {"long": 1.5, "short": 0}
     proxy.base_n_positions = {"long": 4, "short": 0}
-    original = [{"long_ema_span_0": 64}]
+    original = [{"long_ema_span_0_minutes": 64}]
     result = proxy.materialize_suite_candidates(original)
     assert result == [
         dict(
             long_n_positions=4.0,
             long_total_wallet_exposure_limit_ratio=1.5,
-            long_ema_span_0=64.0,
+            long_ema_span_0_minutes=64.0,
             short_n_positions=0,
             short_total_wallet_exposure_limit_ratio=0,
         )
@@ -2613,7 +2612,7 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
     np.testing.assert_array_equal(
         proxy._parameter_matrix(result), proxy._parameter_matrix(original)
     )
-    assert original == [{"long_ema_span_0": 64}]
+    assert original == [{"long_ema_span_0_minutes": 64}]
 
 
 @pytest.mark.parametrize("fraction", [0.0, 0.1, 0.99999999, 1.0, 1e308])

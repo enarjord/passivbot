@@ -191,12 +191,12 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     for side in ("long", "short"):
         bot = config["bot"][side]["strategy"][strategy]
         if strategy == "ema_anchor":
-            bot.update(ema_span_0=10., ema_span_1=20., offset_fraction=.02,
+            bot.update(ema_span_0_minutes=10., ema_span_1_minutes=20., offset_fraction=.02,
                        inventory_offset_exposure_coefficient=0., offset_log_range_1m_coefficient=0.,
                        offset_log_range_1h_coefficient=0., base_qty_fraction=.02,
                        entry_qty_exposure_coefficient=1.)
         else:
-            bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_distance_fraction=.01,
+            bot["entry"].update(ema_span_0_minutes=10., ema_span_1_minutes=20., initial_ema_distance_fraction=.01,
                                 initial_qty_fraction=.02, reentry_qty_multiplier=1.,
                                 threshold_base_fraction=.9, threshold_exposure_ratio_coefficient=0.,
                                 threshold_log_range_1m_coefficient=0.,

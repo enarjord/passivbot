@@ -12,7 +12,7 @@ def snapshot(kind, flags, *, hedge=True, held=None, forager=False):
           "entry_initial_qty_fraction": 0.001, "risk_we_excess_allowance_fraction": 0.0}
     strategy = (adaptive_strategy_params(entry={"initial_qty_fraction": 0.001, "initial_ema_distance_fraction": 0.0})
                 if kind == "trailing_martingale" else
-                {"base_qty_fraction": 0.001, "ema_span_0": 10.0, "ema_span_1": 20.0,
+                {"base_qty_fraction": 0.001, "ema_span_0_minutes": 10.0, "ema_span_1_minutes": 20.0,
                  "offset_fraction": 0.0, "inventory_offset_exposure_coefficient": 0.0})
     symbols = []
     for i in range(2 if forager else 1):

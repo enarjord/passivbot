@@ -183,18 +183,18 @@ struct EmaMulticoinSideConfig {
     float unstuck_span0;
     float unstuck_span1;
     float base_qty_fraction;
-    float span_a;
-    float span_b;
+    float ema_span_0_candles;
+    float ema_span_1_candles;
     float alpha0;
     float alpha1;
     float alpha2;
     float entry_qty_exposure_coefficient;
     float offset_fraction;
     float inventory_offset_exposure_coefficient;
-    float weight_1h;
-    float weight_1m;
-    float span_1h;
-    float span_1m;
+    float offset_log_range_1h_coefficient;
+    float offset_log_range_1m_coefficient;
+    float offset_log_range_ema_span_1h_candles;
+    float offset_log_range_ema_span_candles;
     float alpha_1h;
     float alpha_1m;
     AdaptiveTiming adaptive;
@@ -421,26 +421,26 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     config.unstuck_span0 = params[po + 37];
     config.unstuck_span1 = params[po + 38];
     config.base_qty_fraction = params[po + 0];
-    config.span_a = params[po + 1];
-    config.span_b = params[po + 2];
-    float span_c = sqrt(fmax(config.span_a * config.span_b, 1.0f));
-    float span_lo = fmin(config.span_a, fmin(config.span_b, span_c));
-    float span_hi = fmax(config.span_a, fmax(config.span_b, span_c));
-    float span_mid = config.span_a + config.span_b + span_c - span_lo - span_hi;
+    config.ema_span_0_candles = params[po + 1];
+    config.ema_span_1_candles = params[po + 2];
+    float span_c = sqrt(fmax(config.ema_span_0_candles * config.ema_span_1_candles, 1.0f));
+    float span_lo = fmin(config.ema_span_0_candles, fmin(config.ema_span_1_candles, span_c));
+    float span_hi = fmax(config.ema_span_0_candles, fmax(config.ema_span_1_candles, span_c));
+    float span_mid = config.ema_span_0_candles + config.ema_span_1_candles + span_c - span_lo - span_hi;
     config.alpha0 = clamp(2.0f / (span_lo + 1.0f), 0.0f, 1.0f);
     config.alpha1 = clamp(2.0f / (span_mid + 1.0f), 0.0f, 1.0f);
     config.alpha2 = clamp(2.0f / (span_hi + 1.0f), 0.0f, 1.0f);
     config.entry_qty_exposure_coefficient = params[po + 3];
     config.offset_fraction = params[po + 4];
     config.inventory_offset_exposure_coefficient = params[po + 5];
-    config.weight_1h = params[po + 6];
-    config.weight_1m = params[po + 7];
-    config.span_1h = params[po + 8];
-    config.span_1m = params[po + 9];
-    config.alpha_1h = config.span_1h > 0.0f
-        ? 2.0f / (fmax(config.span_1h, 1.0f) + 1.0f) : 0.0f;
-    config.alpha_1m = config.span_1m > 0.0f
-        ? clamp(2.0f / (config.span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
+    config.offset_log_range_1h_coefficient = params[po + 6];
+    config.offset_log_range_1m_coefficient = params[po + 7];
+    config.offset_log_range_ema_span_1h_candles = params[po + 8];
+    config.offset_log_range_ema_span_candles = params[po + 9];
+    config.alpha_1h = config.offset_log_range_ema_span_1h_candles > 0.0f
+        ? 2.0f / (fmax(config.offset_log_range_ema_span_1h_candles, 1.0f) + 1.0f) : 0.0f;
+    config.alpha_1m = config.offset_log_range_ema_span_candles > 0.0f
+        ? clamp(2.0f / (config.offset_log_range_ema_span_candles + 1.0f), 0.0f, 1.0f) : 0.0f;
     config.cooldown_min = params[po + 10];
     config.adaptive = load_adaptive_timing(params, po + 39);
     config.twel = params[po + 11];
@@ -582,10 +582,10 @@ inline void init_ema_multicoin_side_state(
         side.entry_candidate[c] = false;
         if (c < coin_count) {
             float coin_span_a = coin_override_or(
-                coin_overrides, c, 1, config.span_a
+                coin_overrides, c, 1, config.ema_span_0_candles
             );
             float coin_span_b = coin_override_or(
-                coin_overrides, c, 2, config.span_b
+                coin_overrides, c, 2, config.ema_span_1_candles
             );
             float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
             float coin_span_lo = fmin(coin_span_a, fmin(coin_span_b, coin_span_c));
@@ -602,10 +602,10 @@ inline void init_ema_multicoin_side_state(
                 2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f
             );
             float coin_span_1h = coin_override_or(
-                coin_overrides, c, 8, config.span_1h
+                coin_overrides, c, 8, config.offset_log_range_ema_span_1h_candles
             );
             float coin_span_1m = coin_override_or(
-                coin_overrides, c, 9, config.span_1m
+                coin_overrides, c, 9, config.offset_log_range_ema_span_candles
             );
             side.alpha_1h_coin[c] = coin_span_1h > 0.0f
                 ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
@@ -723,13 +723,13 @@ inline void update_ema_multicoin_side_indicators(
             bool observed;
             side.volatility_1h[c] = bootstrap_market_ema(
                 bars, hour_log_ranges, k, first_valid, c, coin_count,
-                coin_override_or(coin_overrides, c, 8, config.span_1h), bootstrap_counts[c * 10 + 7], 3, observed);
+                coin_override_or(coin_overrides, c, 8, config.offset_log_range_ema_span_1h_candles), bootstrap_counts[c * 10 + 7], 3, observed);
             side.hourly_ema_bootstrapped[c] = observed;
         }
         if (can_bootstrap && !side.market_ema_bootstrapped[c]) {
             bool observed;
-            const float a = coin_override_or(coin_overrides, c, 1, config.span_a);
-            const float b = coin_override_or(coin_overrides, c, 2, config.span_b);
+            const float a = coin_override_or(coin_overrides, c, 1, config.ema_span_0_candles);
+            const float b = coin_override_or(coin_overrides, c, 2, config.ema_span_1_candles);
             const float derived = sqrt(fmax(a * b, 1.0f));
             const float lo = fmin(a, fmin(b, derived));
             const float hi = fmax(a, fmax(b, derived));
@@ -739,7 +739,7 @@ inline void update_ema_multicoin_side_indicators(
             side.ema2[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, hi, bootstrap_counts[c * 10 + 2], 0, observed);
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    coin_override_or(coin_overrides, c, 9, config.span_1m), bootstrap_counts[c * 10 + 6], 1, observed);
+                    coin_override_or(coin_overrides, c, 9, config.offset_log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
             if (config.alpha_forager_volatility > 0.0f)
                 side.forager_volatility[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     config.forager_volatility_span, bootstrap_counts[c * 10 + 9], 1, observed);
@@ -1399,8 +1399,8 @@ inline void generate_ema_multicoin_side_orders(
     const float entry_qty_exposure_coefficient = config.entry_qty_exposure_coefficient;
     const float offset_fraction = config.offset_fraction;
     const float inventory_offset_exposure_coefficient = config.inventory_offset_exposure_coefficient;
-    const float weight_1h = config.weight_1h;
-    const float weight_1m = config.weight_1m;
+    const float offset_log_range_1h_coefficient = config.offset_log_range_1h_coefficient;
+    const float offset_log_range_1m_coefficient = config.offset_log_range_1m_coefficient;
     const float cooldown_min = config.cooldown_min;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
@@ -1769,10 +1769,10 @@ inline void generate_ema_multicoin_side_orders(
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
         float coin_weight_1h = coin_override_or(
-            coin_overrides, c, 6, weight_1h
+            coin_overrides, c, 6, offset_log_range_1h_coefficient
         );
         float coin_weight_1m = coin_override_or(
-            coin_overrides, c, 7, weight_1m
+            coin_overrides, c, 7, offset_log_range_1m_coefficient
         );
         float multiplier = fmax(
             1.0f + volatility_1h[c] * coin_weight_1h

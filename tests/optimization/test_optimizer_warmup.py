@@ -1,7 +1,7 @@
 """Regression tests for optimizer warmup stamping.
 
 Covers the bug where prepare_hlcvs_mss stamped mss[coin]["warmup_minutes"]
-from the template bot's decorative values (e.g. volatility_ema_span_1h)
+from the template bot's decorative values (e.g. log_range_ema_span_1h_candles)
 instead of the worst case the optimizer's search space can actually produce.
 """
 from config.shared_bot import native_forager_weight_name
@@ -42,11 +42,11 @@ def _set_bounds(config, entries):
 def _make_optimizer_config() -> dict:
     """Build a config where template bot and bounds disagree on warmup.
 
-    Template bot has volatility_ema_span_1h = 1690, which would
+    Template bot has log_range_ema_span_1h_candles = 1690, which would
     produce warmup = 1690 * 60 * 0.3 = 30420 min under
     compute_per_coin_warmup_minutes.
 
-    Bounds pin that field to [0, 0] and cap ema_span_0 at 100, so the
+    Bounds pin that field to [0, 0] and cap ema_span_0_minutes at 100, so the
     largest warmup the optimizer can actually produce is 100 * 0.3 = 30 min.
     """
     config = get_template_config()
@@ -75,18 +75,18 @@ def _make_optimizer_config() -> dict:
     short_bot["strategy"]["trailing_martingale"]["log_range_ema_span_minutes"] = 0.0
 
     bounds = config["optimize"]["bounds"]
-    _set_bounds(config, {"long_ema_span_0": [1, 100, 1]})
-    _set_bounds(config, {"long_ema_span_1": [1, 100, 1]})
+    _set_bounds(config, {"long_entry_ema_span_0_minutes": [1, 100, 1]})
+    _set_bounds(config, {"long_entry_ema_span_1_minutes": [1, 100, 1]})
     _set_bounds(config, {"long_forager_volatility_ema_span_1m": [0, 0]})
     _set_bounds(config, {"long_forager_volume_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"long_volatility_ema_span_1h": [0, 0]})
-    _set_bounds(config, {"long_volatility_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"short_ema_span_0": [1, 100, 1]})
-    _set_bounds(config, {"short_ema_span_1": [1, 100, 1]})
+    _set_bounds(config, {"long_log_range_ema_span_1h_candles": [0, 0]})
+    _set_bounds(config, {"long_log_range_ema_span_minutes": [0, 0]})
+    _set_bounds(config, {"short_entry_ema_span_0_minutes": [1, 100, 1]})
+    _set_bounds(config, {"short_entry_ema_span_1_minutes": [1, 100, 1]})
     _set_bounds(config, {"short_forager_volatility_ema_span_1m": [0, 0]})
     _set_bounds(config, {"short_forager_volume_ema_span_1m": [0, 0]})
-    _set_bounds(config, {"short_volatility_ema_span_1h": [0, 0]})
-    _set_bounds(config, {"short_volatility_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_log_range_ema_span_1h_candles": [0, 0]})
+    _set_bounds(config, {"short_log_range_ema_span_minutes": [0, 0]})
     for side in ("long", "short"):
         for i in (0, 1):
             _set_bounds(config, {f"{side}_unstuck_ema_span_{i}": [1, 100, 1]})
@@ -110,7 +110,7 @@ def test_stamp_optimizer_warmup_uses_bounds_when_template_bot_exceeds_them():
     )
 
     # The fix: optimizer stamping reflects the max the optimizer's search
-    # space can produce (ema_span_0 ∈ [1, 100] ⇒ 100 * 0.3 = 30 min).
+    # space can produce (ema_span_0_minutes ∈ [1, 100] ⇒ 100 * 0.3 = 30 min).
     warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
     stamp_warmup_metadata(mss, ["HYPE"], warmup_map)
 
@@ -188,7 +188,7 @@ def test_stamp_optimizer_warmup_respects_last_valid_index_cap():
     bounds-derived warmup would push it past the end of the data."""
 
     config = _make_optimizer_config()
-    _set_bounds(config, {"long_ema_span_0": [1, 100000, 1]})
+    _set_bounds(config, {"long_entry_ema_span_0_minutes": [1, 100000, 1]})
     mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 10}}
 
     stamp_warmup_metadata(mss, ["HYPE"], compute_optimizer_per_coin_warmup_minutes(config))

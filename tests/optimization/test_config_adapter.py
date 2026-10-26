@@ -1,8 +1,9 @@
+from copy import deepcopy
 import passivbot_rust as pbr
 import pytest
 
 import config.strategy_spec as strategy_spec
-from config.strategy_paths import native_strategy_path_to_public
+
 from config import prepare_config
 from config.schema import get_template_config, get_expanded_config_prototype
 from config.param_paths import resolve_optimizer_key_path
@@ -135,7 +136,7 @@ class TestConfigAdapter:
 
         assert spec["strategy_kind"] == "trailing_martingale"
         assert (
-            spec["defaults"]["long"]["ema_span_0"]
+            spec["defaults"]["long"]["entry_ema_span_0_minutes"]
             == bot_template["long"]["strategy"]["trailing_martingale"]["entry"][
                 "ema_span_0_minutes"
             ]
@@ -144,7 +145,7 @@ class TestConfigAdapter:
             "short"
         ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_fraction"]
         assert (
-            spec["optimize_bounds"]["long_ema_span_0"]
+            spec["optimize_bounds"]["long_entry_ema_span_0_minutes"]
             == template["optimize"]["bounds"]["long"]["strategy"][
                 "trailing_martingale"
             ]["entry"]["ema_span_0_minutes"]
@@ -159,9 +160,9 @@ class TestConfigAdapter:
         rust_spec = pbr.get_strategy_spec("trailing_martingale")
         cached_spec = get_strategy_spec("trailing_martingale")
 
-        from config.strategy_paths import project_strategy_spec
 
-        assert project_strategy_spec("trailing_martingale", rust_spec) == cached_spec
+
+        assert deepcopy(rust_spec) == cached_spec
 
     def test_rust_strategy_kind_api_is_python_source_of_truth(self):
         assert tuple(pbr.get_strategy_kinds()) == get_supported_strategy_kinds()
@@ -172,9 +173,9 @@ class TestConfigAdapter:
         assert spec["strategy_kind"] == "ema_anchor"
         assert spec["defaults"]["long"]["base_qty_fraction"] == 0.01
         assert spec["defaults"]["short"]["offset_fraction"] == 0.002
-        assert spec["defaults"]["long"]["offset_volatility_ema_span_1m"] == 60.0
+        assert spec["defaults"]["long"]["offset_log_range_ema_span_minutes"] == 60.0
         assert spec["optimize_bounds"]["long_offset_fraction"] == [0.0, 0.05, 0.0001]
-        assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
+        assert spec["optimize_bounds"]["long_offset_log_range_1m_coefficient"] == [0.0, 40.0, 0.1]
         assert any(
             param["config_path"] == ["strategy", "long", "base_qty_fraction"]
             and param["legacy_config_paths"] == []
@@ -194,7 +195,7 @@ class TestConfigAdapter:
         key_paths = get_optimization_key_paths(config)
 
         assert (
-            "long_ema_span_0",
+            "long_entry_ema_span_0_minutes",
             ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
         ) in key_paths
         assert (
@@ -223,7 +224,7 @@ class TestConfigAdapter:
 
         assert ("long_base_qty_fraction", ("bot", "long", "strategy", "ema_anchor", "base_qty_fraction")) in key_paths
         assert (
-            "long_offset_volatility_1m_weight",
+            "long_offset_log_range_1m_coefficient",
             ("bot", "long", "strategy", "ema_anchor", "offset_log_range_1m_coefficient"),
         ) in key_paths
         assert ("short_offset_fraction", ("bot", "short", "strategy", "ema_anchor", "offset_fraction")) in key_paths
@@ -243,7 +244,7 @@ class TestConfigAdapter:
                 config_path[1],
                 "strategy",
                 strategy_kind,
-                *native_strategy_path_to_public(strategy_kind, config_path[2:]),
+                *tuple(config_path[2:]),
             )
 
             # Native ABI paths remain directional; genetic owners may be shared.

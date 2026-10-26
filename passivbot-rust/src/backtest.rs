@@ -21,9 +21,9 @@ use crate::orchestrator::{
     EntryPeekHints, ForagerHysteresisState,
 };
 use crate::strategies::{
-    parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
+    parse_strategy_params, strategy_price_ema_spans_minutes, strategy_log_range_ema_span_1h_candles,
     strategy_has_trailing, strategy_initial_qty_fraction, strategy_needs_log_range_1h,
-    strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, StrategyParams,
+    strategy_needs_log_range_1m, strategy_log_range_ema_span_minutes, StrategyParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
@@ -139,10 +139,10 @@ pub struct EmaAlphas {
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
     pub log_range_alpha_short: f64,
-    pub volatility_ema_1m_alpha_long: f64,
-    pub volatility_ema_1m_alpha_short: f64,
-    pub volatility_ema_1h_alpha_long: f64,
-    pub volatility_ema_1h_alpha_short: f64,
+    pub log_range_ema_1m_alpha_long: f64,
+    pub log_range_ema_1m_alpha_short: f64,
+    pub log_range_ema_1h_alpha_long: f64,
+    pub log_range_ema_1h_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -176,18 +176,18 @@ pub struct EMAs {
     pub log_range_short: f64,
     pub log_range_short_num: f64,
     pub log_range_short_den: f64,
-    pub volatility_ema_1m_long: f64,
-    pub volatility_ema_1m_long_num: f64,
-    pub volatility_ema_1m_long_den: f64,
-    pub volatility_ema_1m_short: f64,
-    pub volatility_ema_1m_short_num: f64,
-    pub volatility_ema_1m_short_den: f64,
-    pub volatility_ema_1h_long: f64,
-    pub volatility_ema_1h_long_num: f64,
-    pub volatility_ema_1h_long_den: f64,
-    pub volatility_ema_1h_short: f64,
-    pub volatility_ema_1h_short_num: f64,
-    pub volatility_ema_1h_short_den: f64,
+    pub log_range_ema_1m_long: f64,
+    pub log_range_ema_1m_long_num: f64,
+    pub log_range_ema_1m_long_den: f64,
+    pub log_range_ema_1m_short: f64,
+    pub log_range_ema_1m_short_num: f64,
+    pub log_range_ema_1m_short_den: f64,
+    pub log_range_ema_1h_long: f64,
+    pub log_range_ema_1h_long_num: f64,
+    pub log_range_ema_1h_long_den: f64,
+    pub log_range_ema_1h_short: f64,
+    pub log_range_ema_1h_short_num: f64,
+    pub log_range_ema_1h_short_den: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -243,7 +243,7 @@ fn make_orchestrator_ema_slots(
     let forager_short = next_m1_log_range;
     next_m1_log_range += 1;
     let offset_long =
-        if strategy_offset_volatility_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0 {
+        if strategy_log_range_ema_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0 {
             let idx = next_m1_log_range;
             next_m1_log_range += 1;
             Some(idx)
@@ -251,7 +251,7 @@ fn make_orchestrator_ema_slots(
             None
         };
     let offset_short =
-        if strategy_offset_volatility_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0 {
+        if strategy_log_range_ema_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0 {
             let idx = next_m1_log_range;
             Some(idx)
         } else {
@@ -283,16 +283,16 @@ fn refresh_orchestrator_hourly_log_ranges(
     for (strategy, value, denominator) in [
         (
             &strategies.long,
-            emas.volatility_ema_1h_long,
-            emas.volatility_ema_1h_long_den,
+            emas.log_range_ema_1h_long,
+            emas.log_range_ema_1h_long_den,
         ),
         (
             &strategies.short,
-            emas.volatility_ema_1h_short,
-            emas.volatility_ema_1h_short_den,
+            emas.log_range_ema_1h_short,
+            emas.log_range_ema_1h_short_den,
         ),
     ] {
-        if let Some(span) = strategy_entry_volatility_span_hours(strategy) {
+        if let Some(span) = strategy_log_range_ema_span_1h_candles(strategy) {
             if span > 0.0 && denominator > 0.0 && value.is_finite() {
                 values.push((span, value));
             }
@@ -552,10 +552,10 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     needs_volume_ema_short: bool,
     needs_log_range_long: bool,
     needs_log_range_short: bool,
-    needs_volatility_ema_1m_long: bool,
-    needs_volatility_ema_1m_short: bool,
-    needs_volatility_ema_1h_long: bool,
-    needs_volatility_ema_1h_short: bool,
+    needs_log_range_ema_1m_long: bool,
+    needs_log_range_ema_1m_short: bool,
+    needs_log_range_ema_1h_long: bool,
+    needs_log_range_ema_1h_short: bool,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
     coin_trade_start_idx: Vec<usize>,
@@ -848,32 +848,32 @@ fn parse_strategy_params_pair(
 #[cfg(test)]
 fn test_trailing_martingale_params_value_from_flat(bot_params: &BotParams) -> serde_json::Value {
     crate::strategies::TrailingMartingaleParams {
-        volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
-        volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+        log_range_ema_span_1h_candles: bot_params.entry_log_range_ema_span_1h_candles,
+        log_range_ema_span_minutes: bot_params.entry_log_range_ema_span_minutes,
         entry: crate::strategies::TrailingMartingaleEntryParams {
-            ema_span_0: bot_params.ema_span_0,
-            ema_span_1: bot_params.ema_span_1,
+            ema_span_0_minutes: bot_params.ema_span_0_minutes,
+            ema_span_1_minutes: bot_params.ema_span_1_minutes,
             reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
             ema_gate_mode: crate::strategies::EmaGateMode::Initial,
             initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
             initial_qty_fraction: bot_params.entry_initial_qty_fraction,
             threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
             threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-            threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-            threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+            threshold_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+            threshold_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
             retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
             retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-            retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-            retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+            retracement_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+            retracement_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
         },
         close: crate::strategies::TrailingMartingaleCloseParams {
             qty_fraction: bot_params.close_grid_qty_fraction,
             threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
-            threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-            threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+            threshold_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+            threshold_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
             retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
-            retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-            retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+            retracement_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+            retracement_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
             ..Default::default()
         },
     }
@@ -1274,7 +1274,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
 
                 {
                     let strategy = &self.strategy_params[idx].long;
-                    let (span0, span1) = strategy_ema_spans(strategy);
+                    let (span0, span1) = strategy_price_ema_spans_minutes(strategy);
                     let mut spans = [span0, span1, (span0 * span1).sqrt()];
                     spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
                     for (span, value) in spans.into_iter().zip(self.emas[idx].long.into_iter()) {
@@ -1283,7 +1283,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 }
                 {
                     let strategy = &self.strategy_params[idx].short;
-                    let (span0, span1) = strategy_ema_spans(strategy);
+                    let (span0, span1) = strategy_price_ema_spans_minutes(strategy);
                     let mut spans = [span0, span1, (span0 * span1).sqrt()];
                     spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
                     for (span, value) in spans.into_iter().zip(self.emas[idx].short.into_iter()) {
@@ -1338,19 +1338,19 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 m1.log_range
                     .push((lr_span_short, self.emas[idx].log_range_short));
                 if let Some(span) =
-                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].long)
+                    strategy_log_range_ema_span_minutes(&self.strategy_params[idx].long)
                 {
                     if span > 0.0 {
                         m1.log_range
-                            .push((span, self.emas[idx].volatility_ema_1m_long));
+                            .push((span, self.emas[idx].log_range_ema_1m_long));
                     }
                 }
                 if let Some(span) =
-                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].short)
+                    strategy_log_range_ema_span_minutes(&self.strategy_params[idx].short)
                 {
                     if span > 0.0 {
                         m1.log_range
-                            .push((span, self.emas[idx].volatility_ema_1m_short));
+                            .push((span, self.emas[idx].log_range_ema_1m_short));
                     }
                 }
 
@@ -1595,12 +1595,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             }
             if let Some(slot) = slots.m1_log_range.offset_long {
                 if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 = self.emas[idx].volatility_ema_1m_long;
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_ema_1m_long;
                 }
             }
             if let Some(slot) = slots.m1_log_range.offset_short {
                 if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 = self.emas[idx].volatility_ema_1m_short;
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_ema_1m_short;
                 }
             }
             refresh_orchestrator_hourly_log_ranges(
@@ -1839,18 +1839,18 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     log_range_short: 0.0,
                     log_range_short_num: 0.0,
                     log_range_short_den: 1.0,
-                    volatility_ema_1m_long: 0.0,
-                    volatility_ema_1m_long_num: 0.0,
-                    volatility_ema_1m_long_den: 1.0,
-                    volatility_ema_1m_short: 0.0,
-                    volatility_ema_1m_short_num: 0.0,
-                    volatility_ema_1m_short_den: 1.0,
-                    volatility_ema_1h_long: 0.0,
-                    volatility_ema_1h_long_num: 0.0,
-                    volatility_ema_1h_long_den: 1.0,
-                    volatility_ema_1h_short: 0.0,
-                    volatility_ema_1h_short_num: 0.0,
-                    volatility_ema_1h_short_den: 1.0,
+                    log_range_ema_1m_long: 0.0,
+                    log_range_ema_1m_long_num: 0.0,
+                    log_range_ema_1m_long_den: 1.0,
+                    log_range_ema_1m_short: 0.0,
+                    log_range_ema_1m_short_num: 0.0,
+                    log_range_ema_1m_short_den: 1.0,
+                    log_range_ema_1h_long: 0.0,
+                    log_range_ema_1h_long_num: 0.0,
+                    log_range_ema_1h_long_den: 1.0,
+                    log_range_ema_1h_short: 0.0,
+                    log_range_ema_1h_short_num: 0.0,
+                    log_range_ema_1h_short_den: 1.0,
                 }
             })
             .collect();
@@ -1934,16 +1934,16 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             || strategy_params_parsed
                 .iter()
                 .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_volatility_ema_1m_long = strategy_params_parsed
+        let needs_log_range_ema_1m_long = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1m(&sp.long));
-        let needs_volatility_ema_1m_short = strategy_params_parsed
+        let needs_log_range_ema_1m_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_volatility_ema_1h_long = strategy_params_parsed
+        let needs_log_range_ema_1h_long = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1h(&sp.long));
-        let needs_volatility_ema_1h_short = strategy_params_parsed
+        let needs_log_range_ema_1h_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1h(&sp.short));
         let btc_collateral_initialized = !balance.use_btc_collateral;
@@ -2008,10 +2008,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 .any(|bp| bp.short.forager_score_weights.volume != 0.0),
             needs_log_range_long,
             needs_log_range_short,
-            needs_volatility_ema_1m_long,
-            needs_volatility_ema_1m_short,
-            needs_volatility_ema_1h_long,
-            needs_volatility_ema_1h_short,
+            needs_log_range_ema_1m_long,
+            needs_log_range_ema_1m_short,
+            needs_log_range_ema_1h_long,
+            needs_log_range_ema_1h_short,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -4025,7 +4025,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             let strategies = &self.strategy_params[i];
             let bots = &self.bot_params[i];
             let price_spans = |strategy: &StrategyParams| {
-                let (a, b) = strategy_ema_spans(strategy);
+                let (a, b) = strategy_price_ema_spans_minutes(strategy);
                 let mut spans = [a, b, (a * b).sqrt()];
                 spans.sort_by(f64::total_cmp);
                 spans
@@ -4071,30 +4071,30 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 self.bootstrap_market_ema(
                     i,
                     k,
-                    alphas.volatility_ema_1m_alpha_long,
+                    alphas.log_range_ema_1m_alpha_long,
                     2,
-                    strategy_offset_volatility_span_minutes(&strategies.long).unwrap_or(0.0)
+                    strategy_log_range_ema_span_minutes(&strategies.long).unwrap_or(0.0)
                         / interval,
                 ),
                 self.bootstrap_market_ema(
                     i,
                     k,
-                    alphas.volatility_ema_1m_alpha_short,
+                    alphas.log_range_ema_1m_alpha_short,
                     2,
-                    strategy_offset_volatility_span_minutes(&strategies.short).unwrap_or(0.0)
+                    strategy_log_range_ema_span_minutes(&strategies.short).unwrap_or(0.0)
                         / interval,
                 ),
                 self.bootstrap_hour_ema(
                     i,
                     k,
-                    alphas.volatility_ema_1h_alpha_long,
-                    strategy_entry_volatility_span_hours(&strategies.long).unwrap_or(0.0),
+                    alphas.log_range_ema_1h_alpha_long,
+                    strategy_log_range_ema_span_1h_candles(&strategies.long).unwrap_or(0.0),
                 ),
                 self.bootstrap_hour_ema(
                     i,
                     k,
-                    alphas.volatility_ema_1h_alpha_short,
-                    strategy_entry_volatility_span_hours(&strategies.short).unwrap_or(0.0),
+                    alphas.log_range_ema_1h_alpha_short,
+                    strategy_log_range_ema_span_1h_candles(&strategies.short).unwrap_or(0.0),
                 ),
             ];
             let ema = &mut self.emas[i];
@@ -4135,27 +4135,27 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             scalar!(log_range_long, log_range_long_num, log_range_long_den, 2);
             scalar!(log_range_short, log_range_short_num, log_range_short_den, 3);
             scalar!(
-                volatility_ema_1m_long,
-                volatility_ema_1m_long_num,
-                volatility_ema_1m_long_den,
+                log_range_ema_1m_long,
+                log_range_ema_1m_long_num,
+                log_range_ema_1m_long_den,
                 4
             );
             scalar!(
-                volatility_ema_1m_short,
-                volatility_ema_1m_short_num,
-                volatility_ema_1m_short_den,
+                log_range_ema_1m_short,
+                log_range_ema_1m_short_num,
+                log_range_ema_1m_short_den,
                 5
             );
             scalar!(
-                volatility_ema_1h_long,
-                volatility_ema_1h_long_num,
-                volatility_ema_1h_long_den,
+                log_range_ema_1h_long,
+                log_range_ema_1h_long_num,
+                log_range_ema_1h_long_den,
                 6
             );
             scalar!(
-                volatility_ema_1h_short,
-                volatility_ema_1h_short_num,
-                volatility_ema_1h_short_den,
+                log_range_ema_1h_short,
+                log_range_ema_1h_short_num,
+                log_range_ema_1h_short_den,
                 7
             );
             self.ordinary_ema_bootstrapped[i] = true;
@@ -4209,7 +4209,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.last_hour_boundary_ms = hour_boundary;
 
             // Update hourly log-range EMAs for entry volatility adjustments
-            if self.needs_volatility_ema_1h_long || self.needs_volatility_ema_1h_short {
+            if self.needs_log_range_ema_1h_long || self.needs_log_range_ema_1h_short {
                 for i in 0..self.n_coins {
                     if self.coin_valid_range(i).is_none() {
                         continue;
@@ -4223,23 +4223,23 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         continue;
                     }
                     let hour_log_range = (bucket.high / bucket.low).ln();
-                    let alpha_long = self.ema_alphas[i].volatility_ema_1h_alpha_long;
-                    let alpha_short = self.ema_alphas[i].volatility_ema_1h_alpha_short;
+                    let alpha_long = self.ema_alphas[i].log_range_ema_1h_alpha_long;
+                    let alpha_short = self.ema_alphas[i].log_range_ema_1h_alpha_short;
                     let emas = &mut self.emas[i];
-                    if self.needs_volatility_ema_1h_long && alpha_long > 0.0 {
-                        emas.volatility_ema_1h_long = update_adjusted_ema(
+                    if self.needs_log_range_ema_1h_long && alpha_long > 0.0 {
+                        emas.log_range_ema_1h_long = update_adjusted_ema(
                             hour_log_range,
                             alpha_long,
-                            &mut emas.volatility_ema_1h_long_num,
-                            &mut emas.volatility_ema_1h_long_den,
+                            &mut emas.log_range_ema_1h_long_num,
+                            &mut emas.log_range_ema_1h_long_den,
                         );
                     }
-                    if self.needs_volatility_ema_1h_short && alpha_short > 0.0 {
-                        emas.volatility_ema_1h_short = update_adjusted_ema(
+                    if self.needs_log_range_ema_1h_short && alpha_short > 0.0 {
+                        emas.log_range_ema_1h_short = update_adjusted_ema(
                             hour_log_range,
                             alpha_short,
-                            &mut emas.volatility_ema_1h_short_num,
-                            &mut emas.volatility_ema_1h_short_den,
+                            &mut emas.log_range_ema_1h_short_num,
+                            &mut emas.log_range_ema_1h_short_den,
                         );
                     }
                 }
@@ -4327,8 +4327,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             // log range metric: ln(high / low)
             if self.needs_log_range_long
                 || self.needs_log_range_short
-                || self.needs_volatility_ema_1m_long
-                || self.needs_volatility_ema_1m_short
+                || self.needs_log_range_ema_1m_long
+                || self.needs_log_range_ema_1m_short
             {
                 let log_range = if high > 0.0 && low > 0.0 {
                     (high / low).ln()
@@ -4351,25 +4351,25 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         &mut emas.log_range_short_den,
                     );
                 }
-                if self.needs_volatility_ema_1m_long {
-                    let alpha = self.ema_alphas[i].volatility_ema_1m_alpha_long;
+                if self.needs_log_range_ema_1m_long {
+                    let alpha = self.ema_alphas[i].log_range_ema_1m_alpha_long;
                     if alpha > 0.0 {
-                        emas.volatility_ema_1m_long = update_adjusted_ema(
+                        emas.log_range_ema_1m_long = update_adjusted_ema(
                             log_range,
                             alpha,
-                            &mut emas.volatility_ema_1m_long_num,
-                            &mut emas.volatility_ema_1m_long_den,
+                            &mut emas.log_range_ema_1m_long_num,
+                            &mut emas.log_range_ema_1m_long_den,
                         );
                     }
                 }
-                if self.needs_volatility_ema_1m_short {
-                    let alpha = self.ema_alphas[i].volatility_ema_1m_alpha_short;
+                if self.needs_log_range_ema_1m_short {
+                    let alpha = self.ema_alphas[i].log_range_ema_1m_alpha_short;
                     if alpha > 0.0 {
-                        emas.volatility_ema_1m_short = update_adjusted_ema(
+                        emas.log_range_ema_1m_short = update_adjusted_ema(
                             log_range,
                             alpha,
-                            &mut emas.volatility_ema_1m_short_num,
-                            &mut emas.volatility_ema_1m_short_den,
+                            &mut emas.log_range_ema_1m_short_num,
+                            &mut emas.log_range_ema_1m_short_den,
                         );
                     }
                 }
@@ -4765,11 +4765,11 @@ fn calc_ema_alphas(
     };
 
     // EMA spans are in minutes. Divide by interval to get number of candle periods.
-    let (long_span_0, long_span_1) = strategy_ema_spans(&strategy_params_pair.long);
+    let (long_span_0, long_span_1) = strategy_price_ema_spans_minutes(&strategy_params_pair.long);
     let mut ema_spans_long = [long_span_0, long_span_1, (long_span_0 * long_span_1).sqrt()];
     ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let (short_span_0, short_span_1) = strategy_ema_spans(&strategy_params_pair.short);
+    let (short_span_0, short_span_1) = strategy_price_ema_spans_minutes(&strategy_params_pair.short);
     let mut ema_spans_short = [
         short_span_0,
         short_span_1,
@@ -4809,18 +4809,18 @@ fn calc_ema_alphas(
         log_range_alpha_short: clamp_alpha(
             2.0 / (bot_params_pair.short.filter_volatility_ema_span_1m as f64 / interval_f + 1.0),
         ),
-        volatility_ema_1m_alpha_long: {
+        log_range_ema_1m_alpha_long: {
             let span =
-                strategy_offset_volatility_span_minutes(&strategy_params_pair.long).unwrap_or(0.0);
+                strategy_log_range_ema_span_minutes(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
                 clamp_alpha(2.0 / (span / interval_f + 1.0))
             } else {
                 0.0
             }
         },
-        volatility_ema_1m_alpha_short: {
+        log_range_ema_1m_alpha_short: {
             let span =
-                strategy_offset_volatility_span_minutes(&strategy_params_pair.short).unwrap_or(0.0);
+                strategy_log_range_ema_span_minutes(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
                 clamp_alpha(2.0 / (span / interval_f + 1.0))
             } else {
@@ -4829,18 +4829,18 @@ fn calc_ema_alphas(
         },
         // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
         // so they do NOT need interval adjustment (hourly buckets are calendar-based)
-        volatility_ema_1h_alpha_long: {
+        log_range_ema_1h_alpha_long: {
             let span =
-                strategy_entry_volatility_span_hours(&strategy_params_pair.long).unwrap_or(0.0);
+                strategy_log_range_ema_span_1h_candles(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
                 2.0 / (span.max(1.0) + 1.0)
             } else {
                 0.0
             }
         },
-        volatility_ema_1h_alpha_short: {
+        log_range_ema_1h_alpha_short: {
             let span =
-                strategy_entry_volatility_span_hours(&strategy_params_pair.short).unwrap_or(0.0);
+                strategy_log_range_ema_span_1h_candles(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
                 2.0 / (span.max(1.0) + 1.0)
             } else {
@@ -4863,32 +4863,32 @@ mod tests {
 
     fn tm_params_for_ema_tests(bot_params: &BotParams) -> TrailingMartingaleParams {
         TrailingMartingaleParams {
-            volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
-            volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+            log_range_ema_span_1h_candles: bot_params.entry_log_range_ema_span_1h_candles,
+            log_range_ema_span_minutes: bot_params.entry_log_range_ema_span_minutes,
             entry: TrailingMartingaleEntryParams {
-                ema_span_0: bot_params.ema_span_0,
-                ema_span_1: bot_params.ema_span_1,
+                ema_span_0_minutes: bot_params.ema_span_0_minutes,
+                ema_span_1_minutes: bot_params.ema_span_1_minutes,
                 reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
                 ema_gate_mode: crate::strategies::EmaGateMode::Initial,
                 initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
                 initial_qty_fraction: bot_params.entry_initial_qty_fraction,
                 threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
                 threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-                threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                threshold_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+                threshold_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
                 retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
                 retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-                retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                retracement_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+                retracement_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
             },
             close: TrailingMartingaleCloseParams {
                 qty_fraction: bot_params.close_grid_qty_fraction,
                 threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
-                threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                threshold_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+                threshold_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
                 retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
-                retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                retracement_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+                retracement_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
                 ..Default::default()
             },
         }
@@ -4951,8 +4951,8 @@ mod tests {
         }
         let btc = Array1::from_elem(4, 20_000.0);
         let mut pair = BotParamsPair::default();
-        pair.long.ema_span_0 = 3.0;
-        pair.long.ema_span_1 = 3.0;
+        pair.long.ema_span_0_minutes = 3.0;
+        pair.long.ema_span_1_minutes = 3.0;
         pair.long.unstuck_ema_span_0 = 3.0;
         pair.long.unstuck_ema_span_1 = 3.0;
         let params = ordinary_ema_fixture_params(4, 1);
@@ -5002,8 +5002,8 @@ mod tests {
         let btc = Array1::from_elem(n, 20_000.0);
         let params = ordinary_ema_fixture_params(n, 1);
         let mut pair = BotParamsPair::default();
-        pair.long.entry_volatility_ema_span_1h = 3.0;
-        pair.long.entry_weight_volatility_1h = 1.0;
+        pair.long.entry_log_range_ema_span_1h_candles = 3.0;
+        pair.long.entry_log_range_1h_coefficient = 1.0;
         let mut bt = Backtest::new(
             data.view(),
             btc.view(),
@@ -5016,13 +5016,13 @@ mod tests {
         }
         bt.bootstrap_ordinary_emas(120);
         let seed = 5.0 / 3.0 * 2.0_f64.ln();
-        assert!((bt.emas[0].volatility_ema_1h_long - seed).abs() < 1e-12);
+        assert!((bt.emas[0].log_range_ema_1h_long - seed).abs() < 1e-12);
         for k in 121..180 {
             bt.update_emas(k);
         }
-        assert_eq!(bt.emas[0].volatility_ema_1h_long, seed);
+        assert_eq!(bt.emas[0].log_range_ema_1h_long, seed);
         bt.update_emas(180);
-        assert!((bt.emas[0].volatility_ema_1h_long - 13.0 / 3.0 * 2.0_f64.ln()).abs() < 1e-12);
+        assert!((bt.emas[0].log_range_ema_1h_long - 13.0 / 3.0 * 2.0_f64.ln()).abs() < 1e-12);
     }
 
     #[test]
@@ -5043,8 +5043,8 @@ mod tests {
         let btc = Array1::from_elem(n, 20_000.0);
         let params = ordinary_ema_fixture_params(n, 7);
         let mut pair = BotParamsPair::default();
-        pair.long.entry_volatility_ema_span_1h = 1.0;
-        pair.long.entry_weight_volatility_1h = 1.0;
+        pair.long.entry_log_range_ema_span_1h_candles = 1.0;
+        pair.long.entry_log_range_1h_coefficient = 1.0;
         let mut bt = Backtest::new(
             data.view(),
             btc.view(),
@@ -5057,7 +5057,7 @@ mod tests {
         }
         assert_eq!(bt.latest_hour[0].high, 200.0);
         assert_eq!(bt.latest_hour[0].low, 50.0);
-        assert!((bt.emas[0].volatility_ema_1h_long - 4.0_f64.ln()).abs() < 1e-12);
+        assert!((bt.emas[0].log_range_ema_1h_long - 4.0_f64.ln()).abs() < 1e-12);
         assert!((bt.bootstrap_hour_ema(0, 18, 0.5, 3.0) - 4.0_f64.ln()).abs() < 1e-12);
     }
 
@@ -5074,8 +5074,8 @@ mod tests {
             let mut params = ordinary_ema_fixture_params(n, interval);
             params.first_timestamp_ms = first_timestamp_ms;
             let mut pair = BotParamsPair::default();
-            pair.long.entry_volatility_ema_span_1h = 3.0;
-            pair.long.entry_weight_volatility_1h = 1.0;
+            pair.long.entry_log_range_ema_span_1h_candles = 3.0;
+            pair.long.entry_log_range_1h_coefficient = 1.0;
             let mut bt = Backtest::new(
                 data.view(),
                 btc.view(),
@@ -5096,12 +5096,12 @@ mod tests {
         pair.long.n_positions = 1;
         pair.long.total_wallet_exposure_limit_ratio = 1.0;
         pair.long.wallet_exposure_limit_ratio = 1.0;
-        pair.long.ema_span_0 = 1.0;
-        pair.long.ema_span_1 = 1.0;
+        pair.long.ema_span_0_minutes = 1.0;
+        pair.long.ema_span_1_minutes = 1.0;
         pair.long.entry_initial_qty_fraction = 0.1;
         pair.long.entry_grid_threshold_base_fraction = 0.02;
-        pair.long.entry_volatility_ema_span_1h = 3.0;
-        pair.long.entry_weight_volatility_1h = 1.0;
+        pair.long.entry_log_range_ema_span_1h_candles = 3.0;
+        pair.long.entry_log_range_1h_coefficient = 1.0;
         pair.long.close_grid_qty_fraction = 1.0;
         pair.long.close_trailing_threshold_base_fraction = 0.01;
         pair
@@ -5140,7 +5140,7 @@ mod tests {
                 bt.update_emas(k);
             }
             bt.bootstrap_ordinary_emas(3);
-            assert_eq!(bt.emas[0].volatility_ema_1h_long_den, 0.0);
+            assert_eq!(bt.emas[0].log_range_ema_1h_long_den, 0.0);
             let input = if cached {
                 bt.get_orchestrator_input_cached(3, None, None)
             } else {
@@ -5209,7 +5209,7 @@ mod tests {
             bt.update_emas(k);
         }
         let expected = (110.0_f64 / 90.0).ln();
-        assert!(bt.emas[0].volatility_ema_1h_long_den > 0.0);
+        assert!(bt.emas[0].log_range_ema_1h_long_den > 0.0);
         let fresh = bt.build_orchestrator_input_iter(61, None, None, 0..1);
         let cached = bt.get_orchestrator_input_cached(61, None, None);
         for input in [&fresh, &cached] {
@@ -5245,7 +5245,7 @@ mod tests {
         let params = ordinary_ema_fixture_params(n, 1);
         let mut pair = hour_basis_fixture_pair();
         pair.short = pair.long.clone();
-        pair.short.entry_volatility_ema_span_1h = 5.0;
+        pair.short.entry_log_range_ema_span_1h_candles = 5.0;
         let mut bt = Backtest::new(
             data.view(),
             btc.view(),
@@ -5257,9 +5257,9 @@ mod tests {
             bt.update_emas(k);
         }
         bt.bootstrap_ordinary_emas(60);
-        let known_denominator = bt.emas[0].volatility_ema_1h_long_den;
+        let known_denominator = bt.emas[0].log_range_ema_1h_long_den;
         assert!(known_denominator > 0.0);
-        assert_eq!(bt.emas[0].volatility_ema_1h_long, 0.0);
+        assert_eq!(bt.emas[0].log_range_ema_1h_long, 0.0);
         let initial = bt.get_orchestrator_input_cached(60, None, None);
         assert_eq!(
             initial.symbols[0].emas.h1.log_range,
@@ -5273,8 +5273,8 @@ mod tests {
             (known_denominator, 0.0, true),
             (known_denominator, f64::NAN, false),
         ] {
-            bt.emas[0].volatility_ema_1h_long_den = denominator;
-            bt.emas[0].volatility_ema_1h_long = value;
+            bt.emas[0].log_range_ema_1h_long_den = denominator;
+            bt.emas[0].log_range_ema_1h_long = value;
             let fresh = bt.build_orchestrator_input_iter(60, None, None, 0..1);
             let cached = bt.get_orchestrator_input_cached(60, None, None);
             let expected = if known {
@@ -5440,8 +5440,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.ema_span_0 = 1.0;
-        bp_pair.long.ema_span_1 = 1.0;
+        bp_pair.long.ema_span_0_minutes = 1.0;
+        bp_pair.long.ema_span_1_minutes = 1.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -5515,14 +5515,14 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         bp_pair.long.is_forced_active = true;
         bp_pair.short.n_positions = 1;
         bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.short.wallet_exposure_limit_ratio = 1.0;
-        bp_pair.short.ema_span_0 = 10.0;
-        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0_minutes = 10.0;
+        bp_pair.short.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -5591,8 +5591,8 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
@@ -5694,8 +5694,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let hs = EquityHardStopLossConfig::default();
 
@@ -5781,8 +5781,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let hs = EquityHardStopLossConfig::default();
 
@@ -5866,13 +5866,13 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         bp_pair.short.n_positions = 1;
         bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.short.wallet_exposure_limit_ratio = 1.0;
-        bp_pair.short.ema_span_0 = 10.0;
-        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0_minutes = 10.0;
+        bp_pair.short.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -5968,8 +5968,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -6053,8 +6053,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -6148,8 +6148,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
         bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
@@ -6435,10 +6435,10 @@ mod tests {
         bp_pair.short.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-        bp_pair.short.ema_span_0 = 10.0;
-        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
+        bp_pair.short.ema_span_0_minutes = 10.0;
+        bp_pair.short.ema_span_1_minutes = 20.0;
         bp_pair.long.hsl_enabled = true;
         bp_pair.short.hsl_enabled = true;
 
@@ -6598,8 +6598,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -6663,8 +6663,8 @@ mod tests {
 
             let mut bp_pair = BotParamsPair::default();
             bp_pair.long.n_positions = 1;
-            bp_pair.long.ema_span_0 = 10.0;
-            bp_pair.long.ema_span_1 = 20.0;
+            bp_pair.long.ema_span_0_minutes = 10.0;
+            bp_pair.long.ema_span_1_minutes = 20.0;
 
             let backtest_params = BacktestParams {
                 side_activation: crate::types::SideActivation::uniform(true),
@@ -6733,8 +6733,8 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.5;
         bp_pair.long.wallet_exposure_limit_ratio = 1.5;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         bp_pair.long.hsl_enabled = true;
 
         let hs = EquityHardStopLossConfig::default();
@@ -6813,8 +6813,8 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 5.0;
         bp_pair.long.wallet_exposure_limit_ratio = 5.0;
-        bp_pair.long.ema_span_0 = 1.0;
-        bp_pair.long.ema_span_1 = 1.0;
+        bp_pair.long.ema_span_0_minutes = 1.0;
+        bp_pair.long.ema_span_1_minutes = 1.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -6896,8 +6896,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -6974,8 +6974,8 @@ mod tests {
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.wallet_exposure_limit_ratio = 0.1;
         bp_pair.long.entry_initial_qty_fraction = 0.1;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7060,8 +7060,8 @@ mod tests {
         bp_pair.long.total_wallet_exposure_limit_ratio = 0.5;
         bp_pair.long.unstuck_loss_allowance_pct = 0.2;
         bp_pair.long.unstuck_enabled = true;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7162,8 +7162,8 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 0.5;
         bp_pair.long.unstuck_loss_allowance_pct = 0.2;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7267,13 +7267,13 @@ mod tests {
         bp_pair.long.n_positions = 4;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.2;
         bp_pair.long.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         bp_pair.short.n_positions = 4;
         bp_pair.short.total_wallet_exposure_limit_ratio = 2.0;
         bp_pair.short.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.short.ema_span_0 = 10.0;
-        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0_minutes = 10.0;
+        bp_pair.short.ema_span_1_minutes = 20.0;
 
         bp_pair.long.wallet_exposure_limit_ratio = 0.2;
         let mut short_only = bp_pair.clone();
@@ -7437,8 +7437,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         bp_pair.short = bp_pair.long.clone();
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
@@ -7549,8 +7549,8 @@ mod tests {
         bp_pair.long.n_positions = 3;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.5;
         bp_pair.long.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7655,13 +7655,13 @@ mod tests {
         bp_pair.long.n_positions = 4;
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.2;
         bp_pair.long.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
         bp_pair.short.n_positions = 4;
         bp_pair.short.total_wallet_exposure_limit_ratio = 2.0;
         bp_pair.short.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.short.ema_span_0 = 10.0;
-        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0_minutes = 10.0;
+        bp_pair.short.ema_span_1_minutes = 20.0;
 
         let mut short_only = bp_pair.clone();
         short_only.long.entry_eligible = false;
@@ -7751,8 +7751,8 @@ mod tests {
         bp_pair.long.n_positions = 4;
         bp_pair.long.total_wallet_exposure_limit_ratio = 2.0;
         bp_pair.long.wallet_exposure_limit_ratio = -1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7830,8 +7830,8 @@ mod tests {
         bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.wallet_exposure_limit_ratio = 0.1;
         bp_pair.long.entry_initial_qty_fraction = 0.1;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.ema_span_0_minutes = 10.0;
+        bp_pair.long.ema_span_1_minutes = 20.0;
 
         bp_pair.long.unstuck_ema_span_0 = 7.5;
         bp_pair.long.unstuck_ema_span_1 = 31.25;
@@ -7971,10 +7971,10 @@ mod tests {
     fn test_ema_alpha_interval_1_matches_original_formula() {
         // With interval=1, alpha should equal 2/(span+1) (the original formula)
         let mut bp = BotParamsPair::default();
-        bp.long.ema_span_0 = 100.0;
-        bp.long.ema_span_1 = 200.0;
-        bp.short.ema_span_0 = 50.0;
-        bp.short.ema_span_1 = 150.0;
+        bp.long.ema_span_0_minutes = 100.0;
+        bp.long.ema_span_1_minutes = 200.0;
+        bp.short.ema_span_0_minutes = 50.0;
+        bp.short.ema_span_1_minutes = 150.0;
         bp.long.filter_volume_ema_span_1m = 300.0;
         bp.short.filter_volume_ema_span_1m = 400.0;
         bp.long.filter_volatility_ema_span_1m = 500.0;
@@ -8011,10 +8011,10 @@ mod tests {
         // With interval=5, a 60-minute span becomes 12 candle periods
         // alpha = 2 / (60/5 + 1) = 2/13
         let mut bp = BotParamsPair::default();
-        bp.long.ema_span_0 = 60.0;
-        bp.long.ema_span_1 = 60.0; // same so span2=60 too
-        bp.short.ema_span_0 = 60.0;
-        bp.short.ema_span_1 = 60.0;
+        bp.long.ema_span_0_minutes = 60.0;
+        bp.long.ema_span_1_minutes = 60.0; // same so span2=60 too
+        bp.short.ema_span_0_minutes = 60.0;
+        bp.short.ema_span_1_minutes = 60.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 5);
@@ -8035,17 +8035,17 @@ mod tests {
     fn test_make_orchestrator_ema_slots_assigns_fixed_m1_positions() {
         let strategy_pair = StrategyParamsPair {
             long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
-                offset_volatility_ema_span_1m: 30.0,
-                offset_volatility_1m_weight: 2.0,
-                offset_volatility_ema_span_1h: 12.0,
-                offset_volatility_1h_weight: 1.0,
+                offset_log_range_ema_span_minutes: 30.0,
+                offset_log_range_1m_coefficient: 2.0,
+                offset_log_range_ema_span_1h_candles: 12.0,
+                offset_log_range_1h_coefficient: 1.0,
                 ..Default::default()
             }),
             short: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
-                offset_volatility_ema_span_1m: 45.0,
-                offset_volatility_1m_weight: 3.0,
-                offset_volatility_ema_span_1h: 18.0,
-                offset_volatility_1h_weight: 0.5,
+                offset_log_range_ema_span_minutes: 45.0,
+                offset_log_range_1m_coefficient: 3.0,
+                offset_log_range_ema_span_1h_candles: 18.0,
+                offset_log_range_1h_coefficient: 0.5,
                 ..Default::default()
             }),
         };
@@ -8098,20 +8098,20 @@ mod tests {
     fn test_ema_alpha_hourly_volatility_not_adjusted() {
         // entry_volatility spans are in hours and calendar-based; should NOT change with interval
         let mut bp = BotParamsPair::default();
-        bp.long.entry_volatility_ema_span_1h = 24.0;
-        bp.short.entry_volatility_ema_span_1h = 48.0;
+        bp.long.entry_log_range_ema_span_1h_candles = 24.0;
+        bp.short.entry_log_range_ema_span_1h_candles = 48.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
         let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);
 
         assert!(
-            (alphas_1.volatility_ema_1h_alpha_long - alphas_5.volatility_ema_1h_alpha_long).abs()
+            (alphas_1.log_range_ema_1h_alpha_long - alphas_5.log_range_ema_1h_alpha_long).abs()
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );
         assert!(
-            (alphas_1.volatility_ema_1h_alpha_short - alphas_5.volatility_ema_1h_alpha_short).abs()
+            (alphas_1.log_range_ema_1h_alpha_short - alphas_5.log_range_ema_1h_alpha_short).abs()
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );
@@ -8121,19 +8121,19 @@ mod tests {
     fn test_hourly_volatility_span_below_one_hour_floors_alpha_to_one() {
         let strategy_pair = StrategyParamsPair {
             long: StrategyParams::TrailingMartingale(TrailingMartingaleParams {
-                volatility_ema_span_1h: 0.75,
+                log_range_ema_span_1h_candles: 0.75,
                 ..Default::default()
             }),
             short: StrategyParams::TrailingMartingale(TrailingMartingaleParams {
-                volatility_ema_span_1h: 0.25,
+                log_range_ema_span_1h_candles: 0.25,
                 ..Default::default()
             }),
         };
 
         let alphas = calc_ema_alphas(&BotParamsPair::default(), &strategy_pair, 1);
 
-        assert_eq!(alphas.volatility_ema_1h_alpha_long, 1.0);
-        assert_eq!(alphas.volatility_ema_1h_alpha_short, 1.0);
+        assert_eq!(alphas.log_range_ema_1h_alpha_long, 1.0);
+        assert_eq!(alphas.log_range_ema_1h_alpha_short, 1.0);
     }
 }
 
@@ -8141,8 +8141,8 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
     let mut max_span_minutes = 0.0f64;
 
     for (pair, strategy_pair) in bot_params.iter().zip(strategy_params.iter()) {
-        let (long_span_0, long_span_1) = strategy_ema_spans(&strategy_pair.long);
-        let (short_span_0, short_span_1) = strategy_ema_spans(&strategy_pair.short);
+        let (long_span_0, long_span_1) = strategy_price_ema_spans_minutes(&strategy_pair.long);
+        let (short_span_0, short_span_1) = strategy_price_ema_spans_minutes(&strategy_pair.short);
         let spans_long = [
             long_span_0,
             long_span_1,
@@ -8172,7 +8172,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             },
             pair.long.filter_volume_ema_span_1m as f64,
             pair.long.filter_volatility_ema_span_1m as f64,
-            strategy_entry_volatility_span_hours(&strategy_pair.long).unwrap_or(0.0) * 60.0,
+            strategy_log_range_ema_span_1h_candles(&strategy_pair.long).unwrap_or(0.0) * 60.0,
         ];
         let spans_short = [
             short_span_0,
@@ -8203,7 +8203,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             },
             pair.short.filter_volume_ema_span_1m as f64,
             pair.short.filter_volatility_ema_span_1m as f64,
-            strategy_entry_volatility_span_hours(&strategy_pair.short).unwrap_or(0.0) * 60.0,
+            strategy_log_range_ema_span_1h_candles(&strategy_pair.short).unwrap_or(0.0) * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {
             if span.is_finite() {

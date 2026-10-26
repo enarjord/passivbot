@@ -312,10 +312,10 @@ def dump_plots(
             if result["passivbot_mode"] == "clock":
                 spans = sorted(
                     [
-                        result[side]["ema_span_0"],
-                        (result[side]["ema_span_0"] * result[side]["ema_span_1"])
+                        result[side]["ema_span_0_minutes"],
+                        (result[side]["ema_span_0_minutes"] * result[side]["ema_span_1_minutes"])
                         ** 0.5,
-                        result[side]["ema_span_1"],
+                        result[side]["ema_span_1_minutes"],
                     ]
                 )
                 emas = pd.DataFrame(

@@ -158,8 +158,8 @@ pub(crate) fn calc_entry_distance_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit_ratio: f64,
     entry_params: &TrailingMartingaleEntryParams,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
 ) -> f64 {
     let wallet_exposure_ratio = if effective_wallet_exposure_limit_ratio > 0.0 {
         Some(wallet_exposure / effective_wallet_exposure_limit_ratio)
@@ -167,10 +167,10 @@ pub(crate) fn calc_entry_distance_multiplier(
         None
     };
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
-        volatility_ema_1m,
-        volatility_ema_1h,
-        weight_volatility_1m: entry_params.threshold_volatility_1m_weight,
-        weight_volatility_1h: entry_params.threshold_volatility_1h_weight,
+        log_range_ema_1m,
+        log_range_ema_1h,
+        log_range_1m_coefficient: entry_params.threshold_log_range_1m_coefficient,
+        log_range_1h_coefficient: entry_params.threshold_log_range_1h_coefficient,
         wallet_exposure_ratio,
         weight_wallet_exposure: entry_params.threshold_exposure_ratio_coefficient,
         min_multiplier: 1.0,
@@ -181,8 +181,8 @@ pub(crate) fn calc_entry_retracement_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit_ratio: f64,
     entry_params: &TrailingMartingaleEntryParams,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
 ) -> f64 {
     let wallet_exposure_ratio = if effective_wallet_exposure_limit_ratio > 0.0 {
         Some(wallet_exposure / effective_wallet_exposure_limit_ratio)
@@ -190,10 +190,10 @@ pub(crate) fn calc_entry_retracement_multiplier(
         None
     };
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
-        volatility_ema_1m,
-        volatility_ema_1h,
-        weight_volatility_1m: entry_params.retracement_volatility_1m_weight,
-        weight_volatility_1h: entry_params.retracement_volatility_1h_weight,
+        log_range_ema_1m,
+        log_range_ema_1h,
+        log_range_1m_coefficient: entry_params.retracement_log_range_1m_coefficient,
+        log_range_1h_coefficient: entry_params.retracement_log_range_1h_coefficient,
         wallet_exposure_ratio,
         weight_wallet_exposure: entry_params.retracement_exposure_ratio_coefficient,
         min_multiplier: 1.0,
@@ -378,8 +378,8 @@ fn calc_reentry_price_bid(
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingMartingaleEntryParams,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     wallet_exposure_limit_ratio_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit_ratio = f64::min(
@@ -390,8 +390,8 @@ fn calc_reentry_price_bid(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        volatility_ema_1h,
-        volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m,
     );
     let reentry_price = f64::min(
         round_price_distance(
@@ -417,8 +417,8 @@ fn calc_reentry_price_ask(
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingMartingaleEntryParams,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     wallet_exposure_limit_ratio_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit_ratio = f64::min(
@@ -429,8 +429,8 @@ fn calc_reentry_price_ask(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        volatility_ema_1h,
-        volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m,
     );
     let reentry_price = f64::max(
         round_price_distance(
@@ -521,8 +521,8 @@ pub fn calc_grid_entry_long(
         bot_params,
         runtime_context,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
         effective_wallet_exposure_limit_ratio,
     );
     let reentry_price =
@@ -683,15 +683,15 @@ pub fn calc_trailing_entry_long(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
     );
     let retracement_multiplier = calc_entry_retracement_multiplier(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
     );
     let threshold_fraction = entry_params.threshold_base_fraction.max(0.0) * threshold_multiplier;
     let retracement_fraction = entry_params.retracement_base_fraction.max(0.0) * retracement_multiplier;
@@ -866,8 +866,8 @@ pub fn calc_grid_entry_short(
         bot_params,
         runtime_context,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
         effective_wallet_exposure_limit_ratio,
     );
     let reentry_price =
@@ -979,15 +979,15 @@ pub fn calc_trailing_entry_short(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
     );
     let retracement_multiplier = calc_entry_retracement_multiplier(
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         entry_params,
-        state_params.volatility_ema_1h,
-        state_params.volatility_ema_1m,
+        state_params.log_range_ema_1h,
+        state_params.log_range_ema_1m,
     );
     let threshold_fraction = entry_params.threshold_base_fraction.max(0.0) * threshold_multiplier;
     let retracement_fraction = entry_params.retracement_base_fraction.max(0.0) * retracement_multiplier;
@@ -1624,8 +1624,8 @@ mod tests {
         };
         let mut entry = make_entry_params();
         entry.threshold_exposure_ratio_coefficient = 0.0;
-        entry.threshold_volatility_1h_weight = 0.0;
-        entry.threshold_volatility_1m_weight = 0.0;
+        entry.threshold_log_range_1h_coefficient = 0.0;
+        entry.threshold_log_range_1m_coefficient = 0.0;
         entry.threshold_base_fraction = 0.0016;
         // 131.25 * (1 - 0.0016) = 131.04 exactly in decimal arithmetic.
         // The ordinary binary multiplication lands just below that valid tick.
@@ -1994,20 +1994,20 @@ mod tests {
 
     fn make_entry_params() -> TrailingMartingaleEntryParams {
         TrailingMartingaleEntryParams {
-            ema_span_0: 0.0,
-            ema_span_1: 0.0,
+            ema_span_0_minutes: 0.0,
+            ema_span_1_minutes: 0.0,
             reentry_qty_multiplier: 1.0,
             ema_gate_mode: EmaGateMode::Initial,
             threshold_base_fraction: 0.01,
             initial_ema_distance_fraction: 0.0,
             initial_qty_fraction: 0.01,
             retracement_base_fraction: 0.0,
-            threshold_volatility_1h_weight: 25.0,
-            threshold_volatility_1m_weight: 15.0,
+            threshold_log_range_1h_coefficient: 25.0,
+            threshold_log_range_1m_coefficient: 15.0,
             threshold_exposure_ratio_coefficient: 2.0,
             retracement_exposure_ratio_coefficient: 0.0,
-            retracement_volatility_1h_weight: 0.0,
-            retracement_volatility_1m_weight: 0.0,
+            retracement_log_range_1h_coefficient: 0.0,
+            retracement_log_range_1m_coefficient: 0.0,
         }
     }
 
@@ -2025,8 +2025,8 @@ mod tests {
                 upper: 100.0,
                 lower: 100.0,
             },
-            volatility_ema_1h: 0.004,
-            volatility_ema_1m: 0.002,
+            log_range_ema_1h: 0.004,
+            log_range_ema_1m: 0.002,
         };
         let bot = BotParams {
             wallet_exposure_limit_ratio: 1.0,

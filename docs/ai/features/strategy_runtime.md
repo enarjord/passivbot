@@ -1,17 +1,16 @@
 # Strategy Runtime Contracts
 
 Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
-values. Strategy metadata is copied before public path projection. Native strategy sizing,
-relative-price quantities and exposure coefficients use the same names as their public paths; optimizer IDs and
-native transport keys remain Rust-owned. Runtime builders lower the remaining indicator paths
-exactly once at the native boundary. Normal loading accepts one public spelling. Explicit
-released-v8 conversion owns its frozen source vocabulary independently of current Rust names
-and reports path changes across all authored layers.
+values. Native and authored strategy trees use one canonical spelling, without runtime path
+translation. Strategy metadata and runtime trees are independent copies; duplicate metadata
+paths are rejected. Optimizer IDs flatten the canonical field owner, including TM
+`entry_ema_span_0_minutes` and EMA-anchor `ema_span_0_minutes`. Explicit released-v8 conversion
+owns its frozen source vocabulary independently of current Rust names and reports path changes
+across all authored layers. Normal loading accepts one public spelling.
 
-Public candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`,
-not a return standard deviation. Strategy sensitivities use `_coefficient`; forager
-`score_weights.log_range` remains a relative ranking weight. Native volatility identifiers
-remain boundary bindings, not additional authored spellings.
+Candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`, not a return
+standard deviation. Strategy sensitivities use `_coefficient`; forager
+`score_weights.log_range` remains a relative ranking weight.
 
 Fraction denominators are declared in the generated configuration reference. In particular,
 Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
@@ -169,7 +168,7 @@ candles do not reinterpret the configured horizon as a larger number of minutes.
 also uses minutes and requires completed one-minute candles. Hourly log-range indicators use
 `log_range_ema_span_1h_candles` or `offset_log_range_ema_span_1h_candles`: these are floating
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
-not rescale values, round derived spans or change native parameter IDs.
+not rescale values or round derived spans; native strategy IDs use the same explicit units.
 
 ## Side Age Admission
 

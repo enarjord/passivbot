@@ -156,7 +156,7 @@ def test_cleanup_extracts_prepared_membership_only_from_result_records():
 
 @pytest.mark.parametrize("selector", [
     "bot.long.unstuck_ema_span_0", "long.unstuck_ema_span_0",
-    "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0",
+    "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0_minutes",
 ])
 @pytest.mark.parametrize("container", ["pins", "scenario"])
 def test_cleanup_rejects_retired_override_selectors(selector, container):

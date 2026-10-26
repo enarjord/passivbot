@@ -236,8 +236,8 @@ struct TmCloseGridContext {
     float close_qty_fraction;
     float close_threshold_base_fraction;
     float close_threshold_exposure_ratio_coefficient;
-    float close_threshold_v1h;
-    float close_threshold_v1m;
+    float close_threshold_log_range_1h_coefficient;
+    float close_threshold_log_range_1m_coefficient;
     float volatility_1h;
     float volatility_1m;
     float qty_step;
@@ -290,8 +290,8 @@ inline bool next_tm_close_grid_group(
         float wer = we / fmax(context.allowed_wel, 1.0e-12f);
         float threshold = context.close_threshold_base_fraction
             + wer * context.close_threshold_exposure_ratio_coefficient
-            + context.volatility_1h * context.close_threshold_v1h
-            + context.volatility_1m * context.close_threshold_v1m;
+            + context.volatility_1h * context.close_threshold_log_range_1h_coefficient
+            + context.volatility_1m * context.close_threshold_log_range_1m_coefficient;
         float target = fma(context.pprice,
             context.short_side ? -threshold : threshold, context.pprice);
         int target_tick = context.short_side
@@ -405,8 +405,8 @@ inline bool recursive_grid_close_would_expand(
     float close_qty_fraction,
     float close_threshold_base_fraction,
     float close_threshold_exposure_ratio_coefficient,
-    float close_threshold_v1h,
-    float close_threshold_v1m,
+    float close_threshold_log_range_1h_coefficient,
+    float close_threshold_log_range_1m_coefficient,
     float volatility_1h,
     float volatility_1m,
     float qty_step,
@@ -425,8 +425,8 @@ inline bool recursive_grid_close_would_expand(
         float wer = we / fmax(allowed_wel, 1.0e-12f);
         float threshold = close_threshold_base_fraction
             + wer * close_threshold_exposure_ratio_coefficient
-            + volatility_1h * close_threshold_v1h
-            + volatility_1m * close_threshold_v1m;
+            + volatility_1h * close_threshold_log_range_1h_coefficient
+            + volatility_1m * close_threshold_log_range_1m_coefficient;
         float target = fma(pprice, short_side ? -threshold : threshold, pprice);
         int target_tick = short_side
             ? int(floor(target / price_step + 1.0e-6f))
@@ -937,10 +937,10 @@ inline bool apply_tm_multicoin_close_admission(
 struct TrailingMartingaleMulticoinSideConfig {
     float unstuck_span0;
     float unstuck_span1;
-    float span_a;
-    float span_b;
-    float span_1h;
-    float span_1m;
+    float entry_ema_span_0_candles;
+    float entry_ema_span_1_candles;
+    float log_range_ema_span_1h_candles;
+    float log_range_ema_span_candles;
     GpuDecimal decimals[5];
     uint decimal_entry_modifiers, decimal_entry_retracement_modifiers;
     uint decimal_close_modifiers, decimal_close_retracement_modifiers;
@@ -949,20 +949,20 @@ struct TrailingMartingaleMulticoinSideConfig {
     float initial_qty_fraction;
     float entry_threshold_base_fraction;
     float entry_threshold_exposure_ratio_coefficient;
-    float entry_threshold_v1h;
-    float entry_threshold_v1m;
+    float entry_threshold_log_range_1h_coefficient;
+    float entry_threshold_log_range_1m_coefficient;
     float entry_retracement_base_fraction;
     float entry_retracement_exposure_ratio_coefficient;
-    float entry_retracement_v1h;
-    float entry_retracement_v1m;
+    float entry_retracement_log_range_1h_coefficient;
+    float entry_retracement_log_range_1m_coefficient;
     float close_qty_fraction;
     float close_threshold_base_fraction;
     float close_threshold_exposure_ratio_coefficient;
-    float close_threshold_v1h;
-    float close_threshold_v1m;
+    float close_threshold_log_range_1h_coefficient;
+    float close_threshold_log_range_1m_coefficient;
     float close_retracement_base_fraction;
-    float close_retracement_v1h;
-    float close_retracement_v1m;
+    float close_retracement_log_range_1h_coefficient;
+    float close_retracement_log_range_1m_coefficient;
     AdaptiveTiming adaptive;
     float cooldown_min;
     float twel;
@@ -1059,10 +1059,10 @@ inline RecursiveEntryContext recursive_entry_context(
         coin_overrides, coin, 8, config.entry_threshold_exposure_ratio_coefficient
     );
     float threshold_v1h = coin_override_or(
-        coin_overrides, coin, 9, config.entry_threshold_v1h
+        coin_overrides, coin, 9, config.entry_threshold_log_range_1h_coefficient
     );
     float threshold_v1m = coin_override_or(
-        coin_overrides, coin, 10, config.entry_threshold_v1m
+        coin_overrides, coin, 10, config.entry_threshold_log_range_1m_coefficient
     );
     float reentry_qty_multiplier = coin_override_or(coin_overrides, coin, 4, config.reentry_qty_multiplier);
     float band = short_side
@@ -2066,8 +2066,8 @@ inline bool process_tm_multicoin_side_fills(
     const float close_qty_fraction = config.close_qty_fraction;
     const float close_threshold_base_fraction = config.close_threshold_base_fraction;
     const float close_threshold_exposure_ratio_coefficient = config.close_threshold_exposure_ratio_coefficient;
-    const float close_threshold_v1h = config.close_threshold_v1h;
-    const float close_threshold_v1m = config.close_threshold_v1m;
+    const float close_threshold_log_range_1h_coefficient = config.close_threshold_log_range_1h_coefficient;
+    const float close_threshold_log_range_1m_coefficient = config.close_threshold_log_range_1m_coefficient;
     thread float* volatility_1m = side.volatility_1m;
     thread float* volatility_1h = side.volatility_1h;
     thread float* psize = side.psize;
@@ -2182,10 +2182,10 @@ inline bool process_tm_multicoin_side_fills(
                 ),
                 coin_override_or(coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient),
                 coin_override_or(
-                    coin_overrides, c, 18, close_threshold_v1h
+                    coin_overrides, c, 18, close_threshold_log_range_1h_coefficient
                 ),
                 coin_override_or(
-                    coin_overrides, c, 19, close_threshold_v1m
+                    coin_overrides, c, 19, close_threshold_log_range_1m_coefficient
                 ),
                 volatility_1h[c],
                 volatility_1m[c],
@@ -2242,10 +2242,10 @@ inline bool process_tm_multicoin_side_fills(
                     coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient
                 );
                 coin_close_threshold_v1h = coin_override_or(
-                    coin_overrides, c, 18, close_threshold_v1h
+                    coin_overrides, c, 18, close_threshold_log_range_1h_coefficient
                 );
                 coin_close_threshold_v1m = coin_override_or(
-                    coin_overrides, c, 19, close_threshold_v1m
+                    coin_overrides, c, 19, close_threshold_log_range_1m_coefficient
                 );
                 grid_context =
 #if !PASSIVBOT_TM_LOSS_GATE_DISABLED
@@ -2816,10 +2816,10 @@ load_trailing_martingale_multicoin_side_config(
     TrailingMartingaleMulticoinSideConfig config;
     config.unstuck_span0 = params[po + 54];
     config.unstuck_span1 = params[po + 55];
-    config.span_a = params[po + 0];
-    config.span_b = params[po + 1];
-    config.span_1h = params[po + 2];
-    config.span_1m = params[po + 3];
+    config.entry_ema_span_0_candles = params[po + 0];
+    config.entry_ema_span_1_candles = params[po + 1];
+    config.log_range_ema_span_1h_candles = params[po + 2];
+    config.log_range_ema_span_candles = params[po + 3];
     for (int i = 0; i < 5; ++i) config.decimals[i] = load_gpu_decimal(params, po + 65 + i * 4);
     config.decimal_entry_modifiers = uint(params[po + 85]);
     config.decimal_entry_retracement_modifiers = uint(params[po + 86]);
@@ -2830,20 +2830,20 @@ load_trailing_martingale_multicoin_side_config(
     config.initial_qty_fraction = params[po + 6];
     config.entry_threshold_base_fraction = params[po + 7];
     config.entry_threshold_exposure_ratio_coefficient = params[po + 8];
-    config.entry_threshold_v1h = params[po + 9];
-    config.entry_threshold_v1m = params[po + 10];
+    config.entry_threshold_log_range_1h_coefficient = params[po + 9];
+    config.entry_threshold_log_range_1m_coefficient = params[po + 10];
     config.entry_retracement_base_fraction = params[po + 11];
     config.entry_retracement_exposure_ratio_coefficient = params[po + 12];
-    config.entry_retracement_v1h = params[po + 13];
-    config.entry_retracement_v1m = params[po + 14];
+    config.entry_retracement_log_range_1h_coefficient = params[po + 13];
+    config.entry_retracement_log_range_1m_coefficient = params[po + 14];
     config.close_qty_fraction = params[po + 15];
     config.close_threshold_base_fraction = params[po + 16];
     config.close_threshold_exposure_ratio_coefficient = params[po + 17];
-    config.close_threshold_v1h = params[po + 18];
-    config.close_threshold_v1m = params[po + 19];
+    config.close_threshold_log_range_1h_coefficient = params[po + 18];
+    config.close_threshold_log_range_1m_coefficient = params[po + 19];
     config.close_retracement_base_fraction = params[po + 20];
-    config.close_retracement_v1h = params[po + 21];
-    config.close_retracement_v1m = params[po + 22];
+    config.close_retracement_log_range_1h_coefficient = params[po + 21];
+    config.close_retracement_log_range_1m_coefficient = params[po + 22];
     config.cooldown_min = params[po + 23];
     config.adaptive = load_adaptive_timing(params, po + 56);
     config.twel = params[po + 24];
@@ -3018,11 +3018,11 @@ inline void init_trailing_martingale_multicoin_side_state(
             side.coin_hsl[c].enabled = false;
         }
         float coin_span_a = c < coin_count
-            ? coin_override_or(coin_overrides, c, 0, config.span_a)
-            : config.span_a;
+            ? coin_override_or(coin_overrides, c, 0, config.entry_ema_span_0_candles)
+            : config.entry_ema_span_0_candles;
         float coin_span_b = c < coin_count
-            ? coin_override_or(coin_overrides, c, 1, config.span_b)
-            : config.span_b;
+            ? coin_override_or(coin_overrides, c, 1, config.entry_ema_span_1_candles)
+            : config.entry_ema_span_1_candles;
         float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
         float coin_span_lo = fmin(
             coin_span_a, fmin(coin_span_b, coin_span_c)
@@ -3042,11 +3042,11 @@ inline void init_trailing_martingale_multicoin_side_state(
             2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f
         );
         float coin_span_1h = c < coin_count
-            ? coin_override_or(coin_overrides, c, 2, config.span_1h)
-            : config.span_1h;
+            ? coin_override_or(coin_overrides, c, 2, config.log_range_ema_span_1h_candles)
+            : config.log_range_ema_span_1h_candles;
         float coin_span_1m = c < coin_count
-            ? coin_override_or(coin_overrides, c, 3, config.span_1m)
-            : config.span_1m;
+            ? coin_override_or(coin_overrides, c, 3, config.log_range_ema_span_candles)
+            : config.log_range_ema_span_candles;
         side.alpha_1h_coin[c] = coin_span_1h > 0.0f
             ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
         side.alpha_1m_coin[c] = coin_span_1m > 0.0f
@@ -3157,13 +3157,13 @@ inline void update_tm_multicoin_side_indicators(
             bool observed;
             side.volatility_1h[c] = bootstrap_market_ema(
                 bars, hour_log_ranges, k, first_valid, c, coin_count,
-                coin_override_or(coin_overrides, c, 2, config.span_1h), bootstrap_counts[c * 10 + 7], 3, observed);
+                coin_override_or(coin_overrides, c, 2, config.log_range_ema_span_1h_candles), bootstrap_counts[c * 10 + 7], 3, observed);
             side.hourly_ema_bootstrapped[c] = observed;
         }
         if (can_bootstrap && !side.market_ema_bootstrapped[c]) {
             bool observed;
-            const float a = coin_override_or(coin_overrides, c, 0, config.span_a);
-            const float b = coin_override_or(coin_overrides, c, 1, config.span_b);
+            const float a = coin_override_or(coin_overrides, c, 0, config.entry_ema_span_0_candles);
+            const float b = coin_override_or(coin_overrides, c, 1, config.entry_ema_span_1_candles);
             const float derived = sqrt(fmax(a * b, 1.0f));
             const float lo = fmin(a, fmin(b, derived));
             const float hi = fmax(a, fmax(b, derived));
@@ -3173,7 +3173,7 @@ inline void update_tm_multicoin_side_indicators(
             side.ema2[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, hi, bootstrap_counts[c * 10 + 2], 0, observed);
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
-                    coin_override_or(coin_overrides, c, 3, config.span_1m), bootstrap_counts[c * 10 + 6], 1, observed);
+                    coin_override_or(coin_overrides, c, 3, config.log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
             if (config.alpha_forager_volatility > 0.0f)
                 side.forager_volatility[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     config.forager_volatility_span, bootstrap_counts[c * 10 + 9], 1, observed);
@@ -4019,20 +4019,20 @@ inline void generate_tm_multicoin_side_orders(
     const float initial_qty_fraction = config.initial_qty_fraction;
     const float entry_threshold_base_fraction = config.entry_threshold_base_fraction;
     const float entry_threshold_exposure_ratio_coefficient = config.entry_threshold_exposure_ratio_coefficient;
-    const float entry_threshold_v1h = config.entry_threshold_v1h;
-    const float entry_threshold_v1m = config.entry_threshold_v1m;
+    const float entry_threshold_log_range_1h_coefficient = config.entry_threshold_log_range_1h_coefficient;
+    const float entry_threshold_log_range_1m_coefficient = config.entry_threshold_log_range_1m_coefficient;
     const float entry_retracement_base_fraction = config.entry_retracement_base_fraction;
     const float entry_retracement_exposure_ratio_coefficient = config.entry_retracement_exposure_ratio_coefficient;
-    const float entry_retracement_v1h = config.entry_retracement_v1h;
-    const float entry_retracement_v1m = config.entry_retracement_v1m;
+    const float entry_retracement_log_range_1h_coefficient = config.entry_retracement_log_range_1h_coefficient;
+    const float entry_retracement_log_range_1m_coefficient = config.entry_retracement_log_range_1m_coefficient;
     const float close_qty_fraction = config.close_qty_fraction;
     const float close_threshold_base_fraction = config.close_threshold_base_fraction;
     const float close_threshold_exposure_ratio_coefficient = config.close_threshold_exposure_ratio_coefficient;
-    const float close_threshold_v1h = config.close_threshold_v1h;
-    const float close_threshold_v1m = config.close_threshold_v1m;
+    const float close_threshold_log_range_1h_coefficient = config.close_threshold_log_range_1h_coefficient;
+    const float close_threshold_log_range_1m_coefficient = config.close_threshold_log_range_1m_coefficient;
     const float close_retracement_base_fraction = config.close_retracement_base_fraction;
-    const float close_retracement_v1h = config.close_retracement_v1h;
-    const float close_retracement_v1m = config.close_retracement_v1m;
+    const float close_retracement_log_range_1h_coefficient = config.close_retracement_log_range_1h_coefficient;
+    const float close_retracement_log_range_1m_coefficient = config.close_retracement_log_range_1m_coefficient;
     const float cooldown_min = config.cooldown_min;
     const float twel = config.twel;
     const bool gate_initial = config.gate_initial;
@@ -4485,10 +4485,10 @@ inline void generate_tm_multicoin_side_orders(
             coin_overrides, c, 8, entry_threshold_exposure_ratio_coefficient
         );
         float coin_entry_threshold_v1h = coin_override_or(
-            coin_overrides, c, 9, entry_threshold_v1h
+            coin_overrides, c, 9, entry_threshold_log_range_1h_coefficient
         );
         float coin_entry_threshold_v1m = coin_override_or(
-            coin_overrides, c, 10, entry_threshold_v1m
+            coin_overrides, c, 10, entry_threshold_log_range_1m_coefficient
         );
         float coin_entry_retracement_base = coin_override_or(
             coin_overrides, c, 11, entry_retracement_base_fraction
@@ -4497,10 +4497,10 @@ inline void generate_tm_multicoin_side_orders(
             coin_overrides, c, 12, entry_retracement_exposure_ratio_coefficient
         );
         float coin_entry_retracement_v1h = coin_override_or(
-            coin_overrides, c, 13, entry_retracement_v1h
+            coin_overrides, c, 13, entry_retracement_log_range_1h_coefficient
         );
         float coin_entry_retracement_v1m = coin_override_or(
-            coin_overrides, c, 14, entry_retracement_v1m
+            coin_overrides, c, 14, entry_retracement_log_range_1m_coefficient
         );
         float coin_close_qty_fraction = coin_override_or(
             coin_overrides, c, 15, close_qty_fraction
@@ -4512,19 +4512,19 @@ inline void generate_tm_multicoin_side_orders(
             coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient
         );
         float coin_close_threshold_v1h = coin_override_or(
-            coin_overrides, c, 18, close_threshold_v1h
+            coin_overrides, c, 18, close_threshold_log_range_1h_coefficient
         );
         float coin_close_threshold_v1m = coin_override_or(
-            coin_overrides, c, 19, close_threshold_v1m
+            coin_overrides, c, 19, close_threshold_log_range_1m_coefficient
         );
         float coin_close_retracement_base = coin_override_or(
             coin_overrides, c, 20, close_retracement_base_fraction
         );
         float coin_close_retracement_v1h = coin_override_or(
-            coin_overrides, c, 21, close_retracement_v1h
+            coin_overrides, c, 21, close_retracement_log_range_1h_coefficient
         );
         float coin_close_retracement_v1m = coin_override_or(
-            coin_overrides, c, 22, close_retracement_v1m
+            coin_overrides, c, 22, close_retracement_log_range_1m_coefficient
         );
         float coin_cooldown_min = adaptive_duration(
             side.adaptive[c], coin_override_or(coin_overrides, c, 23, cooldown_min),

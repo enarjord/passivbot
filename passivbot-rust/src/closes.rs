@@ -16,8 +16,8 @@ use serde::Serialize;
 pub struct TrailingMartingaleCloseThresholdTerms {
     pub base: f64,
     pub wallet_exposure: f64,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,8 +38,8 @@ pub struct TrailingMartingaleCloseDiagnostic {
     pub wallet_exposure: f64,
     pub effective_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_ratio: f64,
-    pub volatility_ema_1m: f64,
-    pub volatility_ema_1h: f64,
+    pub log_range_ema_1m: f64,
+    pub log_range_ema_1h: f64,
     pub extrema: TrailingPriceBundle,
 }
 
@@ -271,10 +271,10 @@ pub(crate) fn calc_close_retracement_multiplier(
     close_params: &TrailingMartingaleCloseParams,
 ) -> f64 {
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
-        volatility_ema_1m: state_params.volatility_ema_1m,
-        volatility_ema_1h: state_params.volatility_ema_1h,
-        weight_volatility_1m: close_params.retracement_volatility_1m_weight,
-        weight_volatility_1h: close_params.retracement_volatility_1h_weight,
+        log_range_ema_1m: state_params.log_range_ema_1m,
+        log_range_ema_1h: state_params.log_range_ema_1h,
+        log_range_1m_coefficient: close_params.retracement_log_range_1m_coefficient,
+        log_range_1h_coefficient: close_params.retracement_log_range_1h_coefficient,
         wallet_exposure_ratio: None,
         weight_wallet_exposure: 0.0,
         min_multiplier: 1.0,
@@ -302,8 +302,8 @@ pub(crate) fn calc_close_threshold_fraction(
     };
     close_params.threshold_base_fraction
         + wallet_exposure_ratio * close_params.threshold_exposure_ratio_coefficient
-        + state_params.volatility_ema_1m * close_params.threshold_volatility_1m_weight
-        + state_params.volatility_ema_1h * close_params.threshold_volatility_1h_weight
+        + state_params.log_range_ema_1m * close_params.threshold_log_range_1m_coefficient
+        + state_params.log_range_ema_1h * close_params.threshold_log_range_1h_coefficient
 }
 
 pub fn calc_grid_close_long(
@@ -860,18 +860,18 @@ pub fn calc_trailing_martingale_close_diagnostic(
         threshold_terms: TrailingMartingaleCloseThresholdTerms {
             base: close_params.threshold_base_fraction,
             wallet_exposure: wallet_exposure_ratio * close_params.threshold_exposure_ratio_coefficient,
-            volatility_ema_1m: state_params.volatility_ema_1m
-                * close_params.threshold_volatility_1m_weight,
-            volatility_ema_1h: state_params.volatility_ema_1h
-                * close_params.threshold_volatility_1h_weight,
+            log_range_ema_1m: state_params.log_range_ema_1m
+                * close_params.threshold_log_range_1m_coefficient,
+            log_range_ema_1h: state_params.log_range_ema_1h
+                * close_params.threshold_log_range_1h_coefficient,
         },
         retracement_fraction,
         retracement_met,
         wallet_exposure,
         effective_wallet_exposure_limit_ratio,
         wallet_exposure_ratio,
-        volatility_ema_1m: state_params.volatility_ema_1m,
-        volatility_ema_1h: state_params.volatility_ema_1h,
+        log_range_ema_1m: state_params.log_range_ema_1m,
+        log_range_ema_1h: state_params.log_range_ema_1h,
         extrema: trailing_price_bundle.clone(),
     }
 }
@@ -902,11 +902,11 @@ mod tests {
             qty_fraction: 1.0,
             threshold_base_fraction: 0.01,
             threshold_exposure_ratio_coefficient: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
             retracement_base_fraction: 0.0,
-            retracement_volatility_1h_weight: 0.0,
-            retracement_volatility_1m_weight: 0.0,
+            retracement_log_range_1h_coefficient: 0.0,
+            retracement_log_range_1m_coefficient: 0.0,
         }
     }
 
@@ -1142,8 +1142,8 @@ mod tests {
         let close = TrailingMartingaleCloseParams {
             threshold_base_fraction: 0.0,
             threshold_exposure_ratio_coefficient: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
             retracement_base_fraction: 0.0,
             ..make_close_params()
         };
@@ -1198,8 +1198,8 @@ mod tests {
         let mut close = TrailingMartingaleCloseParams {
             threshold_base_fraction: 0.0,
             threshold_exposure_ratio_coefficient: 0.0,
-            threshold_volatility_1h_weight: 0.0,
-            threshold_volatility_1m_weight: 0.0,
+            threshold_log_range_1h_coefficient: 0.0,
+            threshold_log_range_1m_coefficient: 0.0,
             retracement_base_fraction: 0.0,
             ..make_close_params()
         };
@@ -1271,8 +1271,8 @@ mod tests {
         // The threshold/retracement branch uses the same directional contract.
         close.threshold_base_fraction = 0.0013;
         close.retracement_base_fraction = 0.0002;
-        close.retracement_volatility_1h_weight = 0.0;
-        close.retracement_volatility_1m_weight = 0.0;
+        close.retracement_log_range_1h_coefficient = 0.0;
+        close.retracement_log_range_1m_coefficient = 0.0;
         let trail = TrailingPriceBundle {
             max_since_open: 101.0,
             min_since_max: 100.5,
@@ -1324,8 +1324,8 @@ mod tests {
                 bid: 100.0,
                 ..Default::default()
             },
-            volatility_ema_1h: 0.004,
-            volatility_ema_1m: 0.002,
+            log_range_ema_1h: 0.004,
+            log_range_ema_1m: 0.002,
             ..Default::default()
         };
         let bot = BotParams {
@@ -1336,8 +1336,8 @@ mod tests {
         let close = TrailingMartingaleCloseParams {
             threshold_base_fraction: 0.008,
             threshold_exposure_ratio_coefficient: -0.002,
-            threshold_volatility_1h_weight: 0.25,
-            threshold_volatility_1m_weight: 0.15,
+            threshold_log_range_1h_coefficient: 0.25,
+            threshold_log_range_1m_coefficient: 0.15,
             qty_fraction: 0.1,
             ..make_close_params()
         };

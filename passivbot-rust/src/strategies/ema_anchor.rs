@@ -25,10 +25,10 @@ fn calc_signed_wallet_exposure_ratio(
 #[inline]
 fn calc_offset_multiplier(state: &StateParams, params: &EmaAnchorParams) -> f64 {
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
-        volatility_ema_1m: state.volatility_ema_1m,
-        volatility_ema_1h: state.volatility_ema_1h,
-        weight_volatility_1m: params.offset_volatility_1m_weight,
-        weight_volatility_1h: params.offset_volatility_1h_weight,
+        log_range_ema_1m: state.log_range_ema_1m,
+        log_range_ema_1h: state.log_range_ema_1h,
+        log_range_1m_coefficient: params.offset_log_range_1m_coefficient,
+        log_range_1h_coefficient: params.offset_log_range_1h_coefficient,
         wallet_exposure_ratio: None,
         weight_wallet_exposure: 0.0,
         min_multiplier: 1.0,
@@ -1091,15 +1091,15 @@ mod tests {
     fn volatility_weights_widen_bid_and_ask_offsets() {
         let calm_state = base_state();
         let volatile_state = StateParams {
-            volatility_ema_1m: 0.05,
-            volatility_ema_1h: 0.04,
+            log_range_ema_1m: 0.05,
+            log_range_ema_1h: 0.04,
             ..base_state()
         };
         let exchange = base_exchange();
         let params = EmaAnchorParams {
             offset_fraction: 0.01,
-            offset_volatility_1m_weight: 2.0,
-            offset_volatility_1h_weight: 3.0,
+            offset_log_range_1m_coefficient: 2.0,
+            offset_log_range_1h_coefficient: 3.0,
             ..base_params()
         };
 

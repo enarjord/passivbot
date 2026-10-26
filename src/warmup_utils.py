@@ -406,8 +406,8 @@ def compute_backtest_warmup_minutes(
     max_minutes = 0.0
     unstuck_gate_sides = set()
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
         "unstuck_ema_span_0",
         "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",
@@ -525,8 +525,8 @@ def compute_per_coin_warmup_minutes(
             config, {}, param_sets=param_sets, for_trade_activation=for_trade_activation)
     } if include_rms else {}
     minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
+        "ema_span_0_minutes",
+        "ema_span_1_minutes",
         "unstuck_ema_span_0",
         "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",

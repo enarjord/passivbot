@@ -22,7 +22,7 @@ def activation_snapshot(kind, side, *, held=False, mode="normal"):
                    "threshold_base_fraction": 0.01},
             close={"qty_fraction": 0.5, "threshold_base_fraction": 0.01},
         ) if kind == "trailing_martingale" else
-        {"base_qty_fraction": 0.1, "ema_span_0": 10.0, "ema_span_1": 20.0,
+        {"base_qty_fraction": 0.1, "ema_span_0_minutes": 10.0, "ema_span_1_minutes": 20.0,
          "offset_fraction": 0.002, "inventory_offset_exposure_coefficient": 0.0}
     )
     position = ({f"{side}_pos_size": 1.0 if side == "long" else -1.0,

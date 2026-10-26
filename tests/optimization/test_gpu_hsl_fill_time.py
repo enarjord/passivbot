@@ -36,7 +36,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
                                  retracement_base_fraction=0.)
         strategy["close"].update(threshold_base_fraction=.5, retracement_base_fraction=0.)
         config["bot"][direction]["strategy"]["ema_anchor"].update(
-            base_qty_fraction=.5, ema_span_0=2., ema_span_1=3., offset_fraction=.01,
+            base_qty_fraction=.5, ema_span_0_minutes=2., ema_span_1_minutes=3., offset_fraction=.01,
             inventory_offset_exposure_coefficient=0., entry_qty_exposure_coefficient=0.,
         )
     if mode == "portfolio":

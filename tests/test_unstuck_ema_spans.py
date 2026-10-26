@@ -334,7 +334,7 @@ def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
 
     paths = dict(get_optimization_key_paths(get_expanded_config_prototype()))
     assert paths["long_unstuck_ema_span_0"] == ("bot", "long", "unstuck", "ema_span_0_minutes")
-    assert paths["long_ema_span_0"] == (
+    assert paths["long_entry_ema_span_0_minutes"] == (
         "bot",
         "long",
         "strategy",
@@ -498,8 +498,8 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
 
     # Use the same callable surface as live configuration lookup.
     values = {
-        "ema_span_0": 10,
-        "ema_span_1": 20,
+        "ema_span_0_minutes": 10,
+        "ema_span_1_minutes": 20,
         "unstuck_ema_span_0": 400_000,
         "unstuck_ema_span_1": 500_000,
         "unstuck_enabled": True,

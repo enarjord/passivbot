@@ -709,16 +709,16 @@ fn calc_ema_anchor_quote_series(
         ..Default::default()
     };
 
-    let ema_alpha_0 = clamp_alpha(2.0 / (params.ema_span_0 + 1.0));
-    let ema_alpha_1 = clamp_alpha(2.0 / (params.ema_span_1 + 1.0));
-    let ema_alpha_2 = clamp_alpha(2.0 / ((params.ema_span_0 * params.ema_span_1).sqrt() + 1.0));
-    let vol_1m_alpha = if params.offset_volatility_ema_span_1m > 0.0 {
-        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1m + 1.0))
+    let ema_alpha_0 = clamp_alpha(2.0 / (params.ema_span_0_minutes + 1.0));
+    let ema_alpha_1 = clamp_alpha(2.0 / (params.ema_span_1_minutes + 1.0));
+    let ema_alpha_2 = clamp_alpha(2.0 / ((params.ema_span_0_minutes * params.ema_span_1_minutes).sqrt() + 1.0));
+    let vol_1m_alpha = if params.offset_log_range_ema_span_minutes > 0.0 {
+        clamp_alpha(2.0 / (params.offset_log_range_ema_span_minutes + 1.0))
     } else {
         0.0
     };
-    let vol_1h_alpha = if params.offset_volatility_ema_span_1h > 0.0 {
-        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1h + 1.0))
+    let vol_1h_alpha = if params.offset_log_range_ema_span_1h_candles > 0.0 {
+        clamp_alpha(2.0 / (params.offset_log_range_ema_span_1h_candles + 1.0))
     } else {
         0.0
     };
@@ -785,8 +785,8 @@ fn calc_ema_anchor_quote_series(
                 ask: close,
             },
             ema_bands: EMABands { upper, lower },
-            volatility_ema_1m: vol_1m,
-            volatility_ema_1h: vol_1h,
+            log_range_ema_1m: vol_1m,
+            log_range_ema_1h: vol_1h,
         };
         let (bid, ask) =
             calc_ema_anchor_quote_prices(&state, &exchange, &params, position_sizes[i], 1.0);
@@ -817,13 +817,13 @@ fn calc_ema_anchor_quote_series(
     position_sizes,
     *,
     price_step,
-    ema_span_0,
-    ema_span_1,
+    ema_span_0_minutes,
+    ema_span_1_minutes,
     offset_fraction,
-    offset_volatility_ema_span_1m,
-    offset_volatility_1m_weight,
-    offset_volatility_ema_span_1h,
-    offset_volatility_1h_weight,
+    offset_log_range_ema_span_minutes,
+    offset_log_range_1m_coefficient,
+    offset_log_range_ema_span_1h_candles,
+    offset_log_range_1h_coefficient,
     inventory_offset_exposure_coefficient
 ))]
 pub fn calc_ema_anchor_quote_series_py<'py>(
@@ -836,26 +836,26 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
     balances: PyReadonlyArray1<'_, f64>,
     position_sizes: PyReadonlyArray1<'_, f64>,
     price_step: f64,
-    ema_span_0: f64,
-    ema_span_1: f64,
+    ema_span_0_minutes: f64,
+    ema_span_1_minutes: f64,
     offset_fraction: f64,
-    offset_volatility_ema_span_1m: f64,
-    offset_volatility_1m_weight: f64,
-    offset_volatility_ema_span_1h: f64,
-    offset_volatility_1h_weight: f64,
+    offset_log_range_ema_span_minutes: f64,
+    offset_log_range_1m_coefficient: f64,
+    offset_log_range_ema_span_1h_candles: f64,
+    offset_log_range_1h_coefficient: f64,
     inventory_offset_exposure_coefficient: f64,
 ) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
     let side = parse_strategy_side_str(side)?;
     let params = EmaAnchorParams {
         base_qty_fraction: 0.0,
-        ema_span_0,
-        ema_span_1,
+        ema_span_0_minutes,
+        ema_span_1_minutes,
         entry_qty_exposure_coefficient: 0.0,
         offset_fraction,
-        offset_volatility_ema_span_1m,
-        offset_volatility_1m_weight,
-        offset_volatility_ema_span_1h,
-        offset_volatility_1h_weight,
+        offset_log_range_ema_span_minutes,
+        offset_log_range_1m_coefficient,
+        offset_log_range_ema_span_1h_candles,
+        offset_log_range_1h_coefficient,
         inventory_offset_exposure_coefficient,
     };
     let (bids, asks) = calc_ema_anchor_quote_series(
@@ -1250,10 +1250,10 @@ mod tests {
             let dict = object.bind(py);
             let optional = [
                 "entry_qty_exposure_coefficient",
-                "offset_volatility_ema_span_1m",
-                "offset_volatility_1m_weight",
-                "offset_volatility_ema_span_1h",
-                "offset_volatility_1h_weight",
+                "offset_log_range_ema_span_minutes",
+                "offset_log_range_1m_coefficient",
+                "offset_log_range_ema_span_1h_candles",
+                "offset_log_range_1h_coefficient",
             ];
             for key in optional {
                 dict.del_item(key).unwrap();
@@ -1278,7 +1278,7 @@ mod tests {
                 };
                 let fields = if kind == "trailing_martingale" {
                     vec![
-                        (None, "volatility_ema_span_1m"),
+                        (None, "log_range_ema_span_minutes"),
                         (Some("entry"), "reentry_qty_multiplier"),
                         (Some("close"), "qty_fraction"),
                     ]
@@ -2559,33 +2559,33 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
     let entry = extract_value::<&PyDict>(dict, "entry")?;
     let close = extract_value::<&PyDict>(dict, "close")?;
     let params = serde_json::json!({
-        "volatility_ema_span_1h": extract_value::<f64>(dict, "volatility_ema_span_1h")?,
-        "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
+        "log_range_ema_span_1h_candles": extract_value::<f64>(dict, "log_range_ema_span_1h_candles")?,
+        "log_range_ema_span_minutes": extract_value::<f64>(dict, "log_range_ema_span_minutes")?,
         "entry": {
-            "ema_span_0": extract_value::<f64>(entry, "ema_span_0")?,
-            "ema_span_1": extract_value::<f64>(entry, "ema_span_1")?,
+            "ema_span_0_minutes": extract_value::<f64>(entry, "ema_span_0_minutes")?,
+            "ema_span_1_minutes": extract_value::<f64>(entry, "ema_span_1_minutes")?,
             "reentry_qty_multiplier": extract_value::<f64>(entry, "reentry_qty_multiplier")?,
             "ema_gate_mode": extract_optional_string(entry, "ema_gate_mode", "initial")?,
             "initial_ema_distance_fraction": extract_value::<f64>(entry, "initial_ema_distance_fraction")?,
             "initial_qty_fraction": extract_value::<f64>(entry, "initial_qty_fraction")?,
             "threshold_base_fraction": extract_value::<f64>(entry, "threshold_base_fraction")?,
             "threshold_exposure_ratio_coefficient": extract_value::<f64>(entry, "threshold_exposure_ratio_coefficient")?,
-            "threshold_volatility_1h_weight": extract_value::<f64>(entry, "threshold_volatility_1h_weight")?,
-            "threshold_volatility_1m_weight": extract_value::<f64>(entry, "threshold_volatility_1m_weight")?,
+            "threshold_log_range_1h_coefficient": extract_value::<f64>(entry, "threshold_log_range_1h_coefficient")?,
+            "threshold_log_range_1m_coefficient": extract_value::<f64>(entry, "threshold_log_range_1m_coefficient")?,
             "retracement_base_fraction": extract_value::<f64>(entry, "retracement_base_fraction")?,
             "retracement_exposure_ratio_coefficient": extract_value::<f64>(entry, "retracement_exposure_ratio_coefficient")?,
-            "retracement_volatility_1h_weight": extract_value::<f64>(entry, "retracement_volatility_1h_weight")?,
-            "retracement_volatility_1m_weight": extract_value::<f64>(entry, "retracement_volatility_1m_weight")?,
+            "retracement_log_range_1h_coefficient": extract_value::<f64>(entry, "retracement_log_range_1h_coefficient")?,
+            "retracement_log_range_1m_coefficient": extract_value::<f64>(entry, "retracement_log_range_1m_coefficient")?,
         },
         "close": {
             "qty_fraction": extract_value::<f64>(close, "qty_fraction")?,
             "threshold_base_fraction": extract_value::<f64>(close, "threshold_base_fraction")?,
             "threshold_exposure_ratio_coefficient": extract_value::<f64>(close, "threshold_exposure_ratio_coefficient")?,
-            "threshold_volatility_1h_weight": extract_value::<f64>(close, "threshold_volatility_1h_weight")?,
-            "threshold_volatility_1m_weight": extract_value::<f64>(close, "threshold_volatility_1m_weight")?,
+            "threshold_log_range_1h_coefficient": extract_value::<f64>(close, "threshold_log_range_1h_coefficient")?,
+            "threshold_log_range_1m_coefficient": extract_value::<f64>(close, "threshold_log_range_1m_coefficient")?,
             "retracement_base_fraction": extract_value::<f64>(close, "retracement_base_fraction")?,
-            "retracement_volatility_1h_weight": extract_value::<f64>(close, "retracement_volatility_1h_weight")?,
-            "retracement_volatility_1m_weight": extract_value::<f64>(close, "retracement_volatility_1m_weight")?,
+            "retracement_log_range_1h_coefficient": extract_value::<f64>(close, "retracement_log_range_1h_coefficient")?,
+            "retracement_log_range_1m_coefficient": extract_value::<f64>(close, "retracement_log_range_1m_coefficient")?,
         },
     });
     validate_strategy_py_dict_keys(dict, "strategy_params.trailing_martingale", &params)?;
@@ -2595,14 +2595,14 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
 fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
     let params = serde_json::json!({
         "base_qty_fraction": extract_value::<f64>(dict, "base_qty_fraction")?,
-        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
-        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "ema_span_0_minutes": extract_value::<f64>(dict, "ema_span_0_minutes")?,
+        "ema_span_1_minutes": extract_value::<f64>(dict, "ema_span_1_minutes")?,
         "entry_qty_exposure_coefficient": extract_optional_f64(dict, "entry_qty_exposure_coefficient")?,
         "offset_fraction": extract_value::<f64>(dict, "offset_fraction")?,
-        "offset_volatility_ema_span_1m": extract_optional_f64(dict, "offset_volatility_ema_span_1m")?,
-        "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
-        "offset_volatility_ema_span_1h": extract_optional_f64(dict, "offset_volatility_ema_span_1h")?,
-        "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
+        "offset_log_range_ema_span_minutes": extract_optional_f64(dict, "offset_log_range_ema_span_minutes")?,
+        "offset_log_range_1m_coefficient": extract_optional_f64(dict, "offset_log_range_1m_coefficient")?,
+        "offset_log_range_ema_span_1h_candles": extract_optional_f64(dict, "offset_log_range_ema_span_1h_candles")?,
+        "offset_log_range_1h_coefficient": extract_optional_f64(dict, "offset_log_range_1h_coefficient")?,
         "inventory_offset_exposure_coefficient": extract_value::<f64>(dict, "inventory_offset_exposure_coefficient")?,
     });
     validate_strategy_py_dict_keys(dict, "strategy_params.ema_anchor", &params)?;
@@ -2783,20 +2783,20 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         )?,
         close_trailing_qty_fraction: extract_optional_f64(dict, "close_trailing_qty_fraction")?,
         close_trailing_threshold_base_fraction: extract_optional_f64(dict, "close_trailing_threshold_base_fraction")?,
-        close_weight_volatility_1h: extract_optional_f64(dict, "close_weight_volatility_1h")?,
-        close_weight_volatility_1m: extract_optional_f64(dict, "close_weight_volatility_1m")?,
+        close_log_range_1h_coefficient: extract_optional_f64(dict, "close_log_range_1h_coefficient")?,
+        close_log_range_1m_coefficient: extract_optional_f64(dict, "close_log_range_1m_coefficient")?,
         entry_grid_reentry_qty_multiplier: extract_optional_f64(dict, "entry_grid_reentry_qty_multiplier")?,
         entry_grid_threshold_base_fraction: extract_optional_f64(dict, "entry_grid_threshold_base_fraction")?,
-        entry_volatility_ema_span_1h: match dict.get_item("entry_volatility_ema_span_1h")? {
+        entry_log_range_ema_span_1h_candles: match dict.get_item("entry_log_range_ema_span_1h_candles")? {
             Some(item) => item.extract::<f64>()?,
             None => match dict.get_item("entry_log_range_ema_span_hours")? {
                 Some(item) => item.extract::<f64>()?,
                 None => 0.0,
             },
         },
-        entry_volatility_ema_span_1m: extract_optional_f64(dict, "entry_volatility_ema_span_1m")?,
-        entry_weight_volatility_1h: extract_optional_f64(dict, "entry_weight_volatility_1h")?,
-        entry_weight_volatility_1m: extract_optional_f64(dict, "entry_weight_volatility_1m")?,
+        entry_log_range_ema_span_minutes: extract_optional_f64(dict, "entry_log_range_ema_span_minutes")?,
+        entry_log_range_1h_coefficient: extract_optional_f64(dict, "entry_log_range_1h_coefficient")?,
+        entry_log_range_1m_coefficient: extract_optional_f64(dict, "entry_log_range_1m_coefficient")?,
         entry_exposure_ratio_coefficient: extract_optional_f64(dict, "entry_exposure_ratio_coefficient")?,
         entry_initial_ema_distance_fraction: extract_optional_f64(dict, "entry_initial_ema_distance_fraction")?,
         entry_initial_qty_fraction: extract_optional_f64(dict, "entry_initial_qty_fraction")?,
@@ -2836,8 +2836,8 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             .unwrap_or_default(),
         is_forced_active: extract_optional_bool(dict, "is_forced_active", false)?,
         entry_eligible: extract_optional_bool(dict, "entry_eligible", true)?,
-        ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
-        ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
+        ema_span_0_minutes: extract_optional_f64(dict, "ema_span_0_minutes")?,
+        ema_span_1_minutes: extract_optional_f64(dict, "ema_span_1_minutes")?,
         hsl_enabled: hsl.hsl_enabled,
         hsl_panic_close_order_type: hsl.hsl_panic_close_order_type,
         entry_cooldown_min_duration_minutes: extract_optional_f64(
@@ -3175,8 +3175,8 @@ fn make_trailing_martingale_entry_params(
     entry_trailing_reentry_qty_multiplier: f64,
     entry_trailing_retracement_base_fraction: f64,
     entry_trailing_threshold_base_fraction: f64,
-    entry_weight_volatility_1h: f64,
-    entry_weight_volatility_1m: f64,
+    entry_log_range_1h_coefficient: f64,
+    entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
 ) -> TrailingMartingaleEntryParams {
     let _ = (
@@ -3184,20 +3184,20 @@ fn make_trailing_martingale_entry_params(
         entry_trailing_threshold_base_fraction,
     );
     TrailingMartingaleEntryParams {
-        ema_span_0: 0.0,
-        ema_span_1: 0.0,
+        ema_span_0_minutes: 0.0,
+        ema_span_1_minutes: 0.0,
         reentry_qty_multiplier: entry_grid_reentry_qty_multiplier,
         ema_gate_mode: EmaGateMode::Initial,
         initial_ema_distance_fraction: entry_initial_ema_distance_fraction,
         initial_qty_fraction: entry_initial_qty_fraction,
         threshold_base_fraction: entry_grid_threshold_base_fraction,
         threshold_exposure_ratio_coefficient: entry_exposure_ratio_coefficient,
-        threshold_volatility_1h_weight: entry_weight_volatility_1h,
-        threshold_volatility_1m_weight: entry_weight_volatility_1m,
+        threshold_log_range_1h_coefficient: entry_log_range_1h_coefficient,
+        threshold_log_range_1m_coefficient: entry_log_range_1m_coefficient,
         retracement_base_fraction: entry_trailing_retracement_base_fraction,
         retracement_exposure_ratio_coefficient: entry_exposure_ratio_coefficient,
-        retracement_volatility_1h_weight: entry_weight_volatility_1h,
-        retracement_volatility_1m_weight: entry_weight_volatility_1m,
+        retracement_log_range_1h_coefficient: entry_log_range_1h_coefficient,
+        retracement_log_range_1m_coefficient: entry_log_range_1m_coefficient,
     }
 }
 
@@ -3205,18 +3205,18 @@ fn make_trailing_martingale_close_params(
     close_grid_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    close_weight_volatility_1h: f64,
-    close_weight_volatility_1m: f64,
+    close_log_range_1h_coefficient: f64,
+    close_log_range_1m_coefficient: f64,
 ) -> TrailingMartingaleCloseParams {
     TrailingMartingaleCloseParams {
         qty_fraction: close_grid_qty_fraction,
         threshold_base_fraction: close_trailing_threshold_base_fraction,
         threshold_exposure_ratio_coefficient: 0.0,
-        threshold_volatility_1h_weight: close_weight_volatility_1h,
-        threshold_volatility_1m_weight: close_weight_volatility_1m,
+        threshold_log_range_1h_coefficient: close_log_range_1h_coefficient,
+        threshold_log_range_1m_coefficient: close_log_range_1m_coefficient,
         retracement_base_fraction: close_trailing_retracement_base_fraction,
-        retracement_volatility_1h_weight: close_weight_volatility_1h,
-        retracement_volatility_1m_weight: close_weight_volatility_1m,
+        retracement_log_range_1h_coefficient: close_log_range_1h_coefficient,
+        retracement_log_range_1m_coefficient: close_log_range_1m_coefficient,
     }
 }
 
@@ -3344,8 +3344,8 @@ pub fn calc_next_entry_long_py(
     entry_trailing_reentry_qty_multiplier: f64,
     entry_trailing_retracement_base_fraction: f64,
     entry_trailing_threshold_base_fraction: f64,
-    entry_weight_volatility_1h: f64,
-    entry_weight_volatility_1m: f64,
+    entry_log_range_1h_coefficient: f64,
+    entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
     wallet_exposure_limit_ratio: f64,
     risk_we_excess_allowance_fraction: f64,
@@ -3357,8 +3357,8 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -3379,8 +3379,8 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -3391,8 +3391,8 @@ pub fn calc_next_entry_long_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
@@ -3406,8 +3406,8 @@ pub fn calc_next_entry_long_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
     );
     let position = Position {
@@ -3460,10 +3460,10 @@ pub fn calc_next_entry_long_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
-    volatility_ema_1h = 0.0,
-    volatility_ema_1m = 0.0,
-    close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0
+    log_range_ema_1h = 0.0,
+    log_range_ema_1m = 0.0,
+    close_log_range_1h_coefficient = 0.0,
+    close_log_range_1m_coefficient = 0.0
 ))]
 pub fn calc_next_close_long_py(
     qty_step: f64,
@@ -3487,10 +3487,10 @@ pub fn calc_next_close_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
-    close_weight_volatility_1h: f64,
-    close_weight_volatility_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
+    close_log_range_1h_coefficient: f64,
+    close_log_range_1m_coefficient: f64,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -3510,8 +3510,8 @@ pub fn calc_next_close_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -3519,8 +3519,8 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
         risk_wel_enforcer_threshold_ratio,
@@ -3530,8 +3530,8 @@ pub fn calc_next_close_long_py(
         close_grid_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
     );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {
@@ -3574,8 +3574,8 @@ pub fn calc_next_entry_short_py(
     entry_trailing_reentry_qty_multiplier: f64,
     entry_trailing_retracement_base_fraction: f64,
     entry_trailing_threshold_base_fraction: f64,
-    entry_weight_volatility_1h: f64,
-    entry_weight_volatility_1m: f64,
+    entry_log_range_1h_coefficient: f64,
+    entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
     wallet_exposure_limit_ratio: f64,
     risk_we_excess_allowance_fraction: f64,
@@ -3587,8 +3587,8 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -3609,8 +3609,8 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -3621,8 +3621,8 @@ pub fn calc_next_entry_short_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
@@ -3636,8 +3636,8 @@ pub fn calc_next_entry_short_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
     );
     let position = Position {
@@ -3690,10 +3690,10 @@ pub fn calc_next_entry_short_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
-    volatility_ema_1h = 0.0,
-    volatility_ema_1m = 0.0,
-    close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0
+    log_range_ema_1h = 0.0,
+    log_range_ema_1m = 0.0,
+    close_log_range_1h_coefficient = 0.0,
+    close_log_range_1m_coefficient = 0.0
 ))]
 pub fn calc_next_close_short_py(
     qty_step: f64,
@@ -3717,10 +3717,10 @@ pub fn calc_next_close_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
-    close_weight_volatility_1h: f64,
-    close_weight_volatility_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
+    close_log_range_1h_coefficient: f64,
+    close_log_range_1m_coefficient: f64,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -3740,8 +3740,8 @@ pub fn calc_next_close_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -3749,8 +3749,8 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
         risk_wel_enforcer_threshold_ratio,
@@ -3760,8 +3760,8 @@ pub fn calc_next_close_short_py(
         close_grid_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
     );
     let position = Position {
         size: position_size,
@@ -3804,8 +3804,8 @@ pub fn calc_entries_long_py(
     entry_trailing_reentry_qty_multiplier: f64,
     entry_trailing_retracement_base_fraction: f64,
     entry_trailing_threshold_base_fraction: f64,
-    entry_weight_volatility_1h: f64,
-    entry_weight_volatility_1m: f64,
+    entry_log_range_1h_coefficient: f64,
+    entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
     wallet_exposure_limit_ratio: f64,
     risk_we_excess_allowance_fraction: f64,
@@ -3817,8 +3817,8 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -3840,8 +3840,8 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
 
@@ -3853,8 +3853,8 @@ pub fn calc_entries_long_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
@@ -3868,8 +3868,8 @@ pub fn calc_entries_long_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
     );
 
@@ -3915,8 +3915,8 @@ pub fn calc_entries_short_py(
     entry_trailing_reentry_qty_multiplier: f64,
     entry_trailing_retracement_base_fraction: f64,
     entry_trailing_threshold_base_fraction: f64,
-    entry_weight_volatility_1h: f64,
-    entry_weight_volatility_1m: f64,
+    entry_log_range_1h_coefficient: f64,
+    entry_log_range_1m_coefficient: f64,
     entry_exposure_ratio_coefficient: f64,
     wallet_exposure_limit_ratio: f64,
     risk_we_excess_allowance_fraction: f64,
@@ -3928,8 +3928,8 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -3951,8 +3951,8 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
 
@@ -3964,8 +3964,8 @@ pub fn calc_entries_short_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
@@ -3979,8 +3979,8 @@ pub fn calc_entries_short_py(
         entry_trailing_reentry_qty_multiplier,
         entry_trailing_retracement_base_fraction,
         entry_trailing_threshold_base_fraction,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
+        entry_log_range_1h_coefficient,
+        entry_log_range_1m_coefficient,
         entry_exposure_ratio_coefficient,
     );
 
@@ -4053,10 +4053,10 @@ pub fn calc_min_entry_qty_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
-    volatility_ema_1h = 0.0,
-    volatility_ema_1m = 0.0,
-    close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0
+    log_range_ema_1h = 0.0,
+    log_range_ema_1m = 0.0,
+    close_log_range_1h_coefficient = 0.0,
+    close_log_range_1m_coefficient = 0.0
 ))]
 pub fn calc_closes_long_py(
     qty_step: f64,
@@ -4080,10 +4080,10 @@ pub fn calc_closes_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
-    close_weight_volatility_1h: f64,
-    close_weight_volatility_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
+    close_log_range_1h_coefficient: f64,
+    close_log_range_1m_coefficient: f64,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -4104,8 +4104,8 @@ pub fn calc_closes_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
 
@@ -4114,8 +4114,8 @@ pub fn calc_closes_long_py(
         close_trailing_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
         risk_wel_enforcer_threshold_ratio,
@@ -4125,8 +4125,8 @@ pub fn calc_closes_long_py(
         close_grid_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
     );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
 
@@ -4179,10 +4179,10 @@ pub fn calc_closes_long_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
-    volatility_ema_1h = 0.0,
-    volatility_ema_1m = 0.0,
-    close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0
+    log_range_ema_1h = 0.0,
+    log_range_ema_1m = 0.0,
+    close_log_range_1h_coefficient = 0.0,
+    close_log_range_1m_coefficient = 0.0
 ))]
 pub fn calc_closes_short_py(
     qty_step: f64,
@@ -4206,10 +4206,10 @@ pub fn calc_closes_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
-    volatility_ema_1h: f64,
-    volatility_ema_1m: f64,
-    close_weight_volatility_1h: f64,
-    close_weight_volatility_1m: f64,
+    log_range_ema_1h: f64,
+    log_range_ema_1m: f64,
+    close_log_range_1h_coefficient: f64,
+    close_log_range_1m_coefficient: f64,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -4230,8 +4230,8 @@ pub fn calc_closes_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        volatility_ema_1h,
-        volatility_ema_1m: volatility_ema_1m,
+        log_range_ema_1h,
+        log_range_ema_1m: log_range_ema_1m,
         ..Default::default()
     };
 
@@ -4240,8 +4240,8 @@ pub fn calc_closes_short_py(
         close_trailing_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
         wallet_exposure_limit_ratio,
         risk_we_excess_allowance_fraction,
         risk_wel_enforcer_threshold_ratio,
@@ -4251,8 +4251,8 @@ pub fn calc_closes_short_py(
         close_grid_qty_fraction,
         close_trailing_retracement_base_fraction,
         close_trailing_threshold_base_fraction,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        close_log_range_1h_coefficient,
+        close_log_range_1m_coefficient,
     );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {

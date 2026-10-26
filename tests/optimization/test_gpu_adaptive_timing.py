@@ -127,8 +127,8 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
     for s in ("long", "short"):
         cfg["bot"][s]["strategy"]["ema_anchor"].update(
             base_qty_fraction=0.1,
-            ema_span_0=2,
-            ema_span_1=3,
+            ema_span_0_minutes=2,
+            ema_span_1_minutes=3,
             offset_fraction=0.01,
             inventory_offset_exposure_coefficient=0,
             entry_qty_exposure_coefficient=0.1,
@@ -199,8 +199,8 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
             bot["strategy"]["ema_anchor"].update(
                 base_qty_fraction=0.1,
                 offset_fraction=0,
-                ema_span_0=2,
-                ema_span_1=3,
+                ema_span_0_minutes=2,
+                ema_span_1_minutes=3,
                 entry_qty_exposure_coefficient=0,
             )
     cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
@@ -439,7 +439,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         )
         if strategy == "ema_anchor":
             bot["strategy"][strategy].update(
-                base_qty_fraction=0.1, offset_fraction=0.05, ema_span_0=2, ema_span_1=3,
+                base_qty_fraction=0.1, offset_fraction=0.05, ema_span_0_minutes=2, ema_span_1_minutes=3,
                 entry_qty_exposure_coefficient=0,
             )
         else:
@@ -560,7 +560,7 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
     candles[:, :, 0] = candles[:, :, 2] * 1.001
     candles[:, :, 1] = candles[:, :, 2] * 0.999
     cfg["bot"][side]["strategy"]["ema_anchor"].update(
-        ema_span_0=2, ema_span_1=3, offset_fraction=0.01, inventory_offset_exposure_coefficient=0,
+        ema_span_0_minutes=2, ema_span_1_minutes=3, offset_fraction=0.01, inventory_offset_exposure_coefficient=0,
         offset_log_range_1h_coefficient=0, offset_log_range_1m_coefficient=0,
     )
     cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
