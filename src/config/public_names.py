@@ -10,6 +10,11 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 
 PUBLIC_PATH_RENAMES = {
+    ("optimize", "pymoo", "shared", "crossover_eta"): ("optimize", "pymoo", "shared", "crossover_distribution_index"),
+    ("optimize", "pymoo", "shared", "crossover_prob_var"): ("optimize", "pymoo", "shared", "crossover_probability_per_variable"),
+    ("optimize", "pymoo", "shared", "mutation_eta"): ("optimize", "pymoo", "shared", "mutation_distribution_index"),
+    ("optimize", "pymoo", "shared", "mutation_prob"): ("optimize", "pymoo", "shared", "mutation_probability"),
+    ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),

@@ -57,6 +57,20 @@ def enrich_fields(fields):
             data.update(_operational_fraction_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
+            if path[:3] == ("optimize", "pymoo", "shared"):
+                if path[-1].endswith("_distribution_index"):
+                    data.update(unit="distribution index", domain=FieldDomain(minimum=0.0, exclusive_minimum=True),
+                                description="Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.")
+                elif path[-1].endswith(("_probability", "_probability_per_variable")):
+                    data.update(unit="probability", domain=FieldDomain(minimum=0.0, maximum=1.0),
+                                denominator=("offspring candidates" if path[-1] == "mutation_probability" else
+                                             "candidate coordinates conditional on mutation" if path[-1].startswith("mutation_") else
+                                             "parent-pair coordinates conditional on crossover"),
+                                description=("Per-candidate polynomial-mutation gate; auto is 1 / max(1, vector length)."
+                                             if path[-1] == "mutation_probability" else
+                                             "Conditional per-variable polynomial-mutation gate; auto is min(0.5, 1 / max(1, vector length))."
+                                             if path[-1].startswith("mutation_") else
+                                             "Per-variable simulated-binary-crossover gate; external pymoo candidate crossover policy is unchanged."))
         elif path[:1] == ("live",):
             # Reuse the command/runtime owner's declarations without copying
             # their shared-field classification into a second static list.

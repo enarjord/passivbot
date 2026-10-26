@@ -475,12 +475,12 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.pymoo.algorithms.nsga2` | object | `{}` | — | —; optimize | — | — | — | python |
 | `optimize.pymoo.algorithms.nsga3.ref_dirs.method` | string | `"das_dennis"` | — | —; optimize | — | — | — | python |
 | `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions` | integer \| string | `"auto"` | — | —; optimize | — | — | — | python |
-| `optimize.pymoo.shared.crossover_eta` | float | `20.0` | — | —; optimize | — | — | — | python |
-| `optimize.pymoo.shared.crossover_prob_var` | float | `0.5` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.crossover_distribution_index` | float | `20.0` | distribution index | —; optimize | — | — | > 0.0 | python |
+| `optimize.pymoo.shared.crossover_probability_per_variable` | float | `0.5` | probability / parent-pair coordinates conditional on crossover | —; optimize | — | — | >= 0.0; <= 1.0 | python |
 | `optimize.pymoo.shared.eliminate_duplicates` | boolean | `true` | — | —; optimize | — | — | — | python |
-| `optimize.pymoo.shared.mutation_eta` | float | `20.0` | — | —; optimize | — | — | — | python |
-| `optimize.pymoo.shared.mutation_prob` | float \| string | `"auto"` | — | —; optimize | — | — | — | python |
-| `optimize.pymoo.shared.mutation_prob_per_variable` | float \| string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.mutation_distribution_index` | float | `20.0` | distribution index | —; optimize | — | — | > 0.0 | python |
+| `optimize.pymoo.shared.mutation_probability` | float \| string | `"auto"` | probability / offspring candidates | —; optimize | — | — | >= 0.0; <= 1.0 | python |
+| `optimize.pymoo.shared.mutation_probability_per_variable` | float \| string | `"auto"` | probability / candidate coordinates conditional on mutation | —; optimize | — | — | >= 0.0; <= 1.0 | python |
 | `optimize.round_to_n_significant_digits` | integer | `3` | — | —; optimize | — | — | — | python |
 | `optimize.scoring` | array | 10 items (see template) | — | —; optimize | — | — | — | python |
 | `optimize.scoring.*.goal` | string | Not declared | — | —; optimize | — | — | `max`, `min` | python |

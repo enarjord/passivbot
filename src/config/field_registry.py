@@ -179,7 +179,7 @@ _FIELDS_BY_TYPE = {
         "optimize.prefilter": "adverse_directionality volatility_ema_1m volatility_ema_1h penalty_weight",
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
-        "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
+        "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
         "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
@@ -379,7 +379,7 @@ def get_field_registry() -> FieldRegistry:
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
-    for name in ("mutation_prob", "mutation_prob_per_variable"):
+    for name in ("mutation_probability", "mutation_probability_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):

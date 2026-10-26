@@ -1521,12 +1521,10 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimize Common"},
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
-    "optimize.pymoo.shared.mutation_prob": {
-        "visible": ["--optimize.pymoo.shared.mutation_prob"],
+    "optimize.pymoo.shared.mutation_probability": {
+        "visible": ["--optimize.pymoo.shared.mutation_probability"],
         "hidden": [
-            "--optimize_pymoo_shared_mutation_prob",
-            "--optimize.pymoo.shared.mutation_prob_var",
-            "--optimize_pymoo_shared_mutation_prob_var",
+            "--optimize_pymoo_shared_mutation_probability",
             "-psmpv",
         ],
         "type": str,

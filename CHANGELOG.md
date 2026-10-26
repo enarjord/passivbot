@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Spell pymoo crossover and mutation controls explicitly with `_probability`,
+  `_probability_per_variable`, and `_distribution_index`. Values, automatic defaults, and
+  external pymoo arguments are unchanged; released-v8 conversion reports the final paths.
+
 - Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
   use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
   EMA of `ln(high / low)`; values, normalization, native identifiers, and trading formulas are
