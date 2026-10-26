@@ -76,7 +76,7 @@ class Sampler:
                     ], text=True, timeout=5).strip().splitlines()
                     devices = [line.split(",") for line in value]
                     row["global_device_used_bytes"] = sum(int(device[0].strip()) * 2**20 for device in devices)
-                    row["global_gpu_utilization_max_pct"] = max(int(device[1].strip()) for device in devices)
+                    row["global_gpu_utilization_max_percent"] = max(int(device[1].strip()) for device in devices)
                 except (subprocess.SubprocessError, ValueError, IndexError) as error:
                     self.errors.append(type(error).__name__)
             directory = self.directory
@@ -93,7 +93,7 @@ class Sampler:
 def sampling_availability(rows):
     return dict(
         process_tree_rss=bool(rows) and all(row["process_tree_rss_bytes"] is not None for row in rows),
-        global_device=any("global_device_used_bytes" in row and "global_gpu_utilization_max_pct" in row
+        global_device=any("global_device_used_bytes" in row and "global_gpu_utilization_max_percent" in row
                           for row in rows),
     )
 
