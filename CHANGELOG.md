@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
+  including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
+
 - Align native execution inputs with explicit equity-floor, near-touch, slippage and fill-buffer
   fractions. Preserve execution math, native buffer layouts and omitted optional defaults;
   reject retired raw backtest packet keys instead of silently using different defaults.
