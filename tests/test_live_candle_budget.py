@@ -58,7 +58,7 @@ def _forager_score_weights(volume=0.0, ema_readiness=0.0, volatility=0.0):
     return {
         "volume": float(volume),
         "ema_readiness": float(ema_readiness),
-        "volatility": float(volatility),
+        "log_range": float(volatility),
     }
 
 
