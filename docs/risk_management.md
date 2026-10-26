@@ -14,7 +14,7 @@ On perpetual futures markets, exchanges allow you to open positions larger than 
 * **Bot Behavior:** Adjusting the leverage slider on the exchange website does **not** change the bot’s risk calculations, profit targets, or entry logic.
 * **Practical Requirement:** You must set your exchange leverage high enough to support the positions the bot attempts to open. A safe rule of thumb is:
 
-    `Exchange Leverage > (total_wallet_exposure_limit_long + total_wallet_exposure_limit_short)`
+    `Exchange Leverage > (total_wallet_exposure_limit_ratio_long + total_wallet_exposure_limit_ratio_short)`
 
     If exchange leverage is too low, the bot will hit "insufficient margin" errors when trying to place orders.
 
@@ -147,9 +147,9 @@ In practice, the bot rarely fills all positions simultaneously. Therefore, the b
 
 The excess allowance is always bounded. The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 
-`effective_we_excess_allowance_pct = min(max(0, risk_we_excess_allowance_pct), max(0, total_wallet_exposure_limit_ratio / wallet_exposure_limit_ratio - 1))`
+`effective_we_excess_allowance_fraction = min(max(0, risk_we_excess_allowance_fraction), max(0, total_wallet_exposure_limit_ratio / wallet_exposure_limit_ratio - 1))`
 
-`effective_limit = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)`
+`effective_limit = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`
 
 If `wallet_exposure_limit_ratio` is non-positive or non-finite, Passivbot treats
 the effective excess allowance and effective limit as zero. If
@@ -157,7 +157,7 @@ the effective excess allowance and effective limit as zero. If
 grants no excess headroom.
 
 In coin HSL mode, `bot.<side>.hsl.scale_budget_with_excess_allowance=true` also
-multiplies the balance budget by `1 + effective_we_excess_allowance_pct`. It defaults
+multiplies the balance budget by `1 + effective_we_excess_allowance_fraction`. It defaults
 to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 
 * **Example:** If WEL is `0.20` and allowance is `0.10` (10%), the position can grow to `0.22` before the bot considers it "full."
@@ -175,7 +175,7 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 >     `min(0.5, 1.0 / 0.25 - 1) == min(0.5, 3.0) == 0.5`
 >
 > 3.  **Per position effective exposure limit:**
->     `base_wel * (1 + effective_we_excess_allowance_pct)`
+>     `base_wel * (1 + effective_we_excess_allowance_fraction)`
 >     `0.25 * 1.5 == 0.375`
 >
 > 4.  **Per position allowance:**

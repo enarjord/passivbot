@@ -23,7 +23,7 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
     matrix = np.zeros((2, sides * len(keys)), dtype=np.float64)
     for side in range(sides):
         for key, value in ((hour, 3.0), (weight, 1.0), ("n_positions", 1),
-                           ("total_wallet_exposure_limit", 1.0),
+                           ("total_wallet_exposure_limit_ratio", 1.0),
                            ("unstuck_memory_ema_span_minutes", 3.0),
                            ("loss_gate_memory_ema_span_minutes", 7.0)):
             matrix[:, side * len(keys) + keys.index(key)] = value
@@ -84,9 +84,9 @@ def test_hourly_admission_preserves_valid_and_nonconsuming_policies(monkeypatch,
     elif case == "zero_span":
         matrix[:, keys.index(hour)] = 0.0
     elif case == "disabled_side":
-        matrix[:, keys.index("total_wallet_exposure_limit")] = 0.0
+        matrix[:, keys.index("total_wallet_exposure_limit_ratio")] = 0.0
     elif case == "disabled_coin":
-        column = getattr(model, kind + "_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN")
+        column = getattr(model, kind + "_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN")
         runner._bootstrap_coin_overrides[0][:, column] = 0.0
     elif case == "before_planning":
         end_steps = np.array([2, 2])

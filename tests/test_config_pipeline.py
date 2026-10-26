@@ -258,7 +258,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
         (
             {
                 "bot.long.risk.total_wallet_exposure_limit_ratio": 1.0,
-                "bot.long.total_wallet_exposure_limit": 2.0,
+                "bot.long.total_wallet_exposure_limit_ratio": 2.0,
             },
             ValueError,
             "unknown configuration field",
@@ -432,8 +432,8 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     )
 
     assert "n_positions" not in prepared["bot"]["long"]
-    assert "total_wallet_exposure_limit" not in prepared["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
+    assert "total_wallet_exposure_limit_ratio" not in prepared["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in prepared["bot"]["long"]
     assert "unstuck_threshold" not in prepared["bot"]["long"]
     assert "hsl_drawdown_threshold_fraction" not in prepared["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
@@ -553,11 +553,11 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["total_wallet_exposure_limit"]
+        compiled["bot"]["long"]["total_wallet_exposure_limit_ratio"]
         == canonical["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (

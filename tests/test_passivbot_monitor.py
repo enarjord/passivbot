@@ -6648,14 +6648,14 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "volatility": 0.5,
                     "ema_readiness": 0.25,
                 },
-                ("long", "wallet_exposure_limit"): 0.2,
-                ("short", "wallet_exposure_limit"): 0.2,
-                ("long", "risk_we_excess_allowance_pct"): 0.5,
-                ("short", "risk_we_excess_allowance_pct"): 0.5,
+                ("long", "wallet_exposure_limit_ratio"): 0.2,
+                ("short", "wallet_exposure_limit_ratio"): 0.2,
+                ("long", "risk_we_excess_allowance_fraction"): 0.5,
+                ("short", "risk_we_excess_allowance_fraction"): 0.5,
                 ("long", "risk_we_excess_allowance_mode"): "bounded",
                 ("short", "risk_we_excess_allowance_mode"): "bounded",
-                ("long", "total_wallet_exposure_limit"): 0.24,
-                ("short", "total_wallet_exposure_limit"): 0.0,
+                ("long", "total_wallet_exposure_limit_ratio"): 0.24,
+                ("short", "total_wallet_exposure_limit_ratio"): 0.0,
                 ("long", "ema_span_0"): 10.0,
                 ("long", "ema_span_1"): 20.0,
                 ("short", "ema_span_0"): 10.0,
@@ -6709,8 +6709,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "close_weight_volatility_1h"): 0.0,
                 ("long", "close_weight_volatility_1m"): 0.0,
                 ("short", "close_weight_volatility_1m"): 0.0,
-                ("long", "risk_wel_enforcer_threshold"): 0.0,
-                ("short", "risk_wel_enforcer_threshold"): 0.0,
+                ("long", "risk_wel_enforcer_threshold_ratio"): 0.0,
+                ("short", "risk_wel_enforcer_threshold_ratio"): 0.0,
             }
             span2 = float((10.0 * 20.0) ** 0.5)
             self._monitor_runtime_market_hints = {}
@@ -7537,18 +7537,18 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
             assert pside == "long"
             assert requested_symbol == symbol
             return {
-                "wallet_exposure_limit": 0.5,
-                "total_wallet_exposure_limit": 1.5,
+                "wallet_exposure_limit_ratio": 0.5,
+                "total_wallet_exposure_limit_ratio": 1.5,
                 "n_positions": 3,
-                "risk_we_excess_allowance_pct": 0.66,
+                "risk_we_excess_allowance_fraction": 0.66,
                 "risk_wel_enforcer_enabled": False,
-                "risk_wel_enforcer_threshold": 1.0,
+                "risk_wel_enforcer_threshold_ratio": 1.0,
             }
 
         def bp(self, pside, key, requested_symbol):
             assert pside == "long"
             assert requested_symbol == symbol
-            assert key == "wallet_exposure_limit"
+            assert key == "wallet_exposure_limit_ratio"
             return 0.5
 
     payload = monitor_mod._build_monitor_trailing_close_payload(
@@ -7731,7 +7731,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     }
     params = {
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
         "filter_volatility_drop_pct": volatility_drop_pct,
         "unilateralness_ema_span_1m": 60.0,

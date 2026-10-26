@@ -262,8 +262,8 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
         "market_order_near_touch_fraction": 0.001,
     }}, "long": {"enabled": True}, "short": {"enabled": False}}}
     bot.bot_value = lambda pside, key: {
-        ("long", "total_wallet_exposure_limit"): 1.5,
-        ("short", "total_wallet_exposure_limit"): 0.0,
+        ("long", "total_wallet_exposure_limit_ratio"): 1.5,
+        ("short", "total_wallet_exposure_limit_ratio"): 0.0,
         ("long", "n_positions"): 3,
         ("short", "n_positions"): 0,
     }.get((pside, key), 0.0)

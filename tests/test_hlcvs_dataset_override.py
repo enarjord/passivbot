@@ -35,13 +35,13 @@ def _base_config(cache_dir, *, mode="dataset"):
             "long": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
             },
             "short": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
             "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},

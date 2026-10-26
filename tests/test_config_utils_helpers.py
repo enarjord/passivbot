@@ -1195,7 +1195,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     config = format_config(get_template_config(), verbose=False)
 
     assert "n_positions" not in config["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in config["bot"]["long"]
     assert "unstuck_threshold" not in config["bot"]["long"]
     assert "hsl_drawdown_threshold_fraction" not in config["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
@@ -1209,7 +1209,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == config['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (

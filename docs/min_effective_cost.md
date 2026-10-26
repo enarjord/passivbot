@@ -21,7 +21,7 @@ For most perpetuals, `initial_notional ≈ balance * effective_wel * strategy_in
 With:
 - `balance`: current account balance in quote currency (e.g., USDT/USDC).
 - `twel = total_wallet_exposure_limit_ratio`: side-level cap; divided by `n_positions` to get per-position WE.
-- `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit_ratio - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit_ratio` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
+- `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_fraction), max(0, twel / wallet_exposure_limit_ratio - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit_ratio` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
 - `effective_wel = wallet_exposure_limit_ratio * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
   order. For `bot.portfolio.strategy_kind = "trailing_martingale"`, this is

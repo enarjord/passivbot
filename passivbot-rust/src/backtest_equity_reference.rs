@@ -48,8 +48,8 @@ fn equity_shared_references_match_current_producers() {
     let mut bp_pair = BotParamsPair::default();
     bp_pair.long.n_positions = 1;
     bp_pair.short.n_positions = 1;
-    bp_pair.long.total_wallet_exposure_limit = 1.0;
-    bp_pair.short.total_wallet_exposure_limit = 1.0;
+    bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
     bp_pair.long.ema_span_0 = 10.0;
     bp_pair.long.ema_span_1 = 20.0;
     bp_pair.short.ema_span_0 = 10.0;

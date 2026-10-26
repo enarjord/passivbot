@@ -147,13 +147,13 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
     )
-    if pinned.get("wallet_exposure_limit") == 0:
+    if pinned.get("wallet_exposure_limit_ratio") == 0:
         return False
     for key in (
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio",
         "n_positions",
     ):
         if key not in params or _to_float(params[key], context=key) > 0.0:
@@ -166,7 +166,7 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
 
 def rms_side_enabled(params, pside, *, bounds=None):
     """RMS consumers need an enabled fixed side or an optimizer-reachable side."""
-    gates = ("total_wallet_exposure_limit", "n_positions")
+    gates = ("total_wallet_exposure_limit_ratio", "n_positions")
     fixed = [float(params.get(key, 0.0)) for key in gates]
     if all(value > 0.0 for value in fixed):
         return True
@@ -329,7 +329,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=Fal
             if coin not in policies_by_side[side]:
                 continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
-            if patch.get("wallet_exposure_limit") == 0.0:
+            if patch.get("wallet_exposure_limit_ratio") == 0.0:
                 continue
             # Coin pins supersede global search dimensions for this side.
             effective_bounds = dict(bounds)

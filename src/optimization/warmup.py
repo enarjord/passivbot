@@ -712,7 +712,7 @@ def build_optimizer_data_config(config: dict) -> dict:
             ),
             boundary_configs[0],
         )
-        for field in ("n_positions", "total_wallet_exposure_limit"):
+        for field in ("n_positions", "total_wallet_exposure_limit_ratio"):
             path = resolve_optimization_bound_path(data_config, f"{pside}_{field}")
             if path is None:
                 raise KeyError(

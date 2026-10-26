@@ -303,7 +303,7 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 - **strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient**, **threshold_log_range_1h_coefficient**, **threshold_log_range_1m_coefficient**:
   - Entry threshold is widened multiplicatively:
     - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_exposure_ratio_coefficient + log_range_1h * threshold_log_range_1h_coefficient + log_range_1m * threshold_log_range_1m_coefficient)`
-  - `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
+  - `we_ratio = wallet_exposure / effective_wallet_exposure_limit_ratio`.
   - Positive coefficients make entries less eager as exposure or log range rises.
 - **strategy.trailing_martingale.entry.retracement_base_fraction**:
   - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
@@ -365,7 +365,7 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 If a position is stuck, the bot uses profits from other positions to realize losses for the stuck position. If multiple positions are stuck, the position with the lowest price action distance is selected for unstucking.
 
 These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
-allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct)`.
+allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`.
 
 - **unstuck.close_fraction**:
   - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
@@ -588,7 +588,7 @@ shared source.
 - **bot.portfolio.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.portfolio.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 
 - **bot.<side>.universe.filter_by_min_effective_cost**: Each side defaults to `true` and disallows flat initial entries where
-  `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
+  `balance * allowed_wallet_exposure_limit_ratio * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
@@ -686,7 +686,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
   not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
   equivalence from an old rolling duration.
 - **live.startup.risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
-- **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
+- **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
 - **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+position_side. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
   `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.

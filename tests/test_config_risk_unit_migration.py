@@ -77,7 +77,7 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
         "bot.portfolio.loss_gate.max_drawdown_fraction": 0.0625,
     }
     native = flatten_optimize_bounds(converted["optimize"]["bounds"], strategy_kind=kind)
-    assert native["long_total_wallet_exposure_limit"] == [0.25, 3.5]
+    assert native["long_total_wallet_exposure_limit_ratio"] == [0.25, 3.5]
     assert native["long_hsl_drawdown_threshold_fraction"] == [0.01, 0.3]
     assert native["long_hsl_drawdown_fraction_ema_span_minutes"] == [12.5, 22.5]
     report_targets = {

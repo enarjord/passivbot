@@ -36,7 +36,7 @@ from optimization.gpu.service import (
     MPS_MAX_DISPATCH_CANDIDATE_BARS,
     SharedAccountReplay,
     _btc_daily_price_context,
-    _candidate_wallet_exposure_limit_outputs,
+    _candidate_wallet_exposure_limit_ratio_outputs,
     _candidate_position_slot_outputs,
     _hsl_lookback_bars,
     _directional_entry_initial_metrics,
@@ -714,26 +714,26 @@ def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
     assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
 
 
-def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
+def test_candidate_wallet_exposure_limit_ratios_preserve_sides_and_base_fallback():
     torch = pytest.importorskip("torch")
 
-    outputs = _candidate_wallet_exposure_limit_outputs(
+    outputs = _candidate_wallet_exposure_limit_ratio_outputs(
         [
-            {"long_total_wallet_exposure_limit": 1.25},
+            {"long_total_wallet_exposure_limit_ratio": 1.25},
             {
-                "long_total_wallet_exposure_limit": 1.5,
-                "short_total_wallet_exposure_limit": 0.75,
+                "long_total_wallet_exposure_limit_ratio": 1.5,
+                "short_total_wallet_exposure_limit_ratio": 0.75,
             },
         ],
         {"long": 1.0, "short": 0.5},
         torch=torch,
     )
 
-    assert outputs["candidate_total_wallet_exposure_limit_long"].tolist() == [
+    assert outputs["candidate_total_wallet_exposure_limit_ratio_long"].tolist() == [
         1.25,
         1.5,
     ]
-    assert outputs["candidate_total_wallet_exposure_limit_short"].tolist() == [
+    assert outputs["candidate_total_wallet_exposure_limit_ratio_short"].tolist() == [
         0.5,
         0.75,
     ]
@@ -759,7 +759,7 @@ def test_candidate_position_slots_follow_candidate_positions_and_enabledness():
 
     outputs = _candidate_position_slot_outputs(
         [
-            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit": 0.0},
+            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit_ratio": 0.0},
             {"short_n_positions": 2.0},
         ],
         {"long": 2.0, "short": 1.0},
@@ -1078,19 +1078,19 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         entry_eligible = (side, coin) in {("long", "BTC"), ("short", "ETH")}
         return {
             "entry_eligible": entry_eligible,
-            "wallet_exposure_limit": -1.0 if entry_eligible else 0.0,
+            "wallet_exposure_limit_ratio": -1.0 if entry_eligible else 0.0,
             "entry_cooldown_minutes": flat["risk_entry_cooldown_minutes"],
             "filter_volume_ema_span_1m": flat["forager_volume_ema_span_1m"],
             "filter_volatility_ema_span_1m": flat["forager_volatility_ema_span_1m"],
             "forager_score_weights": flat["forager_score_weights"],
             "n_positions": flat["n_positions"],
-            "total_wallet_exposure_limit": flat["total_wallet_exposure_limit"],
+            "total_wallet_exposure_limit_ratio": flat["total_wallet_exposure_limit_ratio"],
             "risk_twel_entry_gate_enabled": True,
             "risk_twel_enforcer_enabled": flat["risk_twel_enforcer_enabled"],
             "risk_twel_enforcer_policy": flat["risk_twel_enforcer_policy"],
-            "risk_twel_enforcer_threshold": flat["risk_twel_enforcer_threshold"],
+            "risk_twel_enforcer_threshold_ratio": flat["risk_twel_enforcer_threshold_ratio"],
             "risk_wel_enforcer_enabled": flat["risk_wel_enforcer_enabled"],
-            "risk_wel_enforcer_threshold": flat["risk_wel_enforcer_threshold"],
+            "risk_wel_enforcer_threshold_ratio": flat["risk_wel_enforcer_threshold_ratio"],
             "unstuck_enabled": flat["unstuck_enabled"],
             "hsl_enabled": flat["hsl_enabled"],
         }
@@ -1407,7 +1407,7 @@ def test_gpu_proxy_rejects_all_internal_gaps():
 )
 def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
     packed = _single_coin_exposure_params({"we_excess_allowance_fraction": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {'threshold_ratio': 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
-    assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold": 0.8}
+    assert packed == {"we_excess_allowance_fraction": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold_ratio": 0.8}
 
 
 
@@ -1424,7 +1424,7 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
         side="short",
     ) == {
         "wel_enforcer_enabled": 1.0,
-        "wel_enforcer_threshold": 0.8,
+        "wel_enforcer_threshold_ratio": 0.8,
     }
 
     with pytest.raises(ValueError, match="finite positive"):
@@ -1601,8 +1601,8 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
         [
             {
                 f"{side}_offset": 0.125,
-                f"{side}_we_excess_allowance_pct": 0.25,
-                f"{side}_twel_enforcer_threshold": 0.8,
+                f"{side}_we_excess_allowance_fraction": 0.25,
+                f"{side}_twel_enforcer_threshold_ratio": 0.8,
                 f"{other_side}_offset": 9.0,
             }
         ]
@@ -1612,10 +1612,10 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
     offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
     assert matrix[0, offset_index] == 0.125
     assert matrix[
-        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_pct")
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_fraction")
     ] == pytest.approx(0.25)
     assert matrix[
-        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")
     ] == pytest.approx(0.8)
 
 
@@ -1654,8 +1654,8 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
             {
                 f"{side}_entry_threshold_base_pct": 0.125,
                 f"{side}_forager_score_weights_volume": 0.25,
-                f"{side}_we_excess_allowance_pct": 0.4,
-                f"{side}_twel_enforcer_threshold": 0.75,
+                f"{side}_we_excess_allowance_fraction": 0.4,
+                f"{side}_twel_enforcer_threshold_ratio": 0.75,
             }
         ]
     )
@@ -1677,11 +1677,11 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
     )
     assert matrix[
         0,
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_pct"),
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_fraction"),
     ] == pytest.approx(0.4)
     assert matrix[
         0,
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold"),
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio"),
     ] == pytest.approx(0.75)
 
 
@@ -1726,14 +1726,14 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 15.0,
-                    "wallet_exposure_limit": 0.4,
-                    "risk_we_excess_allowance_pct": 0.25,
+                    "wallet_exposure_limit_ratio": 0.4,
+                    "risk_we_excess_allowance_fraction": 0.25,
                     "unstuck_ema_span_0": 17.25,
                     "unstuck_ema_span_1": 211.75,
                     "unstuck_enabled": True,
@@ -1828,7 +1828,7 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
                 {
                     "long": {
                         "entry_eligible": True,
-                        "wallet_exposure_limit": -1.0,
+                        "wallet_exposure_limit_ratio": -1.0,
                     }
                 }
             ],
@@ -1875,7 +1875,7 @@ def test_coin_override_contract_keeps_backtest_inert_live_values():
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": False,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             }
         ],
@@ -1924,16 +1924,16 @@ def test_multicoin_coin_overrides_pack_forced_normal_active_slot(
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": False,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "entry_eligible": True,
                     "is_forced_active": True,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
         ],
@@ -1973,21 +1973,21 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
                 "short": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "wallet_exposure_limit": 0.4,
+                    "wallet_exposure_limit_ratio": 0.4,
                 },
                 "short": {
                     "risk_entry_cooldown_minutes": 30.0,
-                    "wallet_exposure_limit": -1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 },
             },
         ],
@@ -2064,15 +2064,15 @@ def test_multicoin_coin_overrides_preserve_side_entry_eligibility(
             {
                 "long": {
                     "entry_eligible": False,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": 0.0,
                 }
             },
             {
                 "long": {
                     "entry_eligible": True,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
         ],
@@ -2244,18 +2244,18 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 0.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": -1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": -1.0,
                 }
             },
             {
                 "long": {
                     "risk_entry_cooldown_minutes": 15.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": 0.4,
-                    "risk_we_excess_allowance_pct": 0.25,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "wallet_exposure_limit_ratio": 0.4,
+                    "risk_we_excess_allowance_fraction": 0.25,
                     "risk_wel_enforcer_enabled": True,
-                    "risk_wel_enforcer_threshold": 0.8,
+                    "risk_wel_enforcer_threshold_ratio": 0.8,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
                     "unstuck_close_pct": 0.125,
@@ -2430,7 +2430,7 @@ def test_trailing_martingale_flattening_preserves_nested_params_and_gates(
     }
     flattened = flatten_trailing_martingale_params(
         strategy,
-        {"entry_cooldown_minutes": 7.0, "total_wallet_exposure_limit": 1.5},
+        {"entry_cooldown_minutes": 7.0, "total_wallet_exposure_limit_ratio": 1.5},
     )
 
     assert tuple(flattened) == TRAILING_MARTINGALE_PARAM_KEYS
@@ -2446,7 +2446,7 @@ def test_trailing_martingale_flattening_rejects_unknown_gate_mode():
                 "entry": {"ema_gate_mode": "mystery"},
                 "close": {},
             },
-            {"total_wallet_exposure_limit": 1.0},
+            {"total_wallet_exposure_limit_ratio": 1.0},
         )
 
 
@@ -2468,7 +2468,7 @@ def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
         strategy,
         {
             "risk_entry_cooldown_minutes": 37.0,
-            "total_wallet_exposure_limit": 1.5,
+            "total_wallet_exposure_limit_ratio": 1.5,
         },
     )
 
@@ -2595,19 +2595,19 @@ def test_suite_batching_rejects_unsupported_topologies(monkeypatch, device):
 
 def test_suite_materialization_preserves_parameter_and_metric_defaults():
     proxy = _suite_batch_proxy()
-    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit", "ema_span_0"]
+    proxy.param_keys = ["n_positions", "total_wallet_exposure_limit_ratio", "ema_span_0"]
     proxy.base_params = {"long": dict(zip(proxy.param_keys, [4, 1.5, 32]))}
-    proxy.base_total_wallet_exposure_limits = {"long": 1.5, "short": 0}
+    proxy.base_total_wallet_exposure_limit_ratios = {"long": 1.5, "short": 0}
     proxy.base_n_positions = {"long": 4, "short": 0}
     original = [{"long_ema_span_0": 64}]
     result = proxy.materialize_suite_candidates(original)
     assert result == [
         dict(
             long_n_positions=4.0,
-            long_total_wallet_exposure_limit=1.5,
+            long_total_wallet_exposure_limit_ratio=1.5,
             long_ema_span_0=64.0,
             short_n_positions=0,
-            short_total_wallet_exposure_limit=0,
+            short_total_wallet_exposure_limit_ratio=0,
         )
     ]
     np.testing.assert_array_equal(

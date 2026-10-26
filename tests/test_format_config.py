@@ -124,7 +124,7 @@ def test_format_config_current_roundtrip_basic():
     assert isinstance(
         out['bot']['short']['risk']['total_exposure_enforcer']['threshold_ratio'], (int, float)
     )
-    assert "risk_twel_enforcer_threshold" not in out["bot"]["long"]
+    assert "risk_twel_enforcer_threshold_ratio" not in out["bot"]["long"]
 
 
 def test_format_config_restores_missing_trailing_martingale_weight_defaults():

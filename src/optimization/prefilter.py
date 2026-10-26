@@ -115,7 +115,7 @@ def _probe_inputs(config, params, checks):
         )
         allocation_total = float(
             require_grouped_bot_value(
-                master, side, "total_wallet_exposure_limit", prefer_flat=True
+                master, side, "total_wallet_exposure_limit_ratio", prefer_flat=True
             )
         )
         dynamic = config["backtest"]["dynamic_wel_by_tradability"]
@@ -139,7 +139,7 @@ def _probe_inputs(config, params, checks):
             def required(key):
                 return require_grouped_bot_value(bot, side, key, prefer_flat=True)
 
-            total = float(required("total_wallet_exposure_limit"))
+            total = float(required("total_wallet_exposure_limit_ratio"))
             if slots <= 0 or allocation_total <= 0 or total <= 0:
                 continue
             # prep_backtest_args derives global WEL from total/slots; only an
@@ -159,10 +159,10 @@ def _probe_inputs(config, params, checks):
             yield coin, side, {
                 "side": side,
                 "strategy": strategy,
-                "wallet_exposure_limit": base_limit,
-                "total_wallet_exposure_limit": total,
-                "risk_we_excess_allowance_pct": float(
-                    required("risk_we_excess_allowance_pct")
+                "wallet_exposure_limit_ratio": base_limit,
+                "total_wallet_exposure_limit_ratio": total,
+                "risk_we_excess_allowance_fraction": float(
+                    required("risk_we_excess_allowance_fraction")
                 ),
                 "cooldown_base": float(required("risk_entry_cooldown_minutes")),
                 "cooldown_min": float(required("entry_cooldown_min_duration_minutes")),

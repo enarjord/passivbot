@@ -11,8 +11,8 @@ from test_orchestrator_json_api import (
 
 def activation_snapshot(kind, side, *, held=False, mode="normal"):
     policy = {
-        "n_positions": 1, "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0, "entry_initial_qty_pct": 0.1,
+        "n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0, "entry_initial_qty_pct": 0.1,
         "entry_grid_double_down_factor": 1.2, "entry_grid_spacing_pct": 0.01,
         "close_grid_qty_pct": 0.5, "close_trailing_threshold_pct": 0.01,
     }

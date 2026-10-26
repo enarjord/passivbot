@@ -1227,7 +1227,7 @@ def build_backtest_payload(
         from config.entry_cooldown import uses_adverse_rms
         if any(
             p["entry_eligible"] and p["n_positions"] > 0
-            and p["total_wallet_exposure_limit"] > 0 and uses_adverse_rms(p)
+            and p["total_wallet_exposure_limit_ratio"] > 0 and uses_adverse_rms(p)
             for pair in bot_params_list for p in pair.values()
         ):
             # Python has explicitly calculated a zero non-RMS activation budget.
@@ -2822,11 +2822,11 @@ def prep_backtest_args(
                 exchange=mss.get(coin, {}).get("exchange") or exchange,
                 market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
             if not approved:
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] = 0.0
             elif "wallet_exposure_limit_ratio" not in coin_override_bot.get(pside, {}):
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] = -1.0
             coin_specific_bot_params[pside]["entry_eligible"] = (
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] != 0.0
             )
         hsl_coin_policies[coin] = [
             {
@@ -2991,7 +2991,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     for pside in ["long", "short"]:
         twel = float(
             flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
-                "total_wallet_exposure_limit", 0.0
+                "total_wallet_exposure_limit_ratio", 0.0
             )
             or 0.0
         )

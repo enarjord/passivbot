@@ -457,8 +457,8 @@ pub struct BotParamsPair {
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBudgetState {
-    pub configured_wallet_exposure_limit: f64,
-    pub effective_wallet_exposure_limit: f64,
+    pub configured_wallet_exposure_limit_ratio: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
     pub configured_n_positions: usize,
     pub effective_n_positions: usize,
 }
@@ -626,17 +626,17 @@ pub struct BotParams {
     #[serde(default = "default_unilateralness_span")]
     pub unilateralness_ema_span_1m: f64,
     pub n_positions: usize,
-    pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    pub total_wallet_exposure_limit_ratio: f64,
+    pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
     #[serde(default = "default_true")]
     pub risk_wel_enforcer_enabled: bool,
-    pub risk_wel_enforcer_threshold: f64,
+    pub risk_wel_enforcer_threshold_ratio: f64,
     #[serde(default = "default_true")]
     pub risk_twel_enforcer_enabled: bool,
     #[serde(default)]
     pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
-    pub risk_twel_enforcer_threshold: f64,
-    pub risk_we_excess_allowance_pct: f64,
+    pub risk_twel_enforcer_threshold_ratio: f64,
+    pub risk_we_excess_allowance_fraction: f64,
     #[serde(default = "default_true")]
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
@@ -686,14 +686,14 @@ impl Default for BotParams {
             entry_cooldown_weights_minutes: Default::default(),
             unilateralness_ema_span_1m: 60.0,
             n_positions: 0,
-            total_wallet_exposure_limit: 0.0,
-            wallet_exposure_limit: 0.0,
+            total_wallet_exposure_limit_ratio: 0.0,
+            wallet_exposure_limit_ratio: 0.0,
             risk_wel_enforcer_enabled: true,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             risk_twel_enforcer_enabled: true,
             risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
-            risk_twel_enforcer_threshold: 0.0,
-            risk_we_excess_allowance_pct: 0.0,
+            risk_twel_enforcer_threshold_ratio: 0.0,
+            risk_we_excess_allowance_fraction: 0.0,
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
             unstuck_close_pct: 0.0,
@@ -708,7 +708,7 @@ impl Default for BotParams {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeOrderContext {
-    pub effective_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

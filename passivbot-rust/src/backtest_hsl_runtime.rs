@@ -280,12 +280,12 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 } else {
                     &self.bot_params_original[c].short
                 };
-                let base = if authored.wallet_exposure_limit < 0.0 {
-                    authored.total_wallet_exposure_limit / slots as f64
+                let base = if authored.wallet_exposure_limit_ratio < 0.0 {
+                    authored.total_wallet_exposure_limit_ratio / slots as f64
                 } else {
-                    authored.wallet_exposure_limit
+                    authored.wallet_exposure_limit_ratio
                 };
-                budget *= 1.0 + effective_we_excess_allowance_pct(authored, base);
+                budget *= 1.0 + effective_we_excess_allowance_fraction(authored, base);
             }
         }
         Ok((budget, upnl, exposed))
@@ -642,7 +642,7 @@ mod tests {
                 let mut pair = BotParamsPair::default();
                 for side in [&mut pair.long, &mut pair.short] {
                     side.n_positions = coins;
-                    side.total_wallet_exposure_limit = 1.0;
+                    side.total_wallet_exposure_limit_ratio = 1.0;
                     side.unstuck_loss_allowance_pct = 0.01;
                     side.unstuck_close_pct = 0.1;
                     side.unstuck_threshold = 0.95;
@@ -1083,7 +1083,7 @@ mod tests {
         long.unstuck_loss_allowance_pct = 0.02;
         long.unstuck_close_pct = 0.5;
         long.unstuck_threshold = 0.5;
-        long.wallet_exposure_limit = 0.5;
+        long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
         long.risk_twel_enforcer_enabled = false;
         let mut bt = Backtest::new(

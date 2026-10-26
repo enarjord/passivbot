@@ -1529,9 +1529,9 @@ def _submitted_rust_input_context(
             raise FatalBotException(
                 f"Rust orchestrator global input has invalid {pside} bot params"
             )
-        total_wallet_exposure_limit = _validated_rust_finite_number(
-            side_params.get("total_wallet_exposure_limit"),
-            f"global input has invalid {pside} total_wallet_exposure_limit",
+        total_wallet_exposure_limit_ratio = _validated_rust_finite_number(
+            side_params.get("total_wallet_exposure_limit_ratio"),
+            f"global input has invalid {pside} total_wallet_exposure_limit_ratio",
         )
         n_positions = side_params.get("n_positions")
         if (
@@ -1541,7 +1541,7 @@ def _submitted_rust_input_context(
         ):
             raise FatalBotException(f"global input has invalid {pside} n_positions")
         global_side_enablement[pside] = (
-            activation[pside] and total_wallet_exposure_limit > 0.0 and n_positions > 0
+            activation[pside] and total_wallet_exposure_limit_ratio > 0.0 and n_positions > 0
         )
         global_side_n_positions[pside] = n_positions
         twel_enabled = side_params.get("risk_twel_enforcer_enabled", True)
@@ -1550,7 +1550,7 @@ def _submitted_rust_input_context(
                 f"Rust orchestrator global input has invalid {pside} TWEL enforcer flag"
             )
         twel_threshold = _validated_rust_finite_number(
-            side_params.get("risk_twel_enforcer_threshold", 0.0),
+            side_params.get("risk_twel_enforcer_threshold_ratio", 0.0),
             f"global input has invalid {pside} TWEL enforcer threshold",
         )
         global_twel_enforcer_enablement[pside] = twel_enabled and twel_threshold > 0.0
@@ -1756,12 +1756,12 @@ def _submitted_rust_input_context(
                 entry_cooldown_active[(symbol_idx, pside)] = False
             if cooldown_unavailable:
                 entry_cooldown_active[(symbol_idx, pside)] = True
-            wallet_exposure_limit = _validated_rust_finite_number(
-                bot_params.get("wallet_exposure_limit"),
-                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
+            wallet_exposure_limit_ratio = _validated_rust_finite_number(
+                bot_params.get("wallet_exposure_limit_ratio"),
+                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit_ratio",
             )
             symbol_side_eligibility[(symbol_idx, pside)] = (
-                tradable and wallet_exposure_limit != 0.0
+                tradable and wallet_exposure_limit_ratio != 0.0
             )
             wel_enabled = bot_params.get("risk_wel_enforcer_enabled", True)
             if not isinstance(wel_enabled, bool):
@@ -1769,7 +1769,7 @@ def _submitted_rust_input_context(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} WEL enforcer flag"
                 )
             wel_threshold = _validated_rust_finite_number(
-                bot_params.get("risk_wel_enforcer_threshold", 0.0),
+                bot_params.get("risk_wel_enforcer_threshold_ratio", 0.0),
                 f"symbol input {input_idx} has invalid {pside} WEL enforcer threshold",
             )
             unstuck_enabled = bot_params.get("unstuck_enabled", True)

@@ -91,11 +91,11 @@ def _rust_bot_params(**overrides):
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0,
-        "risk_wel_enforcer_threshold": 0.0,
-        "risk_twel_enforcer_threshold": 0.0,
-        "risk_we_excess_allowance_pct": 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "risk_twel_enforcer_threshold_ratio": 0.0,
+        "risk_we_excess_allowance_fraction": 0.0,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
         "unstuck_ema_span_0": 10.0,
@@ -176,7 +176,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
             "sort_global": True,
             "global_bot_params": {
                 "long": _rust_bot_params(),
-                "short": _rust_bot_params(n_positions=0, total_wallet_exposure_limit=0.0),
+                "short": _rust_bot_params(n_positions=0, total_wallet_exposure_limit_ratio=0.0),
             },
             "hedge_mode": True,
             "strategy_kind": "trailing_martingale",
@@ -217,7 +217,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
                     "bot_params": _rust_bot_params(
-                        n_positions=0, total_wallet_exposure_limit=0.0
+                        n_positions=0, total_wallet_exposure_limit_ratio=0.0
                     ),
                     "strategy_params": _rust_strategy_params(),
                 },
@@ -3197,7 +3197,7 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
             "unstuck_loss_allowance_pct": 0.1,
             "unstuck_close_pct": 0.1,
             "unstuck_threshold": 0.2,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
         }.get(key, original_bp(side, key, symbol))
 
     bot.bp = bp
@@ -3275,7 +3275,7 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio",
     ],
 )
 async def test_ineligible_unstuck_consumer_does_not_read_emas(
@@ -3300,7 +3300,7 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
         "unstuck_loss_allowance_pct": 0.1,
         "unstuck_close_pct": 0.1,
         "unstuck_threshold": 0.2,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
     }
     if skip_reason in values:
         values[skip_reason] = 0.0
@@ -3338,7 +3338,7 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
     sym[pside]["position"] = {"size": 10.0 if pside == "long" else -10.0, "price": 30.0}
     sym[pside]["bot_params"].update(
         n_positions=1,
-        total_wallet_exposure_limit=0.0,
+        total_wallet_exposure_limit_ratio=0.0,
         unstuck_enabled=True,
         unstuck_ema_gating_enabled=True,
         unstuck_ema_span_0=1000.0,
@@ -3348,12 +3348,12 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
         unstuck_loss_allowance_pct=0.1,
     )
     payload["global"]["global_bot_params"][pside].update(
-        n_positions=1, total_wallet_exposure_limit=1.0
+        n_positions=1, total_wallet_exposure_limit_ratio=1.0
     )
     result = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
     assert any("close" in order["order_type"] for order in result["orders"]), result
-    sym[pside]["bot_params"]["total_wallet_exposure_limit"] = 1.0
-    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit"] = 1.0
+    sym[pside]["bot_params"]["total_wallet_exposure_limit_ratio"] = 1.0
+    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit_ratio"] = 1.0
     with pytest.raises(ValueError, match="MissingEma"):
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
@@ -3480,7 +3480,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     original_bp = bot.bp
     bot.bp = lambda s, key, symbol=None: (
         (0.0 if symbol == names[0] and held_eligibility == "zero_exposure" else 1.0)
-        if key == "wallet_exposure_limit" else original_bp(s, key, symbol)
+        if key == "wallet_exposure_limit_ratio" else original_bp(s, key, symbol)
     )
     slots = 2 if held_eligibility == "outside" else 3
     span = 100000.0 if held_eligibility in {"approved", "age"} else 1.0
@@ -3497,7 +3497,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
     def bot_value(s, key):
         values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": span,
-                  "total_wallet_exposure_limit": 1.0, "n_positions": slots}
+                  "total_wallet_exposure_limit_ratio": 1.0, "n_positions": slots}
         return values[key] if key in values else original(s, key)
 
     bot.bot_value = bot_value
@@ -3514,12 +3514,12 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         return rows[:-1] if name == missing else rows
 
     bot.cm.get_candles = candles
-    params = {"n_positions": slots, "total_wallet_exposure_limit": 1.0,
+    params = {"n_positions": slots, "total_wallet_exposure_limit_ratio": 1.0,
               "forager_score_weights": weights, "unilateralness_ema_span_1m": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     symbols[0]["tradable"] = held_eligibility in {"approved", "age", "zero_exposure"}
     if held_eligibility == "zero_exposure":
-        symbols[0][side]["bot_params"]["wallet_exposure_limit"] = 0.0
+        symbols[0][side]["bot_params"]["wallet_exposure_limit_ratio"] = 0.0
     symbols[0][side]["position"] = bot.positions[names[0]][side].copy()
     for symbol in symbols:
         symbol[side]["mode"] = None

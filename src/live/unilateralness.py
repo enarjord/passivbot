@@ -31,7 +31,7 @@ def scoring_enabled(bot, side, symbols):
     markets = getattr(bot, "markets_dict", {})
     return any(
         symbol not in approved
-        or bot.bp(side, "wallet_exposure_limit", symbol) == 0.0
+        or bot.bp(side, "wallet_exposure_limit_ratio", symbol) == 0.0
         or not markets.get(symbol, {}).get("active", True)
         or symbol in unavailable
         for symbol in held

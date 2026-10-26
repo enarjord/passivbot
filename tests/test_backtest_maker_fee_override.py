@@ -207,8 +207,8 @@ def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coi
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == -1.0
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == -1.0
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
@@ -236,10 +236,10 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
     params_by_coin = dict(zip(sorted(market_settings), bot_params_list))
-    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit"] == -1.0
-    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
@@ -258,8 +258,8 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == 0.5
 
 
 def test_zero_coin_wallet_override_preserves_side_total_exposure():
@@ -271,8 +271,8 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
     bot_params_list, _, _, _ = prep_backtest_args(config, _base_mss(), "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.0
-    assert bot_params_list[0]["long"]["total_wallet_exposure_limit"] == 1.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert bot_params_list[0]["long"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert bot_params_list[0]["long"]["n_positions"] > 0
 
 
@@ -339,7 +339,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
 
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
 
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():

@@ -221,7 +221,7 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio",
     ],
 )
 def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
@@ -238,7 +238,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
         "unstuck_loss_allowance_pct": 0.1,
         "unstuck_close_pct": 0.1,
         "unstuck_threshold": 0.2,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
     }
     if inactive in values:
         values[inactive] = 0.0

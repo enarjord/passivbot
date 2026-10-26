@@ -86,7 +86,7 @@ def test_hsl_policy_registry_covers_every_canonical_leaf():
 @pytest.mark.parametrize("field,value", [
     ("hsl_drawdown_threshold_fraction", 0.2),
     ("unstuck_ema_span_0", 12.5),
-    ("risk_we_excess_allowance_pct", 0.1),
+    ("risk_we_excess_allowance_fraction", 0.1),
 ])
 @pytest.mark.parametrize("location", ["inline", "file"])
 def test_final_coin_patch_rejects_retired_flat_shared_fields(field, value, location):

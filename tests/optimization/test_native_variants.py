@@ -76,8 +76,8 @@ def test_finite_variants_select_execution_views_without_copying_histories(monkey
             on = registry.planner.prepare("on", vector(base, anchor_id=1 if anchor else 0))
             assert (off.requests[0].dataset_id == on.requests[0].dataset_id) == mirror
             assert (off.effective_key == on.effective_key) == mirror
-            assert off.requests[0].parameters["short_total_wallet_exposure_limit"] == (1 if mirror else 0)
-            assert on.requests[0].parameters["short_total_wallet_exposure_limit"] == 1
+            assert off.requests[0].parameters["short_total_wallet_exposure_limit_ratio"] == (1 if mirror else 0)
+            assert on.requests[0].parameters["short_total_wallet_exposure_limit_ratio"] == 1
 
 
 def test_exact_last_scenario_policy_deduplicates_fixed_views_and_preserves_slots(monkeypatch):

@@ -20,7 +20,7 @@ def test_exposure_enforcer_bounds_mirror_the_bot_feature_objects(side):
     config = prepare_config(get_template_config(), verbose=False)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
     for owner, native in (("position", "wel"), ("total", "twel")):
-        key = f"{side}_risk_{native}_enforcer_threshold"
+        key = f"{side}_risk_{native}_enforcer_threshold_ratio"
         assert resolve_optimizer_key_path(config, key) == (
             "bot", side, "risk", f"{owner}_exposure_enforcer", "threshold_ratio",
         )
@@ -57,7 +57,8 @@ def test_released_v8_enforcers_and_override_objects_migrate_explicitly(structure
         released = original["bot"][side]["risk"]
         for owner, prefix in (("position", "wel"), ("total", "twel")):
             for leaf in ("enabled", "threshold"):
-                assert native[f"risk_{prefix}_enforcer_{leaf}"] == released[f"{owner}_exposure_enforcer_{leaf}"]
+                native_suffix = "threshold_ratio" if leaf == "threshold" else leaf
+                assert native[f"risk_{prefix}_enforcer_{native_suffix}"] == released[f"{owner}_exposure_enforcer_{leaf}"]
         assert native["risk_twel_enforcer_policy"] == released["total_exposure_enforcer_policy"]
     assert any("exposure-enforcer object conversion" in item["reason"] for item in migration.changes)
     assert migration.config["backtest"]["scenarios"][0]["overrides"]
@@ -76,8 +77,10 @@ def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, nativ
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = {"long"} if "long" in prefix else {"short"} if "short" in prefix else {"long", "short"}
-    assert set(selected) == {f"{side}_risk_{native}_enforcer_threshold" for side in sides}
-    assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold_ratio"]
+    assert set(selected) == {f"{side}_risk_{native}_enforcer_threshold_ratio" for side in sides}
+    assert [value.removeprefix("bot.") for value in config["optimize"]["fixed_params"]] == [
+        f"{prefix}{owner}_exposure_enforcer.threshold_ratio".removeprefix("bot.")
+    ]
     assert any(item["path"] == "optimize.fixed_params" and item["old"] == [selector]
                and item["new"] == config["optimize"]["fixed_params"] for item in migrated.changes)
 

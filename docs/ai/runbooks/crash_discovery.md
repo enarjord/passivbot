@@ -84,7 +84,7 @@ coverage and preserves scan metadata.
 - Idiosyncratic `adverse` scenarios isolate long exposure for crashes and short exposure for
   pumps by setting the opposite side to manual mode.
 - Market-wide `adverse` scenarios isolate the whole portfolio side by setting the non-adverse
-  side's `total_wallet_exposure_limit` to zero without forcing individual coins.
+  side's `total_wallet_exposure_limit_ratio` to zero without forcing individual coins.
 - Forced-normal overrides apply only to idiosyncratic events and at most two coins per scenario.
 - Split overlapping force targets into repeated scenarios when more than two are required.
 - Every scenario coin has source data overlapping its date range on at least one scenario exchange.

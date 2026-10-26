@@ -2,7 +2,7 @@
 use crate::closes::{calc_close_retracement_multiplier, calc_close_threshold_pct};
 use crate::entries::{
     calc_entry_distance_multiplier, calc_entry_retracement_multiplier, calc_next_entry_long,
-    calc_next_entry_short, wallet_exposure_limit_with_allowance,
+    calc_next_entry_short, wallet_exposure_limit_ratio_with_allowance,
 };
 use crate::strategies::TrailingMartingaleParams;
 use crate::types::{
@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 struct Probe {
     side: String,
     strategy: TrailingMartingaleParams,
-    wallet_exposure_limit: f64,
-    total_wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    total_wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     cooldown_base: f64,
     cooldown_min: f64,
     cooldown_max: Option<f64>,
@@ -54,9 +54,9 @@ struct Measurements {
 
 fn bot(p: &Probe) -> BotParams {
     BotParams {
-        wallet_exposure_limit: p.wallet_exposure_limit,
-        total_wallet_exposure_limit: p.total_wallet_exposure_limit,
-        risk_we_excess_allowance_pct: p.risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio: p.wallet_exposure_limit_ratio,
+        total_wallet_exposure_limit_ratio: p.total_wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction: p.risk_we_excess_allowance_fraction,
         risk_entry_cooldown_minutes: p.cooldown_base,
         entry_cooldown_min_duration_minutes: p.cooldown_min,
         entry_cooldown_max_duration_minutes: p.cooldown_max,
@@ -230,9 +230,9 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         return Err("invalid probe exposure ratios or grid bound".into());
     }
     for value in [
-        p.wallet_exposure_limit,
-        p.total_wallet_exposure_limit,
-        p.risk_we_excess_allowance_pct,
+        p.wallet_exposure_limit_ratio,
+        p.total_wallet_exposure_limit_ratio,
+        p.risk_we_excess_allowance_fraction,
         p.volatility_ema_1m,
         p.volatility_ema_1h,
         p.adverse_directionality,
@@ -255,9 +255,9 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
     let bp = bot(p);
     crate::entry_cooldown::validate(&bp)?;
     let runtime = RuntimeOrderContext {
-        effective_wallet_exposure_limit: p.wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: p.wallet_exposure_limit_ratio,
     };
-    let allowed = wallet_exposure_limit_with_allowance(&bp, &runtime);
+    let allowed = wallet_exposure_limit_ratio_with_allowance(&bp, &runtime);
     if !allowed.is_finite() || allowed <= 0.0 {
         return Err("probe requires positive exposure capacity".into());
     }
@@ -347,7 +347,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         .max(0.0);
         let cooldown = crate::entry_cooldown::effective_duration(
             &bp,
-            Some(ratio * allowed / p.wallet_exposure_limit),
+            Some(ratio * allowed / p.wallet_exposure_limit_ratio),
             Some(p.adverse_directionality),
         )?;
         if [span, retracement, close_retracement, cooldown]
@@ -397,9 +397,9 @@ mod tests {
         Probe {
             side: "long".into(),
             strategy: TrailingMartingaleParams::default(),
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             cooldown_base: 0.0,
             cooldown_min: 0.0,
             cooldown_max: None,

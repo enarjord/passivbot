@@ -101,8 +101,8 @@ def test_per_coin_exposure_ratio_remains_public_and_lowers_to_native_wallet_limi
     patch = prepared["coin_overrides"]["BTC"]["bot"][side]
     assert patch["wallet_exposure_limit_ratio"] == 0.625
     native = merge_runtime_bot_side(prepared["bot"][side], override_side=patch)
-    assert native["wallet_exposure_limit"] == 0.625
-    assert "wallet_exposure_limit_ratio" not in native
+    assert native["wallet_exposure_limit_ratio"] == 0.625
+    assert "wallet_exposure_limit" not in native
     dumped = cleanup_config(prepared)
     assert dumped["coin_overrides"]["BTC"]["bot"][side] == {"wallet_exposure_limit_ratio": 0.625}
     config["coin_overrides"]["BTC"]["bot"][side] = {"wallet_exposure_limit": 0.625}
@@ -112,13 +112,13 @@ def test_per_coin_exposure_ratio_remains_public_and_lowers_to_native_wallet_limi
 
 def test_public_exposure_and_hsl_quantities_resolve_current_native_optimizer_ids():
     config = prepare_config(source_for("bot.long.hsl"), live_only=True, verbose=False)
-    assert resolve_optimizer_key_path(config, "long_total_wallet_exposure_limit") == (
+    assert resolve_optimizer_key_path(config, "long_total_wallet_exposure_limit_ratio") == (
         "bot", "long", "risk", "total_wallet_exposure_limit_ratio")
     assert resolve_optimizer_key_path(config, "long_hsl_drawdown_threshold_fraction") == (
         "bot", "long", "hsl", "drawdown_threshold_fraction")
     assert resolve_optimizer_key_path(config, "long_hsl_drawdown_fraction_ema_span_minutes") == (
         "bot", "long", "hsl", "drawdown_fraction_ema_span_minutes")
-    assert flatten_shared_bot_side(config["bot"]["long"])["total_wallet_exposure_limit"] == 1.5
+    assert flatten_shared_bot_side(config["bot"]["long"])["total_wallet_exposure_limit_ratio"] == 1.5
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -140,15 +140,15 @@ def test_live_allocation_and_backtest_payload_honor_the_same_public_coin_ratio(s
                            min_cost=1.0, c_mult=1.0, maker=0.0002,
                            taker=0.0005, exchange="binance")}
     pair = prep_backtest_args(config, markets, "binance")[0][0]
-    assert pair[side]["wallet_exposure_limit"] == allocation_ratio
+    assert pair[side]["wallet_exposure_limit_ratio"] == allocation_ratio
     assert pair[side]["entry_eligible"] is (allocation_ratio != 0.0)
-    assert "wallet_exposure_limit_ratio" not in pair[side]
+    assert "wallet_exposure_limit" not in pair[side]
 
     # Exercise allocation accessors without constructing any exchange client.
     bot = Passivbot.__new__(Passivbot)
     bot.config = config
     bot.coin_overrides = deepcopy(config["coin_overrides"])
-    assert bot.get_wallet_exposure_limit(side, "BTC") == allocation_ratio
+    assert bot.get_wallet_exposure_limit_ratio(side, "BTC") == allocation_ratio
     assert bot.coin_overrides["BTC"]["bot"][side] == {
         "wallet_exposure_limit_ratio": allocation_ratio
     }
