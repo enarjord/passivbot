@@ -14,7 +14,7 @@ def stubbed_modules(monkeypatch):
     pr_module = types.ModuleType("passivbot_rust")
     pr_module.qty_to_cost = lambda *args, **kwargs: 0.0
     pr_module.round_dynamic = lambda x, y=None: x
-    pr_module.calc_order_price_diff = lambda *args, **kwargs: 0.0
+    pr_module.calc_order_price_gap_fraction = lambda *args, **kwargs: 0.0
     pr_module.hysteresis = lambda x, y, z: x
     pr_module.trailing_bundle_default_py = lambda: (0, 0, 0, 0)
     pr_module.update_trailing_bundle_py = lambda *args, **kwargs: (0, 0, 0, 0)

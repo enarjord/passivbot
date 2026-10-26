@@ -57,8 +57,8 @@ mod core {
         TwelEnforcerPolicy,
     };
     use crate::utils::{
-        calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
-        calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure,
+        calc_new_psize_pprice, calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction, calc_pnl_long,
+        calc_pnl_short, calc_pside_adverse_price_change_fraction, calc_wallet_exposure,
         classify_close_wave_remainder, close_qty_absorbing_proven_remainder, qty_to_cost, round_,
         round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
         CloseWaveRemainder,
@@ -785,9 +785,9 @@ mod core {
             return true;
         }
         let diff = if order.qty > 0.0 {
-            calc_order_price_diff_bid(order.price, market_price).abs()
+            calc_bid_order_price_gap_fraction(order.price, market_price).abs()
         } else {
-            calc_order_price_diff_ask(order.price, market_price).abs()
+            calc_ask_order_price_gap_fraction(order.price, market_price).abs()
         };
         diff <= global.market_order_near_touch_threshold.max(0.0)
     }
@@ -1353,9 +1353,9 @@ mod core {
     fn order_price_diff_strict(order: &IdealOrder, ob: &OrderBook) -> f64 {
         let market_price = market_price_for_order_side(ob, order.qty);
         if order.qty >= 0.0 {
-            calc_order_price_diff_bid(order.price, market_price)
+            calc_bid_order_price_gap_fraction(order.price, market_price)
         } else {
-            calc_order_price_diff_ask(order.price, market_price)
+            calc_ask_order_price_gap_fraction(order.price, market_price)
         }
     }
 
@@ -3275,7 +3275,7 @@ mod core {
             if !(market_price.is_finite() && market_price > 0.0) {
                 continue;
             }
-            let distance = calc_pside_price_diff_int(pside_int, market_price, o.price);
+            let distance = calc_pside_adverse_price_change_fraction(pside_int, market_price, o.price);
             candidates.push(Candidate {
                 order_idx,
                 symbol_idx: o.symbol_idx,

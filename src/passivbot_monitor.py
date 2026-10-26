@@ -1927,7 +1927,7 @@ def _build_monitor_position_side_payload(
         payload["upnl"] = 0.0
         return payload
     payload["price_action_distance"] = float(
-        pbr.calc_pprice_diff_int(self.pside_int_map[pside], price, last_price)
+        pbr.calc_pside_adverse_price_change_fraction(self.pside_int_map[pside], price, last_price)
     )
     payload["upnl"] = float(
         _calc_monitor_pnl(pside, price, last_price, size, self.c_mults[symbol])

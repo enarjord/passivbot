@@ -1319,7 +1319,7 @@ def add_metrics_to_fdf(fdf):
     # Signed wallet exposure: long positive, short negative.
     fdf.loc[:, "wallet_exposure"] = fdf.psize * fdf.pprice / fdf.balance
     fdf.loc[:, "pprice_dist"] = fdf.apply(
-        lambda x: pbr.calc_pprice_diff_int(
+        lambda x: pbr.calc_pside_adverse_price_change_fraction(
             0 if "long" in x.type else 1, x.pprice, x.price
         ),
         axis=1,

@@ -12,6 +12,10 @@ since the latest release tag; these features may already be available when insta
 - Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
   including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
 
+- Give native price helpers explicit fraction names, distinguish absolute relative differences
+  from position-side adverse changes and order-side gaps, and use one canonical adverse-change
+  helper instead of three native aliases. Calculations and invalid-input behavior are unchanged.
+
 - Identify signed diagnostic price changes and target offsets as scale-one fractions,
   preserving monitor/trailing values and percentage display.
 
