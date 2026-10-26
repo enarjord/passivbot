@@ -49,7 +49,7 @@ kernel void loss_report_probe(constant float* params, device float* output,
     output[4] = h.panic_loss_drawdown_max;
     output[5] = h.panic_loss_drawdown_sum;
     output[6] = h.panic_loss_drawdown_count;
-    output[7] = h.panic_close_loss_sum;
+    output[7] = h.panic_fill_loss_sum_usd;
 }
 """
     device = gpu_device()
