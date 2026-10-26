@@ -110,8 +110,8 @@ struct HslState {
     float halt_to_restart_equity_loss;
     float panic_event_start_equity;
     float panic_event_loss;
-    float panic_close_loss_sum;
-    float panic_close_loss_max;
+    float panic_fill_loss_sum_usd;
+    float panic_fill_loss_max_usd;
     float panic_loss_drawdown_min;
     float panic_loss_drawdown_sum;
     float panic_loss_drawdown_max;
@@ -829,8 +829,8 @@ inline HslState load_hsl(
     h.halt_to_restart_equity_loss = 0.0f;
     h.panic_event_start_equity = -1.0f;
     h.panic_event_loss = 0.0f;
-    h.panic_close_loss_sum = 0.0f;
-    h.panic_close_loss_max = 0.0f;
+    h.panic_fill_loss_sum_usd = 0.0f;
+    h.panic_fill_loss_max_usd = 0.0f;
     h.panic_loss_drawdown_min = 0.0f;
     h.panic_loss_drawdown_sum = 0.0f;
     h.panic_loss_drawdown_max = 0.0f;
@@ -1056,8 +1056,8 @@ inline void record_hsl_panic_fill(
     }
     float panic_loss = fmax(-net_pnl, 0.0f);
     h.panic_event_loss += panic_loss;
-    h.panic_close_loss_sum += panic_loss;
-    h.panic_close_loss_max = fmax(h.panic_close_loss_max, panic_loss);
+    h.panic_fill_loss_sum_usd += panic_loss;
+    h.panic_fill_loss_max_usd = fmax(h.panic_fill_loss_max_usd, panic_loss);
 #else
     (void)h;
     (void)net_pnl;
@@ -1160,8 +1160,8 @@ struct HslOutputAggregate {
     float flatten_time_count;
     float restart_retrigger_count;
     float halt_to_restart_equity_loss;
-    float panic_close_loss_sum;
-    float panic_close_loss_max;
+    float panic_fill_loss_sum_usd;
+    float panic_fill_loss_max_usd;
     float panic_loss_drawdown_min;
     float panic_loss_drawdown_sum;
     float panic_loss_drawdown_max;
@@ -1194,8 +1194,8 @@ inline HslOutputAggregate init_hsl_output_aggregate(
     output.flatten_time_count = 0.0f;
     output.restart_retrigger_count = 0.0f;
     output.halt_to_restart_equity_loss = 0.0f;
-    output.panic_close_loss_sum = 0.0f;
-    output.panic_close_loss_max = 0.0f;
+    output.panic_fill_loss_sum_usd = 0.0f;
+    output.panic_fill_loss_max_usd = 0.0f;
     output.panic_loss_drawdown_min = 0.0f;
     output.panic_loss_drawdown_sum = 0.0f;
     output.panic_loss_drawdown_max = 0.0f;
@@ -1218,9 +1218,9 @@ inline void accumulate_hsl_output(
     // Forced delist closes are panic fills even when HSL itself is disabled.
     // Exact Rust reports their loss metrics independently of controller
     // enablement, so retain those fields before filtering HSL-only telemetry.
-    output.panic_close_loss_sum += h.panic_close_loss_sum;
-    output.panic_close_loss_max = fmax(
-        output.panic_close_loss_max, h.panic_close_loss_max
+    output.panic_fill_loss_sum_usd += h.panic_fill_loss_sum_usd;
+    output.panic_fill_loss_max_usd = fmax(
+        output.panic_fill_loss_max_usd, h.panic_fill_loss_max_usd
     );
     if (report.panic_loss_drawdown_count > 0.0f) {
         output.panic_loss_drawdown_min = output.panic_loss_drawdown_count > 0.0f
@@ -1298,8 +1298,8 @@ inline void write_hsl_output_aggregate(
     scalars[scalar_offset + 14] = output.flatten_time_count;
     scalars[scalar_offset + 15] = output.restart_retrigger_count;
     scalars[scalar_offset + 16] = output.halt_to_restart_equity_loss;
-    scalars[scalar_offset + 17] = output.panic_close_loss_sum;
-    scalars[scalar_offset + 18] = output.panic_close_loss_max;
+    scalars[scalar_offset + 17] = output.panic_fill_loss_sum_usd;
+    scalars[scalar_offset + 18] = output.panic_fill_loss_max_usd;
     scalars[scalar_offset + 19] = output.panic_loss_drawdown_min;
     scalars[scalar_offset + 20] = output.panic_loss_drawdown_sum;
     scalars[scalar_offset + 21] = output.panic_loss_drawdown_max;

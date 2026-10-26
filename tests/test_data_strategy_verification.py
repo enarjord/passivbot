@@ -532,7 +532,7 @@ class TestAggregationVariations:
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "a"}, {"label": "b"}],
-            reducer={"default": "mean", "mdg": "min", "sharpe_ratio": "median"},
+            reducer={"default": "mean", "mdg_fraction": "min", "sharpe_ratio": "median"},
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
@@ -540,7 +540,7 @@ class TestAggregationVariations:
         _, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
         assert reducer_cfg["default"] == "mean"
-        assert reducer_cfg["mdg"] == "min"
+        assert reducer_cfg["mdg_fraction"] == "min"
         assert reducer_cfg["sharpe_ratio"] == "median"
 
 
@@ -704,7 +704,7 @@ class TestLegacyMigration:
         assert formatted["backtest"]["scenarios"][1]["label"] == "binance"
         assert formatted["backtest"]["scenarios"][2]["label"] == "bybit"
         assert formatted["backtest"]["reducer"]["default"] == "mean"
-        assert formatted["backtest"]["reducer"]["mdg"] == "min"
+        assert formatted["backtest"]["reducer"]["mdg_fraction"] == "min"
 
 
 # =============================================================================

@@ -35,7 +35,7 @@ def test_prepared_dataset_snapshots_metadata_and_selection_without_attaching(mon
     values["time_range"][0] = 0
     values["coin_indices"].reverse()
     values["candle_coins"].reverse()
-    values["metrics"].append("adg_strategy_eq")
+    values["metrics"].append("adg_fraction_strategy_equity")
     assert json.loads(dataset.config_json)["backtest"]["coins"]["binance"] == ["A", "B"]
     assert json.loads(dataset.markets_json)["A"]["price_step"] == 0.01
     assert dataset.time_range == (2, 8)

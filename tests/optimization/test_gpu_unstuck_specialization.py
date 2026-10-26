@@ -88,9 +88,9 @@ def test_full_unstuck_ablation_preserves_raw_outputs_and_cache_transitions(
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
         exchange=exchange, batch_size=2, factual_hsl=True, needed_metrics={
-            'adg_strategy_eq', 'adg_strategy_eq', 'volume_pct_per_day_avg',
-            'strategy_eq_recovery_days_p95', 'drawdown_worst_strategy_eq',
-            'drawdown_worst_mean_1pct_strategy_eq', 'hard_stop_time_in_red_pct',
+            'adg_fraction_strategy_equity', 'adg_fraction_strategy_equity', 'active_day_turnover_proxy_mean_ratio',
+            'recovery_p95_days_strategy_equity', 'drawdown_max_fraction_strategy_equity',
+            'drawdown_daily_worst_1pct_mean_fraction_strategy_equity', 'hsl_red_time_fraction',
         },
     )
     runner, output = raw(proxy, [{}, {}])

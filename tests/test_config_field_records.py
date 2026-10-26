@@ -117,13 +117,13 @@ def test_scoring_and_limit_scenario_null_remains_distinct_from_omission():
     source = get_template_config()
     source["optimize"]["objective_scenario"] = "base"
     source["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max", "scenario": None},
-        {"metric": "mdg_strategy_eq", "goal": "max"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": None},
+        {"metric": "mdg_fraction_strategy_equity", "goal": "max"},
     ]
     source["optimize"]["limits"] = [
-        {"metric": "drawdown_worst_strategy_eq", "penalize_if": "greater_than", "value": 0.8,
+        {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.8,
          "scenario": None},
-        {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
+        {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
     ]
     registry = get_field_registry()
     for section in ("scoring", "limits"):

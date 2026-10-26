@@ -49,9 +49,9 @@ def inputs(manager, *, n_obj=2):
         }
         for side in ("long", "short")
     }
-    metrics = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "volume_pct_per_day_avg"]
+    metrics = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day", "active_day_turnover_proxy_mean_ratio"]
     config["optimize"]["scoring"] = [dict(metric=name, goal="max") for name in metrics[:n_obj]]
-    config["optimize"]["limits"] = [dict(metric="drawdown_worst_strategy_eq", penalize_if="greater_than", value=0.2)]
+    config["optimize"]["limits"] = [dict(metric="drawdown_max_fraction_strategy_equity", penalize_if="greater_than", value=0.2)]
     config["optimize"]["gpu"].update(batch_size=1, checkpoint_interval_seconds=0)
     coins = deepcopy(config["backtest"]["coins"])
     config = prepare_config(clean_config(config), verbose=False)

@@ -7,8 +7,8 @@ from config.migrations.final_v9 import replace_retired_metrics
 
 
 @pytest.mark.parametrize('old,new', [
-    ('strategy_eq_underwater_pct_mean', 'pain_index_strategy_eq'),
-    ('strategy_eq_underwater_pct_median', 'ulcer_index_strategy_eq'),
+    ('strategy_eq_underwater_pct_mean', 'pain_index_fraction_strategy_equity'),
+    ('strategy_eq_underwater_pct_median', 'ulcer_index_fraction_strategy_equity'),
 ])
 def test_old_drawdown_formula_requires_explicit_replacement_and_acknowledgment(old, new):
     source = {'optimize': {'scoring': [{'metric': old, 'goal': 'min'}]}}

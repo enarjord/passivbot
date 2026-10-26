@@ -93,18 +93,24 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
     def convert(name, path):
         from config.ew import is_ew_metric
+        from config.metrics import canonicalize_metric_name
+        from .released_v8_metrics import released_v8_metric_name, released_v8_ew_replacement
 
         nonlocal ew_requested
+        name = name.strip() if isinstance(name, str) else name
         if not _is_retired_metric(name):
-            ew_requested |= isinstance(name, str) and is_ew_metric(name)
-            return name
+            new = released_v8_metric_name(name)
+            if new != name:
+                changes.append(dict(path=path, old=name, new=new,
+                                    reason="released-v8 metric naming; value and formula unchanged"))
+            return new
         inferred = name not in replacements and best_effort
         if inferred:
             if name.startswith("strategy_eq_underwater_pct_") and name != "strategy_eq_underwater_pct_mean":
                 raise ValueError(f"{path}: no inferred replacement for {name!r}; supply --metric-replacement explicitly")
-            candidate = ("pain_index_strategy_eq" if name == "strategy_eq_underwater_pct_mean"
-                         else re.sub(r"_w(?=_|$)", "_ew", name, flags=re.IGNORECASE))
-            if candidate != "pain_index_strategy_eq" and not is_ew_metric(candidate):
+            candidate = ("pain_index_fraction_strategy_equity" if name == "strategy_eq_underwater_pct_mean"
+                         else released_v8_ew_replacement(name))
+            if candidate is None:
                 raise ValueError(f"{path}: no supported _ew replacement for {name!r}; supply --metric-replacement explicitly")
         elif name not in replacements:
             raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW and an explicit formula choice")
@@ -113,6 +119,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         new = candidate if inferred else replacements[name]
         if not isinstance(new, str) or not new or _is_retired_metric(new):
             raise ValueError(f"replacement for {name!r} must name a supported non-retired metric")
+        new = canonicalize_metric_name(new)
         used.add(name)
         ew_requested |= is_ew_metric(new)
         if inferred or (best_effort and not acknowledge):
@@ -120,7 +127,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
             record_guess(changes, path, name, new,
                          ("adopt minute-sampled Pain Index; daily-worst underwater mean is not equivalent"
-                          if inferred and candidate == "pain_index_strategy_eq" else
+                          if inferred and candidate == "pain_index_fraction_strategy_equity" else
                           "adopt exponential recency formula; retired _w formula is not equivalent"
                           if inferred else "accept explicit replacement formula under best-effort consent"))
         else:
@@ -130,24 +137,53 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
     def visit(node, path=""):
         if isinstance(node, list):
+            visible = path.split(".")[-1] == "visible_metrics"
+            converted = []
             for index, value in enumerate(node):
                 current = f"{path}[{index}]"
-                if isinstance(value, str) and path.split(".")[-1] in {"scoring", "visible_metrics"}:
-                    node[index] = convert(value, current)
+                if visible and isinstance(value, str):
+                    from .released_v8_metrics import RELEASED_V8_METRIC_NAMES, released_v8_visibility_family
+
+                    visible_name = value.strip()
+                    family = (() if visible_name in RELEASED_V8_METRIC_NAMES or _is_retired_metric(visible_name)
+                              else released_v8_visibility_family(visible_name))
+                    if family:
+                        selected = list(dict.fromkeys(convert(name, current) for name in family))
+                        changes.append(dict(path=current, old=value, new=selected,
+                                            reason="expand released-v8 visibility family before metric renaming"))
+                        converted.extend(selected)
+                    else:
+                        converted.append(convert(value, current))
+                elif isinstance(value, str) and path.split(".")[-1] == "scoring":
+                    converted.append(convert(value, current))
                 else:
                     visit(value, current)
+                    converted.append(value)
+            node[:] = list(dict.fromkeys(converted)) if visible else converted
             return
         if not isinstance(node, dict):
             return
-        metric_map = path.split(".")[-1] in {"reducer", "limits"}
+        released_aggregate = path in {"backtest.aggregate", "backtest.suite.aggregate"}
+        metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
-            if key == "metric":
+            if key == "metric" and not released_aggregate:
                 node[key] = convert(node[key], current)
-            elif metric_map:
-                prefix = next((prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_")
-                               if key.startswith(prefix)), "")
+            elif metric_map and key != "default":
+                prefix = "" if released_aggregate else next((
+                    prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
+                                          "lower_bound_", "upper_bound_")
+                    if key.startswith(prefix)), "")
                 metric = key.removeprefix(prefix)
+                if released_aggregate and not _is_retired_metric(metric):
+                    from .released_v8_metrics import released_v8_metric_name
+
+                    try:
+                        released_v8_metric_name(metric)
+                    except ValueError:
+                        # Released aggregate rules also accepted custom metrics.
+                        # Only this vocabulary probe permits their passthrough.
+                        continue
                 renamed = prefix + convert(metric, current)
                 if renamed != key:
                     value = node.pop(key)

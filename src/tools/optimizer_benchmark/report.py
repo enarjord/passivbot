@@ -141,7 +141,7 @@ def ranking_assessment(reference, observed):
     right = observed["samples"][0]["results"]
     if not left or len(left) != len(right) or len(left) > 512:
         return dict(status="unassessed", reason="requires 1..512 matching candidate rows")
-    objectives = {"adg_strategy_eq": "max", "drawdown_worst_strategy_eq": "min"}
+    objectives = {"adg_fraction_strategy_equity": "max", "drawdown_max_fraction_strategy_equity": "min"}
     try:
         vectors = [[tuple(float(row["metrics"][name]) * (-1 if direction == "max" else 1)
                           for name, direction in objectives.items()) for row in rows] for rows in (left, right)]
@@ -175,7 +175,7 @@ def compare(report, manifest):
     for entry in manifest["entries"]:
         from limit_utils import expand_limit_checks
         checks = expand_limit_checks(entry.get("diagnostic_limits", []),
-            {"adg_strategy_eq": -1, "drawdown_worst_strategy_eq": 1}, penalty_weight=1.0)
+            {"adg_fraction_strategy_equity": -1, "drawdown_max_fraction_strategy_equity": 1}, penalty_weight=1.0)
         rows_for_case = [r for r in report["runs"] if r["entry"] == entry["id"]]
         modes = list(dict.fromkeys(r["mode"] for r in rows_for_case))
         def find(label, mode):

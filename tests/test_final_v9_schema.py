@@ -331,13 +331,13 @@ def test_weighted_metric_retirement_requires_choice_and_distinct_formula_ack():
     config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
     with pytest.raises(ValueError, match="metric-replacement"):
         migrate(config, memory_span_minutes=123.5)
-    choices = {"adg_strategy_eq_w": "adg_strategy_eq"}
+    choices = {"adg_strategy_eq_w": "adg_fraction_strategy_equity"}
     with pytest.raises(ValueError, match="acknowledge-metric-formula-change"):
         migrate(config, memory_span_minutes=123.5, metric_replacements=choices)
     result = migrate(config, memory_span_minutes=123.5, metric_replacements=choices,
                      acknowledge_metric_formula_change=True)
-    assert result.config["optimize"]["scoring"] == [{"metric": "adg_strategy_eq", "goal": "max"}]
-    assert result.config["backtest"]["visible_metrics"] == ["adg_strategy_eq"]
+    assert result.config["optimize"]["scoring"] == [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
+    assert result.config["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity"]
 
 
 @pytest.mark.parametrize("key", ["crossover_eta", "crossover_probability", "mutation_eta",
@@ -351,7 +351,7 @@ def test_retired_search_controls_are_not_normal_runtime_fields(key):
 
 def test_invalid_authored_constraint_is_not_replaced_by_default_limits():
     config = get_template_config()
-    config["optimize"]["limits"] = [{"metric": "drawdown_worst_strategy_eq",
+    config["optimize"]["limits"] = [{"metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than", "value": "invalid"}]
     with pytest.raises(ValueError, match="numeric"):
         prepare_config(config, verbose=False)
@@ -361,7 +361,7 @@ def test_v8_legacy_limits_are_explicitly_converted_and_reported():
     config = v8_config()
     config["optimize"]["limits"] = {"penalize_if_greater_than_drawdown_worst_strategy_eq": 0.7}
     result = migrate(config, memory_span_minutes=123.5)
-    assert result.config["optimize"]["limits"] == [{"metric": "drawdown_worst_strategy_eq",
+    assert result.config["optimize"]["limits"] == [{"metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than", "value": 0.7}]
     assert any(item["path"] == "optimize.limits" for item in result.changes)
 
@@ -390,9 +390,9 @@ def test_dependent_weighted_metric_variants_require_explicit_formula_choice(metr
     with pytest.raises(ValueError, match="metric-replacement"):
         migrate(config, memory_span_minutes=123.5)
     result = migrate(config, memory_span_minutes=123.5,
-                     metric_replacements={metric: "adg_strategy_eq"},
+                     metric_replacements={metric: "adg_fraction_strategy_equity"},
                      acknowledge_metric_formula_change=True)
-    assert result.config["optimize"]["scoring"] == [{"metric": "adg_strategy_eq", "goal": "max"}]
+    assert result.config["optimize"]["scoring"] == [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
 
 
 def test_clean_export_preserves_explicit_global_portfolio_policy_and_fixed_span():
@@ -434,15 +434,15 @@ def test_cli_independent_global_risk_controls_use_canonical_paths(command):
 @pytest.mark.parametrize("changed", [{"goal": "min"}, {"scenario": "other"}, {"reducer": "min"}])
 def test_conflicting_repeated_objectives_are_never_silently_discarded(changed):
     source = get_template_config()
-    objective = {"metric": "adg_strategy_eq", "goal": "max"}
+    objective = {"metric": "adg_fraction_strategy_equity", "goal": "max"}
     source["optimize"]["scoring"] = [objective, {**objective, **changed}]
     with pytest.raises(ValueError, match="conflicts with another objective"):
         prepare_config(source, verbose=False)
 
 
 @pytest.mark.parametrize("scoring", [
-    ["adg_strategy_eq", "drawdown_worst_strategy_eq"],
-    ["adg_strategy_eq", {"metric": "drawdown_worst_strategy_eq", "goal": "min"}],
+    ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"],
+    ["adg_fraction_strategy_equity", {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"}],
 ])
 def test_final_v9_scoring_shorthand_reaches_canonical_normalizer(scoring):
     config = get_template_config()
@@ -450,8 +450,8 @@ def test_final_v9_scoring_shorthand_reaches_canonical_normalizer(scoring):
     before = deepcopy(config)
     prepared = prepare_config(config, verbose=False)
     assert prepared["optimize"]["scoring"] == [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     assert config == before
 
@@ -465,11 +465,11 @@ def test_public_scoring_cli_shorthand_loads_through_prepare_config():
     allowed = add_config_arguments(
         parser, project_template_config_for_cli(config, "optimize"), command="optimize",
     )
-    args = parser.parse_args(["--scoring", "adg_strategy_eq,drawdown_worst_strategy_eq"])
+    args = parser.parse_args(["--scoring", "adg_fraction_strategy_equity,drawdown_max_fraction_strategy_equity"])
     update_config_with_args(config, args, allowed_keys=allowed)
     assert prepare_config(config, verbose=False)["optimize"]["scoring"] == [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
 
 
@@ -484,7 +484,7 @@ def test_scoring_shorthand_preserves_unknown_and_retired_metric_rejection(metric
         prepare_config(config, verbose=False)
 
 
-@pytest.mark.parametrize("record", [None, True, 1, 1.0, ["adg_strategy_eq"]])
+@pytest.mark.parametrize("record", [None, True, 1, 1.0, ["adg_fraction_strategy_equity"]])
 def test_scoring_shorthand_does_not_admit_other_record_types(record):
     config = get_template_config()
     config["optimize"]["scoring"] = [record]
@@ -495,7 +495,7 @@ def test_scoring_shorthand_does_not_admit_other_record_types(record):
 @pytest.mark.parametrize("section,key", [("optimize", "limits"), ("backtest", "scenarios")])
 def test_scoring_shorthand_does_not_relax_other_record_lists(section, key):
     config = get_template_config()
-    config[section][key] = ["adg_strategy_eq"]
+    config[section][key] = ["adg_fraction_strategy_equity"]
     with pytest.raises(TypeError, match="must be a dict"):
         prepare_config(config, verbose=False)
 
@@ -533,9 +533,9 @@ def test_best_effort_rejects_invalid_authored_windows(days):
 
 
 @pytest.mark.parametrize("location", ["visible", "scoring", "limits", "reducer"])
-@pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "adg_strategy_eq_ew"),
-                                   ("sharpe_ratio_w_usd", "sharpe_ratio_ew_usd"),
-                                   ("sortino_ratio_w_btc", "sortino_ratio_ew_btc")])
+@pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "adg_fraction_strategy_equity_ew"),
+                                   ("sharpe_ratio_w_usd", "sharpe_ratio_usd_ew"),
+                                   ("sortino_ratio_w_btc", "sortino_ratio_btc_ew")])
 def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, new, caplog):
     config = v8_config()
     if location == "visible":
@@ -559,9 +559,9 @@ def test_best_effort_explicit_choices_take_precedence():
     config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
     config["backtest"]["ew_half_life_days"] = 17.0
     result = migrate(config, best_effort=True, memory_span_minutes=99.5,
-                     metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"})
+                     metric_replacements={"adg_strategy_eq_w": "adg_fraction_strategy_equity"})
     assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 99.5
-    assert result.config["backtest"]["visible_metrics"] == ["adg_strategy_eq"]
+    assert result.config["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity"]
     assert result.config["backtest"]["ew_half_life_days"] == 17.0
     assert not any(item["path"] == "live.pnls_max_lookback_days" and item.get("best_effort")
                    for item in result.changes)
@@ -617,7 +617,7 @@ def test_strict_migration_preserves_metric_choices_when_span_is_missing():
     config = v8_config()
     config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
     with pytest.raises(ValueError, match="explicitly choose --lookback-ema-span-minutes"):
-        migrate(config, metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"},
+        migrate(config, metric_replacements={"adg_strategy_eq_w": "adg_fraction_strategy_equity"},
                 acknowledge_metric_formula_change=True)
 
 
@@ -633,24 +633,32 @@ def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
     assert not target.exists()
     assert source.read_bytes() == before
     changes = json.loads(report.read_text())["changes"]
-    assert any(item.get("best_effort") and item["new"] == "adg_strategy_eq_ew" for item in changes)
+    assert any(item.get("best_effort") and item["new"] == "adg_fraction_strategy_equity_ew" for item in changes)
     for item in changes:
         if item.get("best_effort"):
             assert item["path"] in caplog.text
     assert main([str(source), str(target), "--best-effort"]) == 0
     loaded = prepare_config(load_raw_config(str(target)), verbose=False)
-    assert loaded["backtest"]["visible_metrics"] == ["adg_strategy_eq_ew"]
+    assert loaded["backtest"]["visible_metrics"] == ["adg_fraction_strategy_equity_ew"]
     published = target.read_bytes()
     with pytest.raises(SystemExit):
         main([str(source), str(target), "--best-effort"])
     assert target.read_bytes() == published
 
 
-def test_best_effort_stat_suffix_is_retained_in_objectives():
+@pytest.mark.parametrize("stat", ["min", "max", "mean", "std", "median"])
+def test_best_effort_stat_suffix_is_retained_in_objectives(stat):
     config = v8_config()
-    config["optimize"]["scoring"] = [{"metric": "adg_w_usd_max", "goal": "max"}]
+    old = f"adg_w_usd_{stat}"
+    new = f"adg_fraction_usd_ew_{stat}"
+    config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
+    original = deepcopy(config)
     result = migrate(config, best_effort=True)
-    assert result.config["optimize"]["scoring"][0]["metric"] == "adg_ew_usd_max"
+    assert config == original
+    assert result.config["optimize"]["scoring"][0]["metric"] == new
+    assert any(change["old"] == old and change["new"] == new
+               and change.get("best_effort") and "recency formula" in change["reason"]
+               for change in result.changes)
 
 
 def test_best_effort_coin_file_guesses_are_reported_and_file_is_unchanged(tmp_path, caplog):

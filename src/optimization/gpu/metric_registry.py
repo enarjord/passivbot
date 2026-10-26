@@ -9,39 +9,39 @@ from config.ew import EW_METRICS
 
 EXPONENTIAL_EQUITY_METRICS = EW_METRICS
 EXPONENTIAL_RAW_EQUITY_METRICS = frozenset(
-    name for name in EW_METRICS if name.endswith("_strategy_eq_ew")
+    name for name in EW_METRICS if name.endswith("_strategy_equity_ew")
 )
 EXPONENTIAL_BTC_EQUITY_METRICS = frozenset(
-    name for name in EW_METRICS if name.endswith("_ew_btc")
+    name for name in EW_METRICS if name.endswith("_btc_ew")
 )
 
 # Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
 # Torch-free so backend preflight and ordinary CPU-only installs can prove the
 # dispatch contract without importing the optional GPU runtime.
 RAW_STRATEGY_RISK_METRICS = frozenset({
-    "drawdown_worst_strategy_eq",
-    "drawdown_worst_mean_1pct_strategy_eq",
-    "pain_index_strategy_eq",
-    "ulcer_index_strategy_eq",
+    "drawdown_max_fraction_strategy_equity",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
+    "pain_index_fraction_strategy_equity",
+    "ulcer_index_fraction_strategy_equity",
 })
 
 RAW_STRATEGY_EQUITY_METRICS = frozenset({
-    f"{stem}_strategy_eq" for stem in (
-        "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
-        "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct",
-        "adg_rolling_hmean", "adg_time_integrated", "positive_gain_participation",
+    f"{stem}_strategy_equity" for stem in (
+        "adg_fraction", "mdg_fraction", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+        "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct_fraction",
+        "adg_rolling_hmean_fraction", "adg_time_integrated_fraction", "positive_log_return_participation_score",
     )
 }) | EXPONENTIAL_RAW_EQUITY_METRICS
 RAW_STRATEGY_DRAWDOWN_CONSUMERS = RAW_STRATEGY_RISK_METRICS | frozenset({
-    "calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
+    "calmar_ratio_strategy_equity", "sterling_ratio_strategy_equity",
 })
 
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
-        "expected_shortfall_1pct_btc",
+        "drawdown_max_fraction_btc",
+        "drawdown_daily_worst_1pct_mean_fraction_btc",
+        "expected_shortfall_1pct_fraction_btc",
         "sharpe_ratio_btc",
         "sortino_ratio_btc",
         "sterling_ratio_btc",
@@ -50,25 +50,25 @@ BTC_INTRADAY_RISK_METRICS = frozenset(
 
 EQUITY_BALANCE_DIFF_METRICS = frozenset(
     {
-        f"equity_balance_diff_{sign}_{stat}_{currency}"
-        for sign in ("neg", "pos")
+        f"equity_balance_gap_{sign}_{stat}_fraction_{currency}"
+        for sign in ("negative", "positive")
         for stat in ("max", "mean")
         for currency in ("btc", "usd")
     }
     | {
-        f"paper_loss{middle}_ratio_{currency}"
-        for middle in ("", "_mean")
+        f"adg_to_paper_loss_{stat}_ratio_{currency}"
+        for stat in ("max", "mean")
         for currency in ("btc", "usd")
     }
 )
 
 ENTRY_INTERVAL_METRICS = frozenset(
     {
-        "entry_interval_hours_mean",
-        "entry_interval_hours_median",
-        "entry_interval_hours_p95",
-        "entry_interval_hours_p99",
-        "entry_interval_hours_max",
+        "entry_interval_mean_hours",
+        "entry_interval_median_hours",
+        "entry_interval_p95_hours",
+        "entry_interval_p99_hours",
+        "entry_interval_max_hours",
     }
 )
 
@@ -78,58 +78,56 @@ ENTRY_INTERVAL_METRICS = frozenset(
 # config without coupling shared config loading to the optional GPU runtime.
 GPU_EXACT_ONLY_METRICS = frozenset(
     {
-        "adg_pnl",
-        "equity_balance_diff_pos_max_btc",
-        "equity_balance_diff_pos_max_usd",
-        "equity_balance_diff_pos_mean_btc",
-        "equity_balance_diff_pos_mean_usd",
+        "daily_realized_pnl_mean_fraction",
+        "equity_balance_gap_positive_max_fraction_btc",
+        "equity_balance_gap_positive_max_fraction_usd",
+        "equity_balance_gap_positive_mean_fraction_btc",
+        "equity_balance_gap_positive_mean_fraction_usd",
         "fills_active_days_count",
-        "fills_analysis_duration_days",
-        "n_days",
+        "analysis_duration_days",
         "fills_count",
-        "fills_count_close",
-        "fills_count_entry",
+        "fills_close_count",
+        "fills_entry_count",
         "fills_count_long",
         "fills_count_short",
         "fills_gap_mean_hours",
         "fills_gap_median_hours",
         "fills_gap_p99_hours",
-        "fills_per_day_close",
-        "fills_per_day_entry",
+        "fills_close_per_day",
+        "fills_entry_per_day",
         "fills_per_day_long",
         "fills_per_day_per_position_slot_long",
         "fills_per_day_per_position_slot_short",
         "fills_per_day_short",
-        "gain_btc",
-        "gain_per_exposure_long_btc",
-        "gain_per_exposure_long_usd",
-        "gain_per_exposure_short_btc",
-        "gain_per_exposure_short_usd",
-        "gain_strategy_eq",
-        "gain_usd",
-        "hard_stop_flatten_time_minutes_mean",
-        "hard_stop_panic_close_loss_drawdown_pct_min",
-        "hard_stop_panic_close_loss_max",
-        "hard_stop_panic_close_loss_sum",
-        "hard_stop_restarts",
-        "hard_stop_restarts_long",
-        "hard_stop_restarts_short",
-        "hard_stop_triggers",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_short",
-        "mdg_pnl",
-        "peak_recovery_days_equity_btc",
-        "peak_recovery_days_equity_usd",
-        "peak_recovery_days_pnl",
-        "peak_recovery_days_strategy_eq",
-        "peak_recovery_hours_equity_btc",
-        "peak_recovery_hours_equity_usd",
-        "peak_recovery_hours_pnl",
-        "peak_recovery_hours_strategy_eq",
-        "sharpe_ratio_pnl",
-        "sortino_ratio_pnl",
+        "gain_multiplier_btc",
+        "gain_multiplier_per_twel_ratio_btc_long",
+        "gain_multiplier_per_twel_ratio_usd_long",
+        "gain_multiplier_per_twel_ratio_btc_short",
+        "gain_multiplier_per_twel_ratio_usd_short",
+        "gain_multiplier_strategy_equity",
+        "gain_multiplier_usd",
+        "hsl_flatten_time_mean_minutes",
+        "hsl_panic_episode_loss_min_fraction",
+        "hsl_panic_fill_loss_max_usd",
+        "hsl_panic_fill_loss_sum_usd",
+        "hsl_restart_count",
+        "hsl_restart_count_long",
+        "hsl_restart_count_short",
+        "hsl_trigger_count",
+        "hsl_trigger_count_long",
+        "hsl_trigger_count_short",
+        "daily_realized_pnl_median_fraction",
+        "peak_recovery_max_days_btc",
+        "peak_recovery_max_days_usd",
+        "peak_recovery_max_days_realized_pnl",
+        "peak_recovery_max_hours_btc",
+        "peak_recovery_max_hours_usd",
+        "peak_recovery_max_hours_realized_pnl",
+        "recovery_max_hours_strategy_equity",
+        "sharpe_ratio_realized_pnl",
+        "sortino_ratio_realized_pnl",
         *{
-            f"high_exposure_{unit}_{stat}_{side}"
+            f"high_exposure_{stat}_{unit}_{side}"
             for unit in ("hours", "days")
             for stat in ("mean", "max")
             for side in ("long", "short")
@@ -139,32 +137,32 @@ GPU_EXACT_ONLY_METRICS = frozenset(
 
 HARD_STOP_LIFECYCLE_METRICS = frozenset(
     {
-        "hard_stop_duration_minutes_max",
-        "hard_stop_duration_minutes_mean",
-        "hard_stop_flatten_time_minutes_mean",
-        "hard_stop_post_restart_retrigger_pct",
-        "hard_stop_restarts",
-        "hard_stop_restarts_long",
-        "hard_stop_restarts_per_year",
-        "hard_stop_restarts_per_year_long",
-        "hard_stop_restarts_per_year_short",
-        "hard_stop_restarts_short",
-        "hard_stop_time_in_red_pct",
-        "hard_stop_trigger_drawdown_mean",
-        "hard_stop_triggers",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_per_year",
-        "hard_stop_triggers_short",
+        "hsl_red_duration_max_minutes",
+        "hsl_red_duration_mean_minutes",
+        "hsl_flatten_time_mean_minutes",
+        "hsl_restart_retrigger_fraction",
+        "hsl_restart_count",
+        "hsl_restart_count_long",
+        "hsl_restarts_per_year",
+        "hsl_restarts_per_year_long",
+        "hsl_restarts_per_year_short",
+        "hsl_restart_count_short",
+        "hsl_red_time_fraction",
+        "hsl_trigger_signal_mean_fraction",
+        "hsl_trigger_count",
+        "hsl_trigger_count_long",
+        "hsl_triggers_per_year",
+        "hsl_trigger_count_short",
     }
 )
 HARD_STOP_PANIC_LOSS_METRICS = frozenset(
     {
-        "hard_stop_halt_to_restart_equity_loss_pct",
-        "hard_stop_panic_close_loss_drawdown_pct_max",
-        "hard_stop_panic_close_loss_drawdown_pct_mean",
-        "hard_stop_panic_close_loss_drawdown_pct_min",
-        "hard_stop_panic_close_loss_max",
-        "hard_stop_panic_close_loss_sum",
+        "hsl_panic_loss_starting_balance_fraction",
+        "hsl_panic_episode_loss_max_fraction",
+        "hsl_panic_episode_loss_mean_fraction",
+        "hsl_panic_episode_loss_min_fraction",
+        "hsl_panic_fill_loss_max_usd",
+        "hsl_panic_fill_loss_sum_usd",
     }
 )
 HARD_STOP_PROXY_METRICS = tuple(

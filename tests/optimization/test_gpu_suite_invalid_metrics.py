@@ -10,7 +10,7 @@ from optimization.native_results import CandidateEvaluation, CanonicalResultScor
 from optimize import INVALID_BACKTEST_CANDIDATE_PENALTY
 
 
-METRIC = "equity_choppiness_usd"
+METRIC = "equity_choppiness_ratio_usd"
 
 
 class Suite:

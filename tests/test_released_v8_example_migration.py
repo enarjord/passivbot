@@ -130,13 +130,13 @@ def test_visible_metric_null_and_empty_list_keep_distinct_existing_meanings(visi
 
     source = get_template_config()
     source["backtest"]["visible_metrics"] = visible
-    source["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    source["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
     source["optimize"]["limits"] = []
     Draft202012Validator(generate_schema()).validate(source)
     prepared = prepare_config(source, verbose=False)
-    analysis = {"adg_strategy_eq": 0.1, "volume_pct_per_day_avg": 0.2}
+    analysis = {"adg_fraction_strategy_equity": 0.1, "volume_pct_per_day_avg": 0.2}
     result = filter_analysis_for_visibility(analysis, prepared)
-    assert result.analysis == (analysis if visible == [] else {"adg_strategy_eq": 0.1})
+    assert result.analysis == (analysis if visible == [] else {"adg_fraction_strategy_equity": 0.1})
     assert source["backtest"]["visible_metrics"] is visible
 
 

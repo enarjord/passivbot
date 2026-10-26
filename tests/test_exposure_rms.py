@@ -14,10 +14,10 @@ from metrics_schema import MetricAggregationError, build_scenario_metrics
 
 
 NAMES = (
-    "total_wallet_exposure_rms_long", "total_wallet_exposure_rms_short",
-    "total_wallet_exposure_rms_gross", "total_wallet_exposure_utilization_rms_long",
-    "total_wallet_exposure_utilization_rms_short", "position_exposure_utilization_rms_long",
-    "position_exposure_utilization_rms_short",
+    "wallet_exposure_rms_ratio_long", "wallet_exposure_rms_ratio_short",
+    "gross_wallet_exposure_rms_ratio", "wallet_exposure_utilization_rms_ratio_long",
+    "wallet_exposure_utilization_rms_ratio_short", "position_exposure_utilization_rms_ratio_long",
+    "position_exposure_utilization_rms_ratio_short",
 )
 
 
@@ -223,7 +223,7 @@ def test_rms_gpu_capabilities_are_native_cuda_only(name, native, device, accepte
     else:
         with pytest.raises(ValueError, match="require native NVIDIA/CUDA replay"):
             validate_gpu_metric_names([name], native_replay=native, device=device)
-    assert validate_gpu_metric_names(["adg_strategy_eq"], native_replay=native, device=device) == {"adg_strategy_eq"}
+    assert validate_gpu_metric_names(["adg_fraction_strategy_equity"], native_replay=native, device=device) == {"adg_fraction_strategy_equity"}
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -254,7 +254,7 @@ def test_native_parity_rejects_rms_limit_before_replay(monkeypatch, capsys):
     config["optimize"]["limits"] = [{"metric": NAMES[2], "penalize_if": "greater_than", "value": 0.5}]
     monkeypatch.setattr(gpu_parity, "fixture_inputs", lambda *_: (config,))
     monkeypatch.setattr(gpu_parity, "run_comparison", lambda *_a, **_k: pytest.fail("unsupported limit reached replay"))
-    assert gpu_parity.main(["--fixture", "ema_anchor", "--gpu-engine", "native", "--metrics", "adg_strategy_eq"]) == 2
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--gpu-engine", "native", "--metrics", "adg_fraction_strategy_equity"]) == 2
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "unsupported"
     assert report["stage"] == "metric_contract"
@@ -316,7 +316,7 @@ def test_parity_rms_preflight_accepts_declared_cuda_without_executing_device(
         assert NAMES[0] in metrics
         return {"passed": True}
     monkeypatch.setattr(gpu_parity, "run_comparison", compared)
-    requested = NAMES[0] if surface == "requested" else "adg_strategy_eq"
+    requested = NAMES[0] if surface == "requested" else "adg_fraction_strategy_equity"
     assert gpu_parity.main(["--fixture", "ema_anchor", "--metrics", requested]) == 0
     assert json.loads(capsys.readouterr().out)["passed"]
 
@@ -333,5 +333,5 @@ def test_parity_ordinary_metrics_do_not_probe_device(monkeypatch, capsys):
     config["optimize"]["limits"] = []
     monkeypatch.setattr(gpu_parity, "fixture_inputs", lambda *_: (config,))
     monkeypatch.setattr(gpu_parity, "run_comparison", lambda *_a, **_k: {"passed": True})
-    assert gpu_parity.main(["--fixture", "ema_anchor", "--metrics", "adg_strategy_eq"]) == 0
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--metrics", "adg_fraction_strategy_equity"]) == 0
     assert json.loads(capsys.readouterr().out)["passed"]

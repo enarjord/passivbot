@@ -37,7 +37,7 @@ class FakeEvaluator:
             {
                 "objectives": {"w_0": -1.5, "w_1": 0.2},
                 "constraint_violation": 0.3,
-                "stats": {"adg": {"mean": 1.5}},
+                "stats": {"adg_fraction": {"mean": 1.5}},
             },
         )
 
@@ -109,7 +109,7 @@ def test_problem_evaluate_passthroughs_metrics_and_vector():
     adapter = PymooEvaluatorAdapter(evaluator, overrides_list=["foo"])
     problem = PassivbotProblem(
         bounds=[Bound(0.0, 1.0), Bound(0.0, 2.0)],
-        scoring_keys=["adg", "drawdown_worst"],
+        scoring_keys=["adg_fraction", "drawdown_max_fraction"],
         evaluator_adapter=adapter,
     )
 
@@ -128,7 +128,7 @@ def test_problem_without_constraints_omits_g():
     adapter = PymooEvaluatorAdapter(evaluator)
     problem = PassivbotProblem(
         bounds=[Bound(0.0, 1.0)],
-        scoring_keys=["adg"],
+        scoring_keys=["adg_fraction"],
         evaluator_adapter=adapter,
     )
 
@@ -143,7 +143,7 @@ def test_problem_accepts_shared_evaluation_payload_vector():
     adapter = PymooEvaluatorAdapter(PayloadEvaluator())
     problem = PassivbotProblem(
         bounds=[Bound(0.0, 1.0), Bound(0.0, 2.0)],
-        scoring_keys=["adg"],
+        scoring_keys=["adg_fraction"],
         evaluator_adapter=adapter,
     )
 

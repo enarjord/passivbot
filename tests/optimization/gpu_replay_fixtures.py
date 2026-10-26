@@ -137,7 +137,7 @@ def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
         "--fixture", strategy, "--sides", "long", "--coins", str(coins),
         "--bars", str(multicoin_bars), "--seed", str(seed)]))
     config, candles, markets, btc, timestamps = inputs
-    metrics = {"adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day"}
+    metrics = {"adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day"}
     replay = SharedAccountReplay(config=config, hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=dispatch_batch_size,
         needed_metrics=metrics, factual_hsl=True)

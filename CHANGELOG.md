@@ -12,6 +12,16 @@ since the latest release tag; these features may already be available when insta
 - Preserve released-v8 scenario-specific unstuck EMA inheritance after strategy path conversion,
   including EMA Anchor and inactive zero-span fallbacks. Explicit unstuck overrides retain precedence.
 
+- Preserve named reducer rules when converting released-v8 `backtest.aggregate` and legacy
+  suite aggregation maps. Rename supported metric selectors without changing reducer methods,
+  retain custom rules, and require the existing consent for retired metric formulas.
+
+- Make analysis metric units explicit and put curve, position side and exponential weighting
+  modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
+  strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without
+  changing calculations or value scales. Explicit released-v8 migration emits the current names;
+  best-effort EW formula choices preserve supported outer aggregate statistics.
+
 - Align native BTC collateral inputs with `btc_collateral_target_ratio` and
   `max_usd_debt_to_wallet_value_ratio`. Preserve leveraged targets, initial allocation, top-up limits,
   uncapped debt sentinels and CPU replay values; reject retired native packet keys explicitly.
@@ -124,8 +134,8 @@ since the latest release tag; these features may already be available when insta
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.
 
-- Replace `strategy_eq_underwater_pct_mean` with `pain_index_strategy_eq`, the mean
-  drawdown across all recorded strategy-equity samples, and add `ulcer_index_strategy_eq`,
+- Replace `strategy_eq_underwater_pct_mean` with `pain_index_fraction_strategy_equity`, the mean
+  drawdown across all recorded strategy-equity samples, and add `ulcer_index_fraction_strategy_equity`,
   their root mean square. Both use minute-level samples with standard one-minute candles,
   include zero drawdowns, and support backtest results, optimizer scoring and limits,
   suites, and GPU screening. Remove `strategy_eq_underwater_pct_median` without aliases;

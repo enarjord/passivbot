@@ -117,14 +117,14 @@ def test_native_hsl_transport_and_report(mode):
     assert any("panic" in str(fill[13]) for fill in full[0])
     assert "hard_stop_time_in_yellow_pct" not in full[2]
     assert "hard_stop_time_in_orange_pct" not in full[2]
-    assert full[2]["hard_stop_triggers"] == report["summary"]["triggers"]
+    assert full[2]["hsl_trigger_count"] == report["summary"]["triggers"]
     assert (
-        full[2]["hard_stop_panic_close_loss_sum"]
+        full[2]["hsl_panic_fill_loss_sum_usd"]
         == report["summary"]["panic_close_loss"]
     )
-    assert full[2]["drawdown_worst_strategy_eq"] > 0.0
-    assert full[2]["drawdown_worst_ema_strategy_eq"] > 0.0
-    assert "drawdown_worst" in full[2]
+    assert full[2]["drawdown_max_fraction_strategy_equity"] > 0.0
+    assert full[2]["hsl_signal_ema_max_fraction"] > 0.0
+    assert "drawdown_max_fraction" in full[2]
     compact_args = deepcopy(args)
     compact_args[-1]["metrics_only"] = True
     compact = run(compact_args)
@@ -261,7 +261,7 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
         assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
         assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
         assert "realized_loss_gate_lookback_minutes" not in args[-1]
-        counts.append(run(args)[2]["hard_stop_triggers"])
+        counts.append(run(args)[2]["hsl_trigger_count"])
     # At span1 each new minute forgets earlier currency loss. The same gradual
     # decline crosses RED only when the independently selected slow span retains
     # its accumulated loss. This is not the former finite-window boundary rule.
@@ -335,10 +335,10 @@ def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
     assert len(result[0]) == 0
     assert result[1][-1, 1] > 1300.0
     np.testing.assert_allclose(result[1][:, 3], 1000.0)
-    assert result[2]["gain_strategy_eq"] == 0.0
-    assert result[2]["drawdown_worst_strategy_eq"] == 0.0
-    assert result[2]["drawdown_worst_strategy_eq_long"] == 0.0
-    assert result[2]["drawdown_worst_strategy_eq_short"] == 0.0
+    assert result[2]["gain_multiplier_strategy_equity"] == 0.0
+    assert result[2]["drawdown_max_fraction_strategy_equity"] == 0.0
+    assert result[2]["drawdown_max_fraction_strategy_equity_long"] == 0.0
+    assert result[2]["drawdown_max_fraction_strategy_equity_short"] == 0.0
 
 
 def test_general_strategy_metrics_survive_disabled_hsl():
@@ -346,10 +346,10 @@ def test_general_strategy_metrics_survive_disabled_hsl():
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy.update(enabled=False)
     result = run(args)
-    assert result[2]["hard_stop_triggers"] == 0
-    assert result[2]["drawdown_worst_strategy_eq"] > 0
-    assert result[2]["drawdown_worst_strategy_eq_long"] > 0
-    assert result[2]["drawdown_worst_strategy_eq_short"] == 0
+    assert result[2]["hsl_trigger_count"] == 0
+    assert result[2]["drawdown_max_fraction_strategy_equity"] > 0
+    assert result[2]["drawdown_max_fraction_strategy_equity_long"] > 0
+    assert result[2]["drawdown_max_fraction_strategy_equity_short"] == 0
     assert result[1].shape[1] == 4
 
 
@@ -396,14 +396,14 @@ def test_execute_backtest_preserves_hsl_report_and_shared_metrics(compact):
     args[-1]["metrics_only"] = compact
     prepared = prepared_payload(args)
     _, _, analysis = execute_backtest(prepared, cfg)
-    assert analysis["hard_stop_triggers"] > 0
+    assert analysis["hsl_trigger_count"] > 0
     assert "hard_stop_triggers_usd" not in analysis
     assert not any(
         "time_in_orange" in key or "time_in_yellow" in key for key in analysis
     )
     assert (
         prepared.hard_stop_plot_data["hsl"]["summary"]["triggers"]
-        == analysis["hard_stop_triggers"]
+        == analysis["hsl_trigger_count"]
     )
 
 
@@ -434,7 +434,7 @@ def test_dataset_subset_preserves_only_selected_coin_policies():
     }
     cfg, _, _ = inputs()
     _, _, analysis = execute_backtest(subset, cfg)
-    assert analysis["hard_stop_triggers"] > 0
+    assert analysis["hsl_trigger_count"] > 0
 
 
 @pytest.mark.parametrize("btc_cap", [0.0, 0.5])
@@ -453,7 +453,7 @@ def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
     assert 0 < len(result[1]) < len(args[0]) - 3
     assert result[1].shape[1] == 4
     assert np.isfinite(result[1][:, 3]).all()
-    assert result[2]["drawdown_worst_strategy_eq"] > 0
+    assert result[2]["drawdown_max_fraction_strategy_equity"] > 0
     timestamp, account_equity, _, strategy_equity = result[1][-1]
     fills = [row for row in result[0] if row[1] <= timestamp]
     assert fills
@@ -473,7 +473,7 @@ def test_disabled_hsl_zero_balance_keeps_halt_loss_metric_finite():
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy["enabled"] = False
     result = run(args)
-    assert result[2]["hard_stop_halt_to_restart_equity_loss_pct"] == 0.0
+    assert result[2]["hsl_panic_loss_starting_balance_fraction"] == 0.0
 
 
 def test_native_boundary_rejects_explicit_legacy_engine():

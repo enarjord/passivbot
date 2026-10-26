@@ -207,10 +207,10 @@ fn attach_ew_analysis(
     curve: &crate::ew::EwAnalysis,
     strategy: &crate::ew::EwAnalysis,
 ) -> PyResult<()> {
-    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_eq_ew")] {
+    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_equity_ew")] {
         if let Some(metrics) = analysis.metrics {
             for (key, value) in [
-                ("adg", metrics.adg),
+                ("adg_fraction", metrics.adg_fraction),
                 ("sharpe_ratio", metrics.sharpe_ratio),
                 ("sortino_ratio", metrics.sortino_ratio),
                 ("omega_ratio", metrics.omega_ratio),
@@ -221,40 +221,43 @@ fn attach_ew_analysis(
     }
     let metadata = PyDict::new_bound(py);
     metadata.set_item(curve_name, struct_to_py_dict(py, &curve.metadata)?)?;
-    metadata.set_item("strategy_eq", struct_to_py_dict(py, &strategy.metadata)?)?;
+    metadata.set_item(
+        "strategy_equity",
+        struct_to_py_dict(py, &strategy.metadata)?,
+    )?;
     dict.bind(py).set_item("_ew_metadata", metadata)?;
     Ok(())
 }
 
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
     analysis.fills_active_days_count = metrics.fills_active_days_count;
-    analysis.fills_active_days_ratio = metrics.fills_active_days_ratio;
+    analysis.fills_active_day_fraction = metrics.fills_active_day_fraction;
     analysis.fills_active_symbols_count = metrics.fills_active_symbols_count;
-    analysis.fills_analysis_duration_days = metrics.fills_analysis_duration_days;
+    analysis.analysis_duration_days = metrics.analysis_duration_days;
     analysis.fills_count = metrics.fills_count;
-    analysis.fills_count_close = metrics.fills_count_close;
-    analysis.fills_count_entry = metrics.fills_count_entry;
+    analysis.fills_close_count = metrics.fills_close_count;
+    analysis.fills_entry_count = metrics.fills_entry_count;
     analysis.fills_count_long = metrics.fills_count_long;
     analysis.fills_count_short = metrics.fills_count_short;
-    analysis.fills_entry_per_close = metrics.fills_entry_per_close;
-    analysis.fills_gap_longest_days = metrics.fills_gap_longest_days;
+    analysis.entry_to_close_fill_count_ratio = metrics.entry_to_close_fill_count_ratio;
+    analysis.fills_gap_max_days = metrics.fills_gap_max_days;
     analysis.fills_gap_mean_hours = metrics.fills_gap_mean_hours;
     analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
     analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
     analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
     analysis.fills_gap_time_weighted_mean_hours = metrics.fills_gap_time_weighted_mean_hours;
     analysis.fills_per_day = metrics.fills_per_day;
-    analysis.fills_per_day_close = metrics.fills_per_day_close;
-    analysis.fills_per_day_entry = metrics.fills_per_day_entry;
+    analysis.fills_close_per_day = metrics.fills_close_per_day;
+    analysis.fills_entry_per_day = metrics.fills_entry_per_day;
     analysis.fills_per_day_long = metrics.fills_per_day_long;
     analysis.fills_per_day_per_position_slot = metrics.fills_per_day_per_position_slot;
     analysis.fills_per_day_per_position_slot_long = metrics.fills_per_day_per_position_slot_long;
     analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
     analysis.fills_per_day_short = metrics.fills_per_day_short;
-    analysis.fills_top_symbol_share = metrics.fills_top_symbol_share;
+    analysis.fills_top_symbol_fraction = metrics.fills_top_symbol_fraction;
 }
 
-fn calc_backtest_completion_ratio(
+fn calc_backtest_completion_fraction(
     equities: &Equities,
     backtest_params: &BacktestParams,
     n_timesteps: usize,
@@ -1705,15 +1708,15 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         };
         backtest.exposure_rms.apply(&mut analysis_usd);
         backtest.exposure_rms.apply(&mut analysis_btc);
-        analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
-        analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
-        analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
-        analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        analysis_usd.initial_entry_balance_fraction_long = entry_pct_long;
+        analysis_usd.initial_entry_balance_fraction_short = entry_pct_short;
+        analysis_btc.initial_entry_balance_fraction_long = entry_pct_long;
+        analysis_btc.initial_entry_balance_fraction_short = entry_pct_short;
         let completion_start = profile_start(profile_enabled);
         let completion_ratio =
-            calc_backtest_completion_ratio(&equities, &backtest_params, n_timesteps);
-        analysis_usd.backtest_completion_ratio = completion_ratio;
-        analysis_btc.backtest_completion_ratio = completion_ratio;
+            calc_backtest_completion_fraction(&equities, &backtest_params, n_timesteps);
+        analysis_usd.backtest_completion_fraction = completion_ratio;
+        analysis_btc.backtest_completion_fraction = completion_ratio;
         profile_add(
             &mut rust_profile,
             "rust_completion_ratio_ms",
@@ -1743,193 +1746,218 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
             "rust_strategy_equity_metrics_ms",
             strategy_metrics_start,
         );
-        analysis_usd.hard_stop_triggers = hs.triggers;
-        analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
-        analysis_usd.hard_stop_triggers_long = hs.triggers_long;
-        analysis_usd.hard_stop_triggers_short = hs.triggers_short;
-        analysis_usd.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
-        analysis_usd.hard_stop_restarts = hs.restarts;
-        analysis_usd.hard_stop_restarts_per_year = hs.restarts_per_year;
-        analysis_usd.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_usd.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_usd.hard_stop_restarts_long = hs.restarts_long;
-        analysis_usd.hard_stop_restarts_short = hs.restarts_short;
-        analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
-        analysis_usd.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
-        analysis_usd.hard_stop_duration_minutes_max = hs.duration_minutes_max;
-        analysis_usd.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
-        analysis_usd.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
-        analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_min =
-            hs.panic_close_loss_drawdown_pct_min;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_mean =
-            hs.panic_close_loss_drawdown_pct_mean;
-        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_max =
-            hs.panic_close_loss_drawdown_pct_max;
-        analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
-        analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_usd.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
-        analysis_usd.drawdown_worst_ema_strategy_eq = strategy
+        analysis_usd.hsl_trigger_count = hs.triggers;
+        analysis_usd.hsl_triggers_per_year = hs.triggers_per_year;
+        analysis_usd.hsl_trigger_count_long = hs.triggers_long;
+        analysis_usd.hsl_trigger_count_short = hs.triggers_short;
+        analysis_usd.hsl_panic_loss_starting_balance_fraction =
+            hs.panic_loss_starting_balance_fraction;
+        analysis_usd.hsl_restart_count = hs.restarts;
+        analysis_usd.hsl_restarts_per_year = hs.restarts_per_year;
+        analysis_usd.hsl_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_usd.hsl_restarts_per_year_short = hs.restarts_per_year_short;
+        analysis_usd.hsl_restart_count_long = hs.restarts_long;
+        analysis_usd.hsl_restart_count_short = hs.restarts_short;
+        analysis_usd.hsl_red_time_fraction = hs.red_time_fraction;
+        analysis_usd.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
+        analysis_usd.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
+        analysis_usd.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
+        analysis_usd.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
+        analysis_usd.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
+        analysis_usd.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
+        analysis_usd.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
+        analysis_usd.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
+        analysis_usd.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
+        analysis_usd.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
+        analysis_usd.drawdown_max_fraction_strategy_equity =
+            strategy.overall.drawdown_max_fraction_strategy_equity;
+        analysis_usd.drawdown_max_fraction_strategy_equity_long =
+            strategy.long.drawdown_max_fraction_strategy_equity;
+        analysis_usd.drawdown_max_fraction_strategy_equity_short =
+            strategy.short.drawdown_max_fraction_strategy_equity;
+        analysis_usd.hsl_signal_ema_max_fraction = strategy
             .long
-            .drawdown_worst_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_ema_strategy_eq);
-        analysis_usd.drawdown_worst_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_ema_strategy_eq;
-        analysis_usd.drawdown_worst_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_ema_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq =
-            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .hsl_signal_ema_max_fraction
+            .max(strategy.short.hsl_signal_ema_max_fraction);
+        analysis_usd.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
+        analysis_usd.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
+            .overall
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
             .long
-            .drawdown_worst_mean_1pct_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_usd.pain_index_strategy_eq = strategy.overall.pain_index_strategy_eq;
-        analysis_usd.ulcer_index_strategy_eq = strategy.overall.ulcer_index_strategy_eq;
-        analysis_usd.strategy_eq_recovery_days_mean =
-            strategy.overall.strategy_eq_recovery_days_mean;
-        analysis_usd.strategy_eq_recovery_days_median =
-            strategy.overall.strategy_eq_recovery_days_median;
-        analysis_usd.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
-        analysis_usd.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
-        analysis_usd.strategy_eq_recovery_days_mean_worst_5pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
-        analysis_usd.strategy_eq_recovery_days_mean_worst_1pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
-        analysis_usd.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
-        analysis_usd.peak_recovery_hours_strategy_eq =
-            strategy.overall.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_hours_strategy_eq_long =
-            strategy.long.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_hours_strategy_eq_short =
-            strategy.short.peak_recovery_hours_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq =
-            strategy.overall.peak_recovery_days_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq_long =
-            strategy.long.peak_recovery_days_strategy_eq;
-        analysis_usd.peak_recovery_days_strategy_eq_short =
-            strategy.short.peak_recovery_days_strategy_eq;
-        analysis_usd.gain_strategy_eq = strategy.overall.gain_strategy_eq;
-        analysis_usd.adg_strategy_eq = strategy.overall.adg_strategy_eq;
-        analysis_usd.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
-        analysis_usd.adg_time_integrated_strategy_eq =
-            strategy.overall.adg_time_integrated_strategy_eq;
-        analysis_usd.positive_gain_participation_strategy_eq =
-            strategy.overall.positive_gain_participation_strategy_eq;
-        analysis_usd.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
-        analysis_usd.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
-        analysis_usd.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
-        analysis_usd.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
-        analysis_usd.expected_shortfall_1pct_strategy_eq =
-            strategy.overall.expected_shortfall_1pct_strategy_eq;
-        analysis_usd.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
-        analysis_usd.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
-        analysis_btc.hard_stop_triggers = hs.triggers;
-        analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
-        analysis_btc.hard_stop_triggers_long = hs.triggers_long;
-        analysis_btc.hard_stop_triggers_short = hs.triggers_short;
-        analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
-        analysis_btc.hard_stop_restarts = hs.restarts;
-        analysis_btc.hard_stop_restarts_per_year = hs.restarts_per_year;
-        analysis_btc.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_btc.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_btc.hard_stop_restarts_long = hs.restarts_long;
-        analysis_btc.hard_stop_restarts_short = hs.restarts_short;
-        analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;
-        analysis_btc.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
-        analysis_btc.hard_stop_duration_minutes_max = hs.duration_minutes_max;
-        analysis_btc.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
-        analysis_btc.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
-        analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_min =
-            hs.panic_close_loss_drawdown_pct_min;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_mean =
-            hs.panic_close_loss_drawdown_pct_mean;
-        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_max =
-            hs.panic_close_loss_drawdown_pct_max;
-        analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
-        analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_btc.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
-        analysis_btc.drawdown_worst_ema_strategy_eq = strategy
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
+            .short
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction = strategy
             .long
-            .drawdown_worst_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_ema_strategy_eq);
-        analysis_btc.drawdown_worst_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_ema_strategy_eq;
-        analysis_btc.drawdown_worst_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_ema_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq =
-            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .hsl_signal_ema_worst_1pct_mean_fraction
+            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_long =
+            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_short =
+            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_usd.pain_index_fraction_strategy_equity =
+            strategy.overall.pain_index_fraction_strategy_equity;
+        analysis_usd.ulcer_index_fraction_strategy_equity =
+            strategy.overall.ulcer_index_fraction_strategy_equity;
+        analysis_usd.recovery_mean_days_strategy_equity =
+            strategy.overall.recovery_mean_days_strategy_equity;
+        analysis_usd.recovery_median_days_strategy_equity =
+            strategy.overall.recovery_median_days_strategy_equity;
+        analysis_usd.recovery_p95_days_strategy_equity =
+            strategy.overall.recovery_p95_days_strategy_equity;
+        analysis_usd.recovery_p99_days_strategy_equity =
+            strategy.overall.recovery_p99_days_strategy_equity;
+        analysis_usd.recovery_worst_5pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_5pct_mean_days_strategy_equity;
+        analysis_usd.recovery_worst_1pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_1pct_mean_days_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity =
+            strategy.overall.recovery_max_days_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity =
+            strategy.overall.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity_long =
+            strategy.long.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_hours_strategy_equity_short =
+            strategy.short.recovery_max_hours_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity_long =
+            strategy.long.recovery_max_days_strategy_equity;
+        analysis_usd.recovery_max_days_strategy_equity_short =
+            strategy.short.recovery_max_days_strategy_equity;
+        analysis_usd.gain_multiplier_strategy_equity =
+            strategy.overall.gain_multiplier_strategy_equity;
+        analysis_usd.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
+        analysis_usd.adg_rolling_hmean_fraction_strategy_equity =
+            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
+        analysis_usd.adg_time_integrated_fraction_strategy_equity = strategy
+            .overall
+            .adg_time_integrated_fraction_strategy_equity;
+        analysis_usd.positive_log_return_participation_score_strategy_equity = strategy
+            .overall
+            .positive_log_return_participation_score_strategy_equity;
+        analysis_usd.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
+        analysis_usd.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
+        analysis_usd.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
+        analysis_usd.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
+        analysis_usd.expected_shortfall_1pct_fraction_strategy_equity = strategy
+            .overall
+            .expected_shortfall_1pct_fraction_strategy_equity;
+        analysis_usd.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
+        analysis_usd.sterling_ratio_strategy_equity =
+            strategy.overall.sterling_ratio_strategy_equity;
+        analysis_btc.hsl_trigger_count = hs.triggers;
+        analysis_btc.hsl_triggers_per_year = hs.triggers_per_year;
+        analysis_btc.hsl_trigger_count_long = hs.triggers_long;
+        analysis_btc.hsl_trigger_count_short = hs.triggers_short;
+        analysis_btc.hsl_panic_loss_starting_balance_fraction =
+            hs.panic_loss_starting_balance_fraction;
+        analysis_btc.hsl_restart_count = hs.restarts;
+        analysis_btc.hsl_restarts_per_year = hs.restarts_per_year;
+        analysis_btc.hsl_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_btc.hsl_restarts_per_year_short = hs.restarts_per_year_short;
+        analysis_btc.hsl_restart_count_long = hs.restarts_long;
+        analysis_btc.hsl_restart_count_short = hs.restarts_short;
+        analysis_btc.hsl_red_time_fraction = hs.red_time_fraction;
+        analysis_btc.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
+        analysis_btc.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
+        analysis_btc.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
+        analysis_btc.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
+        analysis_btc.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
+        analysis_btc.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
+        analysis_btc.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
+        analysis_btc.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
+        analysis_btc.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
+        analysis_btc.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
+        analysis_btc.drawdown_max_fraction_strategy_equity =
+            strategy.overall.drawdown_max_fraction_strategy_equity;
+        analysis_btc.drawdown_max_fraction_strategy_equity_long =
+            strategy.long.drawdown_max_fraction_strategy_equity;
+        analysis_btc.drawdown_max_fraction_strategy_equity_short =
+            strategy.short.drawdown_max_fraction_strategy_equity;
+        analysis_btc.hsl_signal_ema_max_fraction = strategy
             .long
-            .drawdown_worst_mean_1pct_ema_strategy_eq
-            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_long =
-            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
-            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
-        analysis_btc.pain_index_strategy_eq = strategy.overall.pain_index_strategy_eq;
-        analysis_btc.ulcer_index_strategy_eq = strategy.overall.ulcer_index_strategy_eq;
-        analysis_btc.strategy_eq_recovery_days_mean =
-            strategy.overall.strategy_eq_recovery_days_mean;
-        analysis_btc.strategy_eq_recovery_days_median =
-            strategy.overall.strategy_eq_recovery_days_median;
-        analysis_btc.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
-        analysis_btc.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
-        analysis_btc.strategy_eq_recovery_days_mean_worst_5pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
-        analysis_btc.strategy_eq_recovery_days_mean_worst_1pct =
-            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
-        analysis_btc.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
-        analysis_btc.peak_recovery_hours_strategy_eq =
-            strategy.overall.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_hours_strategy_eq_long =
-            strategy.long.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_hours_strategy_eq_short =
-            strategy.short.peak_recovery_hours_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq =
-            strategy.overall.peak_recovery_days_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq_long =
-            strategy.long.peak_recovery_days_strategy_eq;
-        analysis_btc.peak_recovery_days_strategy_eq_short =
-            strategy.short.peak_recovery_days_strategy_eq;
-        analysis_btc.gain_strategy_eq = strategy.overall.gain_strategy_eq;
-        analysis_btc.adg_strategy_eq = strategy.overall.adg_strategy_eq;
-        analysis_btc.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
-        analysis_btc.adg_time_integrated_strategy_eq =
-            strategy.overall.adg_time_integrated_strategy_eq;
-        analysis_btc.positive_gain_participation_strategy_eq =
-            strategy.overall.positive_gain_participation_strategy_eq;
-        analysis_btc.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
-        analysis_btc.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
-        analysis_btc.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
-        analysis_btc.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
-        analysis_btc.expected_shortfall_1pct_strategy_eq =
-            strategy.overall.expected_shortfall_1pct_strategy_eq;
-        analysis_btc.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
-        analysis_btc.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
+            .hsl_signal_ema_max_fraction
+            .max(strategy.short.hsl_signal_ema_max_fraction);
+        analysis_btc.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
+        analysis_btc.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
+            .overall
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
+            .long
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
+            .short
+            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction = strategy
+            .long
+            .hsl_signal_ema_worst_1pct_mean_fraction
+            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_long =
+            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_short =
+            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
+        analysis_btc.pain_index_fraction_strategy_equity =
+            strategy.overall.pain_index_fraction_strategy_equity;
+        analysis_btc.ulcer_index_fraction_strategy_equity =
+            strategy.overall.ulcer_index_fraction_strategy_equity;
+        analysis_btc.recovery_mean_days_strategy_equity =
+            strategy.overall.recovery_mean_days_strategy_equity;
+        analysis_btc.recovery_median_days_strategy_equity =
+            strategy.overall.recovery_median_days_strategy_equity;
+        analysis_btc.recovery_p95_days_strategy_equity =
+            strategy.overall.recovery_p95_days_strategy_equity;
+        analysis_btc.recovery_p99_days_strategy_equity =
+            strategy.overall.recovery_p99_days_strategy_equity;
+        analysis_btc.recovery_worst_5pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_5pct_mean_days_strategy_equity;
+        analysis_btc.recovery_worst_1pct_mean_days_strategy_equity = strategy
+            .overall
+            .recovery_worst_1pct_mean_days_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity =
+            strategy.overall.recovery_max_days_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity =
+            strategy.overall.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity_long =
+            strategy.long.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_hours_strategy_equity_short =
+            strategy.short.recovery_max_hours_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity_long =
+            strategy.long.recovery_max_days_strategy_equity;
+        analysis_btc.recovery_max_days_strategy_equity_short =
+            strategy.short.recovery_max_days_strategy_equity;
+        analysis_btc.gain_multiplier_strategy_equity =
+            strategy.overall.gain_multiplier_strategy_equity;
+        analysis_btc.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
+        analysis_btc.adg_rolling_hmean_fraction_strategy_equity =
+            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
+        analysis_btc.adg_time_integrated_fraction_strategy_equity = strategy
+            .overall
+            .adg_time_integrated_fraction_strategy_equity;
+        analysis_btc.positive_log_return_participation_score_strategy_equity = strategy
+            .overall
+            .positive_log_return_participation_score_strategy_equity;
+        analysis_btc.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
+        analysis_btc.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
+        analysis_btc.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
+        analysis_btc.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
+        analysis_btc.expected_shortfall_1pct_fraction_strategy_equity = strategy
+            .overall
+            .expected_shortfall_1pct_fraction_strategy_equity;
+        analysis_btc.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
+        analysis_btc.sterling_ratio_strategy_equity =
+            strategy.overall.sterling_ratio_strategy_equity;
 
         if backtest_params.equity_hard_stop_loss.hsl.is_some() {
             for analysis in [&mut analysis_usd, &mut analysis_btc] {
-                analysis.drawdown_worst_ema_strategy_eq =
-                    strategy.overall.drawdown_worst_ema_strategy_eq;
-                analysis.drawdown_worst_mean_1pct_ema_strategy_eq =
-                    strategy.overall.drawdown_worst_mean_1pct_ema_strategy_eq;
+                analysis.hsl_signal_ema_max_fraction = strategy.overall.hsl_signal_ema_max_fraction;
+                analysis.hsl_signal_ema_worst_1pct_mean_fraction =
+                    strategy.overall.hsl_signal_ema_worst_1pct_mean_fraction;
             }
         }
         let analysis_dict_start = profile_start(profile_enabled);

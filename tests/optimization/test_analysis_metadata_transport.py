@@ -25,15 +25,15 @@ def test_executor_metadata_is_separate_and_copied_for_each_result():
 
     class Replay:
         def evaluate(self, candidates):
-            return [ReplayResult({"adg_strategy_eq_ew": candidate["gain"]}, False, source)
+            return [ReplayResult({"adg_fraction_strategy_equity_ew": candidate["gain_multiplier"]}, False, source)
                     for candidate in candidates]
 
     with GpuBacktestService(batch_size=2, max_batch_delay=1) as service:
         service.register_dataset("data", Replay())
-        futures = [service.submit(BacktestRequest(str(index), "data", {"gain": index * .01}))
+        futures = [service.submit(BacktestRequest(str(index), "data", {"gain_multiplier": index * .01}))
                    for index in (1, 2)]
         results = [future.result(timeout=3) for future in futures]
-    assert [row.metrics for row in results] == [{"adg_strategy_eq_ew": .01}, {"adg_strategy_eq_ew": .02}]
+    assert [row.metrics for row in results] == [{"adg_fraction_strategy_equity_ew": .01}, {"adg_fraction_strategy_equity_ew": .02}]
     assert [row.metadata for row in results] == [expected, expected]
     source["ew"]["strategy_eq"]["half_life_days"] = 999
     assert results[0].metadata == expected
@@ -45,7 +45,7 @@ def test_executor_metadata_is_separate_and_copied_for_each_result():
 def test_executor_invalid_metadata_is_fatal_for_complete_batch(invalid):
     class Replay:
         def evaluate(self, candidates):
-            rows = [ReplayResult({"adg_strategy_eq_ew": .01}, False, _metadata())
+            rows = [ReplayResult({"adg_fraction_strategy_equity_ew": .01}, False, _metadata())
                     for _ in candidates]
             rows[-1] = replace(rows[-1], metadata=invalid)
             return rows
@@ -70,22 +70,22 @@ class CaptureScorer:
         assert stage == "full"
 
     def required_metrics(self, scenario):
-        return {"adg_strategy_eq_ew"}
+        return {"adg_fraction_strategy_equity_ew"}
 
     def score(self, vector, analyses, *, stage="full"):
         assert stage == "full"
         self.analyses = deepcopy(analyses)
-        return {"metrics": {"objectives": {"adg_strategy_eq_ew": .01}}, "fitness": (-.01,)}
+        return {"metrics": {"objectives": {"adg_fraction_strategy_equity_ew": .01}}, "fitness": (-.01,)}
 
 
 def _slots():
     return [ResultSlot(f"{scenario}:{exchange}", f"data:{scenario}:{exchange}", scenario,
-                       exchange, ("adg_strategy_eq_ew",))
+                       exchange, ("adg_fraction_strategy_equity_ew",))
             for scenario, exchange in (("base", "first"), ("base", "second"), ("stress", "first"))]
 
 
 def _result(slot, metadata):
-    return BacktestResult(slot.request_id, slot.dataset_id, {"adg_strategy_eq_ew": .01}, False, metadata)
+    return BacktestResult(slot.request_id, slot.dataset_id, {"adg_fraction_strategy_equity_ew": .01}, False, metadata)
 
 
 def test_candidate_completion_preserves_each_metadata_source_and_scalar_separation():
@@ -108,7 +108,7 @@ def test_candidate_completion_preserves_each_metadata_source_and_scalar_separati
     assert set(scorer.analyses) == {"base", "stress"}
     for exchanges in scorer.analyses.values():
         for analysis in exchanges.values():
-            assert analysis == {"adg_strategy_eq_ew": .01, "liquidated": False}
+            assert analysis == {"adg_fraction_strategy_equity_ew": .01, "liquidated": False}
     assert pending._rows == {}
     assert pending._metadata == {}
     assert pending.pending_request_ids == ()

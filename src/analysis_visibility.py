@@ -7,6 +7,9 @@ from config.metrics import (
     ANALYSIS_SHARED_KEYS,
     CURRENCY_METRICS,
     SHARED_METRICS,
+    CURRENCY_METRIC_VARIANTS,
+    metric_with_curve,
+    split_metric_curve,
     canonical_metric_name,
     metric_aliases,
     reject_retired_metric,
@@ -28,8 +31,7 @@ def collect_visible_metric_requests(config: dict) -> tuple[list[str], list[str],
     derived = []
     for spec in extract_objective_specs(optimize_cfg.get("scoring", []) or []):
         metric = spec.metric
-        if metric.endswith(("_usd", "_btc")) and metric.rsplit("_", 1)[0] in CURRENCY_METRICS:
-            metric = metric.rsplit("_", 1)[0]
+        metric, _curve = split_metric_curve(metric)
         derived.append(metric)
     derived.extend(
         canonical_metric_name(limit["metric"])
@@ -128,7 +130,7 @@ def _expand_metric_name(metric: str, ordered_keys: Sequence[str], key_set: set[s
     if metric in SHARED_METRICS:
         return [metric] if metric in key_set else []
     if metric in CURRENCY_METRICS:
-        matches = [key for key in ordered_keys if key in {f"{metric}_usd", f"{metric}_btc"}]
+        matches = [key for key in ordered_keys if key in {metric_with_curve(metric, "usd"), metric_with_curve(metric, "btc")}]
         if matches:
             return matches
     prefixes = metric_aliases(metric)
@@ -143,19 +145,9 @@ def _expand_metric_name(metric: str, ordered_keys: Sequence[str], key_set: set[s
 
 
 def _known_visible_metric_names() -> set[str]:
-    known = set(CURRENCY_METRICS) | set(ANALYSIS_SHARED_KEYS)
-    known |= {
-        f"{metric}_{suffix}"
-        for metric in CURRENCY_METRICS
-        for suffix in ("usd", "btc")
-    }
-    return known
+    return set(CURRENCY_METRICS) | set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRIC_VARIANTS)
 
 
 def _metric_name_is_known(metric: str, known_metrics: set[str]) -> bool:
     metric = canonical_metric_name(metric)
-    if metric in known_metrics:
-        return True
-    if metric.endswith(("_usd", "_btc")) and metric.rsplit("_", 1)[0] in CURRENCY_METRICS:
-        return True
-    return any(known_metric.startswith(f"{metric}_") for known_metric in known_metrics)
+    return metric in known_metrics or any(name.startswith(f"{metric}_") for name in known_metrics)

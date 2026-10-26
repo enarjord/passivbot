@@ -53,7 +53,7 @@ try:
     dataset = PreparedGpuDataset(
         config=config, markets=markets, exchange=exchange,
         hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
-        candle_coins=ordered_coins, metrics=["adg_strategy_eq", "fills_per_day"],
+        candle_coins=ordered_coins, metrics=["adg_fraction_strategy_equity", "fills_per_day"],
     )
     with CudaBacktestService() as service:
         service.register_dataset("scenario", dataset)
@@ -71,7 +71,7 @@ unsupported topology changes require a separately prepared dataset. The request 
 dataset IDs are caller-owned, run-local identities. The optimizer owns persistent
 content/evaluation fingerprints, precision stamps and resume compatibility separately.
 
-Portfolio `drawdown_worst_mean_1pct_ema_strategy_eq` observes the maximum enabled
+Portfolio `hsl_signal_ema_worst_1pct_mean_fraction` observes the maximum enabled
 HSL scope signal on each completed reporting bar before reducing its worst 1%.
 Shared replay returns one compact portfolio-tail scalar; combining already reduced
 long/short tails loses their joint clock. Requested native EMA tails retain bounded
@@ -496,7 +496,7 @@ host/disk admission budget or adaptive multi-device scheduler.
 
 Shared multicoin replay also separates unweighted raw strategy equity from account
 reporting. Requested raw ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected
-shortfall and the three gain-quality metrics use daily raw equity closes/minima,
+shortfall and the three gain_multiplier-quality metrics use daily raw equity closes/minima,
 including terminal loss marks. Calmar/Sterling additionally request raw daily
 worst drawdowns. Two f32 daily columns add eight bytes per candidate per calendar
 day; these columns and their replay updates compile away when unused. USD account

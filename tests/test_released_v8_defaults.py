@@ -204,7 +204,7 @@ def test_full_public_released_defaults_report_metric_and_memory_choices():
     assert result.config["optimize"]["pymoo"] == expected_pymoo
     assert result.config["backtest"]["filter_by_min_effective_cost"] is False
     guesses = [item for item in result.changes if item.get("best_effort")]
-    assert any(item["old"] == "adg_strategy_eq_w" and item["new"] == "adg_strategy_eq_ew" for item in guesses)
+    assert any(item["old"] == "adg_strategy_eq_w" and item["new"] == "adg_fraction_strategy_equity_ew" for item in guesses)
     assert any(item["path"] == "backtest.ew_half_life_days" for item in guesses)
     assert any(item["path"] == "live.pnls_max_lookback_days" for item in guesses)
     assert migrate(result.config).changes == []

@@ -306,7 +306,7 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
     from pareto_explorer import _extract_suite_metrics
 
     base = SimpleNamespace(
-        scoring_specs=extract_objective_specs(["adg_strategy_eq"]), limit_checks=[]
+        scoring_specs=extract_objective_specs(["adg_fraction_strategy_equity"]), limit_checks=[]
     )
     payload = build_prefilter_payload(
         base, [1], 25, [], suite=True, scenario_labels=("base", "stress")
@@ -317,8 +317,8 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
         _extract_suite_metrics(entry, {"default": "min"}),
         _extract_suite_metrics(entry, {"default": "mean"}, scenario_labels=["stress"]),
     ):
-        assert flat["adg_strategy_eq_mean"] == -25
-        assert values["drawdown_worst_strategy_eq"] == 25
+        assert flat["adg_fraction_strategy_equity_mean"] == -25
+        assert values["drawdown_max_fraction_strategy_equity"] == 25
 
 
 def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
@@ -390,8 +390,8 @@ def test_invalid_policy_is_an_error_not_a_candidate_penalty(bad):
 def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring():
     specs = extract_objective_specs(
         [
-            {"metric": "adg_strategy_eq", "goal": "max"},
-            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
         ]
     )
     base = SimpleNamespace(scoring_specs=specs, limit_checks=[])
@@ -400,12 +400,12 @@ def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring
     assert payload["constraint_violation"] == 25
     assert payload["evaluation_vector"] == [1, 2]
     assert payload["metrics"]["objectives"] == {
-        "adg_strategy_eq": -25,
-        "drawdown_worst_strategy_eq": 25,
+        "adg_fraction_strategy_equity": -25,
+        "drawdown_max_fraction_strategy_equity": 25,
     }
     assert payload["metrics"]["stats"]["fills_count"]["mean"] == -25
-    assert payload["metrics"]["stats"]["win_rate"]["mean"] == -25
-    assert payload["metrics"]["stats"]["adg_usd"]["mean"] == -25
-    assert payload["metrics"]["stats"]["drawdown_worst_btc"]["mean"] == 25
+    assert payload["metrics"]["stats"]["trade_win_fraction"]["mean"] == -25
+    assert payload["metrics"]["stats"]["adg_fraction_usd"]["mean"] == -25
+    assert payload["metrics"]["stats"]["drawdown_max_fraction_btc"]["mean"] == 25
     assert payload["metrics"]["backtest_performed"] is False
     assert payload["metrics"]["prefilter"]["version"] == 2

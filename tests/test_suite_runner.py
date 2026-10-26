@@ -266,14 +266,14 @@ def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
 def test_summarize_scenario_metrics_prefers_mean():
     metrics = {
         "stats": {
-            "adg_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
-            "mdg_btc": 0.2,
+            "adg_fraction_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
+            "mdg_fraction_btc": 0.2,
             "drawdown": {"max": -0.1},
         }
     }
     simplified = summarize_scenario_metrics(metrics)
-    assert simplified["adg_btc"] == 0.1
-    assert simplified["mdg_btc"] == 0.2
+    assert simplified["adg_fraction_btc"] == 0.1
+    assert simplified["mdg_fraction_btc"] == 0.2
     assert simplified["drawdown"] == -0.1
 
 
@@ -1155,23 +1155,21 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
     assert seen["plot_context"].hard_stop_plot_data == {"sample": True}
 
 
-@pytest.mark.parametrize("reducer_name", ["n_days", "fills_analysis_duration_days"])
-def test_reduce_metrics_applies_one_policy_to_duration_aliases(reducer_name):
+def test_reduce_metrics_applies_configured_policy_to_canonical_duration():
+    reducer_name = "analysis_duration_days"
     results = [
         ScenarioResult(
             scenario=SuiteScenario(str(days), None, None, None, None),
             per_exchange={},
             metrics={"stats": {
-                "n_days": {"mean": days},
-                "fills_analysis_duration_days": {"mean": days},
+                "analysis_duration_days": {"mean": days},
             }},
             elapsed_seconds=0.0, output_path=None,
         )
         for days in (1.0, 3.0)
     ]
     summary = reduce_metrics(results, {"default": "mean", reducer_name: "max"})
-    assert summary["aggregated"]["n_days"] == 3.0
-    assert summary["aggregated"]["fills_analysis_duration_days"] == 3.0
+    assert summary["aggregated"]["analysis_duration_days"] == 3.0
 
 
 def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, tmp_path):

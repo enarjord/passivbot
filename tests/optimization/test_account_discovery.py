@@ -463,7 +463,7 @@ def test_missing_or_wrong_account_evidence_cannot_become_neutral_score(metric, v
 
 @pytest.mark.parametrize("updates", [
     {"constraints": []}, {"minimum_activity": {}}, {"minimum_activity": {"fill_count": 0}},
-    {"axes": [dict(metric="adg_strategy_eq", goal="max", reducer="min", novelty_tolerance=0)]},
+    {"axes": [dict(metric="adg_fraction_strategy_equity", goal="max", reducer="min", novelty_tolerance=0)]},
     {"heldout_scenarios": {}}, {"timer_origin": "after_warmup"}, {"timing_phases": ["search"]},
     {"heldout_scenarios": {"renamed_base": "a" * 64}},
     {"target_measure": "unspecified"},

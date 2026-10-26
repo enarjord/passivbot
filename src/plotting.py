@@ -69,6 +69,7 @@ def plot_two_series(series1: pd.Series, series2: pd.Series, *, title: str = ""):
 
 
 def make_table(result_):
+    """Format the legacy single-symbol result schema with its original keys."""
     result = result_.copy()
     if "result" not in result:
         result["result"] = result
@@ -248,6 +249,7 @@ def dump_plots(
     n_parts: int = None,
     disable_plotting: bool = False,
 ):
+    """Render artifacts from the legacy single-symbol result and fill-frame schema."""
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [21, 13]
     try:

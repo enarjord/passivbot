@@ -9,7 +9,7 @@ from tools import pareto_plot
 from passivbot_cli.main import main as cli_main
 
 
-METRICS = ["adg_strategy_eq", "pain_index_strategy_eq", "sortino_ratio_strategy_eq"]
+METRICS = ["adg_fraction_strategy_equity", "pain_index_fraction_strategy_equity", "sortino_ratio_strategy_equity"]
 SPECS = [ObjectiveSpec(metric=name, goal=goal) for name, goal in zip(METRICS, ["max", "min", "max"])]
 
 
@@ -63,15 +63,15 @@ def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(tmp_pat
     for name, value in zip(METRICS, [0.02, 0.1, 2.0]):
         assert metrics[name]["values"] == [value]
     if layout == "suite":
-        assert metrics["stats.adg_strategy_eq.mean"]["values"] == [10.02]
-        assert metrics["stats.adg_strategy_eq.std"]["goal"] is None
+        assert metrics["stats.adg_fraction_strategy_equity.mean"]["values"] == [10.02]
+        assert metrics["stats.adg_fraction_strategy_equity.std"]["goal"] is None
 
 
 def test_requested_axis_order_and_aliases():
-    data = {"metrics": [{"key": name, "count": 1} for name in ["adg_usd", METRICS[1]]]}
-    assert pareto_plot.select_metrics([METRICS[1], "adg"], data) == [METRICS[1], "adg_usd"]
+    data = {"metrics": [{"key": name, "count": 1} for name in ["adg_fraction_usd", METRICS[1]]]}
+    assert pareto_plot.select_metrics([METRICS[1], "adg_fraction"], data) == [METRICS[1], "adg_fraction_usd"]
     with pytest.raises(ValueError, match="distinct"):
-        pareto_plot.select_metrics(["adg", "adg_usd"], data)
+        pareto_plot.select_metrics(["adg_fraction", "adg_fraction_usd"], data)
 
 
 @pytest.mark.parametrize("metrics", [[METRICS[0]], METRICS + ["other"], [METRICS[0]] * 2, ["unknown", METRICS[0]]])
@@ -170,7 +170,7 @@ def test_non_objective_metrics_missing_values_and_explicit_statistics(front):
     _, candidates, specs = load_candidates(front)
     candidates[0] = replace(candidates[0], aggregated_values={"extra": 9.0},
                             stats_flat={"extra_mean": 2.0, "extra_std": 3.0,
-                                        "position_held_hours_mean_mean": 7.0,
+                                        "position_held_mean_hours_mean": 7.0,
                                         "unavailable_mean": float("nan")})
     data = pareto_plot.build_dataset(candidates, specs)
     metrics = {metric["key"]: metric for metric in data["metrics"]}
@@ -179,7 +179,7 @@ def test_non_objective_metrics_missing_values_and_explicit_statistics(front):
     assert metrics["extra"]["count"] == 1
     assert metrics["stats.extra.mean"]["values"] == [2.0, None, None]
     assert metrics["stats.extra.std"]["goal"] is None
-    assert metrics["position_held_hours_mean"]["values"] == [7.0, None, None]
+    assert metrics["position_held_mean_hours"]["values"] == [7.0, None, None]
     assert metrics["unavailable"]["count"] == 0
     assert metrics["unavailable"]["min"] is None
     assert pareto_plot.select_metrics([METRICS[0], "extra"], data) == [METRICS[0], "extra"]
@@ -216,13 +216,13 @@ def test_statistics_inherit_explicit_scoring_direction(tmp_path):
     specs[0] = ObjectiveSpec(metric=METRICS[0], goal="min")
     data = pareto_plot.build_dataset(candidates, specs)
     metrics = {metric["key"]: metric for metric in data["metrics"]}
-    assert metrics["stats.adg_strategy_eq.mean"]["goal"] == "min"
-    assert metrics["stats.adg_strategy_eq.std"]["goal"] is None
+    assert metrics["stats.adg_fraction_strategy_equity.mean"]["goal"] == "min"
+    assert metrics["stats.adg_fraction_strategy_equity.std"]["goal"] is None
 
 
 @pytest.mark.parametrize("alias,canonical", [
-    ("stats.adg.mean", "stats.adg_usd.mean"),
-    ("stats.adg_strategy_pnl_rebased.mean", "stats.adg_strategy_eq.mean"),
+    ("stats.adg_fraction.mean", "stats.adg_fraction_usd.mean"),
+    ("stats.adg_fraction_strategy_equity.mean", "stats.adg_fraction_strategy_equity.mean"),
 ])
 def test_statistic_selectors_accept_metric_aliases(alias, canonical):
     data = {"metrics": [{"key": name, "count": 1} for name in [canonical, METRICS[1]]]}
@@ -230,43 +230,43 @@ def test_statistic_selectors_accept_metric_aliases(alias, canonical):
 
 
 def test_statistic_selector_alias_duplicates_are_rejected():
-    data = {"metrics": [{"key": "stats.adg_usd.mean", "count": 1}]}
+    data = {"metrics": [{"key": "stats.adg_fraction_usd.mean", "count": 1}]}
     with pytest.raises(ValueError, match="distinct"):
-        pareto_plot.select_metrics(["stats.adg.mean", "stats.adg_usd.mean"], data)
+        pareto_plot.select_metrics(["stats.adg_fraction.mean", "stats.adg_fraction_usd.mean"], data)
 
 
 def test_cli_statistic_alias_selects_exported_column(tmp_path):
     source, output = tmp_path / "candidate.json", tmp_path / "plot.html"
     write_candidate(source, layout="suite")
-    assert pareto_plot.main([str(source), "stats.adg_strategy_pnl_rebased.mean", METRICS[1],
+    assert pareto_plot.main([str(source), "stats.adg_fraction_strategy_equity.mean", METRICS[1],
                             "-o", str(output)]) == 0
     data = read_payload(output.read_text())
-    assert data["selected"] == ["stats.adg_strategy_eq.mean", METRICS[1]]
+    assert data["selected"] == ["stats.adg_fraction_strategy_equity.mean", METRICS[1]]
     assert next(metric for metric in data["metrics"] if metric["key"] == data["selected"][0])["values"] == [10.02]
 
 
 @pytest.mark.parametrize("canonical_first", [True, False])
 @pytest.mark.parametrize("source", ["stats_flat", "aggregated_values"])
-def test_canonical_values_win_over_aliases_in_either_order(front, canonical_first, source):
+def test_removed_owned_alias_stays_separate_in_either_order(front, canonical_first, source):
     from dataclasses import replace
     _, candidates, specs = load_candidates(front)
     suffix = "_mean" if source == "stats_flat" else ""
-    entries = [("sharpe_ratio_strategy_eq" + suffix, 0.25),
+    entries = [("sharpe_ratio_strategy_equity" + suffix, 0.25),
                ("sharpe_ratio_strategy_pnl_rebased" + suffix, 99.0)]
     if not canonical_first:
         entries.reverse()
     candidates[0] = replace(candidates[0], **{source: dict(entries)})
     data = pareto_plot.build_dataset(candidates, specs)
     metrics = {metric["key"]: metric for metric in data["metrics"]}
-    assert metrics["sharpe_ratio_strategy_eq"]["values"] == [0.25, None, None]
+    assert metrics["sharpe_ratio_strategy_equity"]["values"] == [0.25, None, None]
     if source == "stats_flat":
-        assert metrics["stats.sharpe_ratio_strategy_eq.mean"]["values"] == [0.25, None, None]
+        assert metrics["stats.sharpe_ratio_strategy_equity.mean"]["values"] == [0.25, None, None]
 
 
-def test_conflicting_aliases_without_canonical_value_fail():
-    with pytest.raises(ValueError, match="Conflicting aliases"):
-        pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.2})
-    assert pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.1}) == {"adg_usd": 0.1}
+def test_removed_currency_prefix_is_not_translated_or_collapsed():
+    assert pareto_plot._canonical_values({"adg_fraction": 0.1, "usd_adg": 0.2}) == {
+        "adg_fraction_usd": 0.1, "usd_adg": 0.2,
+    }
 
 
 @pytest.mark.parametrize("input_kind", ["run", "pareto", "custom", "file"])

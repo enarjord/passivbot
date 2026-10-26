@@ -85,7 +85,7 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
         timestamps=timestamps,
         exchange="bybit",
         batch_size=3,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     return proxy, inputs
 
@@ -116,7 +116,7 @@ def test_native_ema_unstuck_reuses_forward_memory_without_cpu_execution(monkeypa
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_strategy_eq"}) as dataset:
+                         {"adg_fraction_strategy_equity"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("finite-unstuck", dataset)
             pending = [service.submit(BacktestRequest(str(i), "finite-unstuck", values))

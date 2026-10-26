@@ -786,13 +786,13 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max", "scenario": "base"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min", "scenario": None, "aggregate": "max"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": "base"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
     ]
     config["optimize"]["limits"] = [
-        {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
+        {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
     ]
-    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_ratio")
+    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction")
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -879,8 +879,8 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     }
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
     scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}

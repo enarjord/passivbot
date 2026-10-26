@@ -325,7 +325,7 @@ mod tests {
         assert!(source.contains("output.drawdown_ema_max_long"));
         assert!(source.contains("output.drawdown_ema_max_short"));
         let panic_loss_aggregation = source
-            .find("output.panic_close_loss_sum += h.panic_close_loss_sum")
+            .find("output.panic_fill_loss_sum_usd += h.panic_fill_loss_sum_usd")
             .unwrap();
         let enabled_gate = source.find("if (!h.enabled) return;").unwrap();
         assert!(panic_loss_aggregation < enabled_gate);
@@ -842,8 +842,11 @@ mod tests {
         assert!(source
             .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
-        assert!(source.contains("scalars[scalar_offset + 22] = total_wallet_exposure_max"));
-        assert!(source.contains("scalars[scalar_offset + 23] = total_wallet_exposure_mean"));
+        assert!(
+            source.contains("scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio")
+        );
+        assert!(source
+            .contains("scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));
@@ -1113,8 +1116,11 @@ mod tests {
         assert!(source
             .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
-        assert!(source.contains("scalars[scalar_offset + 22] = total_wallet_exposure_max"));
-        assert!(source.contains("scalars[scalar_offset + 23] = total_wallet_exposure_mean"));
+        assert!(
+            source.contains("scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio")
+        );
+        assert!(source
+            .contains("scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));

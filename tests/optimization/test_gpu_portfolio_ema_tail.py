@@ -160,7 +160,7 @@ def test_observed_portfolio_tail_on_public_twenty_day_shock(strategy, relative_b
         )
     inputs[1][1440:, 0, :3] *= .7
     inputs[1][1800:, 1, :3] *= 1.3
-    metric = "drawdown_worst_mean_1pct_ema_strategy_eq"
+    metric = "hsl_signal_ema_worst_1pct_mean_fraction"
     # Local bounds distinguish the corrected joint observation from the former
     # max-of-tails result. They retain existing f32 trajectory/bin approximation;
     # broader tail materiality and general comparison policy remain separate.

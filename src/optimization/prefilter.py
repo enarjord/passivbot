@@ -13,7 +13,7 @@ from backtest_universe import (
     normalize_backtest_coin,
 )
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
-from config.metrics import CURRENCY_METRICS
+from config.metrics import CURRENCY_METRICS, metric_with_curve
 from config.scoring import default_objective_goal, from_engine_value
 from config.shared_bot import require_grouped_bot_value
 from config.strategy import build_runtime_strategy_side, merge_runtime_bot_side
@@ -291,7 +291,7 @@ def build_prefilter_payload(
     names = (
         KNOWN_ANALYSIS_METRICS
         | {
-            f"{name}_{currency}"
+            metric_with_curve(name, currency)
             for name in CURRENCY_METRICS
             for currency in ("usd", "btc")
         }
@@ -303,7 +303,7 @@ def build_prefilter_payload(
             -constraint
             if (
                 default_objective_goal(name) == "max"
-                or name in {"win_rate", "win_rate_w"}
+                or name in {"trade_win_fraction"}
             )
             else constraint
         )

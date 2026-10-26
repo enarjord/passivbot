@@ -56,13 +56,13 @@ def test_all_twelve_metrics_match_hand_calculated_daily_return_weights():
     variance = sum(weight * (ret - mean) ** 2 for weight, ret in zip(p, returns))
     downside = sum(weight * min(ret, 0) ** 2 for weight, ret in zip(p, returns))
     expected = {
-        "adg": math.expm1(sum(weight * math.log1p(ret) for weight, ret in zip(p, returns))),
+        "adg_fraction": math.expm1(sum(weight * math.log1p(ret) for weight, ret in zip(p, returns))),
         "sharpe_ratio": mean / math.sqrt(variance),
         "sortino_ratio": mean / math.sqrt(downside),
         "omega_ratio": (p[0] * .1 + p[2] * .2) / (p[1] * .1),
     }
     assert set(values) == EW_METRICS
-    for suffix in ("_strategy_eq_ew", "_ew_usd", "_ew_btc"):
+    for suffix in ("_strategy_equity_ew", "_usd_ew", "_btc_ew"):
         for stem, expected_value in expected.items():
             assert values[stem + suffix].item() == pytest.approx(expected_value, abs=2e-14)
     assert metadata["observation_count"].item() == 3
@@ -74,25 +74,25 @@ def test_all_twelve_metrics_match_hand_calculated_daily_return_weights():
 
 def test_warmup_partial_days_and_boundary_sample_are_excluded():
     out, run, data = fixture(first=DAY_MS + 60_000, last=3 * DAY_MS + 60_000)
-    values, metadata = exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+    values, metadata = exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
     # Day 1's partial history still supplies its last candle as the boundary
     # for complete day 2; partial day 3 contributes no return.
     assert metadata["observation_count"].item() == 1
     assert metadata["first_return_end_ms"].item() == 3 * DAY_MS
     assert metadata["curves"]["usd"]["status"].item() == 1
-    assert values["adg_ew_usd"].item() == -math.inf
+    assert values["adg_fraction_usd_ew"].item() == -math.inf
 
 
 @pytest.mark.parametrize("equities,expected", [
-    ((100, 100, 100, 100), {"adg": 0, "sharpe_ratio": 0, "sortino_ratio": 0, "omega_ratio": 0}),
-    ((100, 110, 121, 133.1), {"adg": .1, "sharpe_ratio": 1000, "sortino_ratio": 1000, "omega_ratio": 1000}),
+    ((100, 100, 100, 100), {"adg_fraction": 0, "sharpe_ratio": 0, "sortino_ratio": 0, "omega_ratio": 0}),
+    ((100, 110, 121, 133.1), {"adg_fraction": .1, "sharpe_ratio": 1000, "sortino_ratio": 1000, "omega_ratio": 1000}),
 ])
 def test_flat_and_constant_positive_returns(equities, expected):
     out, run, data = fixture(equities)
-    names = {name + "_ew_usd" for name in expected}
+    names = {name + "_usd_ew" for name in expected}
     values, _ = exponential_equity_metrics(out, run, data, names)
     for stem, value in expected.items():
-        assert values[stem + "_ew_usd"].item() == pytest.approx(value)
+        assert values[stem + "_usd_ew"].item() == pytest.approx(value)
 
 
 def test_distinct_raw_usd_btc_equity_provenance():
@@ -101,11 +101,11 @@ def test_distinct_raw_usd_btc_equity_provenance():
     out["raw_strategy_day_min_eq"] = out["raw_strategy_day_end_eq"].clone()
     out["btc_day_end_eq"] = torch.tensor([[100., 90., 81., 72.9]], dtype=torch.float64)
     out["btc_day_min_eq"] = out["btc_day_end_eq"].clone()
-    names = {"adg_strategy_eq_ew", "adg_ew_usd", "adg_ew_btc"}
+    names = {"adg_fraction_strategy_equity_ew", "adg_fraction_usd_ew", "adg_fraction_btc_ew"}
     values, _ = exponential_equity_metrics(out, run, data, names)
-    assert values["adg_strategy_eq_ew"].item() == pytest.approx(.1, abs=1e-7)
-    assert values["adg_ew_usd"].item() == 0
-    assert values["adg_ew_btc"].item() == pytest.approx(-.1)
+    assert values["adg_fraction_strategy_equity_ew"].item() == pytest.approx(.1, abs=1e-7)
+    assert values["adg_fraction_usd_ew"].item() == 0
+    assert values["adg_fraction_btc_ew"].item() == pytest.approx(-.1)
 
 
 @pytest.mark.parametrize("key", ["day_end_eq", "day_min_eq"])
@@ -113,12 +113,12 @@ def test_active_nonfinite_daily_observation_is_fatal(key):
     out, run, data = fixture()
     out[key][0, 1] = math.nan
     with pytest.raises(RuntimeError, match="nonfinite"):
-        exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+        exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
 
 
 def test_missing_required_btc_and_raw_curves_are_fatal():
     out, run, data = fixture()
-    for key, metric in (("btc_day_end_eq", "adg_ew_btc"), ("raw_strategy_day_min_eq", "adg_strategy_eq_ew")):
+    for key, metric in (("btc_day_end_eq", "adg_fraction_btc_ew"), ("raw_strategy_day_min_eq", "adg_fraction_strategy_equity_ew")):
         saved = out.pop(key)
         with pytest.raises(RuntimeError, match="factual curve output is missing"):
             exponential_equity_metrics(out, run, data, {metric})
@@ -128,10 +128,10 @@ def test_missing_required_btc_and_raw_curves_are_fatal():
 def test_intraday_nonpositive_equity_on_partial_day_is_unavailable():
     out, run, data = fixture(last=3 * DAY_MS + 60_000)
     out["raw_strategy_day_min_eq"][0, -1] = -1
-    values, metadata = exponential_equity_metrics(out, run, data, {"adg_strategy_eq_ew"})
+    values, metadata = exponential_equity_metrics(out, run, data, {"adg_fraction_strategy_equity_ew"})
     assert metadata["observation_count"].item() == 2
-    assert metadata["curves"]["strategy_eq"]["status"].item() == 2
-    assert values["adg_strategy_eq_ew"].item() == -math.inf
+    assert metadata["curves"]["strategy_equity"]["status"].item() == 2
+    assert values["adg_fraction_strategy_equity_ew"].item() == -math.inf
 
 
 def test_liquidation_cannot_return_an_ew_score_from_earlier_complete_days():
@@ -145,11 +145,11 @@ def test_liquidation_cannot_return_an_ew_score_from_earlier_complete_days():
 def test_relative_f32_clocks_restore_long_candle_grid():
     origin = 20_000 * DAY_MS
     out, run, data = fixture([100.] * 400, origin=origin)
-    absolute, absolute_meta = exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+    absolute, absolute_meta = exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
     out["first_eq_ts"] = (out["first_eq_ts"] - origin).float()
     out["last_eq_ts"] = (out["last_eq_ts"] - origin).float()
-    relative, relative_meta = exponential_equity_metrics(out, run, data, {"adg_ew_usd"}, relative_timestamps=True)
-    assert torch.equal(absolute["adg_ew_usd"], relative["adg_ew_usd"])
+    relative, relative_meta = exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"}, relative_timestamps=True)
+    assert torch.equal(absolute["adg_fraction_usd_ew"], relative["adg_fraction_usd_ew"])
     assert absolute_meta["observation_count"].item() == relative_meta["observation_count"].item() == 399
 
 
@@ -170,11 +170,11 @@ def test_ew_only_objectives_bypass_every_legacy_multi_pass_helper(monkeypatch):
 def test_supplied_native_ew_scalars_skip_reduction(monkeypatch):
     import optimization.gpu.metrics as gpu_metrics
     out, run, data = fixture()
-    out["adg_ew_usd"] = torch.tensor([.375], dtype=torch.float64)
+    out["adg_fraction_usd_ew"] = torch.tensor([.375], dtype=torch.float64)
     def forbidden(*args, **kwargs):
         raise AssertionError("native EW scalar already reduced")
     monkeypatch.setattr(gpu_metrics, "exponential_equity_metrics", forbidden)
-    assert compute_objectives(out, run, data, needed={"adg_ew_usd"})["adg_ew_usd"].item() == .375
+    assert compute_objectives(out, run, data, needed={"adg_fraction_usd_ew"})["adg_fraction_usd_ew"].item() == .375
 
 
 def test_metric_registry_adds_ew_without_weighted_capture_or_aliases():
@@ -186,7 +186,7 @@ def test_disabled_half_life_rejects_explicit_ew_request():
     out, run, data = fixture()
     data["ew_half_life_days"] = None
     with pytest.raises(ValueError, match="ew_half_life_days"):
-        compute_objectives(out, run, data, needed={"adg_ew_usd"})
+        compute_objectives(out, run, data, needed={"adg_fraction_usd_ew"})
 
 
 @pytest.mark.parametrize("proxy_name", ["SharedAccountReplay"])
@@ -200,7 +200,7 @@ def test_exponential_metal_still_requires_configured_half_life(monkeypatch, prox
     with pytest.raises(ValueError, match="require backtest.ew_half_life_days"):
         getattr(service, proxy_name)(config=config, hlcvs=None, mss={}, btc=None,
                                     timestamps=None, exchange="binance", batch_size=1,
-                                    needed_metrics={"adg_strategy_eq_ew"})
+                                    needed_metrics={"adg_fraction_strategy_equity_ew"})
 
 
 def test_metadata_sidecar_materializes_status_and_unavailable_clocks():
@@ -211,7 +211,7 @@ def test_metadata_sidecar_materializes_status_and_unavailable_clocks():
         out[key] = value.repeat((2,) + (1,) * (value.ndim - 1))
     out["first_eq_ts"][1] = math.nan
     out["last_eq_ts"][1] = math.nan
-    _, metadata = exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+    _, metadata = exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
     host = _exponential_metadata_to_host(metadata)
     available = _exponential_metadata_row(host, 0)
     unavailable = _exponential_metadata_row(host, 1)
@@ -227,7 +227,7 @@ def test_invalid_half_life_is_rejected(value):
     out, run, data = fixture()
     data["ew_half_life_days"] = value
     with pytest.raises(ValueError, match="finite number >= 1"):
-        exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+        exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
 
 
 def test_empty_history_returns_explicit_unavailable_without_nan():
@@ -251,22 +251,22 @@ def test_batched_candidate_start_and_stop_bounds_are_independent():
         out[key] = value.repeat((2,) + (1,) * (value.ndim - 1))
     out["first_eq_ts"][1] = DAY_MS + 60_000
     out["last_eq_ts"][1] = 3 * DAY_MS + 60_000
-    values, metadata = exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+    values, metadata = exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
     assert metadata["observation_count"].tolist() == [3, 1]
     assert metadata["curves"]["usd"]["status"].tolist() == [0, 1]
-    assert math.isfinite(values["adg_ew_usd"][0].item())
-    assert values["adg_ew_usd"][1].item() == -math.inf
+    assert math.isfinite(values["adg_fraction_usd_ew"][0].item())
+    assert values["adg_fraction_usd_ew"][1].item() == -math.inf
 
 
 def test_off_grid_interval_and_malformed_daily_shape_are_fatal():
     out, run, data = fixture()
     run.interval_ms = 70_000
     with pytest.raises(ValueError, match="aligned UTC candle grid"):
-        exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+        exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
     run.interval_ms = 60_000
     out["day_min_eq"] = torch.ones((1, 3), dtype=torch.float64)
     with pytest.raises(RuntimeError, match="inconsistent shape"):
-        exponential_equity_metrics(out, run, data, {"adg_ew_usd"})
+        exponential_equity_metrics(out, run, data, {"adg_fraction_usd_ew"})
 
 
 @pytest.mark.parametrize("interval_minutes", [1, 5])
@@ -301,7 +301,7 @@ def test_seeded_daily_reduction_matches_current_rust(interval_minutes, half_life
     canonical = {}
     for curve, equities, end_key, min_key in (
         ("usd", account, "day_end_eq", "day_min_eq"),
-        ("strategy_eq", raw, "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"),
+        ("strategy_equity", raw, "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"),
         ("btc", btc, "btc_day_end_eq", "btc_day_min_eq"),
     ):
         daily_ends, daily_minima = [], []
@@ -319,7 +319,7 @@ def test_seeded_daily_reduction_matches_current_rust(interval_minutes, half_life
     assert all(value.device.type == device for value in actual.values())
     for curve, reference in canonical.items():
         assert reference["metadata"]["status"] == "available"
-        suffix = "_strategy_eq_ew" if curve == "strategy_eq" else "_ew_" + curve
+        suffix = "_strategy_equity_ew" if curve == "strategy_equity" else "_" + curve + "_ew"
         for stem, expected in reference["metrics"].items():
             assert actual[stem + suffix].item() == pytest.approx(expected, rel=1e-11, abs=1e-13)
         for key in ("observation_count", "first_return_end_ms", "last_return_end_ms"):

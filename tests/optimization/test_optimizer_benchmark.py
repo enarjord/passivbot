@@ -295,11 +295,11 @@ def test_summary_counts_completed_work_over_total_wall_time():
 
 
 def result(value=1.0, liquidated=False):
-    return dict(status="completed", samples=[dict(results=[dict(metrics={"adg_strategy_eq": value}, liquidated=liquidated)])])
+    return dict(status="completed", samples=[dict(results=[dict(metrics={"adg_fraction_strategy_equity": value}, liquidated=liquidated)])])
 
 
 def test_missing_policy_liquidation_and_nonfinite_never_pass():
-    metric = ["adg_strategy_eq"]
+    metric = ["adg_fraction_strategy_equity"]
     exact = {metric[0]: dict(absolute=0, relative=0)}
     assert numerical_comparison(result(), result(), metric, exact)["status"] == "passed"
     for observed, policy in ((result(), {}), (result(liquidated=None), exact),
@@ -321,11 +321,11 @@ def test_nonfinite_json_evidence_is_retained():
 
 def test_empty_candidate_results_are_unassessed():
     empty = dict(status="completed", samples=[dict(results=[])])
-    assert numerical_comparison(empty, empty, ["adg_strategy_eq"], {})["status"] == "unassessed"
+    assert numerical_comparison(empty, empty, ["adg_fraction_strategy_equity"], {})["status"] == "unassessed"
 
 
 def test_numerical_tolerance_cannot_hide_a_constraint_flip():
-    metric = "adg_strategy_eq"
+    metric = "adg_fraction_strategy_equity"
     policy = {metric: dict(absolute=1, relative=0)}
     checks = [dict(metric=metric, mode="greater_than", bound=.5, penalty_weight=1)]
     comparison = numerical_comparison(result(.49), result(.51), [metric], policy, checks)
@@ -478,7 +478,7 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
     def candidate(_task):
         nonlocal calls
         calls += 1
-        return dict(metrics={"adg_strategy_eq": 1.0 + (variation and calls > len(entry["configs"]))},
+        return dict(metrics={"adg_fraction_strategy_equity": 1.0 + (variation and calls > len(entry["configs"]))},
                     liquidated=False, latency_seconds=calls / 1000)
     monkeypatch.setattr(worker, "cpu_candidate", candidate)
     import importlib.metadata
@@ -494,13 +494,13 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
     assert outcome["dependency_versions"]["torch"] is None
     hashes = [sample["results_sha256"] for sample in outcome["samples"]]
     assert (len(set(hashes)) > 1) == variation
-    comparison = numerical_comparison(outcome, outcome, ["adg_strategy_eq"],
-                                     {"adg_strategy_eq": dict(absolute=0, relative=0)})
+    comparison = numerical_comparison(outcome, outcome, ["adg_fraction_strategy_equity"],
+                                     {"adg_fraction_strategy_equity": dict(absolute=0, relative=0)})
     assert comparison["status"] == ("repeat_variation_unassessed" if variation else "passed")
 
 
 def test_cohort_digest_covers_terminal_status():
-    rows = [dict(metrics={"adg_strategy_eq": 1.0}, liquidated=False)]
+    rows = [dict(metrics={"adg_fraction_strategy_equity": 1.0}, liquidated=False)]
     assert cohort_digest(rows) != cohort_digest([dict(metrics=rows[0]["metrics"], liquidated=True)])
 
 
@@ -755,7 +755,7 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
 def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
     from tools.optimizer_benchmark.report import compare
-    names = ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+    names = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
     result = dict(status="completed", samples=[dict(seconds=1.0, completed=1,
         results=[dict(metrics=dict(zip(names, [0.01, 0.1])), liquidated=False)])])
     other = deepcopy(result)

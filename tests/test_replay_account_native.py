@@ -59,4 +59,4 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
     assert metrics["fill_count"] == len(result[0]) > 0
     assert metrics["gross_exposure_max_ratio"] > 0
     assert metrics["exposure_denominator_value"] == params["starting_balance"]
-    assert "adg_strategy_eq" not in metrics
+    assert "adg_fraction_strategy_equity" not in metrics

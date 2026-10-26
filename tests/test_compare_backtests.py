@@ -34,9 +34,9 @@ def _write_artifact(
     (root / "analysis.json").write_text(
         json.dumps(
             {
-                "adg_strategy_eq": 0.0011 if candidate else 0.001,
-                "drawdown_worst_strategy_eq": 0.21 if candidate else 0.2,
-                "position_held_days_max": 12.0 if candidate else 10.0,
+                "adg_fraction_strategy_equity": 0.0011 if candidate else 0.001,
+                "drawdown_max_fraction_strategy_equity": 0.21 if candidate else 0.2,
+                "position_held_max_days": 12.0 if candidate else 10.0,
             }
         ),
         encoding="utf-8",
@@ -75,7 +75,7 @@ def test_compare_backtest_artifacts_reports_dataset_metrics_fills_and_equity(tmp
     report = compare_backtest_artifacts(base, candidate)
 
     assert report["dataset_identity"]["status"] == "same"
-    assert report["metrics"]["adg_strategy_eq"] == {
+    assert report["metrics"]["adg_fraction_strategy_equity"] == {
         "base": 0.001,
         "candidate": 0.0011,
         "absolute_delta": pytest.approx(0.0001),
@@ -101,12 +101,12 @@ def test_compare_backtest_artifacts_reports_dataset_metrics_fills_and_equity(tmp
 
 def test_relative_metric_delta_uses_absolute_base_and_preserves_zero_sentinel():
     metrics = _metric_comparison(
-        {"adg_strategy_eq": -0.002, "drawdown_worst_strategy_eq": 0.0},
-        {"adg_strategy_eq": -0.001, "drawdown_worst_strategy_eq": 0.1},
+        {"adg_fraction_strategy_equity": -0.002, "drawdown_max_fraction_strategy_equity": 0.0},
+        {"adg_fraction_strategy_equity": -0.001, "drawdown_max_fraction_strategy_equity": 0.1},
     )
 
-    assert metrics["adg_strategy_eq"]["relative_delta_fraction"] == pytest.approx(0.5)
-    assert metrics["drawdown_worst_strategy_eq"]["relative_delta_fraction"] is None
+    assert metrics["adg_fraction_strategy_equity"]["relative_delta_fraction"] == pytest.approx(0.5)
+    assert metrics["drawdown_max_fraction_strategy_equity"]["relative_delta_fraction"] is None
 
 
 def test_equity_fraction_denominators_use_base_magnitudes_and_common_samples():

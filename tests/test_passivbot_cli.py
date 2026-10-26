@@ -1035,7 +1035,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "--optimize_n_cpus",
                 "2",
                 "--optimize.scoring",
-                "adg_pnl",
+                "daily_realized_pnl_mean_fraction",
                 "--backtest_start_date",
                 "2025",
                 "--optimizer-backend",

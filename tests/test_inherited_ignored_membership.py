@@ -371,7 +371,7 @@ def test_native_descriptor_identity_and_ceiling_retain_preignored_acquisition(ki
              for name, value in (("candles", candles), ("btc", btc), ("time", timestamps))]
     dataset = PreparedGpuDataset(config=config, markets=markets, exchange="binance", hlcvs=specs[0],
         btc=specs[1], timestamps=specs[2], candle_coins=["COIN00", "COIN01", "COIN02"],
-        coin_indices=(0, 1), metrics=("adg_strategy_eq",))
+        coin_indices=(0, 1), metrics=("adg_fraction_strategy_equity",))
     assert execution_key(dataset.policy_config()) == execution_key(config)
     restored = dataset.policy_config()
     assert apply_bot_config_patch(restored, {f"bot.{side}.universe.ignored_coins": [] for side in ("long", "short")})
@@ -456,7 +456,7 @@ async def test_qualified_policy_lowers_only_against_factual_dataset_venue(tmp_pa
     specs = [SharedArraySpec(name, value.shape, value.dtype.str)
              for name, value in (("candles", candles), ("btc", btc), ("time", timestamps))]
     dataset = PreparedGpuDataset(config=config, markets=markets, exchange=exchange, hlcvs=specs[0],
-        btc=specs[1], timestamps=specs[2], candle_coins=["BTC", "ETH"], metrics=("adg_strategy_eq",))
+        btc=specs[1], timestamps=specs[2], candle_coins=["BTC", "ETH"], metrics=("adg_fraction_strategy_equity",))
     assert execution_key(dataset.policy_config()) == execution_key(config)
     source = bot_policy_source_view(config)
     for runtime in (config, dataset.execution_config()):

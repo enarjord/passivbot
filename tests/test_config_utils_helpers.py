@@ -564,10 +564,10 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     set_side_universe_sources(config, 'ignored_coins', {"long": ["eth"], "short": []})
     config["backtest"]["end_date"] = "2023-01-01"
     config["backtest"]["btc_collateral_target_ratio"] = 0.0
-    config["optimize"]["scoring"] = ["btc_adg", "adg"]
+    config["optimize"]["scoring"] = ["adg_fraction_btc", "adg_fraction"]
     config["optimize"][
         "limits"
-    ] = "--lower_bound_drawdown_worst 0.3 --penalize_if_lower_than_gain_btc 0.1"
+    ] = "--lower_bound_drawdown_max_fraction 0.3 --penalize_if_lower_than_gain_multiplier_btc 0.1"
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
     ] = [0.1, 0.05]
@@ -576,16 +576,16 @@ def test_apply_non_live_adjustments_sorts_and_filters():
 
     assert config['bot']["long"]['universe']['approved_coins'] == ["btc"]
     assert config["optimize"]["scoring"] == [
-        {"metric": "adg_btc", "goal": "max"},
-        {"metric": "adg_usd", "goal": "max"},
+        {"metric": "adg_fraction_btc", "goal": "max"},
+        {"metric": "adg_fraction_usd", "goal": "max"},
     ]
     limits = config["optimize"]["limits"]
     assert isinstance(limits, list)
     gain_limit = next(
-        (entry for entry in limits if entry["metric"] == "gain_btc"), None
+        (entry for entry in limits if entry["metric"] == "gain_multiplier_btc"), None
     )
     drawdown_limit = next(
-        (entry for entry in limits if entry["metric"] == "drawdown_worst_usd"), None
+        (entry for entry in limits if entry["metric"] == "drawdown_max_fraction_usd"), None
     )
     assert drawdown_limit is not None
     assert drawdown_limit["penalize_if"] == "greater_than"
@@ -722,14 +722,14 @@ def test_migrate_btc_collateral_settings_converts_bool():
 
 def test_normalize_limit_entries_supports_new_schema():
     raw = [
-        {"metric": "adg_btc", "penalize_if": "<", "value": 0.001, "stat": "mean"},
+        {"metric": "adg_fraction_btc", "penalize_if": "<", "value": 0.001, "stat": "mean"},
         {"metric": "loss_profit_ratio", "penalize_if": ">", "value": 0.8},
         {"metric": "omega_ratio", "penalize_if": "outside_range", "range": [1.5, 3.0]},
         {"metric": "sharpe_ratio", "penalize_if": "inside_range", "range": [0.5, 1.0]},
     ]
     normalized = config_utils.normalize_limit_entries(raw)
     assert len(normalized) == 4
-    assert normalized[0]["metric"] == "adg_btc"
+    assert normalized[0]["metric"] == "adg_fraction_btc"
     assert normalized[0]["reducer"] == "mean"
     assert normalized[1]["metric"] == "loss_profit_ratio"
     assert normalized[2]["range"] == [1.5, 3.0]
@@ -739,13 +739,13 @@ def test_normalize_limit_entries_supports_new_schema():
 def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries():
     raw = [
         {
-            "metric": "drawdown_worst_btc",
+            "metric": "drawdown_max_fraction_btc",
             "penalize_if": "greater_than",
             "value": 0.85,
             "enabled": False,
         },
         {
-            "metric": "adg_pnl",
+            "metric": "daily_realized_pnl_mean_fraction",
             "penalize_if": "less_than",
             "stat": "mean",
             "value": 0,
@@ -762,13 +762,13 @@ def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries(
 def test_normalize_limit_entries_supports_scenario_specific_limits():
     raw = [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": " base ",
             "value": 0.5,
         },
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": None,
             "reducer": "max",
@@ -778,13 +778,13 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
 
     assert config_utils.normalize_limit_entries(raw) == [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": "base",
             "value": 0.5,
         },
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": None,
             "reducer": "max",
@@ -798,7 +798,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
     [
         (
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "scenario": "base",
                 "stat": "max",
@@ -808,7 +808,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
         ),
         (
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "scenario": "",
                 "value": 0.5,
@@ -817,7 +817,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
         ),
         (
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "scenario": 123,
                 "value": 0.5,
@@ -835,13 +835,13 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
         {
-            "metric": "drawdown_worst_btc",
+            "metric": "drawdown_max_fraction_btc",
             "penalize_if": "greater_than",
             "value": 0.85,
             "enabled": False,
         },
         {
-            "metric": "adg_pnl",
+            "metric": "daily_realized_pnl_mean_fraction",
             "penalize_if": "less_than",
             "reducer": "mean",
             "value": 0,
@@ -858,7 +858,7 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
 
 def test_load_config_malformed_optimize_limits_raises(tmp_path):
     cfg = get_template_config()
-    cfg["optimize"]["limits"] = [{"metric": "adg_pnl", "value": 0}]
+    cfg["optimize"]["limits"] = [{"metric": "daily_realized_pnl_mean_fraction", "value": 0}]
     path = tmp_path / "malformed_limits.json"
     path.write_text(json.dumps(cfg))
 
@@ -874,10 +874,10 @@ def test_profit_ratio_alias_survives_config_roundtrip_and_gpu_preflight(
     cfg = get_template_config()
     cfg["optimize"]["backend"] = backend
     entry = (
-        {"goal": "max", "metric": "long_short_profit_ratio"}
+        {"goal": "max", "metric": "long_pnl_to_total_pnl_ratio"}
         if surface == "scoring"
         else {
-            "metric": "long_short_profit_ratio",
+            "metric": "long_pnl_to_total_pnl_ratio",
             "penalize_if": "less_than_or_equal",
             "value": 0.2,
         }
@@ -888,9 +888,9 @@ def test_profit_ratio_alias_survives_config_roundtrip_and_gpu_preflight(
 
     loaded = load_config(str(path), verbose=False)
     prepared = prepare_config(loaded, verbose=False)
-    assert prepared["optimize"][surface][0]["metric"] == "pnl_ratio_long_short"
+    assert prepared["optimize"][surface][0]["metric"] == "long_pnl_to_total_pnl_ratio"
     assert (
-        prepared["_raw"]["optimize"][surface][0]["metric"] == "long_short_profit_ratio"
+        prepared["_raw"]["optimize"][surface][0]["metric"] == "long_pnl_to_total_pnl_ratio"
     )
     reject_configured_exact_only_gpu_metrics(prepared)
 
@@ -899,36 +899,73 @@ def test_profit_ratio_alias_survives_config_roundtrip_and_gpu_preflight(
     assert reloaded["optimize"][surface] == prepared["optimize"][surface]
 
 
-@pytest.mark.parametrize("surface", ["scoring", "limits"])
-def test_prepare_gpu_config_preserves_exact_only_alias_provenance(
-    surface,
-):
+def _prepared_canonical_metric_gpu_config(surface):
     cfg = get_template_config()
     cfg["optimize"]["backend"] = "gpu"
-    cfg["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    cfg["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
     cfg["optimize"]["limits"] = []
     if surface == "scoring":
         cfg["optimize"]["scoring"] = [
-            {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+            {"goal": "min", "metric": "recovery_max_days_strategy_equity"}
         ]
     else:
         cfg["optimize"]["limits"] = [
             {
-                "metric": "peak_recovery_days_strategy_eq",
+                "metric": "recovery_max_days_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 30.0,
             }
         ]
 
-    prepared = prepare_config(cfg, verbose=False)
+    return prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_prepare_gpu_config_preserves_canonical_metric_provenance(surface):
+    prepared = _prepared_canonical_metric_gpu_config(surface)
 
     assert prepared["optimize"]["scoring"] == (
-        [{"goal": "min", "metric": "strategy_eq_recovery_days_max"}]
+        [{"goal": "min", "metric": "recovery_max_days_strategy_equity"}]
         if surface == "scoring"
-        else [{"goal": "max", "metric": "adg_strategy_eq"}]
+        else [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
     )
     assert prepared["_raw"]["optimize"][surface]
 
+    reject_configured_exact_only_gpu_metrics(prepared)
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_canonical_metric_preserves_native_gpu_admission(surface):
+    pytest.importorskip("torch")
+    prepared = _prepared_canonical_metric_gpu_config(surface)
+
+    from config.scoring import normalize_scoring_entries
+    from optimization.gpu.metrics import validate_gpu_metric_names
+
+    objectives, _ = normalize_scoring_entries(prepared["optimize"]["scoring"])
+    metrics = [objective.metric for objective in objectives]
+    metrics.extend(entry["metric"] for entry in prepared["optimize"]["limits"])
+    assert validate_gpu_metric_names(metrics, native_replay=True, device="mps") == frozenset(metrics)
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_prepare_gpu_config_preserves_exact_only_metric_provenance(surface):
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = "gpu"
+    cfg["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
+    cfg["optimize"]["limits"] = []
+    metric = "recovery_max_hours_strategy_equity"
+    cfg["optimize"][surface] = (
+        [{"goal": "min", "metric": metric}]
+        if surface == "scoring"
+        else [{"metric": metric, "penalize_if": "greater_than", "value": 30.0}]
+    )
+    authored = deepcopy(cfg["optimize"][surface])
+
+    prepared = prepare_config(cfg, verbose=False)
+
+    assert prepared["optimize"][surface][0]["metric"] == metric
+    assert prepared["_raw"]["optimize"][surface] == authored
     with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
         reject_configured_exact_only_gpu_metrics(prepared)
 
@@ -937,14 +974,14 @@ def test_live_config_loading_does_not_enforce_gpu_optimizer_metric_eligibility()
     cfg = get_template_config()
     cfg["optimize"]["backend"] = "gpu"
     cfg["optimize"]["scoring"] = [
-        {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+        {"goal": "min", "metric": "recovery_max_days_strategy_equity"}
     ]
 
     prepared = prepare_config(cfg, live_only=True, verbose=False, target="live")
 
     assert "optimize" not in prepared
     assert prepared["_raw"]["optimize"]["scoring"][0]["metric"] == (
-        "peak_recovery_days_strategy_eq"
+        "recovery_max_days_strategy_equity"
     )
 
 
@@ -952,13 +989,13 @@ def test_format_cpu_config_keeps_legacy_recovery_alias_compatibility():
     cfg = get_template_config()
     cfg["optimize"]["backend"] = "pymoo"
     cfg["optimize"]["scoring"] = [
-        {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+        {"goal": "min", "metric": "recovery_max_days_strategy_equity"}
     ]
 
     formatted = format_config(cfg, verbose=False)
 
     assert formatted["optimize"]["scoring"] == [
-        {"goal": "min", "metric": "strategy_eq_recovery_days_max"}
+        {"goal": "min", "metric": "recovery_max_days_strategy_equity"}
     ]
 
 
@@ -968,7 +1005,7 @@ def test_format_gpu_config_allows_disabled_exact_only_limit():
     cfg["optimize"]["limits"] = [
         {
             "enabled": False,
-            "metric": "peak_recovery_days_strategy_eq",
+            "metric": "recovery_max_days_strategy_equity",
         }
     ]
 
@@ -977,7 +1014,7 @@ def test_format_gpu_config_allows_disabled_exact_only_limit():
     assert formatted["optimize"]["limits"] == [
         {
             "enabled": False,
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "penalize_if": "greater_than",
             "value": 0,
         }
@@ -987,9 +1024,9 @@ def test_format_gpu_config_allows_disabled_exact_only_limit():
 def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
-        {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.9},
-        {"metric": "peak_recovery_hours_hsl", "enabled": False},
-        {"metric": "position_held_hours_max", "enabled": False},
+        {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.9},
+        {"metric": "recovery_max_hours_strategy_equity", "enabled": False},
+        {"metric": "position_held_max_hours", "enabled": False},
     ]
     path = tmp_path / "disabled_sparse_limits.json"
     path.write_text(json.dumps(cfg))
@@ -997,7 +1034,7 @@ def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_
     loaded = load_config(str(path), verbose=False)
 
     assert (
-        loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_strategy_eq"
+        loaded["optimize"]["limits"][1]["metric"] == "recovery_max_hours_strategy_equity"
     )
     assert loaded["optimize"]["limits"][1]["enabled"] is False
     assert loaded["optimize"]["limits"][2]["enabled"] is False
@@ -1008,29 +1045,29 @@ def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_
 
 
 def test_normalize_limit_entries_preserves_integers():
-    raw = {"penalize_if_greater_than_position_held_hours_max": 2016}
+    raw = {"penalize_if_greater_than_position_held_max_hours": 2016}
     normalized = config_utils.normalize_limit_entries(raw)
     assert len(normalized) == 1
-    assert normalized[0]["metric"] == "position_held_hours_max"
+    assert normalized[0]["metric"] == "position_held_max_hours"
     assert isinstance(normalized[0]["value"], int)
     assert normalized[0]["value"] == 2016
 
 
 def test_parse_limit_cli_entry_supports_scalar_syntax():
-    entry = config_utils.parse_limit_cli_entry("drawdown_worst > 0.35")
+    entry = config_utils.parse_limit_cli_entry("drawdown_max_fraction > 0.35")
 
     assert entry == {
-        "metric": "drawdown_worst_usd",
+        "metric": "drawdown_max_fraction_usd",
         "penalize_if": "less_than_or_equal",
         "value": 0.35,
     }
 
 
 def test_parse_limit_cli_entry_supports_scalar_syntax_without_spaces():
-    entry = config_utils.parse_limit_cli_entry("drawdown_worst<=0.35")
+    entry = config_utils.parse_limit_cli_entry("drawdown_max_fraction<=0.35")
 
     assert entry == {
-        "metric": "drawdown_worst_usd",
+        "metric": "drawdown_max_fraction_usd",
         "penalize_if": "greater_than",
         "value": 0.35,
     }
@@ -1038,17 +1075,17 @@ def test_parse_limit_cli_entry_supports_scalar_syntax_without_spaces():
 
 def test_parse_limit_cli_entry_supports_extended_scalar_operators():
     greater_equal = config_utils.parse_limit_cli_entry(
-        "adg_strategy_pnl_rebased>=0.001"
+        "adg_fraction_strategy_equity>=0.001"
     )
-    equal_to = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased == 0.0")
+    equal_to = config_utils.parse_limit_cli_entry("adg_fraction_strategy_equity == 0.0")
 
     assert greater_equal == {
-        "metric": "adg_strategy_eq",
+        "metric": "adg_fraction_strategy_equity",
         "penalize_if": "less_than",
         "value": 0.001,
     }
     assert equal_to == {
-        "metric": "adg_strategy_eq",
+        "metric": "adg_fraction_strategy_equity",
         "penalize_if": "not_equal",
         "value": 0,
     }
@@ -1070,11 +1107,11 @@ def test_parse_limit_cli_entry_supports_range_and_extras():
 
 def test_parse_limit_cli_entry_supports_scenario_selector():
     entry = config_utils.parse_limit_cli_entry(
-        "drawdown_worst_strategy_eq > 0.5 scenario=base"
+        "drawdown_max_fraction_strategy_equity > 0.5 scenario=base"
     )
 
     assert entry == {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "less_than_or_equal",
         "value": 0.5,
         "scenario": "base",
@@ -1083,7 +1120,7 @@ def test_parse_limit_cli_entry_supports_scenario_selector():
 
 def test_parse_limit_cli_entry_preserves_none_scenario_label():
     entry = config_utils.parse_limit_cli_entry(
-        "drawdown_worst_strategy_eq > 0.5 scenario=none"
+        "drawdown_max_fraction_strategy_equity > 0.5 scenario=none"
     )
 
     assert entry["scenario"] == "none"
@@ -1091,11 +1128,11 @@ def test_parse_limit_cli_entry_preserves_none_scenario_label():
 
 def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options():
     entry = config_utils.parse_limit_cli_entry(
-        "drawdown_worst_strategy_eq<=0.7 scenario=null stat=max"
+        "drawdown_max_fraction_strategy_equity<=0.7 scenario=null stat=max"
     )
 
     assert entry == {
-        "metric": "drawdown_worst_strategy_eq",
+        "metric": "drawdown_max_fraction_strategy_equity",
         "penalize_if": "greater_than",
         "value": 0.7,
         "scenario": None,
@@ -1106,18 +1143,18 @@ def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options()
 def test_parse_limit_cli_entry_rejects_conflicting_reducer_aliases():
     with pytest.raises(ValueError, match="conflicting reducer aliases"):
         config_utils.parse_limit_cli_entry(
-            "drawdown_worst_strategy_eq<=0.7 stat=min reducer=max"
+            "drawdown_max_fraction_strategy_equity<=0.7 stat=min reducer=max"
         )
 
 
 def test_parse_limit_cli_entries_supports_json_object_strings():
     entries = config_utils.parse_limit_cli_entries(
-        ['{"metric":"adg","penalize_if":"<","value":0.001,"stat":"mean"}']
+        ['{"metric":"adg_fraction","penalize_if":"<","value":0.001,"stat":"mean"}']
     )
 
     assert entries == [
         {
-            "metric": "adg_usd",
+            "metric": "adg_fraction_usd",
             "penalize_if": "less_than",
             "value": 0.001,
             "reducer": "mean",
@@ -1129,7 +1166,7 @@ def test_normalize_limit_entries_supports_hjson_list_payload():
     raw = """
     [
       {
-        metric: drawdown_worst
+        metric: drawdown_max_fraction
         penalize_if: greater_than
         value: 0.35
       }
@@ -1140,7 +1177,7 @@ def test_normalize_limit_entries_supports_hjson_list_payload():
 
     assert normalized == [
         {
-            "metric": "drawdown_worst_usd",
+            "metric": "drawdown_max_fraction_usd",
             "penalize_if": "greater_than",
             "value": 0.35,
         }
@@ -1149,7 +1186,7 @@ def test_normalize_limit_entries_supports_hjson_list_payload():
 
 def test_limits_structural_equal_detects_canonical_entries():
     raw = [
-        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3},
+        {"metric": "drawdown_max_fraction_btc", "penalize_if": "greater_than", "value": 0.3},
         {
             "metric": "loss_profit_ratio",
             "penalize_if": "outside_range",
@@ -1611,7 +1648,7 @@ def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
     args = SimpleNamespace()
     vars(args)["optimize.limits"] = original_limits + [
         {
-            "metric": "adg_strategy_pnl_rebased",
+            "metric": "adg_fraction_strategy_equity",
             "penalize_if": "less_than_or_equal",
             "value": 0,
         }
@@ -1626,7 +1663,7 @@ def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
     ]
     assert target, messages
     assert "added 1 entry" in target[-1]
-    assert "adg_strategy_pnl_rebased" in target[-1]
+    assert "adg_fraction_strategy_equity" in target[-1]
     assert " -> " not in target[-1]
 
 

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import hjson
 
-from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name, reject_retired_metric
+from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name, reject_retired_metric, split_metric_curve
 from .reducers import (
     LIMIT_REDUCER_ALIASES,
     REDUCER_ALIASES,
@@ -481,9 +481,12 @@ def resolve_reducer_mode(metric: str, reducer_cfg: Optional[Dict[str, Any]]) -> 
         canonical_metric_name(str(key)): value for key, value in reducer_cfg.items()
     }
     mode = normalized_reducer_cfg.get(metric)
-    if mode is None and "_" in metric:
-        base = metric.rsplit("_", 1)[0]
-        mode = normalized_reducer_cfg.get(base)
+    if mode is None:
+        base, curve = split_metric_curve(metric)
+        if curve is not None:
+            mode = normalized_reducer_cfg.get(base)
+        elif "_" in metric:
+            mode = normalized_reducer_cfg.get(metric.rsplit("_", 1)[0])
     resolved = str(mode or normalized_reducer_cfg.get("default", "mean")).strip().lower()
     if resolved not in SUPPORTED_REDUCERS:
         raise ValueError(

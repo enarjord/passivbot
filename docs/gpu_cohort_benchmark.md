@@ -20,8 +20,8 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --report cohort.json
 passivbot tool gpu-cohort-benchmark --strategies ema_anchor --coins 2 --bars 512 \
   --candidates 3 --warm-runs 1 --widths 1 2 auto
 passivbot tool gpu-cohort-benchmark --adg-floor 0 --drawdown-ceiling 0.01
-passivbot tool gpu-cohort-benchmark --metrics strategy_eq_recovery_days_p95 \
-  volume_pct_per_day_avg --limit fills_gap_p95_hours greater_than 0.05
+passivbot tool gpu-cohort-benchmark --metrics recovery_p95_days_strategy_equity \
+  active_day_turnover_proxy_mean_ratio --limit fills_gap_p95_hours greater_than 0.05
 ```
 
 Defaults use both strategies, four coins, both sides, 10,080 one-minute candles,
@@ -46,13 +46,13 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
   --hsl-drawdown-threshold-fraction 0.002 --hsl-drawdown-fraction-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
   --lookback-ema-span-minutes 1440.0 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
-  --objective adg_strategy_eq max --objective drawdown_worst_strategy_eq min \
-  --objective hard_stop_time_in_red_pct min \
-  --metrics hard_stop_duration_minutes_mean hard_stop_duration_minutes_max \
-  hard_stop_triggers_per_year hard_stop_restarts_per_year backtest_completion_ratio \
-  --limit adg_strategy_eq less_than 0 --limit drawdown_worst_strategy_eq greater_than 0.005 \
-  --limit hard_stop_time_in_red_pct greater_than 0.5 \
-  --limit backtest_completion_ratio less_than 0.99 --report hsl-cohort.json
+  --objective adg_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
+  --objective hsl_red_time_fraction min \
+  --metrics hsl_red_duration_mean_minutes hsl_red_duration_max_minutes \
+  hsl_triggers_per_year hsl_restarts_per_year backtest_completion_fraction \
+  --limit adg_fraction_strategy_equity less_than 0 --limit drawdown_max_fraction_strategy_equity greater_than 0.005 \
+  --limit hsl_red_time_fraction greater_than 0.5 \
+  --limit backtest_completion_fraction less_than 0.99 --report hsl-cohort.json
 ```
 
 Earlier v8 replay exposed a material HSL discrepancy in this measurement. Its
@@ -92,7 +92,7 @@ For the fill-gap three-objective experiment:
 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto \
-  --objective adg_strategy_eq max --objective drawdown_worst_strategy_eq min \
+  --objective adg_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
   --objective fills_gap_p95_hours min
 ```
 
@@ -271,12 +271,12 @@ recovery and weighted-volume captures. Reproduce the four strategy/seed cohorts 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto --warm-runs 3 \
   --adg-floor 0 --drawdown-ceiling 0.01 --metrics \
-  drawdown_worst_mean_1pct_strategy_eq drawdown_worst_mean_1pct_ema_strategy_eq \
-  fills_gap_p95_hours adg_strategy_eq strategy_eq_recovery_days_mean \
-  strategy_eq_recovery_days_p95 strategy_eq_recovery_days_mean_worst_1pct \
-  volume_pct_per_day_avg --limit fills_gap_p95_hours greater_than 0.05 \
-  --limit strategy_eq_recovery_days_p95 greater_than 0.05 \
-  --limit drawdown_worst_mean_1pct_ema_strategy_eq greater_than 0.01 \
+  drawdown_daily_worst_1pct_mean_fraction_strategy_equity hsl_signal_ema_worst_1pct_mean_fraction \
+  fills_gap_p95_hours adg_fraction_strategy_equity recovery_mean_days_strategy_equity \
+  recovery_p95_days_strategy_equity recovery_worst_1pct_mean_days_strategy_equity \
+  active_day_turnover_proxy_mean_ratio --limit fills_gap_p95_hours greater_than 0.05 \
+  --limit recovery_p95_days_strategy_equity greater_than 0.05 \
+  --limit hsl_signal_ema_worst_1pct_mean_fraction greater_than 0.01 \
   --report optional-cohort.json
 ```
 

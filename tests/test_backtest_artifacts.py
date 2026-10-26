@@ -72,7 +72,7 @@ def _write_artifact(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (artifact_dir / "config.json").write_text(json.dumps({"config_version": "test"}), encoding="utf-8")
-    (artifact_dir / "analysis.json").write_text(json.dumps({"adg_usd": 0.01}), encoding="utf-8")
+    (artifact_dir / "analysis.json").write_text(json.dumps({"adg_fraction_usd": 0.01}), encoding="utf-8")
     pd.DataFrame(
         {
             "timestamp": [
@@ -106,7 +106,7 @@ def test_load_backtest_artifact_loads_cache_arrays_and_tables(tmp_path):
     artifact = load_backtest_artifact(artifact_dir)
 
     assert artifact.config["config_version"] == "test"
-    assert artifact.analysis["adg_usd"] == pytest.approx(0.01)
+    assert artifact.analysis["adg_fraction_usd"] == pytest.approx(0.01)
     assert artifact.coins == ["BTC", "ETH"]
     assert artifact.hlcvs.shape == (5, 2, 4)
     assert artifact.timestamps.tolist() == [

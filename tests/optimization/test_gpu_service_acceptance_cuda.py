@@ -204,8 +204,8 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
             bot["close"].update(qty_fraction=1., threshold_base_fraction=.5,
                                 threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
                                 threshold_log_range_1h_coefficient=0.)
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "position_held_hours_max", "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "position_held_max_hours", "hsl_red_time_fraction")
     snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]
     active = False
     completed_bars = 0

@@ -262,10 +262,10 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
     assert "entry_initial_balance_pct" not in output
-    assert torch.equal(output["entry_initial_balance_pct_long"], scalars[:, 21])
+    assert torch.equal(output["initial_entry_balance_fraction_long"], scalars[:, 21])
     assert torch.equal(output["hsl_drawdown_ema_max_long"], scalars[:, 55])
     assert torch.equal(output["hsl_drawdown_ema_max_short"], scalars[:, 56])
-    assert torch.equal(output["entry_initial_balance_pct_short"], scalars[:, 57])
+    assert torch.equal(output["initial_entry_balance_fraction_short"], scalars[:, 57])
     assert torch.equal(output["profit_sum_long"], scalars[:, 58])
     assert torch.equal(output["loss_sum_long"], scalars[:, 59])
     assert torch.equal(output["profit_sum_short"], scalars[:, 60])
@@ -3017,21 +3017,21 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
         exchange="bybit",
         batch_size=1,
         needed_metrics={
-            "backtest_completion_ratio",
+            "backtest_completion_fraction",
             "fills_per_day",
-            "adg_btc",
-            "drawdown_worst_btc",
-            "equity_balance_diff_neg_max_btc",
-            "equity_balance_diff_neg_max_usd",
-            "equity_balance_diff_neg_mean_btc",
-            "equity_balance_diff_neg_mean_usd",
-            "expected_shortfall_1pct_btc",
-            "entry_interval_hours_max",
-            "paper_loss_mean_ratio_btc",
-            "paper_loss_mean_ratio_usd",
-            "paper_loss_ratio_btc",
-            "paper_loss_ratio_usd",
-            "strategy_eq_recovery_days_p99",
+            "adg_fraction_btc",
+            "drawdown_max_fraction_btc",
+            "equity_balance_gap_negative_max_fraction_btc",
+            "equity_balance_gap_negative_max_fraction_usd",
+            "equity_balance_gap_negative_mean_fraction_btc",
+            "equity_balance_gap_negative_mean_fraction_usd",
+            "expected_shortfall_1pct_fraction_btc",
+            "entry_interval_max_hours",
+            "adg_to_paper_loss_mean_ratio_btc",
+            "adg_to_paper_loss_mean_ratio_usd",
+            "adg_to_paper_loss_max_ratio_btc",
+            "adg_to_paper_loss_max_ratio_usd",
+            "recovery_p99_days_strategy_equity",
         },
     )
     result = proxy.evaluate([{}])[0]
@@ -3049,34 +3049,34 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
     assert result["fills_per_day"] == pytest.approx(
         exact_analysis["fills_per_day"], rel=1.0e-5
     )
-    assert np.isfinite(result["entry_interval_hours_max"])
-    assert np.isfinite(result["strategy_eq_recovery_days_p99"])
+    assert np.isfinite(result["entry_interval_max_hours"])
+    assert np.isfinite(result["recovery_p99_days_strategy_equity"])
     exact_order_types = {row[13] for row in exact_fills}
     expected_panic_types = {f"close_panic_{side}" for side in enabled_sides}
     assert expected_panic_types <= exact_order_types
-    assert result["adg_btc"] == pytest.approx(exact_analysis["adg_btc"], rel=2.0e-3)
-    assert result["drawdown_worst_btc"] == pytest.approx(
-        exact_analysis["drawdown_worst_btc"], rel=2.0e-3
+    assert result["adg_fraction_btc"] == pytest.approx(exact_analysis["adg_fraction_btc"], rel=2.0e-3)
+    assert result["drawdown_max_fraction_btc"] == pytest.approx(
+        exact_analysis["drawdown_max_fraction_btc"], rel=2.0e-3
     )
-    assert result["expected_shortfall_1pct_btc"] == pytest.approx(
-        exact_analysis["expected_shortfall_1pct_btc"], rel=2.0e-3
+    assert result["expected_shortfall_1pct_fraction_btc"] == pytest.approx(
+        exact_analysis["expected_shortfall_1pct_fraction_btc"], rel=2.0e-3
     )
     for metric in (
-        "equity_balance_diff_neg_max_btc",
-        "equity_balance_diff_neg_max_usd",
-        "equity_balance_diff_neg_mean_btc",
-        "equity_balance_diff_neg_mean_usd",
-        "paper_loss_mean_ratio_btc",
-        "paper_loss_mean_ratio_usd",
-        "paper_loss_ratio_btc",
-        "paper_loss_ratio_usd",
+        "equity_balance_gap_negative_max_fraction_btc",
+        "equity_balance_gap_negative_max_fraction_usd",
+        "equity_balance_gap_negative_mean_fraction_btc",
+        "equity_balance_gap_negative_mean_fraction_usd",
+        "adg_to_paper_loss_mean_ratio_btc",
+        "adg_to_paper_loss_mean_ratio_usd",
+        "adg_to_paper_loss_max_ratio_btc",
+        "adg_to_paper_loss_max_ratio_usd",
     ):
         assert result[metric] == pytest.approx(
             exact_analysis[metric], rel=3.0e-3, abs=1.0e-8
         ), metric
     assert proxy.btc_risk_enabled is True
     assert proxy.equity_balance_diff_enabled is True
-    assert result["backtest_completion_ratio"] > 0.99
+    assert result["backtest_completion_fraction"] > 0.99
 
     if topology == "long":
         ebd_only_proxy = SharedAccountReplay(
@@ -3087,13 +3087,13 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
             timestamps=timestamps,
             exchange="bybit",
             batch_size=1,
-            needed_metrics={"paper_loss_ratio_btc"},
+            needed_metrics={"adg_to_paper_loss_max_ratio_btc"},
         )
         ebd_only_result = ebd_only_proxy.evaluate([{}])[0]
         assert ebd_only_proxy.btc_risk_enabled is False
         assert ebd_only_proxy.equity_balance_diff_enabled is True
-        assert ebd_only_result["paper_loss_ratio_btc"] == pytest.approx(
-            exact_analysis["paper_loss_ratio_btc"],
+        assert ebd_only_result["adg_to_paper_loss_max_ratio_btc"] == pytest.approx(
+            exact_analysis["adg_to_paper_loss_max_ratio_btc"],
             rel=3.0e-3,
             abs=1.0e-8,
         )
@@ -3205,11 +3205,11 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         exchange="bybit",
         batch_size=1,
         needed_metrics={
-            "backtest_completion_ratio",
-            "entry_initial_balance_pct_long",
-            "entry_initial_balance_pct_short",
+            "backtest_completion_fraction",
+            "initial_entry_balance_fraction_long",
+            "initial_entry_balance_fraction_short",
             "fills_per_day",
-            "position_held_days_max",
+            "position_held_max_days",
             "position_held_time_weighted_mean_hours",
         },
     )
@@ -3241,17 +3241,17 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         exact_analysis["fills_per_day"], rel=1.0e-5
     )
     for side in enabled_sides:
-        metric = f"entry_initial_balance_pct_{side}"
+        metric = f"initial_entry_balance_fraction_{side}"
         assert result[metric] == pytest.approx(exact_analysis[metric], rel=1.0e-5)
     # The synthetic exact helper retains the template's calendar date span,
     # whereas the proxy receives this prepared span directly. The
     # proxy must nevertheless cover the all-invalid tail through its endpoint.
-    assert result["backtest_completion_ratio"] > 0.9
+    assert result["backtest_completion_fraction"] > 0.9
     assert result["position_held_time_weighted_mean_hours"] == pytest.approx(
         exact_analysis["position_held_time_weighted_mean_hours"], rel=1.0e-5
     )
-    assert result["position_held_days_max"] == pytest.approx(
-        exact_analysis["position_held_days_max"], rel=1.0e-5
+    assert result["position_held_max_days"] == pytest.approx(
+        exact_analysis["position_held_max_days"], rel=1.0e-5
     )
 
 
@@ -3525,11 +3525,11 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
             rtol=0,
             atol=0,
         )
-        requested = {"fills_top_symbol_share", "fills_active_symbols_count"}
+        requested = {"fills_top_symbol_fraction", "fills_active_symbols_count"}
         metrics = _fill_activity_metrics(compact, run, requested)
         assert torch.all(metrics["fills_active_symbols_count"] == 2)
-        assert torch.all(metrics["fills_top_symbol_share"] >= 0.5)
-        assert torch.all(metrics["fills_top_symbol_share"] <= 1.0)
+        assert torch.all(metrics["fills_top_symbol_fraction"] >= 0.5)
+        assert torch.all(metrics["fills_top_symbol_fraction"] <= 1.0)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -3894,10 +3894,10 @@ def test_mps_tm_multicoin_entry_intervals_remain_coin_and_side_local(topology):
     expected_count = 6.0 if topology == "fused" else 3.0
     assert output["entry_interval_count"].item() == expected_count
     assert output["entry_interval_hist"].sum().item() == expected_count
-    assert metrics["entry_interval_hours_mean"].item() == pytest.approx(
+    assert metrics["entry_interval_mean_hours"].item() == pytest.approx(
         50.0 / 3.0 / 60.0
     )
-    assert metrics["entry_interval_hours_max"].item() == pytest.approx(1.0 / 3.0)
+    assert metrics["entry_interval_max_hours"].item() == pytest.approx(1.0 / 3.0)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -5800,10 +5800,10 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
     assert output["entry_initial_balance_pct"].item() == pytest.approx(0.5)
-    assert output["total_wallet_exposure_max"].item() > 0.0
+    assert output["absolute_net_wallet_exposure_max_ratio"].item() > 0.0
     assert (
-        output["total_wallet_exposure_max"].item()
-        >= output["total_wallet_exposure_mean"].item()
+        output["absolute_net_wallet_exposure_max_ratio"].item()
+        >= output["absolute_net_wallet_exposure_mean_ratio"].item()
     )
     fill_days = output["day_has_fill"].bool()
     assert torch.isfinite(output["day_net_pnl"][fill_days]).all()
@@ -5896,8 +5896,8 @@ def test_mps_fused_multicoin_fixed_wel_uses_each_configured_denominator(
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
 
-    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(0.5)
-    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(0.5)
+    assert output["initial_entry_balance_fraction_long"].item() == pytest.approx(0.5)
+    assert output["initial_entry_balance_fraction_short"].item() == pytest.approx(0.5)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -6914,7 +6914,7 @@ def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side, mark
 
     assert output["fill_count_entry"].item() == 4.0
     assert output["coin_fill_counts"].cpu().tolist() == [[2.0, 2.0]]
-    exposure = output["total_wallet_exposure_max"].item()
+    exposure = output["absolute_net_wallet_exposure_max_ratio"].item()
     assert 0.17 < exposure < 0.18
 
 
@@ -7443,10 +7443,10 @@ def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
     # the other to .997 at the market touch. Short clips are .998 each.
     expected_size = 1.999 if side == "long" else 1.996
     assert promoted[size_key].item() == pytest.approx(expected_size)
-    assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
+    assert promoted["absolute_net_wallet_exposure_max_ratio"].item() == pytest.approx(
         expected_size * 100.0 / 1_000.0
     )
-    assert promoted["total_wallet_exposure_max"].item() < 0.2
+    assert promoted["absolute_net_wallet_exposure_max_ratio"].item() < 0.2
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -7491,10 +7491,10 @@ def test_mps_tm_multicoin_market_entry_cap_uses_market_touch(side):
     assert promoted[size_key].item() == pytest.approx(expected_size)
     passive_limit_size = 2.003 if side == "long" else 1.995
     assert promoted[size_key].item() != pytest.approx(passive_limit_size)
-    assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
+    assert promoted["absolute_net_wallet_exposure_max_ratio"].item() == pytest.approx(
         expected_size * 100.0 / 1_000.0
     )
-    assert promoted["total_wallet_exposure_max"].item() < 0.2
+    assert promoted["absolute_net_wallet_exposure_max_ratio"].item() < 0.2
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -8145,10 +8145,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     torch.testing.assert_close(runner_output["day_min_eq"], daily[valid_indices, :, 1])
     torch.testing.assert_close(runner_output["fill_count"], scalars[valid_indices, 24])
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_long"], scalars[valid_indices, 21]
+        runner_output["initial_entry_balance_fraction_long"], scalars[valid_indices, 21]
     )
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_short"], scalars[valid_indices, 57]
+        runner_output["initial_entry_balance_fraction_short"], scalars[valid_indices, 57]
     )
     torch.testing.assert_close(
         runner_output["hsl_drawdown_ema_max_long"], scalars[valid_indices, 55]
@@ -8240,23 +8240,23 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     proxy.run = runs[0]
     proxy.sides = ["long", "short"]
     proxy.needed_metrics = {
-        "hard_stop_panic_close_loss_drawdown_pct_mean",
-        "hard_stop_time_in_red_pct",
-        "hard_stop_triggers",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_short",
-        "drawdown_worst_ema_strategy_eq",
-        "drawdown_worst_ema_strategy_eq_long",
-        "drawdown_worst_ema_strategy_eq_short",
-        "drawdown_worst_mean_1pct_ema_strategy_eq",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_short",
-        "drawdown_worst_strategy_eq_long",
-        "drawdown_worst_strategy_eq_short",
-        "peak_recovery_hours_strategy_eq_long",
-        "peak_recovery_hours_strategy_eq_short",
-        "peak_recovery_days_strategy_eq_long",
-        "peak_recovery_days_strategy_eq_short",
+        "hsl_panic_episode_loss_mean_fraction",
+        "hsl_red_time_fraction",
+        "hsl_trigger_count",
+        "hsl_trigger_count_long",
+        "hsl_trigger_count_short",
+        "hsl_signal_ema_max_fraction",
+        "hsl_signal_ema_max_fraction_long",
+        "hsl_signal_ema_max_fraction_short",
+        "hsl_signal_ema_worst_1pct_mean_fraction",
+        "hsl_signal_ema_worst_1pct_mean_fraction_long",
+        "hsl_signal_ema_worst_1pct_mean_fraction_short",
+        "drawdown_max_fraction_strategy_equity_long",
+        "drawdown_max_fraction_strategy_equity_short",
+        "recovery_max_hours_strategy_equity_long",
+        "recovery_max_hours_strategy_equity_short",
+        "recovery_max_days_strategy_equity_long",
+        "recovery_max_days_strategy_equity_short",
     }
     proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -8303,54 +8303,54 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     proxy._compute_objectives = reduce_service_output
     service_results = proxy.evaluate(candidates)
     assert (seen_hsl_triggers["long"] + seen_hsl_triggers["short"] > 0.0).all()
-    assert all(item["hard_stop_triggers"] > 0.0 for item in service_results)
+    assert all(item["hsl_trigger_count"] > 0.0 for item in service_results)
     # Unified mode reports portfolio events without attributing them to a side.
-    assert [item["hard_stop_triggers"] for item in service_results] == pytest.approx(
+    assert [item["hsl_trigger_count"] for item in service_results] == pytest.approx(
         (seen_hsl_triggers["long"] + seen_hsl_triggers["short"]).tolist()
     )
-    assert service_results[0]["hard_stop_triggers_long"] == 0
-    assert service_results[0]["hard_stop_triggers_short"] == 0
+    assert service_results[0]["hsl_trigger_count_long"] == 0
+    assert service_results[0]["hsl_trigger_count_short"] == 0
     assert all(
-        item["hard_stop_triggers"]
-        == item["hard_stop_triggers_long"] + item["hard_stop_triggers_short"]
+        item["hsl_trigger_count"]
+        == item["hsl_trigger_count_long"] + item["hsl_trigger_count_short"]
         for item in service_results[1:]
     )
-    assert all(item["hard_stop_time_in_red_pct"] > 0.0 for item in service_results)
+    assert all(item["hsl_red_time_fraction"] > 0.0 for item in service_results)
     assert all(
-        item["hard_stop_panic_close_loss_drawdown_pct_mean"] > 0.0
+        item["hsl_panic_episode_loss_mean_fraction"] > 0.0
         for item in service_results
     )
     assert all(
-        item["drawdown_worst_ema_strategy_eq"]
+        item["hsl_signal_ema_max_fraction"]
         == max(
-            item["drawdown_worst_ema_strategy_eq_long"],
-            item["drawdown_worst_ema_strategy_eq_short"],
+            item["hsl_signal_ema_max_fraction_long"],
+            item["hsl_signal_ema_max_fraction_short"],
         )
         for item in service_results
     )
     assert [
-        item["drawdown_worst_mean_1pct_ema_strategy_eq"] for item in service_results
+        item["hsl_signal_ema_worst_1pct_mean_fraction"] for item in service_results
     ] == pytest.approx(seen_hsl_triggers["portfolio_ema"].tolist())
     assert (seen_hsl_triggers["portfolio_ema"] > 0.0).all()
     for side in ("long", "short"):
         # A profitable side can have zero raw drawdown when portfolio HSL closes
         # both sides early. Verify the factual replay summary, not positivity.
         assert [
-            item[f"drawdown_worst_strategy_eq_{side}"] for item in service_results
+            item[f"drawdown_max_fraction_strategy_equity_{side}"] for item in service_results
         ] == pytest.approx(seen_hsl_triggers[f"raw_{side}"].tolist())
         assert (seen_hsl_triggers[f"raw_{side}"] >= 0.0).all()
     assert all(
-        item["drawdown_worst_strategy_eq_long"] > 0.0
-        and item["drawdown_worst_strategy_eq_short"] > 0.0
+        item["drawdown_max_fraction_strategy_equity_long"] > 0.0
+        and item["drawdown_max_fraction_strategy_equity_short"] > 0.0
         for item in service_results[1:]
     )
     assert all(
-        item["peak_recovery_hours_strategy_eq_long"] >= 0.0
-        and item["peak_recovery_hours_strategy_eq_short"] >= 0.0
-        and item["peak_recovery_days_strategy_eq_long"]
-        == pytest.approx(item["peak_recovery_hours_strategy_eq_long"] / 24.0)
-        and item["peak_recovery_days_strategy_eq_short"]
-        == pytest.approx(item["peak_recovery_hours_strategy_eq_short"] / 24.0)
+        item["recovery_max_hours_strategy_equity_long"] >= 0.0
+        and item["recovery_max_hours_strategy_equity_short"] >= 0.0
+        and item["recovery_max_days_strategy_equity_long"]
+        == pytest.approx(item["recovery_max_hours_strategy_equity_long"] / 24.0)
+        and item["recovery_max_days_strategy_equity_short"]
+        == pytest.approx(item["recovery_max_hours_strategy_equity_short"] / 24.0)
         for item in service_results
     )
 
@@ -8807,10 +8807,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     torch.testing.assert_close(runner_output["day_min_eq"], daily[valid_indices, :, 1])
     torch.testing.assert_close(runner_output["fill_count"], scalars[valid_indices, 24])
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_long"], scalars[valid_indices, 21]
+        runner_output["initial_entry_balance_fraction_long"], scalars[valid_indices, 21]
     )
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_short"], scalars[valid_indices, 57]
+        runner_output["initial_entry_balance_fraction_short"], scalars[valid_indices, 57]
     )
     torch.testing.assert_close(
         runner_output["hsl_drawdown_ema_max_long"], scalars[valid_indices, 55]
@@ -8902,22 +8902,22 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     proxy.run = runs[0]
     proxy.sides = ["long", "short"]
     proxy.needed_metrics = {
-        "hard_stop_panic_close_loss_drawdown_pct_mean",
-        "hard_stop_time_in_red_pct",
-        "hard_stop_triggers_per_year",
+        "hsl_panic_episode_loss_mean_fraction",
+        "hsl_red_time_fraction",
+        "hsl_triggers_per_year",
         "fills_per_day",
-        "drawdown_worst_ema_strategy_eq",
-        "drawdown_worst_ema_strategy_eq_long",
-        "drawdown_worst_ema_strategy_eq_short",
-        "drawdown_worst_mean_1pct_ema_strategy_eq",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-        "drawdown_worst_mean_1pct_ema_strategy_eq_short",
-        "drawdown_worst_strategy_eq_long",
-        "drawdown_worst_strategy_eq_short",
-        "peak_recovery_hours_strategy_eq_long",
-        "peak_recovery_hours_strategy_eq_short",
-        "peak_recovery_days_strategy_eq_long",
-        "peak_recovery_days_strategy_eq_short",
+        "hsl_signal_ema_max_fraction",
+        "hsl_signal_ema_max_fraction_long",
+        "hsl_signal_ema_max_fraction_short",
+        "hsl_signal_ema_worst_1pct_mean_fraction",
+        "hsl_signal_ema_worst_1pct_mean_fraction_long",
+        "hsl_signal_ema_worst_1pct_mean_fraction_short",
+        "drawdown_max_fraction_strategy_equity_long",
+        "drawdown_max_fraction_strategy_equity_short",
+        "recovery_max_hours_strategy_equity_long",
+        "recovery_max_hours_strategy_equity_short",
+        "recovery_max_days_strategy_equity_long",
+        "recovery_max_days_strategy_equity_short",
     }
     proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     width = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
@@ -8970,36 +8970,36 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert (seen_hsl_triggers["long"] >= 0.0).all()
     assert (seen_hsl_triggers["short"] >= 0.0).all()
     assert all(item["fills_per_day"] > 0.0 for item in service_results)
-    assert all(item["hard_stop_triggers_per_year"] >= 0.0 for item in service_results)
-    assert all(item["hard_stop_time_in_red_pct"] >= 0.0 for item in service_results)
+    assert all(item["hsl_triggers_per_year"] >= 0.0 for item in service_results)
+    assert all(item["hsl_red_time_fraction"] >= 0.0 for item in service_results)
     assert all(
-        item["hard_stop_panic_close_loss_drawdown_pct_mean"] >= 0.0
+        item["hsl_panic_episode_loss_mean_fraction"] >= 0.0
         for item in service_results
     )
     assert all(
-        item["drawdown_worst_ema_strategy_eq"]
+        item["hsl_signal_ema_max_fraction"]
         == max(
-            item["drawdown_worst_ema_strategy_eq_long"],
-            item["drawdown_worst_ema_strategy_eq_short"],
+            item["hsl_signal_ema_max_fraction_long"],
+            item["hsl_signal_ema_max_fraction_short"],
         )
         for item in service_results
     )
     assert [
-        item["drawdown_worst_mean_1pct_ema_strategy_eq"] for item in service_results
+        item["hsl_signal_ema_worst_1pct_mean_fraction"] for item in service_results
     ] == pytest.approx(seen_hsl_triggers["portfolio_ema"].tolist())
     assert (seen_hsl_triggers["portfolio_ema"] > 0.0).all()
     assert all(
-        item["drawdown_worst_strategy_eq_long"] > 0.0
-        and item["drawdown_worst_strategy_eq_short"] > 0.0
+        item["drawdown_max_fraction_strategy_equity_long"] > 0.0
+        and item["drawdown_max_fraction_strategy_equity_short"] > 0.0
         for item in service_results
     )
     assert all(
-        item["peak_recovery_hours_strategy_eq_long"] >= 0.0
-        and item["peak_recovery_hours_strategy_eq_short"] >= 0.0
-        and item["peak_recovery_days_strategy_eq_long"]
-        == pytest.approx(item["peak_recovery_hours_strategy_eq_long"] / 24.0)
-        and item["peak_recovery_days_strategy_eq_short"]
-        == pytest.approx(item["peak_recovery_hours_strategy_eq_short"] / 24.0)
+        item["recovery_max_hours_strategy_equity_long"] >= 0.0
+        and item["recovery_max_hours_strategy_equity_short"] >= 0.0
+        and item["recovery_max_days_strategy_equity_long"]
+        == pytest.approx(item["recovery_max_hours_strategy_equity_long"] / 24.0)
+        and item["recovery_max_days_strategy_equity_short"]
+        == pytest.approx(item["recovery_max_hours_strategy_equity_short"] / 24.0)
         for item in service_results
     )
 

@@ -37,17 +37,17 @@ def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
     # Flatten-time remains CPU-analysis-only at the public native API; the
     # shader probes above verify its raw reporting/censoring separately.
     metrics = [
-        "hard_stop_triggers_per_year", "hard_stop_restarts_per_year",
-        "hard_stop_post_restart_retrigger_pct", "hard_stop_duration_minutes_mean",
-        "hard_stop_duration_minutes_max", "hard_stop_trigger_drawdown_mean",
-        "hard_stop_time_in_red_pct", "hard_stop_restarts_per_year_long",
-        "hard_stop_restarts_per_year_short",
+        "hsl_triggers_per_year", "hsl_restarts_per_year",
+        "hsl_restart_retrigger_fraction", "hsl_red_duration_mean_minutes",
+        "hsl_red_duration_max_minutes", "hsl_trigger_signal_mean_fraction",
+        "hsl_red_time_fraction", "hsl_restarts_per_year_long",
+        "hsl_restarts_per_year_short",
     ]
     report = run_comparison(
         inputs, "binance", metrics,
         {name: MetricTolerance(1e-5, 1e-3) for name in metrics}, gpu_engine="native",
     )
-    assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]
 
 
@@ -91,7 +91,7 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
     inputs[1][4, :, :3] = [100, 99, 99.5]
     terminal_mark = 98.5 if terminal_fill else 93.0
     inputs[1][5:, :, :3] = [terminal_mark + .1, terminal_mark - .1, terminal_mark]
-    metrics = ["hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max"]
+    metrics = ["hsl_red_duration_mean_minutes", "hsl_red_duration_max_minutes"]
     report = run_comparison(
         tuple(inputs), "bybit", metrics,
         {name: MetricTolerance(1e-6, 0) for name in metrics},
@@ -146,7 +146,7 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     inputs[2]["BTC"]["last_valid_index"] = 6
     inputs[3] = np.full(1410, 50_000.0)
     inputs[4] = inputs[4][0] + np.arange(1410, dtype=np.int64) * 60_000
-    metrics = ["hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max"]
+    metrics = ["hsl_red_duration_mean_minutes", "hsl_red_duration_max_minutes"]
     report = run_comparison(
         tuple(inputs), "bybit", metrics,
         {name: MetricTolerance(1e-6, 0) for name in metrics},

@@ -38,7 +38,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
-    cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
+    cfg["optimize"]["scoring"] = ["hsl_trigger_count"]
     cfg["optimize"]["limits"] = []
     shape = build_optimization_shape(cfg)
     assert sum(bound.low != bound.high for bound in shape.bounds) == 1
@@ -58,7 +58,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         policy = hsl["portfolio"] if mode == "portfolio" else hsl["sides"][0]
         assert policy["drawdown_threshold_fraction"] == threshold
         result = run(args)
-        counts.append(result[2]["hard_stop_triggers"])
+        counts.append(result[2]["hsl_trigger_count"])
     assert counts[0] > 0 and counts[1] == 0
     assert cfg == original
 
@@ -66,12 +66,12 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
 @pytest.mark.parametrize(
     "metric",
     [
-        "hard_stop_triggers_long",
-        "hard_stop_restarts_short_mean",
-        "drawdown_worst_ema_strategy_eq_long",
-        "drawdown_worst_ema_hsl_short_max",
-        "drawdown_worst_mean_1pct_ema_hsl_long",
-        "usd_drawdown_worst_ema_hsl_short",
+        "hsl_trigger_count_long",
+        "hsl_restart_count_short_mean",
+        "hsl_signal_ema_max_fraction_long",
+        "hsl_signal_ema_max_fraction_short_max",
+        "hsl_signal_ema_worst_1pct_mean_fraction_long",
+        "hsl_signal_ema_max_fraction_short",
     ],
 )
 def test_unified_rejects_inactive_side_signal_objectives(metric):
@@ -94,10 +94,10 @@ def test_unified_keeps_general_side_performance_and_portfolio_signal_metrics():
     validate_optimizer_metrics(
         cfg,
         [
-            "drawdown_worst_strategy_eq_long",
-            "peak_recovery_hours_strategy_eq_short",
-            "hard_stop_triggers",
-            "drawdown_worst_ema_strategy_eq",
+            "drawdown_max_fraction_strategy_equity_long",
+            "recovery_max_hours_strategy_equity_short",
+            "hsl_trigger_count",
+            "hsl_signal_ema_max_fraction",
         ],
     )
 
@@ -113,7 +113,7 @@ def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
     cfg["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
-    cfg["optimize"]["scoring"] = ["drawdown_worst_ema_hsl_long"]
+    cfg["optimize"]["scoring"] = ["hsl_signal_ema_max_fraction_long"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)
     with pytest.raises(ValueError, match="no side controller"):
@@ -125,11 +125,11 @@ def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
 @pytest.mark.parametrize("scenario", ["side", "portfolio", None])
 def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scenario):
     cfg, _, _ = inputs("position_side")
-    cfg["optimize"]["scoring"] = ["drawdown_worst_strategy_eq"]
+    cfg["optimize"]["scoring"] = ["drawdown_max_fraction_strategy_equity"]
     cfg["optimize"]["limits"] = []
     cfg["optimize"][section] = [
         dict(
-            metric="drawdown_worst_ema_hsl_long",
+            metric="hsl_signal_ema_max_fraction_long",
             scenario=scenario,
             **(
                 {"goal": "min"}
@@ -194,16 +194,16 @@ def test_gpu_preparation_rejects_coarse_hsl_candles_before_torch_probe(
 @pytest.mark.parametrize(
     "metric",
     [
-        "hard_stop_triggers_short",
-        "drawdown_worst_ema_hsl_short_max",
-        "hard_stop_restarts_short_mean",
+        "hsl_trigger_count_short",
+        "hsl_signal_ema_max_fraction_short_max",
+        "hsl_restart_count_short_mean",
     ],
 )
 def test_disabled_side_signal_metrics_are_rejected(mode, metric):
     cfg, _, _ = inputs(mode)
     with pytest.raises(ValueError, match="no enabled side controller"):
         validate_optimizer_metrics(cfg, [metric])
-    validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq_short"])
+    validate_optimizer_metrics(cfg, ["drawdown_max_fraction_strategy_equity_short"])
     cfg["bot"]["short"]["hsl"]["enabled"] = True
     validate_optimizer_metrics(cfg, [metric])
 
@@ -226,13 +226,13 @@ def test_coin_metrics_follow_effective_dataset_policy(base, override, accepted):
     }
     if accepted:
         validate_optimizer_metrics(
-            cfg, ["hard_stop_triggers_short"], markets_by_exchange={"binance": markets}
+            cfg, ["hsl_trigger_count_short"], markets_by_exchange={"binance": markets}
         )
     else:
         with pytest.raises(ValueError, match="no enabled side controller"):
             validate_optimizer_metrics(
                 cfg,
-                ["hard_stop_triggers_short"],
+                ["hsl_trigger_count_short"],
                 markets_by_exchange={"binance": markets},
             )
 
@@ -249,14 +249,14 @@ def test_coin_policy_metric_check_uses_same_alias_resolution_as_payload(monkeypa
         backtest, "coin_to_symbol", lambda value, *a, **k: "AAA/USDT:USDT"
     )
     validate_optimizer_metrics(
-        cfg, ["hard_stop_triggers_short"], markets_by_exchange={"binance": markets}
+        cfg, ["hsl_trigger_count_short"], markets_by_exchange={"binance": markets}
     )
 
 
 def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
     cfg, _, _ = inputs("position_side")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["scoring"] = ["hard_stop_triggers_short"]
+    cfg["optimize"]["scoring"] = ["hsl_trigger_count_short"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)
     with pytest.raises(ValueError, match="no enabled side controller"):
@@ -268,11 +268,11 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
 @pytest.mark.parametrize(
     "metric",
     [
-        "hard_stop_triggers",
-        "hard_stop_restarts_mean",
-        "drawdown_worst_ema_hsl",
-        "drawdown_worst_mean_1pct_ema_hsl_max",
-        "usd_drawdown_worst_ema_hsl",
+        "hsl_trigger_count",
+        "hsl_restart_count_mean",
+        "hsl_signal_ema_max_fraction",
+        "hsl_signal_ema_worst_1pct_mean_fraction_max",
+        "hsl_signal_ema_max_fraction_mean",
     ],
 )
 def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
@@ -285,7 +285,7 @@ def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
         validate_optimizer_metrics(
             cfg, [metric], markets_by_exchange={"binance": markets}
         )
-    validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq", "adg"])
+    validate_optimizer_metrics(cfg, ["drawdown_max_fraction_strategy_equity", "adg_fraction"])
     policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy["enabled"] = True
     validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
@@ -302,12 +302,12 @@ def test_portfolio_metric_uses_effective_combined_coin_policies(override_enabled
     }
     if override_enabled:
         validate_optimizer_metrics(
-            cfg, ["hard_stop_triggers"], markets_by_exchange={"combined": markets}
+            cfg, ["hsl_trigger_count"], markets_by_exchange={"combined": markets}
         )
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
             validate_optimizer_metrics(
-                cfg, ["hard_stop_triggers"], markets_by_exchange={"combined": markets}
+                cfg, ["hsl_trigger_count"], markets_by_exchange={"combined": markets}
             )
 
 
@@ -317,11 +317,11 @@ def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, sc
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
-    cfg["optimize"]["scoring"] = ["adg"]
+    cfg["optimize"]["scoring"] = ["adg_fraction"]
     cfg["optimize"]["limits"] = []
     cfg["optimize"][section] = [
         dict(
-            metric="drawdown_worst_ema_hsl",
+            metric="hsl_signal_ema_max_fraction",
             scenario=scenario,
             **(
                 {"goal": "min"}
@@ -366,7 +366,7 @@ def test_combined_suite_validates_actual_source_market_policy(
             }
         }
     }
-    cfg["optimize"]["scoring"] = [{"metric": "hard_stop_triggers_short", "goal": "min"}]
+    cfg["optimize"]["scoring"] = [{"metric": "hsl_trigger_count_short", "goal": "min"}]
     cfg["optimize"]["limits"] = []
     ctx = SimpleNamespace(
         label="combined", config=cfg, overrides={}, msss={"combined": markets}

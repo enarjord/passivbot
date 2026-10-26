@@ -543,9 +543,9 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
                 f"{metric} is removed for HSL; choose a supported objective/limit"
             )
         signal = (
-            name.startswith("hard_stop_")
-            or name.startswith("drawdown_worst_ema_strategy_eq")
-            or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq")
+            name.startswith("hsl_")
+            or name.startswith("hsl_signal_ema_max_fraction")
+            or name.startswith("hsl_signal_ema_worst_1pct_mean_fraction")
         )
         side_signal = signal and name.endswith(("_long", "_short"))
         if _mode(config) == "portfolio" and side_signal:

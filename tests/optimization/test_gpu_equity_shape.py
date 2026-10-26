@@ -17,7 +17,7 @@ FIXTURE = json.loads(
 )
 SHAPE_METRICS = frozenset(
     f"{stem}{suffix}_usd"
-    for stem in ("equity_choppiness", "equity_jerkiness", "exponential_fit_error")
+    for stem in ("equity_choppiness_ratio", "equity_jerkiness_ratio", "exponential_fit_mse_log_ratio_squared")
     for suffix in ("",)
 )
 

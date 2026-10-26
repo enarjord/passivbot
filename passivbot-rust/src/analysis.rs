@@ -60,45 +60,45 @@ fn select_contiguous_fill_suffix(
 
 #[derive(Debug, Clone, Default)]
 pub struct EquitySeriesMetrics {
-    pub gain: f64,
-    pub adg: f64,
-    pub adg_rolling_hmean: f64,
-    pub adg_time_integrated: f64,
-    pub mdg: f64,
-    pub positive_gain_participation: f64,
+    pub gain_multiplier: f64,
+    pub adg_fraction: f64,
+    pub adg_rolling_hmean_fraction: f64,
+    pub adg_time_integrated_fraction: f64,
+    pub mdg_fraction: f64,
+    pub positive_log_return_participation_score: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
-    pub expected_shortfall_1pct: f64,
+    pub expected_shortfall_1pct_fraction: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FillActivityMetrics {
     pub fills_active_days_count: f64,
-    pub fills_active_days_ratio: f64,
+    pub fills_active_day_fraction: f64,
     pub fills_active_symbols_count: f64,
-    pub fills_analysis_duration_days: f64,
+    pub analysis_duration_days: f64,
     pub fills_count: f64,
-    pub fills_count_close: f64,
-    pub fills_count_entry: f64,
+    pub fills_close_count: f64,
+    pub fills_entry_count: f64,
     pub fills_count_long: f64,
     pub fills_count_short: f64,
-    pub fills_entry_per_close: f64,
-    pub fills_gap_longest_days: f64,
+    pub entry_to_close_fill_count_ratio: f64,
+    pub fills_gap_max_days: f64,
     pub fills_gap_mean_hours: f64,
     pub fills_gap_median_hours: f64,
     pub fills_gap_p95_hours: f64,
     pub fills_gap_p99_hours: f64,
     pub fills_gap_time_weighted_mean_hours: f64,
     pub fills_per_day: f64,
-    pub fills_per_day_close: f64,
-    pub fills_per_day_entry: f64,
+    pub fills_close_per_day: f64,
+    pub fills_entry_per_day: f64,
     pub fills_per_day_long: f64,
     pub fills_per_day_per_position_slot: f64,
     pub fills_per_day_per_position_slot_long: f64,
     pub fills_per_day_per_position_slot_short: f64,
     pub fills_per_day_short: f64,
-    pub fills_top_symbol_share: f64,
+    pub fills_top_symbol_fraction: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -123,7 +123,7 @@ fn elapsed_ms(started: Option<Instant>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn calc_long_short_profit_ratio(fills: &[Fill]) -> f64 {
+fn calc_long_pnl_to_total_pnl_ratio(fills: &[Fill]) -> f64 {
     let (long_pnl_sum, short_pnl_sum) =
         fills
             .iter()
@@ -194,11 +194,11 @@ pub fn calc_fill_activity_metrics(
     };
 
     let fills_count = fills.len() as f64;
-    let fills_count_entry = fills
+    let fills_entry_count = fills
         .iter()
         .filter(|fill| fill.order_type.is_entry())
         .count() as f64;
-    let fills_count_close = fills
+    let fills_close_count = fills
         .iter()
         .filter(|fill| fill.order_type.is_close())
         .count() as f64;
@@ -212,13 +212,13 @@ pub fn calc_fill_activity_metrics(
     } else {
         0.0
     };
-    let fills_per_day_entry = if n_days > 0.0 {
-        fills_count_entry / n_days
+    let fills_entry_per_day = if n_days > 0.0 {
+        fills_entry_count / n_days
     } else {
         0.0
     };
-    let fills_per_day_close = if n_days > 0.0 {
-        fills_count_close / n_days
+    let fills_close_per_day = if n_days > 0.0 {
+        fills_close_count / n_days
     } else {
         0.0
     };
@@ -254,13 +254,13 @@ pub fn calc_fill_activity_metrics(
     } else {
         slot_rates.iter().sum::<f64>() / slot_rates.len() as f64
     };
-    let fills_entry_per_close = fills_count_entry / fills_count_close.max(1.0);
+    let entry_to_close_fill_count_ratio = fills_entry_count / fills_close_count.max(1.0);
     let mut fills_by_symbol: HashMap<&str, usize> = HashMap::new();
     for fill in fills {
         *fills_by_symbol.entry(fill.coin.as_str()).or_insert(0) += 1;
     }
     let fills_active_symbols_count = fills_by_symbol.len() as f64;
-    let fills_top_symbol_share = if fills.is_empty() {
+    let fills_top_symbol_fraction = if fills.is_empty() {
         0.0
     } else {
         fills_by_symbol.values().copied().max().unwrap_or(0) as f64 / fills.len() as f64
@@ -268,22 +268,22 @@ pub fn calc_fill_activity_metrics(
 
     let mut metrics = FillActivityMetrics {
         fills_active_symbols_count,
-        fills_analysis_duration_days: n_days,
+        analysis_duration_days: n_days,
         fills_count,
-        fills_count_entry,
-        fills_count_close,
+        fills_entry_count,
+        fills_close_count,
         fills_count_long,
         fills_count_short,
         fills_per_day,
-        fills_per_day_entry,
-        fills_per_day_close,
+        fills_entry_per_day,
+        fills_close_per_day,
         fills_per_day_long,
         fills_per_day_short,
         fills_per_day_per_position_slot,
         fills_per_day_per_position_slot_long,
         fills_per_day_per_position_slot_short,
-        fills_entry_per_close,
-        fills_top_symbol_share,
+        entry_to_close_fill_count_ratio,
+        fills_top_symbol_fraction,
         ..FillActivityMetrics::default()
     };
 
@@ -344,8 +344,8 @@ pub fn calc_fill_activity_metrics(
     };
     let total_day_buckets = n_days.ceil().max(1.0);
     metrics.fills_active_days_count = active_day_buckets as f64;
-    metrics.fills_active_days_ratio = active_day_buckets as f64 / total_day_buckets;
-    metrics.fills_gap_longest_days = gap_hours.iter().copied().fold(0.0, f64::max) / 24.0;
+    metrics.fills_active_day_fraction = active_day_buckets as f64 / total_day_buckets;
+    metrics.fills_gap_max_days = gap_hours.iter().copied().fold(0.0, f64::max) / 24.0;
     metrics.fills_gap_mean_hours = if gap_hours.is_empty() {
         0.0
     } else {
@@ -407,12 +407,13 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
         })
         .collect();
 
-    let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
-    let adg_rolling_hmean = calc_rolling_hmean_adg(&daily_eqs);
-    let adg_time_integrated = calc_time_integrated_adg(&daily_eqs);
-    let mdg = median(&daily_eqs_pct_change);
-    let positive_gain_participation = calc_positive_gain_participation(&daily_eqs);
-    let (sharpe_ratio, sortino_ratio) = calc_sharpe_and_sortino(&daily_eqs_mins_pct_change, adg);
+    let (gain_multiplier, adg_fraction) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let adg_rolling_hmean_fraction = calc_rolling_hmean_adg(&daily_eqs);
+    let adg_time_integrated_fraction = calc_time_integrated_adg(&daily_eqs);
+    let mdg_fraction = median(&daily_eqs_pct_change);
+    let positive_log_return_participation_score = calc_positive_gain_participation(&daily_eqs);
+    let (sharpe_ratio, sortino_ratio) =
+        calc_sharpe_and_sortino(&daily_eqs_mins_pct_change, adg_fraction);
     let (gains_sum, losses_sum) =
         daily_eqs_pct_change
             .iter()
@@ -424,18 +425,18 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
                 }
             });
     let omega_ratio = calc_omega_ratio(gains_sum, losses_sum);
-    let expected_shortfall_1pct = mean_worst_1pct_abs(&daily_eqs_mins_pct_change);
+    let expected_shortfall_1pct_fraction = mean_worst_1pct_abs(&daily_eqs_mins_pct_change);
     EquitySeriesMetrics {
-        gain,
-        adg,
-        adg_rolling_hmean,
-        adg_time_integrated,
-        mdg,
-        positive_gain_participation,
+        gain_multiplier,
+        adg_fraction,
+        adg_rolling_hmean_fraction,
+        adg_time_integrated_fraction,
+        mdg_fraction,
+        positive_log_return_participation_score,
         sharpe_ratio,
         sortino_ratio,
         omega_ratio,
-        expected_shortfall_1pct,
+        expected_shortfall_1pct_fraction,
     }
 }
 
@@ -594,12 +595,13 @@ fn analyze_backtest_basic_with_starting_balance(
         .collect();
 
     // Calculate ADG and standard metrics
-    let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
-    let daily_pnl_ratios = calc_daily_pnl_ratios(fills);
-    let adg_pnl = mean(&daily_pnl_ratios);
-    let mdg_pnl = median(&daily_pnl_ratios);
-    let (sharpe_ratio_pnl, sortino_ratio_pnl) = calc_sharpe_and_sortino(&daily_pnl_ratios, adg_pnl);
-    let mdg = {
+    let (gain_multiplier, adg_fraction) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let daily_pnl_ratios = calc_daily_realized_pnl_fractions(fills);
+    let daily_realized_pnl_mean_fraction = mean(&daily_pnl_ratios);
+    let daily_realized_pnl_median_fraction = median(&daily_pnl_ratios);
+    let (sharpe_ratio_realized_pnl, sortino_ratio_realized_pnl) =
+        calc_sharpe_and_sortino(&daily_pnl_ratios, daily_realized_pnl_mean_fraction);
+    let mdg_fraction = {
         if daily_eqs_pct_change.is_empty() {
             0.0
         } else {
@@ -631,14 +633,18 @@ fn analyze_backtest_basic_with_starting_balance(
     } else {
         let var = daily_eqs_mins_pct_change
             .iter()
-            .map(|&x| (x - adg).powi(2))
+            .map(|&x| (x - adg_fraction).powi(2))
             .sum::<f64>()
             / daily_eqs_mins_pct_change.len() as f64;
         var.sqrt()
     };
 
     // Calculate Sharpe Ratio
-    let sharpe_ratio = if std_dev != 0.0 { adg / std_dev } else { 0.0 };
+    let sharpe_ratio = if std_dev != 0.0 {
+        adg_fraction / std_dev
+    } else {
+        0.0
+    };
 
     // Calculate Sortino Ratio (using downside deviation)
     let downside_returns: Vec<f64> = daily_eqs_mins_pct_change
@@ -653,7 +659,7 @@ fn analyze_backtest_basic_with_starting_balance(
         0.0
     };
     let sortino_ratio = if downside_deviation != 0.0 {
-        adg / downside_deviation
+        adg_fraction / downside_deviation
     } else {
         0.0
     };
@@ -672,7 +678,7 @@ fn analyze_backtest_basic_with_starting_balance(
     let omega_ratio = calc_omega_ratio(gains_sum, losses_sum);
 
     // Calculate Expected Shortfall (99%)
-    let expected_shortfall_1pct = if daily_eqs_mins_pct_change.is_empty() {
+    let expected_shortfall_1pct_fraction = if daily_eqs_mins_pct_change.is_empty() {
         0.0
     } else {
         let mut sorted_returns = daily_eqs_mins_pct_change.clone();
@@ -699,8 +705,8 @@ fn analyze_backtest_basic_with_starting_balance(
     let drawdowns_full = calc_drawdowns(equities);
     let daily_worst_drawdowns =
         daily_worst_signed_drawdowns(&drawdowns_full, timestamps_ms, equities.len());
-    let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
-    let drawdown_worst = if drawdowns_full.is_empty() {
+    let drawdown_daily_worst_1pct_mean_fraction = mean_worst_1pct_abs(&daily_worst_drawdowns);
+    let drawdown_max_fraction = if drawdowns_full.is_empty() {
         0.0
     } else {
         drawdowns_full
@@ -710,13 +716,13 @@ fn analyze_backtest_basic_with_starting_balance(
 
     // Calculate Sterling Ratio (using average of worst 1% drawdowns)
     let sterling_ratio = {
-        let denom = drawdown_worst_mean_1pct.abs().max(1e-12);
-        adg / denom
+        let denom = drawdown_daily_worst_1pct_mean_fraction.abs().max(1e-12);
+        adg_fraction / denom
     };
 
     let calmar_ratio = {
-        let denom = drawdown_worst.abs().max(1e-12);
-        adg / denom
+        let denom = drawdown_max_fraction.abs().max(1e-12);
+        adg_fraction / denom
     };
 
     // Calculate equity-balance differences
@@ -754,15 +760,17 @@ fn analyze_backtest_basic_with_starting_balance(
         }
     }
 
-    let equity_balance_diff_pos_max = ebds_pos.iter().fold(0.0, |max, &x| f64::max(max, x));
-    let equity_balance_diff_pos_mean = if !ebds_pos.is_empty() {
+    let equity_balance_gap_positive_max_fraction =
+        ebds_pos.iter().fold(0.0, |max, &x| f64::max(max, x));
+    let equity_balance_gap_positive_mean_fraction = if !ebds_pos.is_empty() {
         ebds_pos.iter().sum::<f64>() / ebds_pos.len() as f64
     } else {
         0.0
     };
 
-    let equity_balance_diff_neg_max = ebds_neg.iter().fold(0.0, |max, &x| f64::max(max, x.abs()));
-    let equity_balance_diff_neg_mean = if !ebds_neg.is_empty() {
+    let equity_balance_gap_negative_max_fraction =
+        ebds_neg.iter().fold(0.0, |max, &x| f64::max(max, x.abs()));
+    let equity_balance_gap_negative_mean_fraction = if !ebds_neg.is_empty() {
         ebds_neg.iter().map(|x| x.abs()).sum::<f64>() / ebds_neg.len() as f64
     } else {
         0.0
@@ -797,21 +805,21 @@ fn analyze_backtest_basic_with_starting_balance(
         (0.0, 0.0, 0.0)
     };
 
-    let paper_loss_ratio = {
-        let denom = equity_balance_diff_neg_max.abs().max(1e-12);
-        adg / denom
+    let adg_to_paper_loss_max_ratio = {
+        let denom = equity_balance_gap_negative_max_fraction.abs().max(1e-12);
+        adg_fraction / denom
     };
-    let paper_loss_mean_ratio = {
-        let denom = equity_balance_diff_neg_mean.abs().max(1e-12);
-        adg / denom
+    let adg_to_paper_loss_mean_ratio = {
+        let denom = equity_balance_gap_negative_mean_fraction.abs().max(1e-12);
+        adg_fraction / denom
     };
-    let exposure_ratio = {
+    let adg_to_absolute_net_exposure_max_ratio = {
         let denom = twe_max.abs().max(1e-12);
-        adg / denom
+        adg_fraction / denom
     };
-    let exposure_mean_ratio = {
+    let adg_to_absolute_net_exposure_mean_ratio = {
         let denom = twe_mean.abs().max(1e-12);
-        adg / denom
+        adg_fraction / denom
     };
 
     // Calculate profit factor
@@ -847,7 +855,7 @@ fn analyze_backtest_basic_with_starting_balance(
     let loss_profit_ratio_long = calc_loss_profit_ratio(long_loss, long_profit);
     let loss_profit_ratio_short = calc_loss_profit_ratio(short_loss, short_profit);
 
-    // Calculate position durations and position_unchanged_hours_max
+    // Calculate position durations and position_unchanged_max_hours
     let mut positions_opened: HashMap<String, u64> = HashMap::new(); // Tracks position open time
     let mut durations_ms: Vec<u64> = Vec::new(); // Total position durations (ms)
     let mut last_fill_time: HashMap<String, u64> = HashMap::new(); // Last fill time per position (ms)
@@ -925,7 +933,7 @@ fn analyze_backtest_basic_with_starting_balance(
         (equities.len() as f64) / 1440.0
     };
     let n_days = if n_days <= 0.0 { 1e-9 } else { n_days };
-    let positions_held_per_day = durations_ms.len() as f64 / n_days;
+    let position_episodes_per_day = durations_ms.len() as f64 / n_days;
 
     // Weight each coin+side holding episode by its duration, including open tails.
     let (held_hours_sum, held_hours_squared_sum) =
@@ -941,19 +949,19 @@ fn analyze_backtest_basic_with_starting_balance(
         0.0
     };
 
-    let position_held_hours_mean = if !durations_ms.is_empty() {
+    let position_held_mean_hours = if !durations_ms.is_empty() {
         durations_ms.iter().sum::<u64>() as f64 / (durations_ms.len() as f64 * MS_PER_HOUR as f64)
     } else {
         0.0
     };
 
-    let position_held_hours_max = if !durations_ms.is_empty() {
+    let position_held_max_hours = if !durations_ms.is_empty() {
         *durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
     } else {
         0.0
     };
 
-    let position_held_hours_median = if !durations_ms.is_empty() {
+    let position_held_median_hours = if !durations_ms.is_empty() {
         let mut sorted_durations = durations_ms.clone();
         sorted_durations.sort_unstable();
         let mid = sorted_durations.len() / 2;
@@ -966,15 +974,15 @@ fn analyze_backtest_basic_with_starting_balance(
         0.0
     };
 
-    let position_unchanged_hours_max = if !unchanged_durations_ms.is_empty() {
+    let position_unchanged_max_hours = if !unchanged_durations_ms.is_empty() {
         *unchanged_durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
     } else {
         0.0
     };
-    let position_held_days_mean = position_held_hours_mean / 24.0;
-    let position_held_days_max = position_held_hours_max / 24.0;
-    let position_held_days_median = position_held_hours_median / 24.0;
-    let position_unchanged_days_max = position_unchanged_hours_max / 24.0;
+    let position_held_mean_days = position_held_mean_hours / 24.0;
+    let position_held_max_days = position_held_max_hours / 24.0;
+    let position_held_median_days = position_held_median_hours / 24.0;
+    let position_unchanged_max_days = position_unchanged_max_hours / 24.0;
     // Entry interval tracking: collect normal initial entry fills per coin+side
     // and compute gaps between consecutive initial entries for the same coin+side.
     let mut initial_entry_times: HashMap<String, Vec<u64>> = HashMap::new();
@@ -1009,11 +1017,11 @@ fn analyze_backtest_basic_with_starting_balance(
         }
     }
     let (
-        entry_interval_hours_mean,
-        entry_interval_hours_median,
-        entry_interval_hours_p95,
-        entry_interval_hours_p99,
-        entry_interval_hours_max,
+        entry_interval_mean_hours,
+        entry_interval_median_hours,
+        entry_interval_p95_hours,
+        entry_interval_p99_hours,
+        entry_interval_max_hours,
     ) = if !entry_intervals_ms.is_empty() {
         let mut sorted = entry_intervals_ms;
         sorted.sort_unstable();
@@ -1033,44 +1041,53 @@ fn analyze_backtest_basic_with_starting_balance(
     } else {
         (0.0, 0.0, 0.0, 0.0, 0.0)
     };
-    let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
-        if completed_trades.is_empty() {
-            (0.0, 0.0, 0.0, 0.0)
+    let (
+        trade_win_fraction,
+        trade_loss_max_fraction,
+        trade_loss_mean_fraction,
+        trade_loss_median_fraction,
+    ) = if completed_trades.is_empty() {
+        (0.0, 0.0, 0.0, 0.0)
+    } else {
+        let n_trades = completed_trades.len() as f64;
+        let n_wins = completed_trades
+            .iter()
+            .filter(|(net_pnl, _)| *net_pnl > 0.0)
+            .count() as f64;
+        let trade_win_fraction = n_wins / n_trades;
+
+        let loss_ratios: Vec<f64> = completed_trades
+            .iter()
+            .filter(|(net_pnl, _)| *net_pnl <= 0.0)
+            .map(|(net_pnl, balance_at_open)| {
+                if *balance_at_open > 0.0 {
+                    net_pnl.abs() / balance_at_open
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        if loss_ratios.is_empty() {
+            (trade_win_fraction, 0.0, 0.0, 0.0)
         } else {
-            let n_trades = completed_trades.len() as f64;
-            let n_wins = completed_trades
-                .iter()
-                .filter(|(net_pnl, _)| *net_pnl > 0.0)
-                .count() as f64;
-            let win_rate = n_wins / n_trades;
+            let trade_loss_max_fraction = loss_ratios.iter().copied().fold(0.0, f64::max);
+            let trade_loss_mean_fraction = mean(&loss_ratios);
+            let trade_loss_median_fraction = median(&loss_ratios);
+            (
+                trade_win_fraction,
+                trade_loss_max_fraction,
+                trade_loss_mean_fraction,
+                trade_loss_median_fraction,
+            )
+        }
+    };
+    let equity_choppiness_ratio = calc_equity_choppiness(&daily_eqs);
+    let equity_jerkiness_ratio = calc_equity_jerkiness(&daily_eqs);
+    let exponential_fit_mse_log_ratio_squared = calc_exponential_fit_error(&daily_eqs);
 
-            let loss_ratios: Vec<f64> = completed_trades
-                .iter()
-                .filter(|(net_pnl, _)| *net_pnl <= 0.0)
-                .map(|(net_pnl, balance_at_open)| {
-                    if *balance_at_open > 0.0 {
-                        net_pnl.abs() / balance_at_open
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
-
-            if loss_ratios.is_empty() {
-                (win_rate, 0.0, 0.0, 0.0)
-            } else {
-                let trade_loss_max = loss_ratios.iter().copied().fold(0.0, f64::max);
-                let trade_loss_mean = mean(&loss_ratios);
-                let trade_loss_median = median(&loss_ratios);
-                (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median)
-            }
-        };
-    let equity_choppiness = calc_equity_choppiness(&daily_eqs);
-    let equity_jerkiness = calc_equity_jerkiness(&daily_eqs);
-    let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
-
-    let volume_pct_per_day_avg = calc_avg_volume_pct_per_day(fills);
-    let peak_recovery_hours_equity = calc_peak_recovery_hours(
+    let active_day_turnover_proxy_mean_ratio = calc_active_day_turnover_proxy_mean_ratio(fills);
+    let peak_recovery_max_hours = calc_peak_recovery_hours(
         equities,
         if use_timestamps {
             Some(timestamps_ms)
@@ -1080,68 +1097,69 @@ fn analyze_backtest_basic_with_starting_balance(
         false,
     );
     let final_timestamp_ms = Some(analysis_end_ts);
-    let peak_recovery_hours_pnl = calc_peak_recovery_hours_pnl(fills, final_timestamp_ms);
-    let peak_recovery_days_equity = peak_recovery_hours_equity / 24.0;
-    let peak_recovery_days_pnl = peak_recovery_hours_pnl / 24.0;
+    let peak_recovery_max_hours_realized_pnl =
+        calc_peak_recovery_hours_pnl(fills, final_timestamp_ms);
+    let peak_recovery_max_days = peak_recovery_max_hours / 24.0;
+    let peak_recovery_max_days_realized_pnl = peak_recovery_max_hours_realized_pnl / 24.0;
 
     let mut analysis = Analysis::default();
-    analysis.adg = adg;
-    analysis.mdg = mdg;
-    analysis.gain = gain;
-    analysis.adg_pnl = adg_pnl;
-    analysis.mdg_pnl = mdg_pnl;
-    analysis.sharpe_ratio_pnl = sharpe_ratio_pnl;
-    analysis.sortino_ratio_pnl = sortino_ratio_pnl;
-    analysis.mdg_pnl = mdg_pnl;
+    analysis.adg_fraction = adg_fraction;
+    analysis.mdg_fraction = mdg_fraction;
+    analysis.gain_multiplier = gain_multiplier;
+    analysis.daily_realized_pnl_mean_fraction = daily_realized_pnl_mean_fraction;
+    analysis.daily_realized_pnl_median_fraction = daily_realized_pnl_median_fraction;
+    analysis.sharpe_ratio_realized_pnl = sharpe_ratio_realized_pnl;
+    analysis.sortino_ratio_realized_pnl = sortino_ratio_realized_pnl;
+    analysis.daily_realized_pnl_median_fraction = daily_realized_pnl_median_fraction;
     analysis.sharpe_ratio = sharpe_ratio;
     analysis.sortino_ratio = sortino_ratio;
     analysis.omega_ratio = omega_ratio;
-    analysis.expected_shortfall_1pct = expected_shortfall_1pct;
+    analysis.expected_shortfall_1pct_fraction = expected_shortfall_1pct_fraction;
     analysis.calmar_ratio = calmar_ratio;
     analysis.sterling_ratio = sterling_ratio;
-    analysis.drawdown_worst = drawdown_worst;
-    analysis.drawdown_worst_mean_1pct = drawdown_worst_mean_1pct;
-    analysis.equity_balance_diff_neg_max = equity_balance_diff_neg_max;
-    analysis.equity_balance_diff_neg_mean = equity_balance_diff_neg_mean;
-    analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
-    analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
-    analysis.paper_loss_ratio = paper_loss_ratio;
-    analysis.paper_loss_mean_ratio = paper_loss_mean_ratio;
-    analysis.exposure_ratio = exposure_ratio;
-    analysis.exposure_mean_ratio = exposure_mean_ratio;
+    analysis.drawdown_max_fraction = drawdown_max_fraction;
+    analysis.drawdown_daily_worst_1pct_mean_fraction = drawdown_daily_worst_1pct_mean_fraction;
+    analysis.equity_balance_gap_negative_max_fraction = equity_balance_gap_negative_max_fraction;
+    analysis.equity_balance_gap_negative_mean_fraction = equity_balance_gap_negative_mean_fraction;
+    analysis.equity_balance_gap_positive_max_fraction = equity_balance_gap_positive_max_fraction;
+    analysis.equity_balance_gap_positive_mean_fraction = equity_balance_gap_positive_mean_fraction;
+    analysis.adg_to_paper_loss_max_ratio = adg_to_paper_loss_max_ratio;
+    analysis.adg_to_paper_loss_mean_ratio = adg_to_paper_loss_mean_ratio;
+    analysis.adg_to_absolute_net_exposure_max_ratio = adg_to_absolute_net_exposure_max_ratio;
+    analysis.adg_to_absolute_net_exposure_mean_ratio = adg_to_absolute_net_exposure_mean_ratio;
     analysis.loss_profit_ratio = loss_profit_ratio;
     analysis.loss_profit_ratio_long = loss_profit_ratio_long;
     analysis.loss_profit_ratio_short = loss_profit_ratio_short;
-    analysis.positions_held_per_day = positions_held_per_day;
+    analysis.position_episodes_per_day = position_episodes_per_day;
     analysis.position_held_time_weighted_mean_hours = position_held_time_weighted_mean_hours;
-    analysis.position_held_hours_mean = position_held_hours_mean;
-    analysis.position_held_hours_max = position_held_hours_max;
-    analysis.position_held_hours_median = position_held_hours_median;
-    analysis.position_unchanged_hours_max = position_unchanged_hours_max;
-    analysis.position_held_days_mean = position_held_days_mean;
-    analysis.position_held_days_max = position_held_days_max;
-    analysis.position_held_days_median = position_held_days_median;
-    analysis.position_unchanged_days_max = position_unchanged_days_max;
-    analysis.entry_interval_hours_mean = entry_interval_hours_mean;
-    analysis.entry_interval_hours_median = entry_interval_hours_median;
-    analysis.entry_interval_hours_p95 = entry_interval_hours_p95;
-    analysis.entry_interval_hours_p99 = entry_interval_hours_p99;
-    analysis.entry_interval_hours_max = entry_interval_hours_max;
-    analysis.win_rate = win_rate;
-    analysis.trade_loss_max = trade_loss_max;
-    analysis.trade_loss_mean = trade_loss_mean;
-    analysis.trade_loss_median = trade_loss_median;
-    analysis.equity_choppiness = equity_choppiness;
-    analysis.equity_jerkiness = equity_jerkiness;
-    analysis.exponential_fit_error = exponential_fit_error;
-    analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
-    analysis.peak_recovery_hours_equity = peak_recovery_hours_equity;
-    analysis.peak_recovery_hours_pnl = peak_recovery_hours_pnl;
-    analysis.peak_recovery_days_equity = peak_recovery_days_equity;
-    analysis.peak_recovery_days_pnl = peak_recovery_days_pnl;
-    analysis.total_wallet_exposure_max = twe_max;
-    analysis.total_wallet_exposure_mean = twe_mean;
-    analysis.total_wallet_exposure_median = twe_median;
+    analysis.position_held_mean_hours = position_held_mean_hours;
+    analysis.position_held_max_hours = position_held_max_hours;
+    analysis.position_held_median_hours = position_held_median_hours;
+    analysis.position_unchanged_max_hours = position_unchanged_max_hours;
+    analysis.position_held_mean_days = position_held_mean_days;
+    analysis.position_held_max_days = position_held_max_days;
+    analysis.position_held_median_days = position_held_median_days;
+    analysis.position_unchanged_max_days = position_unchanged_max_days;
+    analysis.entry_interval_mean_hours = entry_interval_mean_hours;
+    analysis.entry_interval_median_hours = entry_interval_median_hours;
+    analysis.entry_interval_p95_hours = entry_interval_p95_hours;
+    analysis.entry_interval_p99_hours = entry_interval_p99_hours;
+    analysis.entry_interval_max_hours = entry_interval_max_hours;
+    analysis.trade_win_fraction = trade_win_fraction;
+    analysis.trade_loss_max_fraction = trade_loss_max_fraction;
+    analysis.trade_loss_mean_fraction = trade_loss_mean_fraction;
+    analysis.trade_loss_median_fraction = trade_loss_median_fraction;
+    analysis.equity_choppiness_ratio = equity_choppiness_ratio;
+    analysis.equity_jerkiness_ratio = equity_jerkiness_ratio;
+    analysis.exponential_fit_mse_log_ratio_squared = exponential_fit_mse_log_ratio_squared;
+    analysis.active_day_turnover_proxy_mean_ratio = active_day_turnover_proxy_mean_ratio;
+    analysis.peak_recovery_max_hours = peak_recovery_max_hours;
+    analysis.peak_recovery_max_hours_realized_pnl = peak_recovery_max_hours_realized_pnl;
+    analysis.peak_recovery_max_days = peak_recovery_max_days;
+    analysis.peak_recovery_max_days_realized_pnl = peak_recovery_max_days_realized_pnl;
+    analysis.absolute_net_wallet_exposure_max_ratio = twe_max;
+    analysis.absolute_net_wallet_exposure_mean_ratio = twe_mean;
+    analysis.absolute_net_wallet_exposure_median_ratio = twe_median;
 
     analysis
 }
@@ -1232,16 +1250,16 @@ pub fn analyze_backtest(
 
                 match *side {
                     "long" => {
-                        analysis.high_exposure_hours_mean_long = hrs_mean;
-                        analysis.high_exposure_hours_max_long = hrs_max;
-                        analysis.high_exposure_days_mean_long = hrs_mean / 24.0;
-                        analysis.high_exposure_days_max_long = hrs_max / 24.0;
+                        analysis.high_exposure_mean_hours_long = hrs_mean;
+                        analysis.high_exposure_max_hours_long = hrs_max;
+                        analysis.high_exposure_mean_days_long = hrs_mean / 24.0;
+                        analysis.high_exposure_max_days_long = hrs_max / 24.0;
                     }
                     "short" => {
-                        analysis.high_exposure_hours_mean_short = hrs_mean;
-                        analysis.high_exposure_hours_max_short = hrs_max;
-                        analysis.high_exposure_days_mean_short = hrs_mean / 24.0;
-                        analysis.high_exposure_days_max_short = hrs_max / 24.0;
+                        analysis.high_exposure_mean_hours_short = hrs_mean;
+                        analysis.high_exposure_max_hours_short = hrs_max;
+                        analysis.high_exposure_mean_days_short = hrs_mean / 24.0;
+                        analysis.high_exposure_max_days_short = hrs_max / 24.0;
                     }
                     _ => {}
                 }
@@ -1324,9 +1342,8 @@ pub fn analyze_backtest_usd_with_profile(
         total_wallet_exposures,
     );
     let analysis_usd_ms = elapsed_ms(usd_started);
-    let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
-    analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
-    analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+    let long_pnl_to_total_pnl_ratio = calc_long_pnl_to_total_pnl_ratio(fills);
+    analysis_usd.long_pnl_to_total_pnl_ratio = long_pnl_to_total_pnl_ratio;
     analysis_usd.liquidated = liquidated;
     (
         analysis_usd,
@@ -1347,7 +1364,7 @@ fn analyze_backtest_pair_inner(
     profile_enabled: bool,
 ) -> ((Analysis, Analysis), AnalysisPairProfile) {
     let total_started = profile_start(profile_enabled);
-    let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
+    let long_pnl_to_total_pnl_ratio = calc_long_pnl_to_total_pnl_ratio(fills);
 
     let usd_started = profile_start(profile_enabled);
     let analysis_usd = analyze_backtest(
@@ -1383,13 +1400,11 @@ fn analyze_backtest_pair_inner(
     );
     let analysis_btc_ms = elapsed_ms(btc_started);
     let mut analysis_usd = analysis_usd;
-    analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
-    analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+    analysis_usd.long_pnl_to_total_pnl_ratio = long_pnl_to_total_pnl_ratio;
     analysis_usd.liquidated = liquidated;
 
     let mut analysis_btc = analysis_btc;
-    analysis_btc.pnl_ratio_long_short = long_short_profit_ratio;
-    analysis_btc.long_short_profit_ratio = long_short_profit_ratio;
+    analysis_btc.long_pnl_to_total_pnl_ratio = long_pnl_to_total_pnl_ratio;
     analysis_btc.liquidated = liquidated;
 
     (
@@ -1403,7 +1418,7 @@ fn analyze_backtest_pair_inner(
     )
 }
 
-fn calc_daily_pnl_ratios(fills: &[Fill]) -> Vec<f64> {
+fn calc_daily_realized_pnl_fractions(fills: &[Fill]) -> Vec<f64> {
     if fills.is_empty() {
         return Vec::new();
     }
@@ -1561,7 +1576,7 @@ fn daily_worst_signed_drawdowns(
     daily_worst
 }
 
-/// Calculates the normalized total variation (sum of absolute first differences divided by net equity gain)
+/// Calculates the normalized total variation (sum of absolute first differences divided by net equity gain_multiplier)
 pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
     if equity.len() < 2 {
         return 0.0;
@@ -1719,7 +1734,7 @@ pub fn calc_exponential_fit_error(equity: &[f64]) -> f64 {
     mse
 }
 
-/// Computes terminal gain from the mean of the last up to 3 daily equity values and derives ADG.
+/// Computes terminal gain_multiplier from the mean of the last up to 3 daily equity values and derives ADG.
 pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64) {
     if daily_eqs.len() < 2 {
         return (0.0, 0.0);
@@ -1734,8 +1749,8 @@ pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64)
         return (-1.0, -1.0);
     }
     let n_days = daily_eqs.len() as f64;
-    let gain = end / start;
-    (gain, gain.powf(1.0 / n_days) - 1.0)
+    let gain_multiplier = end / start;
+    (gain_multiplier, gain_multiplier.powf(1.0 / n_days) - 1.0)
 }
 
 /// Chooses up to three deterministic rolling-growth horizons from the number of complete
@@ -1845,7 +1860,7 @@ pub fn calc_time_integrated_adg(daily_eqs: &[f64]) -> f64 {
 
 /// Calculates average volume per day as a percentage of balance.
 /// For each fill: abs(qty) * price / balance_at_fill
-pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
+pub fn calc_active_day_turnover_proxy_mean_ratio(fills: &[Fill]) -> f64 {
     if fills.is_empty() {
         return 0.0;
     }
@@ -1951,10 +1966,14 @@ mod tests {
         let equities: Vec<f64> = (0..30).map(|i| 10000.0 + 100.0 * i as f64).collect();
         let fills = vec![make_trade_fill(0, 0, "BTC", 0.0, 0.1, 0.1, 10000.0, true)];
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &[0.4; 30]);
-        assert!((analysis.gain - 1.28).abs() < 1e-12);
-        assert!((analysis.adg - 1.28_f64.powf(1.0 / 30.0) + 1.0).abs() < 1e-12);
+        assert!((analysis.gain_multiplier - 1.28).abs() < 1e-12);
+        assert!((analysis.adg_fraction - 1.28_f64.powf(1.0 / 30.0) + 1.0).abs() < 1e-12);
         let output = serde_json::to_value(analysis).unwrap();
-        assert!(output.as_object().unwrap().keys().all(|key| !key.ends_with("_w")));
+        assert!(output
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| !key.ends_with("_w")));
     }
 
     #[test]
@@ -2018,25 +2037,25 @@ mod tests {
         let metrics = calc_fill_activity_metrics(&fills, &timestamps, 2, 0);
 
         assert_eq!(metrics.fills_count, 2.0);
-        assert_eq!(metrics.fills_count_entry, 1.0);
-        assert_eq!(metrics.fills_count_close, 1.0);
+        assert_eq!(metrics.fills_entry_count, 1.0);
+        assert_eq!(metrics.fills_close_count, 1.0);
         assert_eq!(metrics.fills_count_long, 2.0);
         assert_eq!(metrics.fills_count_short, 0.0);
         assert!((metrics.fills_per_day - 12.0).abs() < 1e-12);
-        assert!((metrics.fills_per_day_entry - 6.0).abs() < 1e-12);
-        assert!((metrics.fills_per_day_close - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_entry_per_day - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_close_per_day - 6.0).abs() < 1e-12);
         assert!((metrics.fills_per_day_long - 12.0).abs() < 1e-12);
         assert!((metrics.fills_per_day_short - 0.0).abs() < 1e-12);
         assert!((metrics.fills_per_day_per_position_slot_long - 6.0).abs() < 1e-12);
         assert!((metrics.fills_per_day_per_position_slot_short - 0.0).abs() < 1e-12);
         assert!((metrics.fills_per_day_per_position_slot - 6.0).abs() < 1e-12);
-        assert!((metrics.fills_entry_per_close - 1.0).abs() < 1e-12);
+        assert!((metrics.entry_to_close_fill_count_ratio - 1.0).abs() < 1e-12);
         assert!((metrics.fills_active_days_count - 1.0).abs() < 1e-12);
-        assert!((metrics.fills_active_days_ratio - 1.0).abs() < 1e-12);
+        assert!((metrics.fills_active_day_fraction - 1.0).abs() < 1e-12);
         assert!((metrics.fills_active_symbols_count - 2.0).abs() < 1e-12);
-        assert!((metrics.fills_analysis_duration_days - (4.0 / 24.0)).abs() < 1e-12);
-        assert!((metrics.fills_top_symbol_share - 0.5).abs() < 1e-12);
-        assert!((metrics.fills_gap_longest_days - 2.0 / 24.0).abs() < 1e-12);
+        assert!((metrics.analysis_duration_days - (4.0 / 24.0)).abs() < 1e-12);
+        assert!((metrics.fills_top_symbol_fraction - 0.5).abs() < 1e-12);
+        assert!((metrics.fills_gap_max_days - 2.0 / 24.0).abs() < 1e-12);
         assert!((metrics.fills_gap_mean_hours - 4.0 / 3.0).abs() < 1e-12);
         assert!((metrics.fills_gap_median_hours - 1.0).abs() < 1e-12);
         assert!((metrics.fills_gap_p95_hours - 1.9).abs() < 1e-12);
@@ -2053,11 +2072,11 @@ mod tests {
         assert_eq!(metrics.fills_count, 0.0);
         assert_eq!(metrics.fills_per_day, 0.0);
         assert_eq!(metrics.fills_active_days_count, 0.0);
-        assert_eq!(metrics.fills_active_days_ratio, 0.0);
+        assert_eq!(metrics.fills_active_day_fraction, 0.0);
         assert_eq!(metrics.fills_active_symbols_count, 0.0);
-        assert_eq!(metrics.fills_top_symbol_share, 0.0);
-        assert!((metrics.fills_analysis_duration_days - (2.0 / 24.0)).abs() < 1e-12);
-        assert!((metrics.fills_gap_longest_days - 2.0 / 24.0).abs() < 1e-12);
+        assert_eq!(metrics.fills_top_symbol_fraction, 0.0);
+        assert!((metrics.analysis_duration_days - (2.0 / 24.0)).abs() < 1e-12);
+        assert!((metrics.fills_gap_max_days - 2.0 / 24.0).abs() < 1e-12);
         assert!((metrics.fills_gap_mean_hours - 2.0).abs() < 1e-12);
         assert!((metrics.fills_gap_median_hours - 2.0).abs() < 1e-12);
         assert!((metrics.fills_gap_p95_hours - 2.0).abs() < 1e-12);
@@ -2195,7 +2214,7 @@ mod tests {
         ];
         let result = analyze_backtest(&fills, &equities, &timestamps, &[]);
         assert!((result.position_held_time_weighted_mean_hours - 69.0 / 13.0).abs() < 1e-12);
-        assert_eq!(result.position_held_hours_max, 7.0);
+        assert_eq!(result.position_held_max_hours, 7.0);
     }
 
     #[test]
@@ -2223,8 +2242,8 @@ mod tests {
         let longer = evaluate(6);
         let shorter = evaluate(4);
         assert_eq!(
-            longer.position_held_hours_max,
-            shorter.position_held_hours_max
+            longer.position_held_max_hours,
+            shorter.position_held_max_hours
         );
         assert!((longer.position_held_time_weighted_mean_hours - 100.0 / 14.0).abs() < 1e-12);
         assert!((shorter.position_held_time_weighted_mean_hours - 80.0 / 12.0).abs() < 1e-12);
@@ -2269,8 +2288,8 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
 
-        assert!((analysis.position_held_days_max - 10.0).abs() < 1e-12);
-        assert!((analysis.position_unchanged_days_max - 9.0).abs() < 1e-12);
+        assert!((analysis.position_held_max_days - 10.0).abs() < 1e-12);
+        assert!((analysis.position_unchanged_max_days - 9.0).abs() < 1e-12);
     }
 
     #[test]
@@ -2292,15 +2311,15 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
 
-        assert!((analysis.position_held_days_max - 3.0).abs() < 1e-12);
+        assert!((analysis.position_held_max_days - 3.0).abs() < 1e-12);
         assert_eq!(analysis.position_held_time_weighted_mean_hours, 72.0);
-        assert!((analysis.position_unchanged_days_max - 3.0).abs() < 1e-12);
+        assert!((analysis.position_unchanged_max_days - 3.0).abs() < 1e-12);
     }
 
     #[test]
     fn test_total_wallet_exposure_max_short_only() {
         // For short-only configs, twe_net is always negative.
-        // total_wallet_exposure_max should report the maximum absolute exposure.
+        // absolute_net_wallet_exposure_max_ratio should report the maximum absolute exposure.
         let fills = vec![
             make_fill(100, -0.5), // 50% short exposure
             make_fill(200, -1.0), // 100% short exposure
@@ -2316,9 +2335,9 @@ mod tests {
 
         // With abs() fix: max(0.5, 1.0, 0.3) = 1.0
         assert!(
-            (analysis.total_wallet_exposure_max - 1.0).abs() < 0.01,
-            "Expected total_wallet_exposure_max=1.0 for short-only, got {}",
-            analysis.total_wallet_exposure_max
+            (analysis.absolute_net_wallet_exposure_max_ratio - 1.0).abs() < 0.01,
+            "Expected absolute_net_wallet_exposure_max_ratio=1.0 for short-only, got {}",
+            analysis.absolute_net_wallet_exposure_max_ratio
         );
     }
 
@@ -2336,9 +2355,9 @@ mod tests {
 
         // With abs() fix: max(0.2, 0.5, 0.8, 0.3) = 0.8
         assert!(
-            (analysis.total_wallet_exposure_max - 0.8).abs() < 0.01,
-            "Expected total_wallet_exposure_max=0.8, got {}",
-            analysis.total_wallet_exposure_max
+            (analysis.absolute_net_wallet_exposure_max_ratio - 0.8).abs() < 0.01,
+            "Expected absolute_net_wallet_exposure_max_ratio=0.8, got {}",
+            analysis.absolute_net_wallet_exposure_max_ratio
         );
     }
 
@@ -2353,12 +2372,16 @@ mod tests {
         let expected_gain: f64 = ((9500.0 + 11000.0 + 12000.0) / 3.0) / 10000.0;
         let expected_adg = expected_gain.powf(1.0 / 4.0) - 1.0;
 
-        assert!((analysis.paper_loss_ratio - expected_adg / 0.05).abs() < 1e-12);
-        assert!((analysis.paper_loss_mean_ratio - expected_adg / 0.05).abs() < 1e-12);
-        assert!((analysis.exposure_ratio - expected_adg / 0.8).abs() < 1e-12);
-        assert!((analysis.exposure_mean_ratio - expected_adg / 0.45).abs() < 1e-12);
-        assert!((analysis.total_wallet_exposure_mean - 0.45).abs() < 1e-12);
-        assert!((analysis.total_wallet_exposure_median - 0.4).abs() < 1e-12);
+        assert!((analysis.adg_to_paper_loss_max_ratio - expected_adg / 0.05).abs() < 1e-12);
+        assert!((analysis.adg_to_paper_loss_mean_ratio - expected_adg / 0.05).abs() < 1e-12);
+        assert!(
+            (analysis.adg_to_absolute_net_exposure_max_ratio - expected_adg / 0.8).abs() < 1e-12
+        );
+        assert!(
+            (analysis.adg_to_absolute_net_exposure_mean_ratio - expected_adg / 0.45).abs() < 1e-12
+        );
+        assert!((analysis.absolute_net_wallet_exposure_mean_ratio - 0.45).abs() < 1e-12);
+        assert!((analysis.absolute_net_wallet_exposure_median_ratio - 0.4).abs() < 1e-12);
     }
 
     #[test]
@@ -2373,11 +2396,15 @@ mod tests {
 
         let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &[]);
 
-        assert!((analysis.equity_balance_diff_neg_max - 0.1).abs() < 1e-12);
-        assert!((analysis.equity_balance_diff_neg_mean - 0.1).abs() < 1e-12);
+        assert!((analysis.equity_balance_gap_negative_max_fraction - 0.1).abs() < 1e-12);
+        assert!((analysis.equity_balance_gap_negative_mean_fraction - 0.1).abs() < 1e-12);
         let expected_positive = (95.0 - 90.0) / 90.0;
-        assert!((analysis.equity_balance_diff_pos_max - expected_positive).abs() < 1e-12);
-        assert!((analysis.equity_balance_diff_pos_mean - expected_positive).abs() < 1e-12);
+        assert!(
+            (analysis.equity_balance_gap_positive_max_fraction - expected_positive).abs() < 1e-12
+        );
+        assert!(
+            (analysis.equity_balance_gap_positive_mean_fraction - expected_positive).abs() < 1e-12
+        );
     }
 
     #[test]
@@ -2392,9 +2419,11 @@ mod tests {
 
         let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &[]);
 
-        assert!((analysis.equity_balance_diff_neg_mean - 0.1).abs() < 1e-12);
+        assert!((analysis.equity_balance_gap_negative_mean_fraction - 0.1).abs() < 1e-12);
         let expected_positive = (95.0 - 90.0) / 90.0;
-        assert!((analysis.equity_balance_diff_pos_mean - expected_positive).abs() < 1e-12);
+        assert!(
+            (analysis.equity_balance_gap_positive_mean_fraction - expected_positive).abs() < 1e-12
+        );
     }
 
     #[test]
@@ -2427,10 +2456,10 @@ mod tests {
         let expected_hours = ((timestamps[100] - timestamps[0]) as f64) / MS_PER_HOUR as f64;
 
         assert!(
-            (analysis.peak_recovery_hours_pnl - expected_hours).abs() < 1e-9,
-            "Expected peak_recovery_hours_pnl={}, got {}",
+            (analysis.peak_recovery_max_hours_realized_pnl - expected_hours).abs() < 1e-9,
+            "Expected peak_recovery_max_hours_realized_pnl={}, got {}",
             expected_hours,
-            analysis.peak_recovery_hours_pnl
+            analysis.peak_recovery_max_hours_realized_pnl
         );
     }
 
@@ -2462,14 +2491,14 @@ mod tests {
         let analysis =
             analyze_backtest(&vec![f0, f1, f2], &equities, &timestamps, &exposures_series);
         assert!(
-            (analysis.peak_recovery_hours_pnl - 3.0).abs() < 1e-9,
+            (analysis.peak_recovery_max_hours_realized_pnl - 3.0).abs() < 1e-9,
             "Expected net pnl open-tail recovery of 3.0h, got {}",
-            analysis.peak_recovery_hours_pnl
+            analysis.peak_recovery_max_hours_realized_pnl
         );
         assert!(
-            (analysis.peak_recovery_days_pnl - 0.125).abs() < 1e-9,
+            (analysis.peak_recovery_max_days_realized_pnl - 0.125).abs() < 1e-9,
             "Expected net pnl open-tail recovery of 0.125d, got {}",
-            analysis.peak_recovery_days_pnl
+            analysis.peak_recovery_max_days_realized_pnl
         );
     }
 
@@ -2482,8 +2511,8 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
 
-        assert!((analysis.drawdown_worst - 0.5).abs() < 1e-12);
-        assert!((analysis.drawdown_worst_mean_1pct - 0.5).abs() < 1e-12);
+        assert!((analysis.drawdown_max_fraction - 0.5).abs() < 1e-12);
+        assert!((analysis.drawdown_daily_worst_1pct_mean_fraction - 0.5).abs() < 1e-12);
     }
 
     #[test]
@@ -2509,11 +2538,11 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
 
-        assert!((analysis.entry_interval_hours_mean - 12.5).abs() < 1e-9);
-        assert!((analysis.entry_interval_hours_median - 12.5).abs() < 1e-9);
-        assert!((analysis.entry_interval_hours_p95 - 14.75).abs() < 1e-9);
-        assert!((analysis.entry_interval_hours_p99 - 14.95).abs() < 1e-9);
-        assert!((analysis.entry_interval_hours_max - 15.0).abs() < 1e-9);
+        assert!((analysis.entry_interval_mean_hours - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_median_hours - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_p95_hours - 14.75).abs() < 1e-9);
+        assert!((analysis.entry_interval_p99_hours - 14.95).abs() < 1e-9);
+        assert!((analysis.entry_interval_max_hours - 15.0).abs() < 1e-9);
     }
 
     #[test]
@@ -2532,10 +2561,10 @@ mod tests {
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
         let expected_loss = 30.0 / balance;
 
-        assert!((analysis.win_rate - 0.5).abs() < 1e-9);
-        assert!((analysis.trade_loss_max - expected_loss).abs() < 1e-9);
-        assert!((analysis.trade_loss_mean - expected_loss).abs() < 1e-9);
-        assert!((analysis.trade_loss_median - expected_loss).abs() < 1e-9);
+        assert!((analysis.trade_win_fraction - 0.5).abs() < 1e-9);
+        assert!((analysis.trade_loss_max_fraction - expected_loss).abs() < 1e-9);
+        assert!((analysis.trade_loss_mean_fraction - expected_loss).abs() < 1e-9);
+        assert!((analysis.trade_loss_median_fraction - expected_loss).abs() < 1e-9);
     }
 
     #[test]
@@ -2551,10 +2580,10 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
 
-        assert!(analysis.win_rate.abs() < 1e-9);
-        assert!(analysis.trade_loss_max.abs() < 1e-9);
-        assert!(analysis.trade_loss_mean.abs() < 1e-9);
-        assert!(analysis.trade_loss_median.abs() < 1e-9);
+        assert!(analysis.trade_win_fraction.abs() < 1e-9);
+        assert!(analysis.trade_loss_max_fraction.abs() < 1e-9);
+        assert!(analysis.trade_loss_mean_fraction.abs() < 1e-9);
+        assert!(analysis.trade_loss_median_fraction.abs() < 1e-9);
     }
 
     #[test]
@@ -2572,22 +2601,22 @@ mod tests {
 
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
 
-        assert!(analysis.win_rate.abs() < 1e-9);
-        assert!((analysis.trade_loss_max - 0.02).abs() < 1e-9);
-        assert!((analysis.trade_loss_mean - 0.015).abs() < 1e-9);
-        assert!((analysis.trade_loss_median - 0.015).abs() < 1e-9);
+        assert!(analysis.trade_win_fraction.abs() < 1e-9);
+        assert!((analysis.trade_loss_max_fraction - 0.02).abs() < 1e-9);
+        assert!((analysis.trade_loss_mean_fraction - 0.015).abs() < 1e-9);
+        assert!((analysis.trade_loss_median_fraction - 0.015).abs() < 1e-9);
     }
 
     #[test]
     fn test_smoothed_terminal_geometric_gain_uses_last_three_day_mean() {
         let daily_eqs = vec![100.0, 110.0, 120.0, 90.0];
-        let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+        let (gain_multiplier, adg_fraction) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
         let expected_end: f64 = (110.0 + 120.0 + 90.0) / 3.0;
         let expected_gain: f64 = expected_end / 100.0;
         let expected_adg = expected_gain.powf(1.0 / daily_eqs.len() as f64) - 1.0;
 
-        assert!((gain - expected_gain).abs() < 1e-12);
-        assert!((adg - expected_adg).abs() < 1e-12);
+        assert!((gain_multiplier - expected_gain).abs() < 1e-12);
+        assert!((adg_fraction - expected_adg).abs() < 1e-12);
     }
 
     #[test]
@@ -2647,10 +2676,16 @@ mod tests {
         let (analysis_usd, analysis_btc) =
             analyze_backtest_pair(&fills, &equities, false, &exposures_series, false);
 
-        assert!(analysis_usd.adg > 0.0, "expected positive usd adg");
-        assert!(analysis_btc.adg < 0.0, "expected negative btc adg");
         assert!(
-            (analysis_usd.adg - analysis_btc.adg).abs() > 1e-12,
+            analysis_usd.adg_fraction > 0.0,
+            "expected positive usd adg_fraction"
+        );
+        assert!(
+            analysis_btc.adg_fraction < 0.0,
+            "expected negative btc adg_fraction"
+        );
+        assert!(
+            (analysis_usd.adg_fraction - analysis_btc.adg_fraction).abs() > 1e-12,
             "expected btc metrics to differ from usd metrics without btc collateral"
         );
         assert!(!analysis_usd.liquidated);
@@ -2686,12 +2721,12 @@ mod tests {
         second.index = 1;
         second.timestamp_ms = timestamps[1];
         let analysis = analyze_backtest(&[first.clone(), second], &equities, &timestamps, &[]);
-        assert_eq!(analysis.equity_choppiness, 1.0);
+        assert_eq!(analysis.equity_choppiness_ratio, 1.0);
         let expected = (7200.0 / 10000.0_f64).powf(1.0 / 30.0) - 1.0;
-        assert!((analysis.adg - expected).abs() < 1e-12);
+        assert!((analysis.adg_fraction - expected).abs() < 1e-12);
         let single_fill = analyze_backtest(&[first], &equities, &timestamps, &[]);
-        assert_eq!(single_fill.equity_choppiness, 1.0);
-        assert!((single_fill.adg - expected).abs() < 1e-12);
+        assert_eq!(single_fill.equity_choppiness_ratio, 1.0);
+        assert!((single_fill.adg_fraction - expected).abs() < 1e-12);
     }
 
     #[test]
@@ -2705,11 +2740,14 @@ mod tests {
             0.4,
             0,
         );
-        assert!((analysis.equity_balance_diff_neg_max - 0.3).abs() < 1e-12);
-        assert!((analysis.paper_loss_ratio - analysis.adg / 0.3).abs() < 1e-12);
-        assert!((analysis.exposure_ratio - analysis.adg / 0.4).abs() < 1e-12);
-        assert_eq!(analysis.volume_pct_per_day_avg, 0.0);
-        assert_eq!(analysis.win_rate, 0.0);
+        assert!((analysis.equity_balance_gap_negative_max_fraction - 0.3).abs() < 1e-12);
+        assert!((analysis.adg_to_paper_loss_max_ratio - analysis.adg_fraction / 0.3).abs() < 1e-12);
+        assert!(
+            (analysis.adg_to_absolute_net_exposure_max_ratio - analysis.adg_fraction / 0.4).abs()
+                < 1e-12
+        );
+        assert_eq!(analysis.active_day_turnover_proxy_mean_ratio, 0.0);
+        assert_eq!(analysis.trade_win_fraction, 0.0);
     }
 
     #[test]
@@ -2726,7 +2764,7 @@ mod tests {
             0.4,
             15,
         );
-        assert!((analysis.equity_balance_diff_neg_max - 0.1).abs() < 1e-12);
+        assert!((analysis.equity_balance_gap_negative_max_fraction - 0.1).abs() < 1e-12);
     }
 
     #[test]
@@ -2737,8 +2775,18 @@ mod tests {
         let expected = analyze_backtest(&fills, &equities, &timestamps, &[0.4; 30]);
         for exposures in [&[][..], &[0.4][..]] {
             let actual = analyze_backtest(&fills, &equities, &timestamps, exposures);
-            assert!((actual.exposure_ratio - expected.exposure_ratio).abs() < 1e-12);
-            assert!((actual.exposure_mean_ratio - expected.exposure_mean_ratio).abs() < 1e-12);
+            assert!(
+                (actual.adg_to_absolute_net_exposure_max_ratio
+                    - expected.adg_to_absolute_net_exposure_max_ratio)
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (actual.adg_to_absolute_net_exposure_mean_ratio
+                    - expected.adg_to_absolute_net_exposure_mean_ratio)
+                    .abs()
+                    < 1e-12
+            );
         }
     }
 

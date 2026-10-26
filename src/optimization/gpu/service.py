@@ -104,14 +104,14 @@ CORE_OUTPUT_KEYS = {
     "btc_day_end_eq",
     "btc_day_min_eq",
     "btc_day_max_dd",
-    "equity_balance_diff_neg_max",
-    "equity_balance_diff_neg_mean",
-    "equity_balance_diff_pos_max",
-    "equity_balance_diff_pos_mean",
-    "equity_balance_diff_neg_max_btc",
-    "equity_balance_diff_neg_mean_btc",
-    "equity_balance_diff_pos_max_btc",
-    "equity_balance_diff_pos_mean_btc",
+    "equity_balance_gap_negative_max_fraction",
+    "equity_balance_gap_negative_mean_fraction",
+    "equity_balance_gap_positive_max_fraction",
+    "equity_balance_gap_positive_mean_fraction",
+    "equity_balance_gap_negative_max_fraction_btc",
+    "equity_balance_gap_negative_mean_fraction_btc",
+    "equity_balance_gap_positive_max_fraction_btc",
+    "equity_balance_gap_positive_mean_fraction_btc",
     "day_end_eq",
     "day_min_eq",
     "day_max_dd",
@@ -153,14 +153,14 @@ CORE_OUTPUT_KEYS = {
     "profit_sum_short",
     "loss_sum_short",
     "entry_initial_balance_pct",
-    "entry_initial_balance_pct_long",
-    "entry_initial_balance_pct_short",
+    "initial_entry_balance_fraction_long",
+    "initial_entry_balance_fraction_short",
     "entry_interval_sum_steps",
     "entry_interval_count",
     "entry_interval_max_steps",
     "entry_interval_hist",
-    "total_wallet_exposure_max",
-    "total_wallet_exposure_mean",
+    "absolute_net_wallet_exposure_max_ratio",
+    "absolute_net_wallet_exposure_mean_ratio",
 }
 
 
@@ -881,33 +881,33 @@ def _log_mps_dispatch_cap(
 
 
 _ACCOUNT_EQUITY_RECOVERY_METRICS = {
-    "peak_recovery_days_equity_usd",
-    "peak_recovery_hours_equity_usd",
+    "peak_recovery_max_days_usd",
+    "peak_recovery_max_hours_usd",
 }
 
 _HSL_EMA_TAIL_METRICS = {
-    "drawdown_worst_mean_1pct_ema_strategy_eq",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
-    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+    "hsl_signal_ema_worst_1pct_mean_fraction",
+    "hsl_signal_ema_worst_1pct_mean_fraction_long",
+    "hsl_signal_ema_worst_1pct_mean_fraction_short",
 }
 _HSL_EMA_DRAWDOWN_METRICS = {
-    "drawdown_worst_ema_strategy_eq",
-    "drawdown_worst_ema_strategy_eq_long",
-    "drawdown_worst_ema_strategy_eq_short",
+    "hsl_signal_ema_max_fraction",
+    "hsl_signal_ema_max_fraction_long",
+    "hsl_signal_ema_max_fraction_short",
 }
 _HSL_RAW_DRAWDOWN_METRICS = {
-    "drawdown_worst_strategy_eq_long",
-    "drawdown_worst_strategy_eq_short",
+    "drawdown_max_fraction_strategy_equity_long",
+    "drawdown_max_fraction_strategy_equity_short",
 }
 _HSL_RAW_TAIL_METRICS = {
-    "drawdown_worst_mean_1pct_strategy_eq_long",
-    "drawdown_worst_mean_1pct_strategy_eq_short",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long",
+    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short",
 }
 _HSL_STRATEGY_EQ_RECOVERY_METRICS = {
-    "peak_recovery_hours_strategy_eq_long",
-    "peak_recovery_hours_strategy_eq_short",
-    "peak_recovery_days_strategy_eq_long",
-    "peak_recovery_days_strategy_eq_short",
+    "recovery_max_hours_strategy_equity_long",
+    "recovery_max_hours_strategy_equity_short",
+    "recovery_max_days_strategy_equity_long",
+    "recovery_max_days_strategy_equity_short",
 }
 
 
@@ -927,12 +927,12 @@ def _hsl_diagnostics_needed(needed_metrics) -> bool:
 
 
 _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
-    "strategy_eq_recovery_days_mean",
-    "strategy_eq_recovery_days_median",
-    "strategy_eq_recovery_days_p95",
-    "strategy_eq_recovery_days_p99",
-    "strategy_eq_recovery_days_mean_worst_5pct",
-    "strategy_eq_recovery_days_mean_worst_1pct",
+    "recovery_mean_days_strategy_equity",
+    "recovery_median_days_strategy_equity",
+    "recovery_p95_days_strategy_equity",
+    "recovery_p99_days_strategy_equity",
+    "recovery_worst_5pct_mean_days_strategy_equity",
+    "recovery_worst_1pct_mean_days_strategy_equity",
 }
 
 
@@ -963,7 +963,7 @@ def mps_requested_metric_features(
         "hsl_raw_tail": bool(metrics & _HSL_RAW_TAIL_METRICS),
         "hsl_diagnostics": _hsl_diagnostics_needed(metrics),
         "coin_fill_counts": bool(
-            metrics & {"fills_active_symbols_count", "fills_top_symbol_share"}
+            metrics & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
         ),
     }
     return frozenset(name for name, enabled in features.items() if enabled)
@@ -1336,8 +1336,8 @@ def _directional_entry_initial_metrics(side: str, entry_pct):
         raise ValueError(f"expected long or short entry metric side, got {side!r}")
     zeros = entry_pct.new_zeros(entry_pct.shape)
     return {
-        "entry_initial_balance_pct_long": entry_pct if side == "long" else zeros,
-        "entry_initial_balance_pct_short": entry_pct if side == "short" else zeros,
+        "initial_entry_balance_fraction_long": entry_pct if side == "long" else zeros,
+        "initial_entry_balance_fraction_short": entry_pct if side == "short" else zeros,
     }
 
 
@@ -1953,7 +1953,7 @@ class SharedAccountReplay:
             ),
             "collect_coin_fill_counts": bool(
                 self.needed_metrics
-                & {"fills_active_symbols_count", "fills_top_symbol_share"}
+                & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
             ),
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
@@ -2383,7 +2383,7 @@ class SharedAccountReplay:
                 output[key] = torch.where(
                     torch.isfinite(values), values + timestamp_origin, values
                 )
-            if any("_per_exposure_" in name for name in self.needed_metrics):
+            if any("_per_twel_ratio_" in name for name in self.needed_metrics):
                 output.update(
                     _candidate_wallet_exposure_limit_ratio_outputs(
                         chunk,
@@ -2410,7 +2410,7 @@ class SharedAccountReplay:
             }.issubset(output):
                 raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
             if (getattr(self, "native_factual_hsl", False)
-                    and any(name.startswith("drawdown_worst_ema_strategy_eq") for name in self.needed_metrics)
+                    and any(name.startswith("hsl_signal_ema_max_fraction") for name in self.needed_metrics)
                     and "hsl_drawdown_ema_max_portfolio" not in output):
                 raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
             if (getattr(self, "native_factual_hsl", False)
@@ -2419,7 +2419,7 @@ class SharedAccountReplay:
                     and "entry_interval_native_metrics" not in output):
                 raise RuntimeError("native entry intervals require compact exact metrics")
             if (
-                "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
+                "hsl_signal_ema_worst_1pct_mean_fraction" in self.needed_metrics
                 and (fused_runner is not None or len(self.sides) == 1)
                 and "hsl_drawdown_ema_mean_worst_1pct_portfolio" not in output
             ):
