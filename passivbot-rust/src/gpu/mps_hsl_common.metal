@@ -18,32 +18,12 @@
 #define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
 #endif
 
-#ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED
-#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
-#endif
-
-#ifndef PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-#define PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_EMA_TAIL_ENABLED)
-#endif
-
-#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0
-#endif
-
-#ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED
-#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0
-#endif
-
 #ifndef PASSIVBOT_HSL_RAW_TAIL_CAPACITY
 #define PASSIVBOT_HSL_RAW_TAIL_CAPACITY 1
 #endif
 
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED && PASSIVBOT_HSL_RAW_TAIL_CAPACITY < 1
+#if 0 && PASSIVBOT_HSL_RAW_TAIL_CAPACITY < 1
 #error Raw drawdown tail capacity must be positive
-#endif
-
-#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 1
 #endif
 
 #define HSL_EMA_TAIL_BINS 32
@@ -83,40 +63,21 @@ struct HslState {
     float budget_multiplier;
     float drawdown_ema;
     float sampled_drawdown_raw;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float drawdown_ema_max;
-#endif
     int tier;
     bool red_active_now;
     bool halted;
     int report_flat_minute; // Observed accounting boundary; never trading permission.
-    float current_red_start_k;
-    float current_halt_start_k;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float last_restart_k;
-#endif
+
     float triggers;
     float restarts;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float halt_duration_sum_steps;
-    float halt_duration_max_steps;
-    float halt_duration_count;
-    float trigger_drawdown_sum;
-    float trigger_drawdown_count;
-    float flatten_time_sum_steps;
-    float flatten_time_count;
-    float restart_retrigger_count;
-    float equity_at_halt;
-    float halt_to_restart_equity_loss;
+
     float panic_event_start_equity;
     float panic_event_loss;
     float panic_fill_loss_sum_usd;
-    float panic_fill_loss_max_usd;
-    float panic_loss_drawdown_min;
+
     float panic_loss_drawdown_sum;
     float panic_loss_drawdown_max;
     float panic_loss_drawdown_count;
-#endif
 };
 
 struct HslReplayContext {
@@ -154,250 +115,6 @@ inline void attach_hsl_replay_side(
         coins[c].replay = &context; coins[c].replay_side = side; coins[c].replay_coin = c;
         coins[c].risk_multiplier = context.settings[c * context.coin_columns + 4];
     }
-}
-
-struct HslStrategyEquityStats {
-    bool initialized;
-    float peak;
-    float peak_sample_k;
-    float last_sample_k;
-    float recovery_max_steps;
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    float drawdown_max;
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    int current_drawdown_day;
-    float current_day_drawdown_worst;
-    int completed_day_count;
-    int daily_tail_count;
-    float daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY];
-#endif
-};
-
-inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
-    HslStrategyEquityStats stats;
-    stats.initialized = false;
-    stats.peak = 0.0f;
-    stats.peak_sample_k = -1.0f;
-    stats.last_sample_k = -1.0f;
-    stats.recovery_max_steps = 0.0f;
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    stats.drawdown_max = 0.0f;
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    stats.current_drawdown_day = -1;
-    stats.current_day_drawdown_worst = 0.0f;
-    stats.completed_day_count = 0;
-    stats.daily_tail_count = 0;
-    for (int i = 0; i < PASSIVBOT_HSL_RAW_TAIL_CAPACITY; ++i)
-        stats.daily_drawdown_top[i] = 0.0f;
-#endif
-    return stats;
-}
-
-inline void flush_hsl_strategy_equity_daily_drawdown(
-    thread HslStrategyEquityStats& stats
-) {
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    if (stats.current_drawdown_day < 0) return;
-    stats.completed_day_count += 1;
-    // The registered timeline bounds floor(observed days / 100). Keep only
-    // that many largest daily maxima, with no approximate cutoff-bin mean.
-    const float value = stats.current_day_drawdown_worst;
-    if (stats.daily_tail_count == PASSIVBOT_HSL_RAW_TAIL_CAPACITY
-        && value <= stats.daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1])
-        return;
-    int position = min(stats.daily_tail_count, PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1);
-    while (position > 0 && value > stats.daily_drawdown_top[position - 1]) {
-        stats.daily_drawdown_top[position] = stats.daily_drawdown_top[position - 1];
-        --position;
-    }
-    stats.daily_drawdown_top[position] = value;
-    stats.daily_tail_count = min(stats.daily_tail_count + 1, PASSIVBOT_HSL_RAW_TAIL_CAPACITY);
-#endif
-}
-
-inline void update_hsl_strategy_equity_stats(
-    thread HslStrategyEquityStats& stats,
-    float strategy_equity,
-    int day_index
-) {
-    if (!isfinite(strategy_equity)) return;
-    const float sample_k = stats.initialized
-        ? stats.last_sample_k + 1.0f : 0.0f;
-    if (!stats.initialized) {
-        stats.initialized = true;
-        stats.peak = strategy_equity;
-        stats.peak_sample_k = sample_k;
-        stats.last_sample_k = sample_k;
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-        stats.current_drawdown_day = day_index;
-        stats.current_day_drawdown_worst = 0.0f;
-#endif
-        return;
-    }
-    stats.last_sample_k = sample_k;
-    if (strategy_equity > stats.peak) {
-        stats.recovery_max_steps = fmax(
-            stats.recovery_max_steps, sample_k - stats.peak_sample_k
-        );
-        stats.peak = strategy_equity;
-        stats.peak_sample_k = sample_k;
-    }
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    float drawdown = (stats.peak - strategy_equity)
-        / fmax(fabs(stats.peak), 1.0e-12f);
-    stats.drawdown_max = fmax(stats.drawdown_max, drawdown);
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    float daily_drawdown = (stats.peak - strategy_equity)
-        / fmax(fabs(stats.peak), 1.0e-12f);
-    if (day_index > stats.current_drawdown_day) {
-        flush_hsl_strategy_equity_daily_drawdown(stats);
-        stats.current_drawdown_day = day_index;
-        stats.current_day_drawdown_worst = daily_drawdown;
-    } else {
-        stats.current_day_drawdown_worst = fmax(
-            stats.current_day_drawdown_worst, daily_drawdown
-        );
-    }
-#endif
-}
-
-inline float hsl_strategy_equity_drawdown_max(
-    thread HslStrategyEquityStats& stats
-) {
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    return stats.drawdown_max;
-#else
-    return 0.0f;
-#endif
-}
-
-inline float hsl_strategy_equity_drawdown_mean_worst_1pct(
-    thread HslStrategyEquityStats& stats
-) {
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    int sample_count = stats.completed_day_count
-        + (stats.current_drawdown_day >= 0 ? 1 : 0);
-    if (sample_count <= 0) return 0.0f;
-    int worst_n = max(sample_count / 100, 1);
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    if (worst_n == 1) return stats.drawdown_max;
-#endif
-    // An undersized direct shader invocation cannot supply a valid tail.
-    // Prepared runners specialize capacity from the complete input horizon.
-    if (worst_n > PASSIVBOT_HSL_RAW_TAIL_CAPACITY) return NAN;
-    int stored = 0;
-    bool current = stats.current_drawdown_day >= 0;
-    float total = 0.0f;
-    // Merge the unflushed current day without mutating the retained state:
-    // repeated metric queries and temporal replay snapshots remain identical.
-    for (int i = 0; i < worst_n; ++i) {
-        if (current && (stored >= stats.daily_tail_count
-            || stats.current_day_drawdown_worst >= stats.daily_drawdown_top[stored])) {
-            total += stats.current_day_drawdown_worst;
-            current = false;
-        } else {
-            total += stats.daily_drawdown_top[stored++];
-        }
-    }
-    return total / worst_n;
-#else
-    return 0.0f;
-#endif
-}
-
-inline float hsl_strategy_equity_recovery_max_steps(
-    thread HslStrategyEquityStats& stats
-) {
-    if (!stats.initialized) return 0.0f;
-    return fmax(
-        stats.recovery_max_steps,
-        fmax(stats.last_sample_k - stats.peak_sample_k, 0.0f)
-    );
-}
-
-// Native factual replay captures requested observations in bounded device
-// storage and reduces the actual largest floor(1%) after an accepted replay.
-// The legacy observation replay retains its approximate log histogram. Neither
-// path changes the controller's signal or clock. Unrequested work is compiled out.
-struct HslDrawdownEmaTailStats {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
-    float last_sample;
-#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    float sample_count;
-    float counts[HSL_EMA_TAIL_BINS];
-    float sums[HSL_EMA_TAIL_BINS];
-#else
-    float unused;
-#endif
-};
-
-inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
-    HslDrawdownEmaTailStats stats;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
-    stats.last_sample = NAN;
-#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    stats.sample_count = 0.0f;
-    for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
-        stats.counts[i] = 0.0f;
-        stats.sums[i] = 0.0f;
-    }
-#else
-    stats.unused = 0.0f;
-#endif
-    return stats;
-}
-
-inline int hsl_drawdown_ema_tail_bin(float value) {
-    // EMA tails retain their existing histogram independently of raw daily tails.
-    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
-        * 2.2857142857142856f;
-    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
-}
-
-inline void update_hsl_drawdown_ema_tail_stats(
-    thread HslDrawdownEmaTailStats& stats,
-    float drawdown_ema
-) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    if (!isfinite(drawdown_ema)) return;
-    float value = fabs(drawdown_ema);
-#if PASSIVBOT_HSL_FACTUAL_ONLY
-    stats.last_sample = value;
-#else
-    int bin = hsl_drawdown_ema_tail_bin(value);
-    stats.sample_count += 1.0f;
-    stats.counts[bin] += 1.0f;
-    stats.sums[bin] += value;
-#endif
-#endif
-}
-
-inline float hsl_drawdown_ema_mean_worst_1pct(
-    thread HslDrawdownEmaTailStats& stats
-) {
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    // A successful native result must replace this sentinel with the device
-    // reduction. An unreduced observational placeholder is never valid fitness.
-    return NAN;
-#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED && !PASSIVBOT_HSL_FACTUAL_ONLY
-    if (!(stats.sample_count > 0.0f)) return 0.0f;
-    float worst_n = fmax(floor(stats.sample_count * 0.01f), 1.0f);
-    float remaining = worst_n;
-    float total = 0.0f;
-    for (int i = HSL_EMA_TAIL_BINS - 1; i >= 0 && remaining > 0.0f; --i) {
-        float count = stats.counts[i];
-        if (!(count > 0.0f)) continue;
-        float take = fmin(count, remaining);
-        total += stats.sums[i] * (take / count);
-        remaining -= take;
-    }
-    return total / worst_n;
-#else
-    return 0.0f;
-#endif
 }
 
 inline void bind_hsl(
@@ -453,50 +170,26 @@ inline void mirror_hsl(thread HslState& owner, thread HslState& view) {
 // Reporting only: finish one contiguous panic loss segment. GREEN cancels
 // panic intent, so a later RED starts a new loss denominator even before flat.
 inline void finish_hsl_panic_loss(thread HslState& h) {
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    if (h.panic_event_start_equity >= 0.0f) {
+    if (h.panic_event_start_equity != -1.0f) {
         float ratio = h.panic_event_loss / h.panic_event_start_equity;
-        h.panic_loss_drawdown_min = h.panic_loss_drawdown_count > 0.0f
-            ? fmin(h.panic_loss_drawdown_min, ratio) : ratio;
+
         h.panic_loss_drawdown_sum += ratio;
         h.panic_loss_drawdown_max = fmax(h.panic_loss_drawdown_max, ratio);
-        h.panic_loss_drawdown_count += 1.0f;
+        h.panic_loss_drawdown_count = h.panic_loss_drawdown_count < 16777216.0f
+            ? h.panic_loss_drawdown_count + 1.0f : NAN;
         h.panic_event_start_equity = -1.0f;
         h.panic_event_loss = 0.0f;
     }
-#else
-    (void)h;
-#endif
 }
 
 // Observational lifecycle: current RED starts reporting before a terminal fill.
 // These counters never grant trading permission or retain a panic commitment.
 inline void begin_hsl_report(thread HslState& h, int minute, float score) {
-    h.triggers += 1.0f;
-    h.current_red_start_k = float(minute);
-    if (h.current_halt_start_k < 0.0f) h.current_halt_start_k = float(minute);
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    h.trigger_drawdown_sum += score;
-    h.trigger_drawdown_count += 1.0f;
-    // A restart contributes at most one following retrigger, per scope.
-    if (h.last_restart_k >= 0.0f) {
-        h.restart_retrigger_count += 1.0f;
-        h.last_restart_k = -1.0f;
-    }
-#endif
+    h.triggers = h.triggers < 16777216.0f ? h.triggers + 1.0f : NAN;
 }
 
 inline void restart_hsl_report(thread HslState& h, int minute) {
-    h.restarts += 1.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
-    h.halt_duration_sum_steps += duration;
-    h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
-    h.halt_duration_count += 1.0f;
-    h.last_restart_k = float(minute);
-#endif
-    h.current_halt_start_k = -1.0f;
-    h.current_red_start_k = -1.0f;
+    h.restarts = h.restarts < 16777216.0f ? h.restarts + 1.0f : NAN;
 }
 
 inline bool hsl_coin_scope_active(thread HslState& h, int slots, bool exposed) {
@@ -542,21 +235,9 @@ inline void observe_hsl_event(
         begin_hsl_report(h, minute, score);
         reporting_red = true;
     }
-    if (terminal_red) {
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        if (h.current_red_start_k >= 0.0f) {
-            h.flatten_time_sum_steps += fmax(float(minute) - h.current_red_start_k, 0.0f);
-            h.flatten_time_count += 1.0f;
-        }
-#endif
-        h.current_red_start_k = -1.0f;
-    }
     // GREEN permits restart without requiring a flat panic exit. A terminal
     // RED with zero cooldown can trigger, flatten and restart at one timestamp.
     if (h.hsl.action == 0 && reporting_red) restart_hsl_report(h, minute);
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    h.drawdown_ema_max = fmax(h.drawdown_ema_max, h.drawdown_ema);
-#endif
 }
 
 // One symbol mark is shared across its long and short inventories. An execution
@@ -700,82 +381,20 @@ inline bool hsl_mark_terminal_observation_eligible(
 #endif
 }
 
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
-// The public portfolio EMA series observes the maximum current signal on each
-// bar. Reducing each side's tail first would discard their joint time ordering.
-inline float observed_multicoin_hsl_ema(
-    thread const HslState& aggregate, thread const HslState* coins,
-    int coin_count, int effective_n_positions
-) {
-    if (effective_n_positions <= 0) return 0.0f;
-    if (aggregate.signal_mode != HSL_SIGNAL_COIN) {
-        return aggregate.enabled ? fabs(aggregate.drawdown_ema) : 0.0f;
-    }
-    float value = 0.0f;
-    for (int c = 0; c < coin_count; ++c) {
-        if (coins[c].enabled) value = fmax(value, fabs(coins[c].drawdown_ema));
-    }
-    return value;
-}
-#endif
-
 // Reporting runs after forced closes and never advances the trading controller.
 // A negative tier means this side has no enabled reporting scope.
 inline int record_multicoin_hsl_report(
     thread HslState& aggregate, thread HslState* coins, int coin_count,
-    int effective_n_positions, bool ema_eligible
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    , thread float& report_ema_max
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    , thread HslDrawdownEmaTailStats& ema_tail
-#endif
+    int effective_n_positions
 ) {
-    bool enabled = aggregate.enabled;
-    int tier = hsl_report_tier(aggregate);
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
-    // Reset the current bar before recording its scope observation.
-    ema_tail.last_sample = NAN;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
-    float drawdown_ema = fabs(aggregate.drawdown_ema);
-#if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Unified has one portfolio controller, not a controller for each side.
-    // The portfolio observation below retains its signal; side reports are zero.
-    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED || !aggregate.enabled
-            || effective_n_positions <= 0) drawdown_ema = 0.0f;
-#endif
-#endif
-    if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
-        enabled = false;
-        tier = 0;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
-        drawdown_ema = 0.0f;
-#endif
-        if (effective_n_positions > 0) {
-            for (int c = 0; c < coin_count; ++c) {
-                enabled = enabled || coins[c].enabled;
-                tier = max(tier, hsl_report_tier(coins[c]));
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
-                if (coins[c].enabled)
-                    drawdown_ema = fmax(drawdown_ema, fabs(coins[c].drawdown_ema));
-#endif
-            }
-        }
-        ema_eligible = enabled;
-    }
-#if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Rust records each bar's enabled scope signal, including cooldown bars.
-    // Permission to generate orders is not the EMA reporting clock.
-    ema_eligible = true;
-#endif
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    report_ema_max = fmax(report_ema_max, drawdown_ema);
-#endif
-    if (ema_eligible) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-        update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);
-#endif
+    if (aggregate.signal_mode != HSL_SIGNAL_COIN)
+        return aggregate.enabled ? hsl_report_tier(aggregate) : -1;
+    if (effective_n_positions <= 0) return -1;
+    bool enabled = false;
+    int tier = 0;
+    for (int c = 0; c < coin_count; ++c) {
+        enabled = enabled || coins[c].enabled;
+        tier = max(tier, hsl_report_tier(coins[c]));
     }
     return enabled ? tier : -1;
 }
@@ -802,40 +421,21 @@ inline HslState load_hsl(
     h.risk_multiplier = 1.0f;
     h.drawdown_ema = 0.0f;
     h.sampled_drawdown_raw = 0.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    h.drawdown_ema_max = 0.0f;
-#endif
     h.tier = 0;
     h.red_active_now = false;
     h.halted = false;
     h.report_flat_minute = -1;
-    h.current_red_start_k = -1.0f;
-    h.current_halt_start_k = -1.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    h.last_restart_k = -1.0f;
-#endif
+
     h.triggers = 0.0f;
     h.restarts = 0.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    h.halt_duration_sum_steps = 0.0f;
-    h.halt_duration_max_steps = 0.0f;
-    h.halt_duration_count = 0.0f;
-    h.trigger_drawdown_sum = 0.0f;
-    h.trigger_drawdown_count = 0.0f;
-    h.flatten_time_sum_steps = 0.0f;
-    h.flatten_time_count = 0.0f;
-    h.restart_retrigger_count = 0.0f;
-    h.equity_at_halt = 0.0f;
-    h.halt_to_restart_equity_loss = 0.0f;
+
     h.panic_event_start_equity = -1.0f;
     h.panic_event_loss = 0.0f;
     h.panic_fill_loss_sum_usd = 0.0f;
-    h.panic_fill_loss_max_usd = 0.0f;
-    h.panic_loss_drawdown_min = 0.0f;
+
     h.panic_loss_drawdown_sum = 0.0f;
     h.panic_loss_drawdown_max = 0.0f;
     h.panic_loss_drawdown_count = 0.0f;
-#endif
     return h;
 }
 
@@ -872,10 +472,6 @@ inline int hsl_mode(thread HslState& h, bool has_position) {
     return h.enabled ? h.hsl.action : 0;
 }
 
-
-
-
-
 inline void advance_coin_hsl_equity_after_close_fill(
     thread float& equity,
     float net_pnl,
@@ -905,8 +501,6 @@ inline void advance_coin_hsl_equity_after_entry_fill(
     );
     equity += added_unrealized - fee;
 }
-
-
 
 inline void update_hsl(
     thread HslState& h,
@@ -1043,26 +637,21 @@ inline bool update_dual_side_hsl(
     return long_hsl.hsl_valid && short_hsl.hsl_valid;
 }
 
-
-
 inline void record_hsl_panic_fill(
     thread HslState& h,
     float net_pnl,
-    float current_equity
+    float pre_fill_balance
 ) {
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    // Forced delist labels alone do not establish an HSL execution episode.
+    if (!h.enabled || !h.red_active_now) return;
     if (h.panic_event_start_equity < 0.0f) {
-        h.panic_event_start_equity = fmax(current_equity, 1.0e-12f);
+        h.panic_event_start_equity = isfinite(pre_fill_balance) && pre_fill_balance > 0.0f
+            ? pre_fill_balance : NAN;
     }
     float panic_loss = fmax(-net_pnl, 0.0f);
     h.panic_event_loss += panic_loss;
     h.panic_fill_loss_sum_usd += panic_loss;
-    h.panic_fill_loss_max_usd = fmax(h.panic_fill_loss_max_usd, panic_loss);
-#else
-    (void)h;
-    (void)net_pnl;
-    (void)current_equity;
-#endif
+
 }
 
 // CPU reporting assigns elapsed time to the preceding observation's RED state.
@@ -1140,147 +729,56 @@ inline float hsl_report_end_step(thread const HslTimeObservation& observation) {
 // Keep every HSL scalar reduction in one contract. Existing one-side kernels
 // and future fused dual-side kernels therefore share identical sum/max/count
 // and conditional-min semantics.
+// Compact factual reporting shared by all controller topologies. Reserved
+// scalar holes do not carry retired analytic quantities.
 struct HslOutputAggregate {
-    float enabled_long;
-    float enabled_short;
-    float triggers_long;
-    float triggers_short;
-    float restarts_long;
-    float restarts_short;
-    float tier_samples_total;
-
-
-    float tier_samples_red;
-    float duration_sum;
-    float duration_max;
-    float duration_count;
-    float trigger_drawdown_sum;
-    float trigger_drawdown_count;
-    float flatten_time_sum;
-    float flatten_time_count;
-    float restart_retrigger_count;
-    float halt_to_restart_equity_loss;
+    float enabled_long, enabled_short;
+    float triggers_long, triggers_short;
+    float restarts_long, restarts_short;
+    float tier_samples_total, tier_samples_red;
     float panic_fill_loss_sum_usd;
-    float panic_fill_loss_max_usd;
-    float panic_loss_drawdown_min;
-    float panic_loss_drawdown_sum;
-    float panic_loss_drawdown_max;
-    float panic_loss_drawdown_count;
-    float drawdown_ema_max_long;
-    float drawdown_ema_max_short;
+    float panic_loss_drawdown_sum, panic_loss_drawdown_max, panic_loss_drawdown_count;
 };
 
-inline HslOutputAggregate init_hsl_output_aggregate(
-    float tier_samples_total,
-    float tier_samples_red
-) {
+inline HslOutputAggregate init_hsl_output_aggregate(float observed_steps, float red_steps) {
     HslOutputAggregate output;
-    output.enabled_long = 0.0f;
-    output.enabled_short = 0.0f;
-    output.triggers_long = 0.0f;
-    output.triggers_short = 0.0f;
-    output.restarts_long = 0.0f;
-    output.restarts_short = 0.0f;
-    output.tier_samples_total = tier_samples_total;
-
-
-    output.tier_samples_red = tier_samples_red;
-    output.duration_sum = 0.0f;
-    output.duration_max = 0.0f;
-    output.duration_count = 0.0f;
-    output.trigger_drawdown_sum = 0.0f;
-    output.trigger_drawdown_count = 0.0f;
-    output.flatten_time_sum = 0.0f;
-    output.flatten_time_count = 0.0f;
-    output.restart_retrigger_count = 0.0f;
-    output.halt_to_restart_equity_loss = 0.0f;
+    output.enabled_long = output.enabled_short = 0.0f;
+    output.triggers_long = output.triggers_short = 0.0f;
+    output.restarts_long = output.restarts_short = 0.0f;
+    output.tier_samples_total = observed_steps;
+    output.tier_samples_red = red_steps;
     output.panic_fill_loss_sum_usd = 0.0f;
-    output.panic_fill_loss_max_usd = 0.0f;
-    output.panic_loss_drawdown_min = 0.0f;
-    output.panic_loss_drawdown_sum = 0.0f;
-    output.panic_loss_drawdown_max = 0.0f;
+    output.panic_loss_drawdown_sum = output.panic_loss_drawdown_max = 0.0f;
     output.panic_loss_drawdown_count = 0.0f;
-    output.drawdown_ema_max_long = 0.0f;
-    output.drawdown_ema_max_short = 0.0f;
     return output;
 }
 
-inline void accumulate_hsl_output(
-    thread HslOutputAggregate& output,
-    thread HslState& h,
-    bool short_side,
-    float report_end_k
-) {
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    // Include a censored unfinished panic segment in the final report.
+inline void accumulate_hsl_output(thread HslOutputAggregate& output,
+    thread HslState& h, bool short_side, float report_end_k) {
     HslState report = h;
     finish_hsl_panic_loss(report);
-    // Forced delist closes are panic fills even when HSL itself is disabled.
-    // Exact Rust reports their loss metrics independently of controller
-    // enablement, so retain those fields before filtering HSL-only telemetry.
     output.panic_fill_loss_sum_usd += h.panic_fill_loss_sum_usd;
-    output.panic_fill_loss_max_usd = fmax(
-        output.panic_fill_loss_max_usd, h.panic_fill_loss_max_usd
-    );
-    if (report.panic_loss_drawdown_count > 0.0f) {
-        output.panic_loss_drawdown_min = output.panic_loss_drawdown_count > 0.0f
-            ? fmin(output.panic_loss_drawdown_min, report.panic_loss_drawdown_min)
-            : report.panic_loss_drawdown_min;
-    }
     output.panic_loss_drawdown_sum += report.panic_loss_drawdown_sum;
-    output.panic_loss_drawdown_max = fmax(
-        output.panic_loss_drawdown_max, report.panic_loss_drawdown_max
-    );
-    output.panic_loss_drawdown_count += report.panic_loss_drawdown_count;
+    output.panic_loss_drawdown_max = fmax(output.panic_loss_drawdown_max,
+                                         report.panic_loss_drawdown_max);
+    output.panic_loss_drawdown_count = output.panic_loss_drawdown_count <= 16777216.0f - report.panic_loss_drawdown_count
+        ? output.panic_loss_drawdown_count + report.panic_loss_drawdown_count : NAN;
     if (!h.enabled) return;
-    float terminal_count = (h.red_active_now || h.halted)
-        && h.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
-        ? 1.0f : 0.0f;
-    float terminal_duration = terminal_count > 0.0f
-        ? fmax(report_end_k - h.current_halt_start_k, 0.0f) : 0.0f;
     if (short_side) {
         output.enabled_short = 1.0f;
-        output.triggers_short += h.triggers;
+        output.triggers_short = output.triggers_short <= 16777216.0f - h.triggers
+            ? output.triggers_short + h.triggers : NAN;
         output.restarts_short += h.restarts;
-        output.drawdown_ema_max_short = fmax(
-            output.drawdown_ema_max_short, h.drawdown_ema_max
-        );
     } else {
         output.enabled_long = 1.0f;
-        output.triggers_long += h.triggers;
+        output.triggers_long = output.triggers_long <= 16777216.0f - h.triggers
+            ? output.triggers_long + h.triggers : NAN;
         output.restarts_long += h.restarts;
-        output.drawdown_ema_max_long = fmax(
-            output.drawdown_ema_max_long, h.drawdown_ema_max
-        );
     }
-    output.duration_sum += h.halt_duration_sum_steps + terminal_duration;
-    output.duration_max = fmax(
-        output.duration_max,
-        fmax(h.halt_duration_max_steps, terminal_duration)
-    );
-    output.duration_count += h.halt_duration_count + terminal_count;
-    output.trigger_drawdown_sum += h.trigger_drawdown_sum;
-    output.trigger_drawdown_count += h.trigger_drawdown_count;
-    float open_exit_count = h.current_red_start_k >= 0.0f && report_end_k >= 0.0f
-        ? 1.0f : 0.0f;
-    output.flatten_time_sum += h.flatten_time_sum_steps + (open_exit_count > 0.0f
-        ? fmax(report_end_k - h.current_red_start_k, 0.0f) : 0.0f);
-    output.flatten_time_count += h.flatten_time_count + open_exit_count;
-    output.restart_retrigger_count += h.restart_retrigger_count;
-    output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
-#else
-    (void)output;
-    (void)h;
-    (void)short_side;
-    (void)report_end_k;
-#endif
 }
 
-inline void write_hsl_output_aggregate(
-    thread const HslOutputAggregate& output,
-    device float* scalars,
-    int scalar_offset
-) {
+inline void write_hsl_output_aggregate(thread const HslOutputAggregate& output,
+    device float* scalars, int scalar_offset) {
     scalars[scalar_offset + 0] = output.enabled_long;
     scalars[scalar_offset + 1] = output.enabled_short;
     scalars[scalar_offset + 2] = output.triggers_long;
@@ -1289,23 +787,10 @@ inline void write_hsl_output_aggregate(
     scalars[scalar_offset + 5] = output.restarts_short;
     scalars[scalar_offset + 6] = output.tier_samples_total;
     scalars[scalar_offset + 7] = output.tier_samples_red;
-    scalars[scalar_offset + 8] = output.duration_sum;
-    scalars[scalar_offset + 9] = output.duration_max;
-    scalars[scalar_offset + 10] = output.duration_count;
-    scalars[scalar_offset + 11] = output.trigger_drawdown_sum;
-    scalars[scalar_offset + 12] = output.trigger_drawdown_count;
-    scalars[scalar_offset + 13] = output.flatten_time_sum;
-    scalars[scalar_offset + 14] = output.flatten_time_count;
-    scalars[scalar_offset + 15] = output.restart_retrigger_count;
-    scalars[scalar_offset + 16] = output.halt_to_restart_equity_loss;
     scalars[scalar_offset + 17] = output.panic_fill_loss_sum_usd;
-    scalars[scalar_offset + 18] = output.panic_fill_loss_max_usd;
-    scalars[scalar_offset + 19] = output.panic_loss_drawdown_min;
     scalars[scalar_offset + 20] = output.panic_loss_drawdown_sum;
     scalars[scalar_offset + 21] = output.panic_loss_drawdown_max;
     scalars[scalar_offset + 22] = output.panic_loss_drawdown_count;
-    scalars[scalar_offset + 23] = output.drawdown_ema_max_long;
-    scalars[scalar_offset + 24] = output.drawdown_ema_max_short;
 }
 
 inline void write_one_side_hsl_outputs(

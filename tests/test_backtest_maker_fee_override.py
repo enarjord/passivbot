@@ -475,6 +475,7 @@ def _native_strategy_payload(strategy_kind):
 
     verify_loaded_runtime_extension()
     config = _base_config()
+    config["backtest"].update(start_date="2021-01-01", end_date="2021-01-02")
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
@@ -485,8 +486,9 @@ def _native_strategy_payload(strategy_kind):
         ],
         dtype=np.float64,
     )
-    btc_usd_prices = np.array([20_000.0, 20_000.0], dtype=np.float64)
-    timestamps = np.array([1_609_459_200_000, 1_609_459_260_000], dtype=np.int64)
+    hlcvs = np.tile(hlcvs, (8, 1, 1))
+    btc_usd_prices = np.full(len(hlcvs), 20_000.0, dtype=np.float64)
+    timestamps = 1_609_459_200_000 + np.arange(len(hlcvs), dtype=np.int64) * 60_000
     payload = build_backtest_payload(
         hlcvs,
         mss,
@@ -494,8 +496,8 @@ def _native_strategy_payload(strategy_kind):
         "binance",
         btc_usd_prices,
         timestamps,
-        skip_btc_analysis=True,
     )
+    payload.backtest_params["global_warmup_bars"] = 1
     return payload
 
 
@@ -587,4 +589,4 @@ def test_run_backtest_bundle_keeps_supported_optional_strategy_defaults(strategy
             del target[path[-1]]
 
     result = _run_native_strategy_payload(payload)
-    assert len(result) == 5
+    assert len(result) == 4

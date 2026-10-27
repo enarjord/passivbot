@@ -659,6 +659,7 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
 
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["portfolio"]["warmup"].update(activation_span_fraction=1.0, max_minutes=3)
     config["bot"]["long"]["enabled"] = True
     config["optimize"]["backend"] = backend
     config["backtest"].update(

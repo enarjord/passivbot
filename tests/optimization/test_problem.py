@@ -123,7 +123,7 @@ def test_problem_evaluate_passthroughs_metrics_and_vector():
     assert evaluator.calls == [([0.7, 1.1], ["foo"])]
 
 
-def test_problem_without_constraints_omits_g():
+def test_problem_without_numeric_limits_retains_validity_constraint():
     evaluator = SingleObjectiveEvaluator()
     adapter = PymooEvaluatorAdapter(evaluator)
     problem = PassivbotProblem(
@@ -135,7 +135,7 @@ def test_problem_without_constraints_omits_g():
     out = {}
     problem._evaluate(np.asarray([0.7]), out)
 
-    assert "G" not in out
+    assert out["G"].tolist() == [-1.0]
     assert out["F"].tolist() == [-1.5]
 
 

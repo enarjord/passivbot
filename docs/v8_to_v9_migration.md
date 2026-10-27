@@ -136,44 +136,50 @@ The converter preserves sparse file inheritance and reports materialized referen
 patches; file values precede inline values. Conflicting aliases fail rather than choosing
 one by insertion order.
 
-Retired metrics require a specific replacement and a separate formula acknowledgment:
+Core metric definition version 1 changes observation populations, clocks and formulas.
+Strict migration requires `--acknowledge-metric-formula-change` for every selected
+released metric, including retained names such as `loss_profit_ratio`. Each newly
+retired selector also requires an explicit `--metric-replacement OLD=NEW` choice:
 
 ```sh
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
-  --metric-replacement adg_strategy_eq_w=adg_fraction_strategy_equity \
+  --metric-replacement adg_strategy_eq=cagr_fraction_strategy_equity \
+  --metric-replacement adg_strategy_eq_w=cagr_fraction_strategy_equity_ew \
   --metric-replacement strategy_eq_underwater_pct_mean=pain_index_fraction_strategy_equity \
   --acknowledge-metric-formula-change --report migration-report.json
 ```
 
-This example deliberately selects ordinary full-period growth. `_ew` is another distinct,
-opt-in formula and requires `backtest.ew_half_life_days`. Neither is an alias for `_w`.
-Objectives, limits, visibility lists and reducer mappings all require explicit choices.
-The retired daily-worst underwater mean is replaced by minute-sampled Pain Index only
-when explicitly selected and acknowledged; its old thresholds are not equivalent.
-Best-effort migration may infer that choice and records the formula change. The removed
-underwater median has no inferred replacement and requires an explicit metric choice.
-Best-effort migration can infer a supported `_ew` formula. Four released families without an
-exponential counterpart instead have explicit ordinary fallbacks:
+Repeat the replacement flag for every retired selector reported in the input's
+objectives, limits or reducer mappings. These examples are deliberate formula choices;
+CAGR, CAGR EW and minute-sampled Pain Index do not preserve the old formulas or their
+thresholds. Turnover, HSL episode loss and other revised quantities also require fresh
+thresholds and backtests. See the [current metric definitions](metrics.md).
 
-| Released selector | Best-effort ordinary replacement |
-| --- | --- |
-| `volume_pct_per_day_avg_w` | `active_day_turnover_proxy_mean_ratio` |
-| `mdg_strategy_eq_w` | `mdg_fraction_strategy_equity` |
-| `adg_pnl_w` | `daily_realized_pnl_mean_fraction` |
-| `mdg_pnl_w` | `daily_realized_pnl_median_fraction` |
+Best-effort mode never chooses replacements for retired growth, `_w`, currency,
+turnover-proxy, realized-PnL or daily-worst underwater families. The former automatic
+EW and ordinary-statistic fallbacks are retired. An explicitly chosen replacement must
+be a current BASE selector; `_usd`, `_btc` and outer-statistic aliases are unsupported.
+A verified released outer suffix such as `_max` moves into the existing `reducer` field.
+Conflicting reducer choices fail, and identical objectives created by explicit choices
+are consolidated with their old/new lists and counts recorded in the report.
 
-These retain the ordinary quantity, statistic and scale, including the realized-PnL basis of
-the last two. They drop the retired equal average of the full-history estimate and up to nine
-shorter suffix estimates. Full-period ordinary statistics are different formulas; they do not
-enable EW analysis or supply an EW half-life. Each inference is reported as such. Supported
-outer statistic suffixes remain intact; unknown families still require `--metric-replacement`.
-Existing scoring normalization consolidates identical objectives created by formula choices;
-the report includes the old/new objective lists and counts. Inspect that list and re-evaluate
-limits before starting a new search. Explicit replacements take precedence over inferred choices.
-The terminal-only `backtest.visible_metrics` setting is removed during explicit v8 migration,
-with its removal recorded in the migration report. Standalone backtests display their complete
-analysis. Current v9 configurations must omit this retired field.
+Only `cagr_fraction_strategy_equity_ew` retains exponential recency weighting. Its
+native default half-life is 180 days; omitted or `null` values resolve to that default.
+Explicit half-lives must be finite and positive, including fractional days below one.
+One resolved value applies across the campaign; scenarios cannot override it.
+
+Annualized metrics use 365.25 days per year. Volatility, Sharpe, Sortino and Omega use
+complete UTC daily returns, with no risk-free-return subtraction. Drawdown, Ulcer,
+Pain, recovery, CAGR EW and exposure need minute observations. Coarser replay preserves
+its actual cadence: ordinary reports mark unavailable quantities explicitly, and an
+optimizer selecting one of those minute quantities fails preflight. Daily quantities
+require a cadence supplying the complete UTC-close grid; no interpolation creates
+missing observations.
+
+The terminal-only `backtest.visible_metrics` setting is removed during explicit v8
+migration, with its removal recorded in the report. Standalone backtests display their
+complete core analysis. Current v9 configurations must omit this retired field.
 
 DEAP inputs additionally require an authored `optimize.pymoo.shared` policy and
 `--acknowledge-search-backend-change`; outer genetic gates and offspring policies are
@@ -195,7 +201,7 @@ retired search controls do not imply equivalent search evolution or reusable fit
 
 ## Opt-in best-effort migration
 
-Use `--best-effort` to propose a replacement without supplying every semantic choice:
+Use `--best-effort` to report supported policy inferences. Supply every retired metric's explicit replacement alongside it:
 
 ```sh
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
@@ -210,9 +216,9 @@ are emitted as choices are made, including before a later validation failure.
 
 | Missing choice or saved-result field | Best-effort policy |
 |---|---|
-| Supported released `_w` family with an EW counterpart | Use its frozen EW replacement, preserving verified currency and supported outer statistic suffixes |
-| The four released turnover / MDG strategy-equity / daily realized-PnL families above | Use the named full-period ordinary statistic and report loss of suffix-window recency averaging |
-| EW half-life absent or `null`, with an EW metric requested | Set global `backtest.ew_half_life_days` to `180.0` |
+| Retired metric selector, including `_w` and former ordinary fallbacks | Require an explicit `--metric-replacement OLD=NEW`; never infer a formula substitute |
+| Retained metric selector crossing core definition version 1 | Report the changed definition and require fresh thresholds/results |
+| EW half-life absent or `null`, with CAGR EW explicitly selected | Resolve and report the native 180-day default |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
 | Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |
 | Zero or sub-minute rolling window | Use the minimum `1.0` minute span |
@@ -231,13 +237,13 @@ initializes `pymoo.shared.mutation_probability`, and per-variable `mutation_indp
 initializes `mutation_probability_per_variable`; the old zero `mutation_indpb` sentinel
 uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
-with best-effort mode. Best-effort mode supplies missing consent for formula,
-restart, gate-memory and search-algorithm changes; those changes are guesses,
-not equivalence claims. Review limit thresholds, re-tune risk settings, run fresh
-backtests and start fresh optimizations.
+with best-effort mode. Best-effort mode supplies missing acknowledgment for retained
+metric definitions and explicit formula replacements, restart, gate-memory and search-algorithm
+changes; it does not choose a replacement metric. These decisions make no equivalence claim.
+Review limit thresholds, re-tune risk settings, run fresh backtests and start fresh optimizations.
 
 Unknown fields, conflicting aliases, malformed values, ambiguous enabled null
-restart policies, retired strategies/venues, unsupported metric counterparts and
+restart policies, retired strategies/venues, retired selectors lacking explicit replacements and
 rolling-window search bounds still require explicit correction. Normal config
 loading and migration without `--best-effort` remain strict. Referenced coin
 files are materialized in the output and remain unchanged on disk.

@@ -26,7 +26,7 @@ for the distinction between schema, package version and tags.
 
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
-- **ew_half_life_days**: `null` by default (disabled), or a finite number at least `1`, including fractional days such as `180.5`. Required when scoring or limits select an `_ew` metric. Applies globally across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5` (or `null` to disable). See [exponential metric definitions](metrics.md#exponential-recency-weighting).
+- **ew_half_life_days**: Positive finite half-life in days for `cagr_fraction_strategy_equity_ew`. The native default is `180`; omission or `null` resolves to that default. Fractional values below one day are allowed. One resolved value applies across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5`. See the [metric definitions](metrics.md).
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
   Binance backtests fill missing v2 1m data from Binance Vision monthly archives first, eligible
@@ -69,18 +69,15 @@ for the distinction between schema, package version and tags.
 - **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.
   - `true` (default): `wallet_exposure_limit_ratio = total_wallet_exposure_limit_ratio / min(max_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).
   - `false`: fixed denominator, same as live: `wallet_exposure_limit_ratio = total_wallet_exposure_limit_ratio / max_positions`.
-- **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
+- **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before replay. `1` keeps minute observations; higher values lose intra-interval fill ordering. Minute-only drawdown, Ulcer, Pain, recovery, CAGR EW and exposure quantities become explicitly unavailable at coarser cadence, and optimizer-selected requests for them fail preflight. Daily-return quantities require a cadence supplying complete UTC daily closes. Passivbot does not interpolate missing minute or daily support.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
 - **equity_floor_fraction**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_fraction`, and `backtest_completion_fraction` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_fraction = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_fraction < 1.0`.
 - **maker_fee_override_fraction**: Optional signed maker fee override (scale one; negative values are rebates; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override-fraction`.
 - **taker_fee_override_fraction**: Optional signed taker fee override (scale one; negative values are rebates; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override-fraction`.
 - **limit_order_fill_buffer_fraction**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
 - **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.portfolio.execution.market_orders_allowed`. A sell fills at `close * (1 - market_order_slippage_fraction)` rounded down to `price_step`; a buy fills at `close * (1 + market_order_slippage_fraction)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
-  Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
-- **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
-  `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
-  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
-  includes account balance/equity in USD and BTC plus collateral-agnostic `strategy_equity`.
+  Core activity quantities include `fills_gap_max_days` and `gross_turnover_ratio_per_day`; supporting clocks and counts belong to metric metadata.
+- **balance_sample_divider**: Plot-only minutes per balance/equity bucket. `1` keeps every observed point in plots; higher values thin plots. `balance_and_equity.csv.gz` always retains full-precision values at every native observation, including USD/BTC account balances and collateral-agnostic `strategy_equity`. This setting does not change metric populations or CSV precision.
 - **btc_collateral_target_ratio**: Target BTC collateral value divided by total wallet value in USD: current BTC market value plus USD cash, excluding unrealized trading PnL. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
 - **max_usd_debt_to_wallet_value_ratio**: Optional USD debt divided by the same total wallet value, enforced when topping up BTC. `null` (default) or a nonpositive value leaves top-up debt uncapped. A positive value such as `0.6` limits additional BTC purchases using `max(-USD cash, 0) ÷ total wallet value`; the initial collateral allocation still follows the target ratio.
 ### Suite Scenarios
@@ -111,9 +108,9 @@ Example per-metric aggregation:
 "backtest": {
   "reducer": {
     "default": "mean",
-    "mdg_fraction_usd": "median",
-    "sharpe_ratio": "std",
-    "drawdown_max_fraction_usd": "max"
+    "cagr_fraction_strategy_equity": "median",
+    "sharpe_ratio_strategy_equity": "std",
+    "drawdown_max_fraction_strategy_equity": "max"
   }
 }
 ```
@@ -862,31 +859,31 @@ after migration.
   See [optimizing](optimizing.md) for device scope and checkpoint compatibility.
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.
 - **scoring**:
-  - The optimizer minimizes the configured objective list and keeps the Pareto front.
-  - Each object-form scoring entry accepts `metric`, `goal`, and optional suite-only `scenario`
-    and `reducer` selectors. An omitted `scenario` inherits `optimize.objective_scenario`; a
-    named value selects that scenario; explicit `null` selects suite aggregation. `reducer`
-    overrides the reducer for that objective and supports `mean`, `min`, `max`, `std`, and
-    `median`. It is invalid when the objective resolves to a named scenario.
-  - The current default profile uses:
-    - `adg_fraction_strategy_equity`
-    - `mdg_fraction_strategy_equity`
-    - `sortino_ratio_strategy_equity`
-    - `active_day_turnover_proxy_mean_ratio`
-    - `sharpe_ratio_strategy_equity`
-    - `recovery_max_days_strategy_equity`
-    - `position_held_max_days`
-    - `drawdown_max_fraction_strategy_equity`
-    - `loss_profit_ratio`
-    - `pain_index_fraction_strategy_equity`
-  - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
-  - Built-in shorthand metrics and their default goals are registered in
-    `src/config/scoring.py`; see `docs/optimizing.md` for metric descriptions.
-  - Legacy `_w` formulas and dependent aliases are removed. Select ordinary metrics or explicit
-    `_ew` formulas deliberately; migration requires a replacement and formula acknowledgment.
-  - Authored scoring is a list of objects, for example
-    `[{"metric":"adg_fraction_strategy_equity","goal":"max"},{"metric":"drawdown_max_fraction_strategy_equity","goal":"min"}]`.
-    Currency metrics may use `_usd` or `_btc` to select denomination.
+  - Each entry names one current BASE metric, a `goal` of `min` or `max`, and optional
+    suite-only `scenario` and `reducer` fields. An omitted `scenario` inherits
+    `optimize.objective_scenario`; a name selects that scenario; explicit `null`
+    selects suite aggregation. `reducer` supports `mean`, `min`, `max`, `std` and
+    `median`, and is invalid with a named scenario.
+  - The default profile maximizes `cagr_fraction_strategy_equity` and minimizes
+    `ulcer_index_fraction_strategy_equity`. String shorthand uses the catalog's
+    recommended scoring direction. Primarily useful limit metrics, such as maximum
+    drawdown, require an explicit goal if deliberately used as objectives.
+  - The optimizer reduces raw values before applying its common bounded objective
+    adapter. Saved objective values retain raw units and explicit statuses; penalties
+    remain separate. Selected unavailable values or infinite limit violations make
+    the candidate explicitly infeasible with finite optimizer transport.
+  - Current metric names and roles come from the native catalog. Use [metrics](metrics.md)
+    for definitions. Every numeric metric supports lower and upper limits independently
+    or together; scoring roles are recommendations.
+  - Authored selectors have no currency or outer-statistic suffix aliases. Use
+    `"metric": "cagr_fraction_strategy_equity", "reducer": "min"`, rather than
+    adding `_min` to the metric. Internal result statistic keys are not authored aliases.
+  - Example: `[{"metric":"cagr_fraction_strategy_equity","goal":"max"},{"metric":"ulcer_index_fraction_strategy_equity","goal":"min"}]`.
+  - Annualized values use 365.25 days per year. Volatility, Sharpe, Sortino and Omega
+    use complete UTC daily returns. Passivbot subtracts no risk-free return.
+  - With `pymoo`, the default algorithm is `nsga2` for up to three objectives and
+    `nsga3` for four or more, unless explicitly overridden.
+
 - **write_all_results**: Controls whether every evaluated candidate is appended to `all_results.bin`. Keep `true` for full replay/analysis history; set `false` to reduce disk writes and store only the maintained Pareto/state artifacts.
 
 ### Optimizer Suites
@@ -910,11 +907,19 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 
 ### Optimization Limits
 
-The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
+The optimizer applies the chosen lower and upper penalty conditions to raw metric
+values. Both directions may be set for the same quantity. Finite violations add
+penalties; selected unavailable quantities and infinite violations make a candidate
+explicitly infeasible.
 
-Any metric listed above can be used when defining limits. Currency-specific metrics use `_usd` and `_btc` suffixes where both denominations are available; BTC-denominated metrics are available even when `backtest.btc_collateral_target_ratio = 0`. This includes the shared HSL metrics such as `hsl_red_time_fraction`, `hsl_restart_retrigger_fraction`, and `hsl_panic_loss_starting_balance_fraction`, plus `backtest_completion_fraction` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
+Any current numeric selector can be a limit. Examples include maximum drawdown,
+`hsl_panic_episode_loss_max_fraction`, `hsl_red_time_fraction`,
+`short_net_profit_contribution_fraction` and `backtest_completion_fraction`.
+Each limit entry is a dictionary with:
 
-- `metric`: canonical metric name (`drawdown_max_fraction_btc`, `loss_profit_ratio`, `peak_recovery_max_hours_realized_pnl`, etc.).
+- `metric`: exact current BASE name, such as `drawdown_max_fraction_strategy_equity`,
+  `loss_profit_ratio` or `peak_recovery_max_days_strategy_equity`. Strategy metrics
+  use one strategy-equity basis; `_usd` and `_btc` copies are retired.
 - `penalize_if`: one of `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
@@ -925,6 +930,10 @@ Any metric listed above can be used when defining limits. Currency-specific metr
 - Optional `reducer`: for suite-aggregate limits, the statistic to compare against (`min`, `max`,
   `mean`, `std`, or `median`). If omitted, Passivbot uses the metric's `backtest.reducer` rule,
   then `backtest.reducer.default`, then `mean`.
+
+The `auto` alias derives its penalty direction from a scoring objective for the
+same metric. Without that objective, the limit is rejected; choose an explicit
+`penalize_if` direction for a quantity used only as a limit.
 
 #### Format
 
@@ -945,7 +954,7 @@ Define limits in `optimize.limits` as a list:
     "value": 0.7
   },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
-  {"metric": "adg_fraction_btc", "penalize_if": "<", "value": 0.0005, "reducer": "mean"},
+  {"metric": "cagr_fraction_strategy_equity", "penalize_if": "<", "value": 0.10, "reducer": "mean"},
   {"metric": "hsl_red_time_fraction", "penalize_if": ">", "value": 0.02},
   {"metric": "backtest_completion_fraction", "penalize_if": "<", "value": 1.0}
 ]
@@ -960,7 +969,7 @@ To intentionally opt out of a default limit, keep the metric name but disable it
 For CLI overrides you can replace the full list with a JSON/HJSON payload:
 
 ```
-passivbot optimize --limits '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
 ```
 
 For repeatable one-off entries, use `--limit`. Symbolic scalar operators in `--limit` are
@@ -969,11 +978,11 @@ written as keep conditions, matching `pareto_store.py` filtering:
 ```bash
 passivbot optimize \
   --clear-limits \
-  --limit 'drawdown_max_fraction <= 0.35' \
+  --limit 'drawdown_max_fraction_strategy_equity <= 0.35' \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.5 scenario=base' \
   --limit 'backtest_completion_fraction>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg_fraction > 0.0008 reducer=mean'
+  --limit 'cagr_fraction_strategy_equity > 0.10 reducer=mean'
 ```
 
 CLI replacement rules:
@@ -1050,8 +1059,7 @@ identity; incompatible checkpoints fail and migrated numeric seeds require fresh
 
 Backtests retain HSL summaries and transitions. Set `backtest.hsl_detailed_report=true`
 for optional per-minute risk samples and plots; optimizer replay omits additional diagnostic
-arrays. Independent ordinary account-equity metrics remain required even when HSL
-reporting is disabled. See [metrics](metrics.md) and [qualification](hsl_testing.md).
+arrays. Core strategy-equity metric requests are independent of optional HSL reporting. See [metrics](metrics.md) and [qualification](hsl_testing.md).
 
 Rollback requires version-matched source/runtime and the original config backup. Offline
 validation and migration authorize no bot startup, deployment or account action.

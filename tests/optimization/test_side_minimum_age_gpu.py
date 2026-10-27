@@ -47,7 +47,7 @@ def test_actual_gpu_age_admission_matches_native_counts(monkeypatch, kind, topol
     fills, _, native = execute_backtest(payload, config)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
                                 timestamps=timestamps, exchange=args.exchange, batch_size=1,
-                                needed_metrics={"fills_per_day"})
+                                needed_metrics={"gross_turnover_ratio_per_day"})
     settings = proxy.data["coin_settings"].cpu().numpy()
     assert settings.shape == (2, 15)
     np.testing.assert_array_equal(settings[:, 6], [0, 0])
@@ -63,9 +63,9 @@ def test_actual_gpu_age_admission_matches_native_counts(monkeypatch, kind, topol
     monkeypatch.setattr(runner, "run", capture)
     result = proxy.evaluate([{}])[0]
     raw = captures[0]
-    assert raw["fill_count_long"].item() == native["fills_count_long"]
-    assert raw["fill_count"].item() - raw["fill_count_long"].item() == native["fills_count_short"]
-    assert result["fills_per_day"] == pytest.approx(native["fills_per_day"], rel=1e-5)
+    assert raw["fill_count_long"].item() == sum(str(row[13]).endswith("long") for row in fills)
+    assert raw["fill_count"].item() - raw["fill_count_long"].item() == sum(str(row[13]).endswith("short") for row in fills)
+    assert result["gross_turnover_ratio_per_day"] == pytest.approx(native["gross_turnover_ratio_per_day"], rel=1e-5)
     entries = [row for row in fills if str(row[13]).startswith("entry_")]
     assert all(str(row[13]).endswith("_" + eligible_side) for row in entries)
     assert all(int(row[1]) >= int(timestamps[7]) for row in entries)
@@ -158,7 +158,7 @@ def test_actual_gpu_one_way_combines_age_and_cost(monkeypatch, kind, eligible_si
     assert [row[eligible_side]["entry_eligible"] for row in payload.bot_params_list] == [True, False]
     fills, _, native = execute_backtest(payload, config)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
-                                exchange=args.exchange, batch_size=1, needed_metrics={"fills_per_day"})
+                                exchange=args.exchange, batch_size=1, needed_metrics={"gross_turnover_ratio_per_day"})
     runner = proxy.fused_runner
     flags = payload.backtest_params["filter_by_min_effective_cost"]
     assert runner.settings[13].item() == flags["long"]
@@ -174,8 +174,8 @@ def test_actual_gpu_one_way_combines_age_and_cost(monkeypatch, kind, eligible_si
     monkeypatch.setattr(runner, "run", capture)
     proxy.evaluate([{}])
     raw = captures[0]
-    assert raw["fill_count_long"].item() == native["fills_count_long"]
-    assert raw["fill_count"].item() - raw["fill_count_long"].item() == native["fills_count_short"]
+    assert raw["fill_count_long"].item() == sum(str(row[13]).endswith("long") for row in fills)
+    assert raw["fill_count"].item() - raw["fill_count_long"].item() == sum(str(row[13]).endswith("short") for row in fills)
     entries = [row for row in fills if str(row[13]).startswith("entry_")]
     assert bool(entries) is allow_entry
     if entries:

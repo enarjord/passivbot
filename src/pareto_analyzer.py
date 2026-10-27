@@ -7,13 +7,14 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 
-from config.metrics import resolve_metric_value
+from config.metrics import split_metric_stat_suffix
+from metrics_schema import (copy_metric_value, decode_metric_value, encode_metric_values, raw_reduce, MetricAggregationError)
 from pareto_core import detect_latest_pareto_dir
 from pareto_explorer import (
     ParetoCandidate,
@@ -32,37 +33,58 @@ class SeriesSummary:
     name: str
     count: int
     missing: int
-    minimum: float
-    maximum: float
-    mean: float
-    median: float
-    std: float
-    p05: float
-    p25: float
-    p75: float
-    p95: float
+    minimum: Optional[float]
+    maximum: Optional[float]
+    mean: Optional[float]
+    median: Optional[float]
+    std: Optional[float]
+    p05: Optional[float]
+    p25: Optional[float]
+    p75: Optional[float]
+    p95: Optional[float]
     unique_count: int
     min_file: str
     max_file: str
+    finite_count: int = 0
+    positive_infinity_count: int = 0
+    negative_infinity_count: int = 0
+    unavailable_count: int = 0
+    unavailable_sources: Dict[str, Any] = field(default_factory=dict)
+    metric_status: Dict[str, Any] = field(default_factory=dict)
 
     @property
-    def span(self) -> float:
-        return self.maximum - self.minimum
+    def span(self) -> Optional[float]:
+        if self.maximum is None or self.minimum is None:
+            return None
+        span = self.maximum - self.minimum
+        return (
+            None
+            if math.isnan(span)
+            or (
+                not math.isfinite(span)
+                and math.isfinite(self.maximum)
+                and math.isfinite(self.minimum)
+            )
+            else span
+        )
 
     @property
-    def iqr(self) -> float:
-        return self.p75 - self.p25
+    def iqr(self) -> Optional[float]:
+        if self.p75 is None or self.p25 is None:
+            return None
+        span = self.p75 - self.p25
+        return None if not math.isfinite(span) else span
 
     @property
     def cv_abs(self) -> float:
-        return abs(self.std / self.mean) if self.mean else math.inf
+        return (
+            abs(self.std / self.mean)
+            if self.std is not None and self.mean
+            else math.inf
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "group": self.group,
-            "name": self.name,
-            "count": self.count,
-            "missing": self.missing,
+        raw = {
             "min": self.minimum,
             "max": self.maximum,
             "range": self.span,
@@ -74,10 +96,38 @@ class SeriesSummary:
             "p75": self.p75,
             "p95": self.p95,
             "iqr": self.iqr,
-            "unique_count": self.unique_count,
-            "min_file": self.min_file,
-            "max_file": self.max_file,
         }
+        result = encode_metric_values(
+            {name: value for name, value in raw.items() if value is not None}
+        )
+        statuses = {**self.metric_status, **result.get("metric_status", {})}
+        for name, value in raw.items():
+            if value is None:
+                result[name] = None
+                statuses.setdefault(
+                    name,
+                    {
+                        "status": "undefined",
+                        "reason": "distribution statistic has unavailable support",
+                    },
+                )
+        if statuses:
+            result["metric_status"] = statuses
+        result.update(
+            group=self.group,
+            name=self.name,
+            count=self.count,
+            missing=self.missing,
+            finite_count=self.finite_count,
+            positive_infinity_count=self.positive_infinity_count,
+            negative_infinity_count=self.negative_infinity_count,
+            unavailable_count=self.unavailable_count,
+            unavailable_sources=self.unavailable_sources,
+            unique_count=self.unique_count,
+            min_file=self.min_file,
+            max_file=self.max_file,
+        )
+        return result
 
 
 def _is_number(value: Any) -> bool:
@@ -112,29 +162,50 @@ def extract_config_values(candidate: ParetoCandidate) -> Dict[str, float]:
     return values
 
 
-def extract_metric_values(candidate: ParetoCandidate) -> Dict[str, float]:
-    values: Dict[str, float] = {}
-    values.update(candidate.objectives)
-    values.update(candidate.aggregated_values)
-    values.update(candidate.stats_flat)
-    return {key: float(value) for key, value in values.items() if _is_number(value)}
+def _merge_metric_fact(values, source, key, output_name=None):
+    name = key if output_name is None else output_name
+    copied = copy_metric_value(source, key, output_name=name)
+    statuses = copied.pop("metric_status", {})
+    values.update(copied)
+    values.get("metric_status", {}).pop(name, None)
+    if not values.get("metric_status"):
+        values.pop("metric_status", None)
+    if statuses:
+        values.setdefault("metric_status", {}).update(statuses)
 
 
-def resolve_metric_series_value(candidate: ParetoCandidate, metric: str) -> Optional[float]:
-    value = resolve_metric_value(candidate.objectives, metric)
-    if value is not None and _is_number(value):
-        return float(value)
-    value = resolve_metric_value(candidate.aggregated_values, metric)
-    if value is not None and _is_number(value):
-        return float(value)
-    value = resolve_metric_value(candidate.stats_flat, metric)
-    if value is not None and _is_number(value):
-        return float(value)
-    mean_key = f"{metric}_mean"
-    value = resolve_metric_value(candidate.stats_flat, mean_key)
-    if value is not None and _is_number(value):
-        return float(value)
-    return None
+def extract_metric_values(candidate: ParetoCandidate) -> Dict[str, Any]:
+    """Keep explicit unavailable facts and true endpoints with objective precedence."""
+    values = {}
+    for key in candidate.stats_flat:
+        if key == "metric_status":
+            continue
+        _merge_metric_fact(values, candidate.stats_flat, key)
+        base, reducer = split_metric_stat_suffix(key)
+        if reducer == "mean":
+            _merge_metric_fact(values, candidate.stats_flat, key, base)
+    for key in candidate.aggregated_values:
+        if key != "metric_status":
+            _merge_metric_fact(values, candidate.aggregated_values, key)
+    # Candidate objectives are already decoded raw values, including true infinities.
+    objectives = encode_metric_values(candidate.objectives)
+    for key in candidate.objectives:
+        _merge_metric_fact(values, objectives, key)
+    return values
+
+
+def resolve_metric_series_value(
+    candidate: ParetoCandidate, metric: str
+) -> Optional[float]:
+    if metric in candidate.objectives:
+        return candidate.objectives[metric]
+    values = extract_metric_values(candidate)
+    if metric not in values:
+        return None
+    try:
+        return decode_metric_value(values, metric)
+    except MetricAggregationError:
+        return None
 
 
 def _collect_value_maps(
@@ -149,7 +220,7 @@ def _collect_value_maps(
 def _all_names(maps: Sequence[Mapping[str, float]]) -> List[str]:
     names = set()
     for values in maps:
-        names.update(values.keys())
+        names.update(key for key in values if key != "metric_status")
     return sorted(names)
 
 
@@ -182,40 +253,79 @@ def summarize_series(
     candidates: Sequence[ParetoCandidate],
     value_maps: Sequence[Mapping[str, float]],
 ) -> Optional[SeriesSummary]:
-    pairs = [
-        (idx, float(values[name]))
-        for idx, values in enumerate(value_maps)
-        if name in values and _is_number(values[name])
-    ]
-    if not pairs:
+    pairs, unavailable, statuses = [], {}, {}
+    for idx, values in enumerate(value_maps):
+        if name not in values:
+            continue
+        try:
+            value = (
+                decode_metric_value(values, name)
+                if group == "metric"
+                else float(values[name])
+            )
+        except MetricAggregationError as error:
+            unavailable[candidates[idx].path.name] = values.get(
+                "metric_status", {}
+            ).get(name, {"status": error.status, "reason": str(error)})
+            continue
+        pairs.append((idx, value))
+    if not pairs and not unavailable:
         return None
-    idxs = [idx for idx, _value in pairs]
-    raw = np.array([value for _idx, value in pairs], dtype=float)
-    min_pos = int(np.argmin(raw))
-    max_pos = int(np.argmax(raw))
-    rounded_unique = {round(float(value), 15) for value in raw}
+    raw = [value for _, value in pairs]
+    finite_count = sum(math.isfinite(value) for value in raw)
+    fields = {}
+    for mode in ("mean", "median", "std"):
+        try:
+            fields[mode] = raw_reduce(raw, mode)
+        except (MetricAggregationError, OverflowError) as error:
+            fields[mode] = None
+            statuses[mode] = {
+                "status": getattr(error, "status", "invalid"),
+                "reason": str(error),
+            }
+    for field_name, percentile in (("p05", 5), ("p25", 25), ("p75", 75), ("p95", 95)):
+        if not raw or finite_count != len(raw):
+            fields[field_name] = None
+            statuses[field_name] = {
+                "status": "undefined",
+                "reason": "percentile interpolation requires a nonempty finite population",
+            }
+        else:
+            value = float(np.percentile(raw, percentile))
+            fields[field_name] = value if math.isfinite(value) else None
+            if fields[field_name] is None:
+                statuses[field_name] = {
+                    "status": "invalid",
+                    "reason": "percentile arithmetic overflow",
+                }
+    min_index = min(pairs, key=lambda pair: pair[1])[0] if pairs else None
+    max_index = max(pairs, key=lambda pair: pair[1])[0] if pairs else None
     return SeriesSummary(
         group=group,
         name=name,
-        count=int(raw.size),
-        missing=len(candidates) - int(raw.size),
-        minimum=float(np.min(raw)),
-        maximum=float(np.max(raw)),
-        mean=float(np.mean(raw)),
-        median=float(np.median(raw)),
-        std=float(np.std(raw, ddof=0)),
-        p05=float(np.percentile(raw, 5)),
-        p25=float(np.percentile(raw, 25)),
-        p75=float(np.percentile(raw, 75)),
-        p95=float(np.percentile(raw, 95)),
-        unique_count=len(rounded_unique),
-        min_file=candidates[idxs[min_pos]].path.name,
-        max_file=candidates[idxs[max_pos]].path.name,
+        count=len(raw),
+        missing=len(candidates) - len(raw),
+        minimum=min(raw) if raw else None,
+        maximum=max(raw) if raw else None,
+        **fields,
+        unique_count=len(set(raw)),
+        min_file=candidates[min_index].path.name if min_index is not None else "",
+        max_file=candidates[max_index].path.name if max_index is not None else "",
+        finite_count=finite_count,
+        positive_infinity_count=raw.count(math.inf),
+        negative_infinity_count=raw.count(-math.inf),
+        unavailable_count=len(unavailable),
+        unavailable_sources=unavailable,
+        metric_status=statuses,
     )
 
 
 def _is_varying(summary: SeriesSummary) -> bool:
-    return summary.unique_count > 1 and abs(summary.span) > 0.0
+    return (
+        summary.unique_count > 1
+        and summary.span is not None
+        and abs(summary.span) > 0.0
+    )
 
 
 def _metric_names_for_mode(
@@ -254,7 +364,7 @@ def _summary_sort_key(summary: SeriesSummary) -> tuple[int, float, float, str]:
     return (
         0 if _is_varying(summary) else 1,
         -summary.cv_abs if math.isfinite(summary.cv_abs) else -1e300,
-        -abs(summary.span),
+        -abs(summary.span) if summary.span is not None else 0.0,
         summary.name,
     )
 
@@ -341,7 +451,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _format_number(value: float) -> str:
+def _format_number(value: Optional[float]) -> str:
+    if value is None:
+        return "undefined"
     if not math.isfinite(float(value)):
         return str(value)
     value = float(value)
@@ -639,9 +751,10 @@ def analyze_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         "metric_correlations": metric_correlations,
         "output_dir": str(output_dir) if output_dir is not None else None,
         "plots": written_plots,
+        "distribution_note": "Distributions retain genuine infinite endpoints and explicit unavailable counts. Correlations and plots use finite samples only; correlation rows report their admitted pair counts.",
     }
     if output_dir is not None:
-        (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
     return payload
 
 
@@ -652,6 +765,11 @@ def format_analysis(payload: Mapping[str, Any], *, show: int, corr_limit: int) -
         f"Candidates: retained {payload['retained_count']} / loaded {payload['loaded_count']}",
         "Scoring metrics: " + ", ".join(payload.get("scoring_metrics") or []),
     ]
+    if payload.get("distribution_note"):
+        lines.append(payload["distribution_note"])
+    for summary in payload.get("metrics", []):
+        if summary.get("positive_infinity_count") or summary.get("negative_infinity_count") or summary.get("unavailable_count"):
+            lines.append(f"Metric support {summary['name']}: finite={summary.get('finite_count', 0)}, +infinity={summary.get('positive_infinity_count', 0)}, -infinity={summary.get('negative_infinity_count', 0)}, unavailable={summary.get('unavailable_count', 0)}")
     if payload.get("output_dir"):
         lines.append(f"Output dir: {payload['output_dir']}")
     if payload.get("plots"):
@@ -704,30 +822,52 @@ def format_analysis(payload: Mapping[str, Any], *, show: int, corr_limit: int) -
 
 
 def _summary_to_constructor_args(item: Mapping[str, Any]) -> Dict[str, Any]:
-    return {
+    def numeric(key):
+        if item[key] is None and item.get("metric_status", {}).get(key, {}).get(
+            "status"
+        ) not in {"positive_infinity", "negative_infinity"}:
+            return None
+        return decode_metric_value(item, key)
+
+    result = {
         "group": str(item["group"]),
         "name": str(item["name"]),
         "count": int(item["count"]),
         "missing": int(item["missing"]),
-        "minimum": float(item["min"]),
-        "maximum": float(item["max"]),
-        "mean": float(item["mean"]),
-        "median": float(item["median"]),
-        "std": float(item["std"]),
-        "p05": float(item["p05"]),
-        "p25": float(item["p25"]),
-        "p75": float(item["p75"]),
-        "p95": float(item["p95"]),
+        "minimum": numeric("min"),
+        "maximum": numeric("max"),
         "unique_count": int(item["unique_count"]),
         "min_file": str(item["min_file"]),
         "max_file": str(item["max_file"]),
     }
+    result.update(
+        {
+            key: numeric(key)
+            for key in ("mean", "median", "std", "p05", "p25", "p75", "p95")
+        }
+    )
+    result.update(
+        {
+            key: item.get(key, 0)
+            for key in (
+                "finite_count",
+                "positive_infinity_count",
+                "negative_infinity_count",
+                "unavailable_count",
+            )
+        }
+    )
+    result.update(
+        unavailable_sources=item.get("unavailable_sources", {}),
+        metric_status=item.get("metric_status", {}),
+    )
+    return result
 
 
 def run_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     payload = analyze_from_args(args)
     if getattr(args, "json_output", False):
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
     else:
         print(
             format_analysis(

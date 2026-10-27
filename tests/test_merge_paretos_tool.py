@@ -10,8 +10,8 @@ from tools.merge_paretos import _side_is_enabled
 
 
 SCORING = [
-    {"metric": "metric_a", "goal": "max"},
-    {"metric": "metric_b", "goal": "min"},
+    {"metric": "omega_ratio_strategy_equity", "goal": "max"},
+    {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
 ]
 
 
@@ -59,10 +59,11 @@ def _write_candidate(
             "bounds": bounds,
         },
         "metrics": {
-            "objectives": {"metric_a": metric_a, "metric_b": metric_b},
+            "definition_version": 1,
+            "objectives": {"omega_ratio_strategy_equity": metric_a, "ulcer_index_fraction_strategy_equity": metric_b},
             "stats": {
-                "metric_a": _metric_stats(metric_a),
-                "metric_b": _metric_stats(metric_b),
+                "omega_ratio_strategy_equity": _metric_stats(metric_a),
+                "ulcer_index_fraction_strategy_equity": _metric_stats(metric_b),
             },
         },
     }
@@ -91,10 +92,11 @@ def _write_nested_candidate(
             "bounds": bounds,
         },
         "metrics": {
-            "objectives": {"metric_a": metric_a, "metric_b": metric_b},
+            "definition_version": 1,
+            "objectives": {"omega_ratio_strategy_equity": metric_a, "ulcer_index_fraction_strategy_equity": metric_b},
             "stats": {
-                "metric_a": _metric_stats(metric_a),
-                "metric_b": _metric_stats(metric_b),
+                "omega_ratio_strategy_equity": _metric_stats(metric_a),
+                "ulcer_index_fraction_strategy_equity": _metric_stats(metric_b),
             },
         },
     }

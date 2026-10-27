@@ -99,7 +99,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     source['bot']["portfolio"]['strategy_kind'] = strategy
     set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     source["live"]["startup"]["startup_phase_budgets"] = {"candles": 15.0}
-    source["backtest"]["reducer"] = {"adg_fraction_strategy_equity": "max"}
+    source["backtest"]["reducer"] = {"cagr_fraction_strategy_equity": "max"}
     source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
     source["backtest"]["scenarios"] = [
         {"label": "stress", "overrides": {"bot.long.risk.max_positions": 2.0}}
@@ -125,7 +125,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned == repeated
     assert not (_mutable_container_ids(source) & _mutable_container_ids(cleaned))
     assert not (_mutable_container_ids(cleaned) & _mutable_container_ids(repeated))
-    assert cleaned["backtest"]["reducer"] == {"adg_fraction_strategy_equity": "max", "default": "mean"}
+    assert cleaned["backtest"]["reducer"] == {"cagr_fraction_strategy_equity": "max", "default": "mean"}
     assert cleaned["live"]["startup"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
@@ -280,12 +280,16 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     cfg_path.write_text(json.dumps(source))
     with pytest.raises(ValueError, match="explicit migration"):
         load_config(str(cfg_path), verbose=False)
-    migrated = migrate_v8_to_v9(source, memory_span_minutes=43200.0)
+    migrated = migrate_v8_to_v9(
+        source, memory_span_minutes=43200.0,
+        metric_replacements={"adg_pnl": "cagr_fraction_strategy_equity"},
+        acknowledge_metric_formula_change=True,
+    )
     dump_config(prepare_config(migrated.config, verbose=False), str(out_path), clean=True)
     dumped = json.loads(out_path.read_text())
     assert source == before
     assert json.loads(cfg_path.read_text()) == before
-    assert dumped["backtest"]["reducer"]["daily_realized_pnl_mean_fraction"] == "max"
+    assert dumped["backtest"]["reducer"]["cagr_fraction_strategy_equity"] == "max"
     assert dumped["backtest"]["reducer"]["default"] == "mean"
     assert "aggregate" not in dumped["backtest"]
     assert "drawdown_max_fraction_strategy_equity" not in dumped["backtest"]["reducer"]
@@ -294,12 +298,12 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
 
 def test_clean_config_preserves_backtest_reducer_overrides():
     config = {
-        "backtest": {"reducer": {"daily_realized_pnl_mean_fraction": "max", "default": "mean"}},
+        "backtest": {"reducer": {"cagr_fraction_strategy_equity": "max", "default": "mean"}},
     }
 
     cleaned = clean_config(config)
 
-    assert cleaned["backtest"]["reducer"]["daily_realized_pnl_mean_fraction"] == "max"
+    assert cleaned["backtest"]["reducer"]["cagr_fraction_strategy_equity"] == "max"
     assert cleaned["backtest"]["reducer"]["default"] == "mean"
     assert "drawdown_max_fraction_strategy_equity" not in cleaned["backtest"]["reducer"]
     assert "position_held_max_days" not in cleaned["backtest"]["reducer"]
@@ -350,11 +354,14 @@ def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from config.hsl import generated_template
-    from optimization.evaluation_contract import CONTRACT_KEY, CONTRACT_VERSION, build_evaluation_contract
+    from optimization.evaluation_contract import CONTRACT_CACHE_KEY, CONTRACT_KEY, CONTRACT_VERSION, build_evaluation_contract
     from optimize import _resume_config_mismatches
 
     cfg = generated_template(get_expanded_config_prototype(), mode)
     contract = build_evaluation_contract(cfg)
+    cfg[CONTRACT_CACHE_KEY] = deepcopy(contract)
+    assert contract["core_metric_definition_version"] == 1
+    assert contract["implementation"]
     assert "hsl_engine" not in contract.get("live", {})
     block = (
         contract["bot"]["portfolio"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
@@ -365,6 +372,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     assert contract["risk_model"].startswith("v9_")
     assert "drawdown_threshold_fraction" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
+    record.pop(CONTRACT_CACHE_KEY)
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
         cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
@@ -377,6 +385,8 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
         else "bot.long.hsl.panic_close_order_type"
     )
     cfg["optimize"]["fixed_runtime_overrides"][path] = "market"
+    cfg.pop(CONTRACT_CACHE_KEY)
+    cfg[CONTRACT_CACHE_KEY] = build_evaluation_contract(cfg)
     assert any(
         "evaluation.bot" in diff for diff in _resume_config_mismatches(record, cfg)
     )

@@ -40,7 +40,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
                 }
             }
         }
-    report_data = run(payload(mode, cfg=cfg, mss=markets))[4]
+    report_data = run(payload(mode, cfg=cfg, mss=markets))[3]
     report = report_data["hsl"]
     before = deepcopy(report)
     figures = create_forager_hard_stop_drawdown_figure(
@@ -143,7 +143,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
     for coin_policies in policies.values():
         coin_policies[1] = deepcopy(coin_policies[0])
     policies["BBB"][0]["drawdown_threshold_fraction"] = 0.04
-    data = run(args)[4]
+    data = run(args)[3]
     figures = create_forager_hard_stop_drawdown_figure(
         pd.DataFrame(),
         {},
@@ -207,15 +207,12 @@ def test_compact_native_report_is_explicit_and_has_no_plot_trace():
     args[-1]["metrics_only"] = True
     prepared = prepared_payload(args)
     execute_backtest(prepared, cfg)
-    report = prepared.hard_stop_plot_data["hsl"]
-    assert report["detailed"] is False
-    assert report["samples"] == []
-    assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
+    assert prepared.hard_stop_plot_data == {}
     assert (
         create_forager_hard_stop_drawdown_figure(
             pd.DataFrame(),
             cfg,
-            hard_stop_plot_data={"hsl": report},
+            hard_stop_plot_data=prepared.hard_stop_plot_data,
             autoplot=False,
             return_figures=True,
         )
@@ -226,7 +223,7 @@ def test_compact_native_report_is_explicit_and_has_no_plot_trace():
 def test_artifact_workspace_preserves_native_report_and_legacy_absence(tmp_path):
     folder = _write_artifact(tmp_path)
     assert load_backtest_artifact(folder).hsl_report is None
-    report = run(payload("portfolio"))[4]["hsl"]
+    report = run(payload("portfolio"))[3]["hsl"]
     (folder / "hsl_report.json").write_text(json.dumps(report))
     artifact = load_backtest_artifact(folder)
     assert artifact.hsl_report == report
@@ -248,7 +245,7 @@ def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     cfg, markets, _ = inputs(mode)
     policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy["cooldown_after_red_minutes"] = 0
-    data = run(payload(mode, cfg=cfg, mss=markets))[4]
+    data = run(payload(mode, cfg=cfg, mss=markets))[3]
     report = data["hsl"]
     sequences = [r["sequence"] for r in report["samples"] + report["events"]]
     assert len(sequences) == len(set(sequences))
@@ -277,7 +274,7 @@ def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
 def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
     args = payload()
     args[2][0]["long"]["n_positions"] = 0
-    data = run(args)[4]
+    data = run(args)[3]
     rows = data["hsl"]["samples"]
     assert rows
     assert all(
@@ -298,14 +295,14 @@ def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
 
 
 def test_report_rows_and_reason_lists_are_independent():
-    report = run(payload("coin"))[4]["hsl"]
+    report = run(payload("coin"))[3]["hsl"]
     before = deepcopy(report)
     assert len(report["samples"]) > 2
     report["samples"][0]["signal_raw_fraction"] = -123.0
     report["samples"][0]["reasons"].append("caller annotation")
     assert report["samples"][1:] == before["samples"][1:]
     assert report["events"] == before["events"]
-    assert run(payload("coin"))[4]["hsl"] == before
+    assert run(payload("coin"))[3]["hsl"] == before
 
 
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
@@ -316,10 +313,10 @@ def test_default_report_preserves_trading_metrics_and_events_without_samples(mod
     compact = run(args)
     args[-1]["hsl_detailed_report"] = True
     detailed = run(args)
-    for actual, expected in zip(compact[:4], detailed[:4]):
+    for actual, expected in zip(compact[:3], detailed[:3]):
         np.testing.assert_equal(actual, expected)
-    compact_report = compact[4]["hsl"]
-    detailed_report = detailed[4]["hsl"]
+    compact_report = compact[3]["hsl"]
+    detailed_report = detailed[3]["hsl"]
     assert compact_report["detailed"] is False
     assert compact_report["samples"] == []
     assert detailed_report["detailed"] is True
@@ -330,10 +327,9 @@ def test_default_report_preserves_trading_metrics_and_events_without_samples(mod
     } == {k: v for k, v in detailed_report.items() if k not in {"detailed", "samples"}}
     args[-1]["metrics_only"] = True  # Opt-in cannot inflate optimizer results.
     metrics = run(args)
-    assert metrics[2:4] == detailed[2:4]
-    assert metrics[4]["hsl"]["samples"] == []
-    assert metrics[4]["hsl"]["events"] == []
-    assert metrics[4]["hsl"]["detailed"] is False
+    assert metrics[2] == detailed[2]
+    assert metrics[0] is None and metrics[1] is None
+    assert "hsl" not in metrics[3]
 
 
 @pytest.mark.parametrize("detailed", [False, True])
@@ -353,15 +349,16 @@ def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inac
     reference = run(args)
     args[-1]["hsl_detailed_report"] = detailed
     actual = run(args)
-    for got, expected in zip(actual[:4], reference[:4]):
+    for got, expected in zip(actual[:3], reference[:3]):
         np.testing.assert_equal(got, expected)
     def without_samples(report):
         return {k: v for k, v in report.items() if k not in {"detailed", "samples"}}
-    assert without_samples(actual[4]["hsl"]) == without_samples(reference[4]["hsl"])
+    assert without_samples(actual[3]["hsl"]) == without_samples(reference[3]["hsl"])
     args[-1]["metrics_only"] = True
     metrics = run(args)
-    assert metrics[2:4] == reference[2:4]
-    assert metrics[4]["hsl"]["summary"] == reference[4]["hsl"]["summary"]
+    assert metrics[2] == reference[2]
+    assert metrics[0] is None and metrics[1] is None
+    assert "hsl" not in metrics[3]
 
 
 @pytest.mark.parametrize("detailed", [False, True])

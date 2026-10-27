@@ -35,20 +35,20 @@ directory instead of the nested `pareto/` directory, it resolves that automatica
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto
 passivbot tool pareto optimize_results/.../pareto -m reference \
-  --target adg_fraction_strategy_equity=0.001 \
+  --target cagr_fraction_strategy_equity=0.10 \
   --target drawdown_max_fraction_strategy_equity=0.25
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_max_fraction_strategy_equity<=0.35' \
-  -l 'adg_fraction_strategy_equity>0.0' \
+  -l 'cagr_fraction_strategy_equity>0.0' \
   --save-selected configs/promoted_candidate.local.json
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_max_fraction_strategy_equity<=0.35' \
-  -l 'adg_fraction_strategy_equity>0.0' \
+  -l 'cagr_fraction_strategy_equity>0.0' \
   --save-filtered optimize_results/filtered_pareto
-passivbot tool pareto -o sharpe_ratio_strategy_equity,adg_fraction_strategy_equity,recovery_max_days_strategy_equity \
+passivbot tool pareto -o sharpe_ratio_strategy_equity,cagr_fraction_strategy_equity,peak_recovery_max_days_strategy_equity \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
-  --weight adg_fraction_strategy_equity=4 \
+  --weight cagr_fraction_strategy_equity=4 \
   --weight drawdown_max_fraction_strategy_equity=2 \
   --show-top 5
 passivbot tool pareto optimize_results/... --scenario opt_2025_to_present
@@ -121,7 +121,7 @@ passivbot tool pareto-plot optimize_results/.../pareto --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
 passivbot tool pareto-plot optimize_results/... \
-  adg_fraction_strategy_equity pain_index_fraction_strategy_equity sortino_ratio_strategy_equity \
+  cagr_fraction_strategy_equity pain_index_fraction_strategy_equity sortino_ratio_strategy_equity \
   --output plots/tradeoffs.html --open
 ```
 
@@ -131,19 +131,20 @@ relative to the current working directory, matching the other Pareto tools. Run 
 timestamps; directory modification times do not affect selection. Empty and sidecar-only
 fronts are skipped; malformed candidate data still fails visibly. Missing candidates produce
 a clear error. Positional initial metrics follow an explicit PATH. Without positional
-metrics, the first two available metrics (scoring objectives first) are selected. Known metric aliases
-are accepted. Metric selectors group objectives, other metrics, and named statistics;
-`stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_fraction_strategy_equity.mean`.
-Saved objective values take precedence over aggregates, which take precedence over means.
-Canonical names take precedence over legacy aliases regardless of file ordering; conflicting
-aliases without a canonical value are rejected.
-Objectives can include penalties and legacy engine values are converted by the shared loader.
+metrics, the first two finite-valued metrics (scoring objectives first) are selected.
+Only exact current metric names are accepted. Metrics group objectives, other quantities
+and named statistics; `stats.<metric>.<stat>` identifies an explicit stored statistic,
+such as `stats.cagr_fraction_strategy_equity.mean`. Saved raw objectives take precedence
+over aggregates, which take precedence over means. Current definition-version metadata
+is required; stale engine-space records need fresh evaluation. Infinite and unavailable
+facts retain explicit export statuses and have no plot coordinates. Off-axis filters
+compare genuine infinite endpoints normally; missing or undefined values fail a filter.
 Per-scenario values are not exported as separate metrics. No full configs are embedded.
 
 The highlighted **star is the chosen Pareto member closest to the theoretical ideal** on
 those selected axes. Distance is Euclidean with equal weights after normalizing each axis
-to the surviving, plottable candidates' range, matching the Pareto selector's unweighted
-`ideal` method. Constant axes (range at most `1e-15`) contribute zero distance; exact ties
+to the surviving, plottable candidates' range. The marker uses the finite raw chart
+coordinates; command-line selection uses the documented bounded objective coordinates. Constant axes (range at most `1e-15`) contribute zero distance; exact ties
 choose the first member in saved loading order. The chosen filename and values appear below
 the plot and on hover.
 
@@ -212,9 +213,9 @@ the optimizer's final effective limits, including config limits and CLI `--limit
 passivbot optimize configs/examples/suite_example.json \
   -t optimize_results/.../pareto \
   --filter-starting-configs \
-  -l 'adg_fraction_strategy_equity>0.0' \
-  -l 'recovery_max_days_strategy_equity<100' \
-  -l '{"metric":"recovery_max_days_strategy_equity","penalize_if":"greater_than","reducer":"max","value":120}'
+  -l 'cagr_fraction_strategy_equity>0.0' \
+  -l 'peak_recovery_max_days_strategy_equity<100' \
+  -l '{"metric":"peak_recovery_max_days_strategy_equity","penalize_if":"greater_than","reducer":"max","value":120}'
 ```
 
 Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most

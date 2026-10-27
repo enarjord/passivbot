@@ -3,6 +3,8 @@
 import math
 import statistics
 
+from metrics_schema import (copy_metric_value, decode_metric_value, encode_metric_values, MetricAggregationError, require_metric_definition)
+
 
 def validate_policies(policies):
     if not isinstance(policies, dict):
@@ -21,25 +23,43 @@ def validate_policies(policies):
 
 
 def compare_values(reference, observed, metrics, policies):
-    """Standalone comparison so older target branches need no parity module."""
+    """Compare declared core facts without losing unavailable or infinite statuses."""
     validate_policies(policies)
     rows = {}
     for name in metrics:
-        left, right, policy = reference.get(name), observed.get(name), policies.get(name)
-        row = dict(cpu=left, gpu=right)
-        if left is None or right is None:
-            status = "missing_both" if left is None and right is None else "missing_cpu" if left is None else "missing_gpu"
+        row, decoded = {}, {}
+        unavailable = []
+        for label, source in (("cpu", reference), ("gpu", observed)):
+            if name not in source:
+                row[label] = None
+                unavailable.append(f"missing_{label}")
+                continue
+            try:
+                require_metric_definition(source)
+                copied = copy_metric_value(source, name, output_name=label)
+                statuses = copied.pop("metric_status", {})
+                row.update(copied)
+                if statuses:
+                    row.setdefault("metric_status", {}).update(statuses)
+                decoded[label] = decode_metric_value(source, name)
+            except MetricAggregationError as error:
+                row[label] = None
+                row.setdefault("metric_status", {}).setdefault(label, {"status": error.status, "reason": str(error)})
+                unavailable.append(f"unavailable_{label}")
+        policy = policies.get(name)
+        if unavailable:
+            status = "/".join(unavailable)
         else:
-            left, right = float(left), float(right)
+            left, right = decoded["cpu"], decoded["gpu"]
             if not (math.isfinite(left) and math.isfinite(right)):
-                status = "sentinel_match" if policy and policy.get("matching_infinity", False) and math.isinf(left) and left == right else "non_finite"
+                status = "sentinel_match" if policy and policy.get("matching_infinity", False) and left == right else "non_finite"
             elif policy is None:
                 status = "unassessed"
             else:
                 error = abs(left - right)
                 allowed = policy["absolute"] + policy["relative"] * abs(left)
                 status = "match" if math.isfinite(error) and math.isfinite(allowed) and error <= allowed else "mismatch"
-                row.update(absolute_error=error, allowed_error=allowed)
+                row.update(encode_metric_values({"absolute_error": error, "allowed_error": allowed}))
         row["status"] = status
         rows[name] = row
     return dict(passed=bool(rows) and all(row["status"] in {"match", "sentinel_match"} for row in rows.values()), metrics=rows)
@@ -90,19 +110,24 @@ def numerical_comparison(reference, observed, metrics, policies, checks=()):
     comparisons = []
     for left, right in zip(a, b):
         result = compare_values(left["metrics"], right["metrics"], metrics, policies)
-        liquidation_assessed = left.get("liquidated") is not None and right.get("liquidated") is not None
+        liquidation_assessed = isinstance(left.get("liquidated"), bool) and isinstance(right.get("liquidated"), bool)
         result["liquidation"] = ("match" if left["liquidated"] == right["liquidated"] else "mismatch") if liquidation_assessed else "unassessed"
         result["passed"] = result["passed"] and result["liquidation"] == "match"
         limits = []
         for check in checks:
             from limit_utils import compute_limit_violation
-            values = [row["metrics"].get(check["metric"]) for row in (left, right)]
-            if check.get("scenario") is not None or any(value is None or not math.isfinite(float(value)) for value in values):
+            try:
+                for source_row in (left, right):
+                    require_metric_definition(source_row["metrics"])
+                values = [decode_metric_value(row["metrics"], check["metric"]) for row in (left, right)]
+            except MetricAggregationError:
+                values = []
+            if check.get("scenario") is not None or not values:
                 limits.append(dict(metric=check["metric"], status="unassessed"))
             else:
                 violations = [compute_limit_violation(check, float(value)) for value in values]
-                limits.append(dict(metric=check["metric"], reference_violation=violations[0],
-                    observed_violation=violations[1], status="match" if (violations[0] > 0) == (violations[1] > 0) else "flip"))
+                limits.append(dict(metric=check["metric"], **encode_metric_values({"reference_violation": violations[0],
+                    "observed_violation": violations[1]}), status="match" if (violations[0] > 0) == (violations[1] > 0) else "flip"))
         result["limits"] = limits
         result["passed"] = result["passed"] and all(row["status"] == "match" for row in limits)
         comparisons.append(result)
@@ -141,9 +166,12 @@ def ranking_assessment(reference, observed):
     right = observed["samples"][0]["results"]
     if not left or len(left) != len(right) or len(left) > 512:
         return dict(status="unassessed", reason="requires 1..512 matching candidate rows")
-    objectives = {"adg_fraction_strategy_equity": "max", "drawdown_max_fraction_strategy_equity": "min"}
+    objectives = {"cagr_fraction_strategy_equity": "max", "ulcer_index_fraction_strategy_equity": "min"}
     try:
-        vectors = [[tuple(float(row["metrics"][name]) * (-1 if direction == "max" else 1)
+        for rows in (left, right):
+            for row in rows:
+                require_metric_definition(row["metrics"])
+        vectors = [[tuple(decode_metric_value(row["metrics"], name) * (-1 if direction == "max" else 1)
                           for name, direction in objectives.items()) for row in rows] for rows in (left, right)]
     except (KeyError, TypeError, ValueError):
         return dict(status="unassessed", reason="missing or invalid objective")
@@ -175,7 +203,7 @@ def compare(report, manifest):
     for entry in manifest["entries"]:
         from limit_utils import expand_limit_checks
         checks = expand_limit_checks(entry.get("diagnostic_limits", []),
-            {"adg_fraction_strategy_equity": -1, "drawdown_max_fraction_strategy_equity": 1}, penalty_weight=1.0)
+            {"cagr_fraction_strategy_equity": -1, "ulcer_index_fraction_strategy_equity": 1}, penalty_weight=1.0)
         rows_for_case = [r for r in report["runs"] if r["entry"] == entry["id"]]
         modes = list(dict.fromkeys(r["mode"] for r in rows_for_case))
         def find(label, mode):

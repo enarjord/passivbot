@@ -1,293 +1,219 @@
 # Metrics reference
 
-The generated [quantity reference](ai/generated/metric_fields.md) lists each owned field's unit,
-denominator, observation population, intrinsic aggregation, weighting and sign convention.
-Its source is `config.metric_definitions`; scoring direction and backend support retain their
-existing owners. Describing a quantity does not authorize a selector alias or change its formula.
+Passivbot uses **24 core quantities**, exposed through 25 exact selectors because position
+utilization has separate long and short scopes. The generated [quantity reference](ai/generated/metric_fields.md)
+lists the selectors and units; the [numerical contract](ai/features/backtest_metrics.md) owns
+their clocks, formulas and validity rules. There are no automatic USD/BTC, unit, rate or
+presentation copies of these quantities.
 
-This page documents the main backtest metrics exposed by `passivbot-rust`.
-Names use `<quantity_with_unit>_<curve>_<position_side>_ew`, omitting modifiers that do not apply.
-Curves are `usd`, `btc`, and `strategy_equity`; position sides are `long` and `short`; `_ew` is
-always last. For example, `adg_fraction_usd_ew` and `gain_multiplier_per_twel_ratio_btc_long`.
-Outer suite statistics follow the complete name, such as `adg_fraction_usd_ew_mean`.
+An optimizer computes its selected objectives, enabled limits and necessary validity facts.
+A standalone backtest produces the core report. Every numeric metric supports penalties below
+and/or above a bound, independently or together. Score directions below are recommendations;
+an explicitly authored goal can override them. Risk-minimizing objectives need suitable growth
+or activity conditions.
 
-Fractions use scale one (`0.05` means five percent) and may be signed or exceed one where the
-formula allows. Ratios name a quotient and need not be bounded. Multipliers use one for an
-unchanged value. `_1pct` identifies a one-percent tail population; `p95` identifies a quantile,
-not a percentage-valued result. Conventional ratio names retain their established spelling;
-the quantity reference gives their precise daily, unannualized estimators. USD and BTC account
-curves are evaluated even without BTC collateral. Shared USD loss amounts remain shared metrics.
-Current v9 selectors and results use these exact spellings. Only explicit versioned v8 conversion
-accepts released historical names; there is no earlier development-v9 compatibility layer.
-Standalone backtests print the complete analysis report.
+## Equity, units and sampling
 
-## Effective backtest period
+`E` is portfolio strategy equity: initial trading capital, net realized trading cashflows and
+marked trading UPNL. Trading fees and rebates enter once. Direct collateral appreciation and
+collateral-conversion operations/costs are excluded from strategy performance, while their
+effects on actual account balance, position sizing and subsequent trading remain. With USD-only
+collateral, published USD equity and strategy equity are identical by construction.
 
-- `analysis_duration_days`: Elapsed days between the first and last actual equity-analysis timestamps,
-  including idle periods. This excludes pre-analysis warmup and reflects early termination.
-  It is not a count of days with fills or a per-coin coverage measure.
-  Duration defaults to maximizing in exact/CPU scoring. It remains excluded from GPU proxy
-  scoring and proxy-side limits, while computed diagnostic values stay available.
-- `effective_start_date` and `effective_end_date`: Those actual boundaries as UTC ISO timestamps.
-  Empty equity histories have null dates and zero duration; a single timestamp has equal dates
-  and zero duration. Dates are output metadata and are never averaged or used as scoring metrics.
+Use exactly **365.25 calendar days per year**. With actual elapsed evaluation days `D`,
+`Y = D / 365.25`. Return and drawdown fractions use scale one: `0.05` means 5%. Ratios are
+dimensionless; duration units appear in their names. Human percentage formatting includes `%`.
 
-Standalone result configs keep finite values in `metrics.stats` and encode undefined numeric
-diagnostics as strings (`"inf"`, `"-inf"`, or `"nan"`) in `metrics.nonfinite_diagnostics`. The raw
-`analysis.json` remains unchanged, and fills and plots still persist. Optimizer and suite scoring
-continue to reject non-finite metric values.
+Volatility, Sharpe, Sortino and Omega use the same **complete UTC daily-close simple returns**:
+`r_i = E_close_i / E_close_(i-1) - 1`. Partial boundary days do not create returns, and the first
+equity level is a reference rather than an artificial zero return. Missing required interior
+observations make the selected statistic unavailable.
 
-Standalone backtests retain the flat `analysis.json` and also embed structured results in
-`config.json` under `metrics`, matching Pareto members: duration is at `metrics.stats.analysis_duration_days`
-(`mean`, `min`, `max`, `std`, `median`), and dates are directly under `metrics` when all evaluation
-windows match. `metrics.exchanges.<exchange>` preserves each exchange's dates.
+**Passivbot does not subtract a risk-free rate or benchmark return.** Sortino and Omega have a
+fixed zero cutoff. There is no excess-return or configurable return-target machinery.
 
-Suites use `suite_metrics.metrics.analysis_duration_days` for duration statistics and per-scenario values.
-Dates are at `suite_metrics.scenarios.<label>` and its `exchanges.<exchange>` entries;
-shared dates appear directly under `suite_metrics` only when all windows match.
-Suite backtests also save a root `config.json` containing `suite_metrics` alongside
-`suite_summary.json`, preserving effective suite exchange defaults for repeat runs. Duration uses its configured
-suite reducer. Each output config contains fresh results,
-replacing prior `metrics` and `suite_metrics` blocks. `config.original.json`, when present, remains the input snapshot.
-Requested config dates and detailed dataset coverage in the manifest retain their existing roles.
+Drawdown, Ulcer, Pain, peak recovery, CAGR EW and exposure use minute observations. The initial
+pre-trading baseline counts once; a factual terminal mark counts once, including an early
+partial minute. Flat periods and zero drawdowns remain included. Coarser replay remains usable
+for supported quantities, with its cadence recorded; minute-only metrics are unavailable and
+cannot be selected for optimization at that cadence. No interpolation creates supposed minute facts.
 
-## Core growth metrics
+## Complete core list
 
-- `gain_multiplier`: Terminal equity divided by starting equity, where terminal equity is the mean of the
-  last up to three daily equity values.
-- `adg_fraction`: Average daily growth derived from that same smoothed terminal equity
-  (`gain_multiplier^(1/N) - 1`, where `N` is the number of daily equity values).
+Let `mu = mean(r)`, `s = sample_std(r, ddof=1)`, and
+`d_t = 1 - E_t / running_max(E)`. S denotes a useful score and L a primarily useful limit.
+Every S metric is also a limit.
 
-For positive gain and equal numbers of daily equity values, gain and ADG give the same ranking.
-GPU screening currently accepts ADG and reserves gain for exact analysis; this is a preference for
-normalized growth, not a separate known GPU gain-calculation defect.
+| Metric selector | Definition/formula | Usual role |
+|---|---|---|
+| `cagr_fraction_strategy_equity` | `(E_end / E_start)^(1/Y) - 1` | S maximize |
+| `volatility_annual_fraction_strategy_equity` | `s * sqrt(365.25)` | L |
+| `sharpe_ratio_strategy_equity` | `mu / s * sqrt(365.25)` | S maximize |
+| `sortino_ratio_strategy_equity` | `mu / sqrt(mean(min(r, 0)^2)) * sqrt(365.25)` | S maximize |
+| `omega_ratio_strategy_equity` | `sum(max(r, 0)) / sum(max(-r, 0))`; not annualized | S maximize |
+| `drawdown_max_fraction_strategy_equity` | `max(d)` | L |
+| `ulcer_index_fraction_strategy_equity` | `sqrt(mean(d^2))` | S minimize |
+| `pain_index_fraction_strategy_equity` | `mean(d)` | S minimize |
+| `cagr_fraction_strategy_equity_ew` | Annualized calendar-weighted log growth, below | S maximize |
+| `backtest_completion_fraction` | Covered duration / intended duration, clipped to `[0,1]` | L |
+| `fills_gap_max_days` | Longest gap between evaluation boundaries and consecutive portfolio fills, in days | L |
+| `peak_recovery_max_days_strategy_equity` | Longest underwater episode until regaining its previous high, in days | L |
+| `position_held_max_days` | Longest coin/position-side open-to-flat episode, including open tails | L |
+| `gross_turnover_ratio_per_day` | `sum(abs(fill_notional_i) / pre_fill_balance_i) / D` | S maximize when desired |
+| `position_held_time_weighted_mean_hours` | `sum(h_i^2) / sum(h_i)`, for holding episode hours `h_i` | S minimize |
+| `position_exposure_utilization_rms_ratio_long` / `_short` | Budget-relative position RMS, below | S minimize |
+| `hsl_panic_episode_loss_max_fraction` | Maximum HSL execution-episode loss / balance before its first HSL fill | L |
+| `hsl_panic_episode_loss_mean_fraction` | Arithmetic mean of those episode loss fractions | L |
+| `hsl_triggers_per_year` | Observed trigger count / `Y` | L |
+| `gross_exposure_rms_ratio_strategy_equity` | `sqrt(mean(g_t^2))`, with gross marked exposure `g_t` below | S minimize |
+| `gross_exposure_max_ratio_strategy_equity` | `max(g_t)` | L |
+| `hsl_red_time_fraction` | Union reported RED seconds / observed HSL seconds | L |
+| `loss_profit_ratio` | Negative net realized cashflow magnitude / positive net realized cashflow | S minimize |
+| `short_net_profit_contribution_fraction` | Net short strategy profit / positive combined net strategy profit | L |
 
-- `adg_rolling_hmean_fraction_strategy_equity`: Path-sensitive growth on collateral-agnostic strategy equity.
-  For each automatic horizon `h`, it computes every complete rolling growth factor
-  `G(t,h) = equity(t) / equity(t-h)`, then calculates
-  `R(h) = harmonic_mean(G(t,h))^(1/h) - 1`. The final metric is the geometric mean of
-  `1 + R(h)`, minus one, so each horizon contributes equally in daily log-growth space. The automatic
-  horizons retain roughly 48, 16, and 8 non-overlapping-window equivalents and are capped at 30,
-  90, and 180 days; histories of about four years or more therefore use exactly 30/90/180 days.
-  The harmonic mean makes persistently weak windows matter more than isolated windfalls. Keep
-  terminal `adg_fraction_strategy_equity` as a separate objective because overlapping rolling windows give the
-  ends of the backtest less coverage than its middle.
-- `adg_time_integrated_fraction_strategy_equity`: Dailyized area under log strategy equity relative to its
-  starting value: `exp(2 * trapezoid_sum(log(equity/start)) / days^2) - 1`. It equals ordinary ADG
-  on a perfectly exponential curve, rewards gains that arrive earlier, and penalizes equity that
-  spends much of the run below its start. Use it together with terminal ADG: an early windfall
-  followed by deterioration can still have positive area.
-- `positive_log_return_participation_score_strategy_equity`: Effective participation of positive daily log gains,
-  normalized to `[0, 1]`: `(sum(p)^2) / (N * sum(p^2))`, where
-  `p = max(log(equity(t) / equity(t-1)), 0)`. If positive gain is spread equally across `k` of `N`
-  daily intervals, the score is `k / N`; concentration in a few unusually large positive days
-  lowers it further. The metric deliberately ignores negative returns, leaving their magnitude and
-  duration to Sortino and drawdown objectives, and should be paired with a growth objective such as
-  `adg_fraction_strategy_equity` so tiny frequent gains cannot win on participation alone.
+Sortino includes **all daily returns** in its downside denominator: nonnegative days contribute
+zero, and division is by the total number of daily returns. It does not use clipped-return
+standard deviation or a negative-day-only average. Sharpe uses arithmetic mean returns, not CAGR.
+Volatility and Sharpe need at least two daily returns for sample dispersion.
 
-For example, over 240 daily intervals, equal positive gains on all 240 days score `1.0`; equal
-positive gains on 120, 24, or one day score `0.5`, `0.1`, or about `0.0042`. Unequal gains reduce
-the score further. Two curves can therefore finish at the same equity while participation strongly
-prefers the one whose gains were broadly shared. Rolling-harmonic ADG asks a different question:
-whether growth remains sound across many possible 30/90/180-day start and end points.
+CAGR uses factual endpoints with no three-day or seven-day smoothing. Growth and daily return
+statistics require valid positive equity support; a later recovery does not repair an intermediate
+nonpositive equity observation. Drawdown, Pain and Ulcer are not annualized.
 
-- `daily_realized_pnl_mean_fraction`: Daily net realized PnL fraction. For each UTC day with fills, sum `pnl + fee_paid`
-  and divide by the absolute final recorded balance, floored at `1e-12`; average the finite daily fractions.
-- `mdg_fraction`: Median of daily scale-one equity changes.
-- `daily_realized_pnl_median_fraction`: Median of the collateral-agnostic daily PnL ratios (same daily ratios as `daily_realized_pnl_mean_fraction`,
-  aggregated via median instead of mean).
-- `sharpe_ratio_realized_pnl`: Sharpe on the collateral-agnostic daily PnL ratios (`daily_realized_pnl_mean_fraction` divided by the
-  standard deviation of those daily ratios).
-- `sortino_ratio_realized_pnl`: Sortino on the same daily PnL ratios (`daily_realized_pnl_mean_fraction` divided by downside
-  deviation of negative daily ratios).
-
-Note: Sharpe/Sortino on equity (`sharpe_ratio`, `sortino_ratio`) use daily equity returns
-(mark-to-market, including unrealized swings), so their variance usually reflects BTC collateral and
-intra-day volatility. The PnL variants (`*_realized_pnl`) use realized PnL ratios divided by end-of-day
-balance, which often yields lower variance (and fewer negative days), so the ratios can be higher
-and more stable across collateral caps.
+Requested peak recovery includes `metric_metadata.peak_recovery_tail_censored`: true for an
+unfinished underwater tail, false when recovered or flat, and null when support is invalid.
 
 ## Exponential recency weighting
 
-Set `backtest.ew_half_life_days` to a finite number at least `1` to enable these
-metrics. The default `null` disables them. Half-life is measured in calendar days;
-with `180`, a return 180 days older gets half the weight. One global half-life
-applies to every exchange and scenario and cannot be overridden by a scenario.
-When enabled, `backtest.candle_interval_minutes` must be a positive integer
-dividing a UTC day (1,440 minutes); unsupported intervals fail config preflight.
+The single EW quantity is CAGR EW. `backtest.ew_half_life_days` resolves to **180 days** by
+default, including an omitted or null input; an explicit finite positive value sets one common
+campaign half-life. Scenario overrides are rejected.
 
-| Curve | Metric names |
-|---|---|
-| Collateral-agnostic strategy equity | `adg_fraction_strategy_equity_ew`, `sharpe_ratio_strategy_equity_ew`, `sortino_ratio_strategy_equity_ew`, `omega_ratio_strategy_equity_ew` |
-| USD account equity | `adg_fraction_usd_ew`, `sharpe_ratio_usd_ew`, `sortino_ratio_usd_ew`, `omega_ratio_usd_ew` |
-| BTC account equity | `adg_fraction_btc_ew`, `sharpe_ratio_btc_ew`, `sortino_ratio_btc_ew`, `omega_ratio_btc_ew` |
+For minute intervals, define `z_k = log(E_k / E_(k-1))`, interval days `delta_k`, and
+`w_k = 2^(-age_of_interval_endpoint_days / half_life_days)`:
 
-All twelve objectives default to maximizing. They use complete UTC daily
-end-equity returns, including zero-return and no-fill days. The final candle of
-the preceding day must supply the starting equity, and every candle in the
-return day must be present. Warmup and partial boundary days contribute no
-returns. Saved plot/CSV sampling does not change these calculations.
+```text
+CAGR_EW = expm1(365.25 * sum(w_k * z_k) / sum(w_k * delta_k))
+```
 
-For returns `r_i`, normalized weights are `p_i = w_i / sum(w)`, where
-`w_i = 2^(-age_days_i / half_life_days)`. The newest admitted return is used as
-the age origin; this is equivalent to weighting from the evaluation end after
-normalization and avoids underflow on older scenarios.
+Flat intervals remain in the denominator. As half-life tends to infinity, the result approaches
+ordinary CAGR on the same window. This is a declared Passivbot definition of recency-weighted
+growth. There are no EW Sharpe/Sortino/Omega or currency variants.
 
-- ADG: `exp(sum(p_i * log(1 + r_i))) - 1`.
-- Sharpe: weighted arithmetic mean divided by weighted population standard deviation.
-- Sortino: weighted arithmetic mean divided by `sqrt(sum(p_i * min(r_i, 0)^2))`.
-- Omega: `sum(p_i * max(r_i, 0)) / sum(p_i * max(-r_i, 0))`.
+## Effective backtest period
 
-These ratios are daily and unannualized, with a zero return threshold. Denominators
-are floored at `1e-12`; Sharpe/Sortino are clipped to `[-1000, 1000]` and Omega to
-`[0, 1000]`. A flat curve scores zero. Fewer than two admitted returns,
-liquidation, or any nonpositive equity sample makes the affected metrics
-unavailable. Malformed or nonfinite observations fail analysis. Required metrics
-must be available for every selected exchange and scenario; scoring never
-substitutes another currency or silently averages a surviving subset.
+The declared post-warmup boundary starts evaluation even when there is no trading capacity or
+no fills. Actual observation clocks determine elapsed time and coverage. Completion keeps the
+intended denominator when replay terminates early. A nonpositive post-warmup window is an explicit
+error for a standalone backtest and an invalid candidate in optimization.
 
-EW metadata records definition version, half-life, observation count, effective
-sample size (`sum(w)^2 / sum(w^2)`), first/last admitted return clocks, and
-availability. It is stored outside numeric scoring statistics: `metrics.ew_metadata`
-for CPU results and `metrics.analysis_metadata` for native GPU optimizer results.
-Unavailable native GPU values use `-inf` so the canonical scorer rejects the
-candidate; the sidecar explains why.
+`metric_metadata` records actual/intended clocks, observation cadence, definition version and
+relevant sample counts. Uncomputed group counts are omitted. `effective_start_date` and
+`effective_end_date` are actual UTC ISO boundaries, outside numeric aggregation.
+Liquidation is separate support metadata: final-minute liquidation can have completion `1`.
 
-Legacy `_w` trailing-slice metrics and their dependent aliases are removed from standalone
-and optimizer results. Ordinary metrics and explicit `_ew` metrics retain distinct formulas.
-Final default objectives use ordinary strategy equity. Conversion requires an explicit formula
-choice; changing that choice, the EW half-life or definition invalidates saved fitness.
+Fill gaps include the leading and trailing evaluation intervals; no fills gives one gap equal
+to the full duration. Duplicate fill timestamps add no elapsed gap. Recovery starts at the last
+high before a decline and ends at its first recovery; a plateau at the high is recovered.
+Include unfinished recovery and holding episodes through evaluation end. Position additions
+and partial closes do not reset holding starts. With no positive-duration position episode,
+both holding metrics are zero.
 
-## Risk/return ratios
-- `sharpe_ratio`: `adg_fraction` divided by the standard deviation of daily min-equity returns.
-- `sortino_ratio`: `adg_fraction` divided by downside deviation (only negative daily min-equity returns).
-- `omega_ratio`: Sum of positive daily returns divided by the absolute sum of negative daily returns.
-- `sterling_ratio`: `adg_fraction` divided by the average of the worst 1% drawdowns.
-- `calmar_ratio`: `adg_fraction` divided by the worst drawdown observed over the full equity curve.
-- `adg_to_paper_loss_max_ratio`: `adg_fraction` divided by the worst absolute negative equity-vs-balance gap.
-- `adg_to_paper_loss_mean_ratio`: `adg_fraction` divided by the mean absolute negative equity-vs-balance gap.
-- `exposure_ratio`: `adg_fraction` divided by the maximum absolute recorded wallet exposure.
-- `adg_to_absolute_net_exposure_mean_ratio`: `adg_fraction` divided by the mean absolute recorded wallet exposure.
+## Turnover and exposure
 
-Ordinary equity metrics include the full retained equity curve, including periods without fills.
-Ordinary time-weighted holding/gap summaries remain available; they are not retired `_w` variants.
+Turnover counts every entry and exit at execution-price notional, including instrument
+multiplier. Its denominator is each fill's raw, unrounded USD-valued account balance immediately
+before execution, excluding UPNL. Include inactive and partial days, with no round-trip halving.
+At unchanged balance 1000, volume 500 in one day gives `0.5`; volume 1200 over two days gives
+`0.6`, including a day without trades.
 
-## Drawdown and tail metrics
-- `pain_index_fraction_strategy_equity`: Mean drawdown from the running peak of collateral-agnostic
-  strategy equity (Pain Index, also known as Zephyr Pain Index).
-- `ulcer_index_fraction_strategy_equity`: Root mean square of those same drawdowns (Ulcer Index).
+Position utilization retains nominal runtime WEL/TWEL budgets, excluding excess allowance:
 
-Both indices use every recorded equity observation, including zero drawdowns at peaks:
-`d[t] = (running_peak[t] - strategy_equity[t]) / abs(running_peak[t])`,
-`pain = mean(d)`, and `ulcer = sqrt(mean(d*d))`. They use minute-level observations
-with standard one-minute candles; coarser backtests use their configured candle resolution.
-They include unrealized PnL, retain losses beyond 100% on negative strategy equity,
-and return fractions (`0.05` means 5%). Neither uses daily maxima, HSL smoothing,
-or plot/CSV downsampling. Both optimizer objectives default to minimizing.
-Rust reuses the drawdown traversal; GPU screening accumulates compact per-day sums,
-squared sums and counts of all observations without retaining minute-sized histories.
+```text
+e_p,t = abs(entry-price position notional_p,t) / raw_account_balance_t
+u_side_squared_t = sum_over_positions(e_p,t^2 / WEL_p,t) / TWEL_side,t
+utilization_side_rms = sqrt(mean(u_side_squared_t))
 
-The former daily-worst `strategy_eq_underwater_pct_mean` and
-`strategy_eq_underwater_pct_median` are removed without aliases. Re-evaluate
-saved results and limits before selecting thresholds for the new definitions.
+g_t = sum_over_positions(abs(marked position notional_p,t)) / E_t
+```
 
-- `drawdown_max_fraction`: Maximum absolute drawdown over the equity curve.
-- `drawdown_daily_worst_1pct_mean_fraction`: Mean of the worst 1% daily worst drawdowns, where drawdown is computed from the full-resolution equity curve before reducing each day to its worst underwater point.
-- `expected_shortfall_1pct_fraction`: Average loss of the worst 1% daily min-equity returns.
+Flat capacity remains in the minute population. Positive load with invalid balance/budget is
+unavailable. Scaling exposure and both budgets proportionally leaves utilization unchanged;
+gross exposure separately measures absolute strategy load. Long and short gross notionals add.
 
-## HSL metrics
+## HSL execution episodes
 
-V9 HSL risk curves use decaying currency drawdown and ratio smoothing. These diagnostics
-are model-dependent; they are not independent account-equity measurements or a common
-quality ruler for v8/v9 comparisons. Compute ordinary account return/drawdown/recovery
-from full account equity and fills with identical definitions. Disabling optional HSL
-samples must not omit required account/objective metrics. See [V9 risk model](v9_risk_model.md).
+An execution episode belongs to one actual controller scope and contains at least one HSL fill.
+Flattening or retirement of its panic intent ends it. A later execution starts a new episode;
+RED cooldown after flattening does not create another loss episode. Include observed unfinished
+episode loss once at evaluation end.
 
-- `hsl_trigger_count`: Absolute count of RED trigger events during the run.
-- `hsl_restart_count`: Absolute count of cooldown restarts after RED halts.
-- `hsl_panic_loss_starting_balance_fraction`: Loss-only net panic-fill PnL, summed as a
-  nonnegative loss magnitude and divided by starting balance.
-- `hsl_triggers_per_year`: `hsl_trigger_count / analysis_duration_days * 365.25`.
-- `hsl_restarts_per_year`: `hsl_restart_count / analysis_duration_days * 365.25`.
+```text
+net_fill_pnl_i = realized_pnl_i + signed_fee_i
+episode_loss_e = sum(max(-net_fill_pnl_i, 0))
+episode_fraction_e = episode_loss_e / raw_balance_before_first_HSL_fill_e
+```
 
-## Exposure, volume, and timing
+Costs are negative signed fees and rebates positive. Profitable fills do not offset losses.
+Zero-loss executed episodes count as zero in the mean; triggers without executed HSL fills do
+not enter that mean. With no execution episodes, both loss aggregates are zero with count
+metadata. A nonpositive/invalid balance anchor makes the selected aggregate unavailable.
 
-The RMS exposure family uses every recorded nonterminal candle after analysis
-activation, including flat and HSL cooldown candles. Warmup and the terminal
-liquidation candle are excluded. There is no daily maximum, smoothing, threshold,
-clipping, or padding after termination. Values are dimensionless and shared between
-USD/BTC analyses, with no currency or `_w` variants. A valid all-flat history is
-zero; an empty history is undefined and cannot supply an optimizer objective or limit.
+Reported RED includes enforced restart cooldown and can outlast immediate panic permission.
+RED time is the union across enabled controllers, excluding warmup. In coin/position-side mode
+it does not mean the whole bot was inactive. Missing coverage is not known GREEN time.
+Disabled HSL remains distinguishable from enabled HSL that was never triggered.
 
-For coin `i`, side `s`, candle `t`, define `e[i,s,t]` as absolute position quantity
-times average entry price times contract multiplier divided by actual, unrounded
-USD wallet balance (excluding unrealized PnL). Let `E[s,t] = sum_i(e[i,s,t])`, `L[s]`
-be nominal total wallet exposure limit, and `w[i,s,t]` be the current runtime base
-wallet exposure limit for that coin/side. These budgets include allocation changes
-and coin overrides, exclude excess allowance, and retain the runtime budget of a
-held nontradable coin. Neither approved-coin count nor final configuration substitutes
-for the runtime budget.
+## Profit accounting
 
-| Metric | Definition | Intended use |
-|---|---|---|
-| `wallet_exposure_utilization_rms_ratio_long/short` | `sqrt(mean_t((E[s,t]/L[s])^2))` | Minimize portfolio utilization |
-| `position_exposure_utilization_rms_ratio_long/short` | `sqrt(mean_t(sum_i(e[i,s,t]^2/(L[s]*w[i,s,t]))))` | Minimize budget-weighted position utilization |
-| `wallet_exposure_rms_ratio_long/short` | `sqrt(mean_t(E[s,t]^2))` | Absolute exposure diagnostic or limit |
-| `gross_wallet_exposure_rms_ratio` | `sqrt(mean_t((E[long,t]+E[short,t])^2))` | Gross exposure diagnostic or limit |
+For realized loss/profit, split each actual fill's `x_i = realized_pnl_i + signed_fee_i`
+into positive and negative net cashflow. Include entry fees, HSL fills and other modeled trading
+cashflows once. Positive cashflow 100 and negative magnitude 70 give `0.7`, leaving net realized
+profit 30. Above one means net realized loss. UPNL is excluded. Actual event grouping is part of
+this definition; no inverse profit-factor or closed-trade variant is maintained.
 
-Position weighting is `w/L` inside the square root; weights are not renormalized
-over occupied positions or the coin universe. Equal budgets `w=L/K` reduce this to
-`sqrt(mean_t(sum_i(utilization[i,t]^2)/K))`. Flat inventory contributes zero without
-dividing by a disabled budget. Positive exposure with an invalid nominal limit or
-coin budget makes the affected utilization metric undefined; it is never silently
-clamped or omitted. Long and short exposures are nonnegative, and gross exposure
-sums both sides before squaring, so hedges do not cancel.
+For short contribution:
 
-All seven names support optimizer scoring and limits with default goal `min`;
-the default objective list is unchanged. Prefer utilization objectives and absolute
-diagnostics/limits: scaling inventory and nominal budgets together leaves utilization
-unchanged while increasing absolute exposure. These definitions are implemented by
-Rust CPU backtests and the native NVIDIA/CUDA service, including temporal chunking.
-CUDA compiles RMS state and accumulation only when RMS metrics are requested.
-RMS metrics are rejected before replay on legacy GPU paths and Apple Metal; the
-RMS implementation currently supports native NVIDIA/CUDA only.
+```text
+P_side = net_realized_trading_cashflows_side + UPNL_side_end - UPNL_side_start
+short_contribution = P_short / (P_long + P_short)
+```
 
-- `absolute_net_wallet_exposure_{max,mean,median}_ratio`: Stats over recorded wallet exposure values.
-- `active_day_turnover_proxy_mean_ratio`: Scale-one mean of active-fill-day sums of
-  `abs(fill_qty) * fill_price / fill.usd_total_balance`. Days without fills are absent.
-  This quantity-price turnover proxy does not apply `c_mult`; its signed balance denominator
-  has no floor, so negative balances can produce negative values and zero balances can be nonfinite.
-- `position_episodes_per_day`: Average number of positions opened per day.
-- `position_held_{mean,median,max}_hours`: Holding-time stats for closed (or still-open) positions.
-- `position_held_time_weighted_mean_hours`: Duration-weighted mean holding time, computed as
-  `sum(held_hours^2) / sum(held_hours)` over the same per-coin, per-position-side episodes.
-  An episode starts on opening and ends on a full close; adds and partial closes do not reset it.
-  Still-open episodes run to the analysis end. Concurrent positions contribute independently,
-  without position-size or exposure weighting. No positive holding time returns `0`.
-  Minimize this metric for a distribution-sensitive penalty on long holds; retain the maximum
-  as a diagnostic or limit. As with the fill-gap metric, it is a duration-weighted average,
-  so shortening an episode already much shorter than the average need not lower the score.
-- `position_held_{mean,median,max}_days`: Same holding-time stats converted to days.
-- `position_unchanged_max_hours`: Longest span with no fills on an open position.
-- `position_unchanged_max_days`: Same unchanged-position span converted to days.
-- `fills_gap_time_weighted_mean_hours`: Time-weighted mean portfolio no-fill gap. Unique fill
-  timestamps split the full analysis window, including its leading and trailing boundaries, into
-  gaps `g`; the metric is `sum(g^2) / sum(g)`. A randomly selected moment is therefore weighted by
-  the length of the gap containing it, so long droughts contribute more strongly than clustered
-  fills. A zero-fill run equals the full analysis duration.
-- `peak_recovery_max_hours`: Longest equity peak-to-recovery interval, including an unrecovered
-  tail from the last peak to the final equity sample.
-- `peak_recovery_max_days`: Same equity recovery duration converted to days.
-- `peak_recovery_max_hours_realized_pnl`: Same calculation on cumulative realized PnL.
-- `peak_recovery_max_days_realized_pnl`: Same realized-PnL recovery duration converted to days.
-- `recovery_*_days_strategy_equity`: Distribution of per-sample strategy-equity recovery durations. For each strategy-equity sample, recovery is the time until a later sample strictly exceeds that equity; samples not exceeded by the end use the open tail to the final timestamp. Available summaries are `mean`, `median`, `p95`, `p99`, `worst_5pct_mean`, `worst_1pct_mean`, and `max`.
+Use position side, not buy/sell direction. Include trading costs and rebates; exclude collateral
+appreciation. Require positive combined net profit. Long/short profits 100/0, 0/100 and 100/100
+give `0`, `1` and `0.5`. A losing short gives a negative share; a losing long gives a share above
+one. Do not clamp or take absolute profits. Bounds `0.1` and `0.9` require at least 10% of positive
+combined net profit from each side. Nonpositive combined profit is unavailable and cannot satisfy
+an enabled contribution limit.
 
-## Trade-level metrics
-- `trade_win_fraction`: Fraction of completed trades with positive summed realized fill PnL, excluding fees.
-- `trade_loss_max_fraction`: Worst completed-trade loss as a fraction of the account balance at trade open.
-- `trade_loss_mean_fraction`: Mean losing-trade loss fraction in that same unit.
-- `trade_loss_median_fraction`: Median losing-trade loss fraction in that same unit.
+## Results, scores and limits
 
-A completed trade is one full position lifecycle from open to flat for a single `coin + side`.
-Realized PnL is accumulated from `fill.pnl` over that lifecycle. Positions that remain open at the
-end of the backtest are excluded from these trade-level metrics.
+Raw analysis uses finite values or `null`, with a sparse `metric_status` map distinguishing
+positive/negative infinity, undefined and invalid inputs. It uses standard JSON, without
+`NaN`/`Infinity` tokens, epsilon floors, arbitrary ratio caps or friendly `0/0` fallbacks.
+True nonzero/zero ratios can be infinite; zero/zero is undefined. A standard report can contain
+unavailable metrics. Only a selected objective or enabled limit requiring one rejects a candidate.
+
+Limits compare raw extended-real values. Positive infinity passes a finite lower bound and fails
+a finite upper bound, with the converse for negative infinity. Unavailable values cannot satisfy
+limits. Both penalty directions remain available together, with existing equality semantics.
+
+Authored selectors use exact base names; outer reductions use reducer fields/maps. Reduce raw
+values across every required source before scoring; missing scenarios/exchanges are never dropped.
+Compute only requested reductions. Mixed positive/negative infinities make a mean undefined;
+any infinite input makes standard deviation unavailable.
+
+For minimization engines, a reduced score uses `(2/pi) * atan(goal_sign * raw_value)`, with sign
+`+1` for minimization and `-1` for maximization. Genuine infinities map to finite endpoints.
+This preserves mathematical ordering/Pareto dominance but changes crowding geometry; it is
+versioned in the evaluation contract. Feasibility takes precedence. Raw values remain in results
+and limits; finite invalid-candidate transport placeholders are not real metric values.
+
+Standalone `analysis.json` and structured `config.json` results retain definition metadata and
+statuses. Saved fitness/checkpoints require the current definition and implementation identity.
+Historical results keep their original definitions; changed metrics and thresholds need explicit
+review/re-evaluation. See [released-v8 migration](v8_to_v9_migration.md).
+
+The normal equity CSV keeps factual native observations and float64 precision. The
+`balance_sample_divider` setting affects plots only. Fills remain exported; no dedicated
+post-backtest analysis tool or retired-metric compatibility subsystem is added.

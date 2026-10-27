@@ -203,7 +203,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
                 ema_span_1_minutes=3,
                 entry_qty_exposure_coefficient=0,
             )
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
+    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in ("BTC", "ETH"):
         mss[coin].update(last_valid_index=count - 1, price_step=0.001)
     out, fills = _evaluate(side, (cfg, candles, mss, np.full(count, 50000.0), ts))
@@ -322,7 +322,7 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
         timestamps=ts,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"adg_fraction_strategy_equity"},
+        needed_metrics={"cagr_fraction_strategy_equity"},
     )
     start = (
         EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START
@@ -446,7 +446,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
             bot["strategy"][strategy]["entry"].update(
                 initial_ema_distance_fraction=0.05, ema_gate_mode="all",
             )
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit_ratio=1)
+    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1)
     for coin in coins:
         mss[coin].update(last_valid_index=count - 1, price_step=0.001)
     mss["SOL"].update(first_valid_index=60, warmup_minutes=1)
@@ -475,13 +475,8 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
         unilateralness_ema_span_minutes=100000,
         score_weights=dict(volume=0, log_range=0, ema_readiness=0, unilateralness=1),
     )
-    active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
-    cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0
-    disabled, baseline = _evaluate(side, (cfg, candles, mss, btc, ts))
-    np.testing.assert_array_equal(fills, baseline)
-    for key, value in active.items():
-        if isinstance(value, torch.Tensor):
-            torch.testing.assert_close(value, disabled[key], rtol=0, atol=0, equal_nan=True)
+    with pytest.raises(ValueError, match="1m"):
+        _evaluate(side, (cfg, candles, mss, btc, ts))
 
 
 @pytest.mark.parametrize("count,slots,dynamic,adverse,accept", [
@@ -567,17 +562,8 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
         "min_duration_minutes": 10.0, "max_duration_minutes": 10.0,
         "weights_minutes": {"adverse_directionality": 7.0},
     }}}} for coin in ("BTC", "ETH")}
-    active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
-    baseline_cfg = copy.deepcopy(cfg)
-    for override in baseline_cfg["coin_overrides"].values():
-        override["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
-    disabled, baseline = _evaluate(side, (baseline_cfg, candles, mss, btc, ts))
-    assert len(fills) > 0
-    np.testing.assert_array_equal(fills, baseline)
-    assert active["fill_count"].item() == len(fills)
-    for key, value in active.items():
-        if isinstance(value, torch.Tensor):
-            torch.testing.assert_close(value, disabled[key], rtol=0, atol=0, equal_nan=True)
+    with pytest.raises(ValueError, match="1m"):
+        _evaluate(side, (cfg, candles, mss, btc, ts))
 
 
 @pytest.mark.parametrize("pins,base,floor,ceiling,adverse,accept", [

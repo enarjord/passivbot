@@ -34,7 +34,7 @@ def test_mirrored_searched_weights_keep_logical_fixed_identity_and_static_pin_ga
         name: [0.0, 1.0] for name in names
     }}}}
     raw["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
-    raw["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
+    raw["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     raw["optimize"]["limits"] = []
     config = prepare_config(raw, verbose=False)
     config["backtest"]["coins"] = columns

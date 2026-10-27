@@ -80,6 +80,15 @@ from config.parse import load_raw_config
 from config.schema import get_expanded_config_prototype
 
 
+def _core_analysis(values, **metadata):
+    """A current native result fixture; quantities are supplied by each test."""
+    return {
+        **values,
+        "metric_metadata": {"definition_version": 1, **metadata},
+        "liquidated": False,
+    }
+
+
 def _bounds_from_flat(values, strategy_kind="trailing_martingale"):
     """Build canonical fixture bounds from the optimizer's internal key names."""
     from config.optimize_bounds import set_flat_optimize_bound
@@ -353,10 +362,16 @@ class TestLiquidationHelpers:
         assert _analysis_indicates_liquidation({"liquidated": False}, config) is False
         assert (
             _analysis_indicates_liquidation(
-                {"drawdown_max_fraction": 0.999, "liquidated": False}, config
+                {"drawdown_max_fraction_strategy_equity": 0.999, "liquidated": False}, config
             )
             is False
         )
+
+    @pytest.mark.parametrize("analysis", [{}, {"liquidated": None}, {"liquidated": 0}, {"liquidated": 1}, {"liquidated": "false"}])
+    def test_analysis_indicates_liquidation_rejects_missing_or_malformed_support(self, analysis):
+        config = get_expanded_config_prototype()
+        with pytest.raises(ValueError, match="liquidat"):
+            _analysis_indicates_liquidation(analysis, config)
 
 
 class TestLooksLikeBoolToken:
@@ -445,8 +460,8 @@ class TestNormalizeOptionalBoolFlag:
     "flags,expected",
     [
         (["--clear-limits"], []),
-        (["--limit", "adg_fraction > 0.0008"], ["drawdown_max_fraction_usd", "adg_fraction_usd"]),
-        (["--clear-limits", "--limit", "adg_fraction > 0.0008"], ["adg_fraction_usd"]),
+        (["--limit", "cagr_fraction_strategy_equity > 0.0008"], ["drawdown_max_fraction_strategy_equity", "cagr_fraction_strategy_equity"]),
+        (["--clear-limits", "--limit", "cagr_fraction_strategy_equity > 0.0008"], ["cagr_fraction_strategy_equity"]),
     ],
 )
 async def test_optimizer_cli_applies_special_limits_before_preparation(
@@ -454,7 +469,7 @@ async def test_optimizer_cli_applies_special_limits_before_preparation(
 ):
     config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
-        {"metric": "drawdown_max_fraction", "penalize_if": "greater_than", "value": 0.3}
+        {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.3}
     ]
     path = tmp_path / "input.json"
     path.write_text(json.dumps({"config": config} if wrapped else config))
@@ -489,7 +504,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["adg_fraction > 0.0008"],
+                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008"],
                 "clear_limits": False,
             }
         )
@@ -497,18 +512,18 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": ">", "value": 0.35}
             ],
         )
 
         assert result == [
             {
-                "metric": "drawdown_max_fraction_usd",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.35,
             },
             {
-                "metric": "adg_fraction_usd",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             },
@@ -517,8 +532,8 @@ class TestResolveCliLimitsOverride:
     def test_combines_limits_payload_and_repeatable_limit_entries(self):
         args = argparse.Namespace(
             **{
-                "optimize.limits": '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]',
-                "limit_entries": ["adg_fraction > 0.0008 stat=mean"],
+                "optimize.limits": '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]',
+                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008 stat=mean"],
                 "clear_limits": False,
             }
         )
@@ -527,12 +542,12 @@ class TestResolveCliLimitsOverride:
 
         assert result == [
             {
-                "metric": "drawdown_max_fraction_usd",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.35,
             },
             {
-                "metric": "adg_fraction_usd",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
                 "reducer": "mean",
@@ -543,7 +558,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["fills_gap_p99_hours<72 stat=max"],
+                "limit_entries": ["fills_gap_max_days<72 stat=max"],
                 "clear_limits": False,
             }
         )
@@ -552,7 +567,7 @@ class TestResolveCliLimitsOverride:
 
         assert result == [
             {
-                "metric": "fills_gap_p99_hours",
+                "metric": "fills_gap_max_days",
                 "penalize_if": "greater_than_or_equal",
                 "value": 72.0,
                 "reducer": "max",
@@ -563,7 +578,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": '[{"metric":"backtest_completion_fraction","penalize_if":"<","value":1.0}]',
-                "limit_entries": ["adg_fraction > 0.0008"],
+                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008"],
                 "clear_limits": False,
             }
         )
@@ -571,7 +586,7 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": ">", "value": 0.35}
             ],
         )
 
@@ -582,7 +597,7 @@ class TestResolveCliLimitsOverride:
                 "value": 1.0,
             },
             {
-                "metric": "adg_fraction_usd",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             },
@@ -598,7 +613,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["adg_fraction > 0.0008"],
+                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008"],
                 "clear_limits": True,
             }
         )
@@ -606,13 +621,13 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": ">", "value": 0.35}
             ],
         )
 
         assert result == [
             {
-                "metric": "adg_fraction_usd",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             }
@@ -674,32 +689,33 @@ class TestStartingConfigSelectionArgs:
 def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
         {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = [
         {
-            "metric": "adg_fraction_strategy_equity",
+            "metric": "cagr_fraction_strategy_equity",
             "penalize_if": "less_than_or_equal",
             "value": 0.0015,
         }
     ]
     pareto_dir = tmp_path / "pareto"
     pareto_dir.mkdir()
-    for idx, adg_fraction in enumerate((0.001, 0.002)):
+    for idx, cagr_fraction_strategy_equity in enumerate((0.001, 0.002)):
         artifact = deepcopy(config)
         artifact["metrics"] = {
+            "definition_version": 1,
             "objectives": {
-                "adg_fraction_strategy_equity": adg_fraction,
+                "cagr_fraction_strategy_equity": cagr_fraction_strategy_equity,
                 "drawdown_max_fraction_strategy_equity": 0.3 - idx * 0.1,
             },
             "stats": {
-                "adg_fraction_strategy_equity": {
-                    "mean": adg_fraction,
-                    "min": adg_fraction,
-                    "max": adg_fraction,
+                "cagr_fraction_strategy_equity": {
+                    "mean": cagr_fraction_strategy_equity,
+                    "min": cagr_fraction_strategy_equity,
+                    "max": cagr_fraction_strategy_equity,
                     "std": 0.0,
-                    "median": adg_fraction,
+                    "median": cagr_fraction_strategy_equity,
                 },
                 "drawdown_max_fraction_strategy_equity": {
                     "mean": 0.3 - idx * 0.1,
@@ -710,7 +726,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
                 },
             },
         }
-        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 + adg_fraction
+        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 + cagr_fraction_strategy_equity
         (pareto_dir / f"candidate_{idx}.json").write_text(
             json.dumps(artifact),
             encoding="utf-8",
@@ -735,7 +751,7 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     config = get_expanded_config_prototype()
     config["backtest"]["reducer"] = {"default": "max"}
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
         {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = [
@@ -747,12 +763,13 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     ]
     artifact = deepcopy(config)
     artifact["metrics"] = {
+        "definition_version": 1,
         "objectives": {
-            "adg_fraction_strategy_equity": 0.002,
+            "cagr_fraction_strategy_equity": 0.002,
             "drawdown_max_fraction_strategy_equity": 0.8,
         },
         "stats": {
-            "adg_fraction_strategy_equity": {
+            "cagr_fraction_strategy_equity": {
                 "mean": 0.002,
                 "min": 0.002,
                 "max": 0.002,
@@ -769,14 +786,18 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
         },
     }
     artifact["suite_metrics"] = {
+        "definition_version": 1,
+        "scenario_labels": ["base", "stress"],
         "metrics": {
-            "adg_fraction_strategy_equity": {
+            "cagr_fraction_strategy_equity": {
                 "aggregated": 0.002,
-                "stats": artifact["metrics"]["stats"]["adg_fraction_strategy_equity"],
+                "stats": artifact["metrics"]["stats"]["cagr_fraction_strategy_equity"],
+                "scenarios": {"base": 0.002, "stress": 0.002},
             },
             "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.8,
                 "stats": artifact["metrics"]["stats"]["drawdown_max_fraction_strategy_equity"],
+                "scenarios": {"base": 0.2, "stress": 0.8},
             },
         }
     }
@@ -1168,9 +1189,9 @@ def test_optimize_parser_accepts_short_limit_alias():
         dest="clear_limits",
     )
 
-    args = parser.parse_args(["-l", "adg_fraction_strategy_equity > 0.0"])
+    args = parser.parse_args(["-l", "cagr_fraction_strategy_equity > 0.0"])
 
-    assert args.limit_entries == ["adg_fraction_strategy_equity > 0.0"]
+    assert args.limit_entries == ["cagr_fraction_strategy_equity > 0.0"]
 
 
 @pytest.mark.parametrize(
@@ -1238,11 +1259,11 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
             "--optimize.bounds.long.risk.total_wallet_exposure_limit_ratio",
             "0",
             "-l",
-            "adg_fraction_strategy_equity>0.0",
+            "cagr_fraction_strategy_equity>0.0",
         ]
     )
 
-    assert args.limit_entries == ["adg_fraction_strategy_equity>0.0"]
+    assert args.limit_entries == ["cagr_fraction_strategy_equity>0.0"]
     assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio") == [
         0.0
     ]
@@ -1355,19 +1376,19 @@ class TestFormatObjectives:
         result = _format_objectives([1000, 0.001, 10])
         assert result == "[1e+03, 0.001, 10]"
 
-    def test_dict_uses_scoring_keys_for_weighted_suite_objectives(self):
+    def test_dict_displays_canonical_raw_suite_objectives(self):
         result = _format_objectives(
-            {"w_0": -0.00123, "w_1": 58.0},
-            scoring_keys=["adg_fraction_strategy_equity", "recovery_max_days_strategy_equity"],
+            {"cagr_fraction_strategy_equity": -0.00123, "peak_recovery_max_days_strategy_equity": 58.0},
+            scoring_keys=["cagr_fraction_strategy_equity", "peak_recovery_max_days_strategy_equity"],
         )
-        assert result == "[adg_fraction_strategy_equity=-0.00123, recovery_max_days_strategy_equity=58]"
+        assert result == "[cagr_fraction_strategy_equity=-0.00123, peak_recovery_max_days_strategy_equity=58]"
 
-    def test_dict_uses_named_objectives_before_weighted_suite_fallback(self):
+    def test_dict_displays_only_selected_named_objectives(self):
         result = _format_objectives(
-            {"adg_fraction_strategy_equity": 0.00123, "w_0": -999.0},
-            scoring_keys=["adg_fraction_strategy_equity"],
+            {"cagr_fraction_strategy_equity": 0.00123, "pain_index_fraction_strategy_equity": 999.0},
+            scoring_keys=["cagr_fraction_strategy_equity"],
         )
-        assert result == "[adg_fraction_strategy_equity=0.00123]"
+        assert result == "[cagr_fraction_strategy_equity=0.00123]"
 
 
 class TestIndividualToConfig:
@@ -4099,7 +4120,7 @@ class TestResultRecorder:
 
         entry = build_pymoo_record_entry(
             vector=vector,
-            metrics={"objectives": {"metric1": 0.5}, "constraint_violation": 0.0},
+            metrics={"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.5}, "constraint_violation": 0.0},
             template=template,
             build_config_fn=individual_to_config,
             overrides_fn=optimize.optimizer_overrides,
@@ -4133,6 +4154,7 @@ class TestResultRecorder:
         }
 
         individual.evaluation_metrics = {
+            "definition_version": 1,
             "effective_start_date": "2024-01-02T00:00:00Z",
             "effective_end_date": "2024-01-03T00:00:00Z",
             "objectives": objectives,
@@ -4189,7 +4211,7 @@ class TestResultRecorder:
 
         entry = build_pymoo_record_entry(
             vector=vector,
-            metrics={"objectives": objectives, "constraint_violation": 0.0},
+            metrics={"definition_version": 1, "objectives": objectives, "constraint_violation": 0.0},
             template=template,
             build_config_fn=individual_to_config,
             overrides_fn=optimize.optimizer_overrides,
@@ -4230,7 +4252,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1", "metric2"],
+                scoring_keys=["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=False,
                 pareto_max_size=300,
@@ -4239,7 +4261,7 @@ class TestResultRecorder:
 
             assert recorder.write_all is False
             assert recorder.compress is False
-            assert recorder.scoring_keys == ["metric1", "metric2"]
+            assert recorder.scoring_keys == ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"]
             assert recorder.results_file is None
 
     def test_initialization_with_write_all(self):
@@ -4249,7 +4271,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=["cagr_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=True,
                 bounds=bounds,
@@ -4268,7 +4290,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=["cagr_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=False,
                 bounds=bounds,
@@ -4277,7 +4299,8 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {}, "short": {}},
                 "metrics": {
-                    "objectives": {"metric1": 0.5},
+                    "definition_version": 1,
+                    "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
             }
@@ -4293,7 +4316,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=["cagr_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=False,
                 bounds=bounds,
@@ -4302,7 +4325,8 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
                 "metrics": {
-                    "objectives": {"metric1": 0.5},
+                    "definition_version": 1,
+                    "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
             }
@@ -4320,7 +4344,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=["cagr_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=False,
                 bounds=None,
@@ -4328,7 +4352,8 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {}, "short": {}},
                 "metrics": {
-                    "objectives": {"metric1": None},
+                    "definition_version": 1,
+                    "objectives": {"cagr_fraction_strategy_equity": None},
                     "constraint_violation": 0.0,
                 },
             }
@@ -4345,7 +4370,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=["cagr_fraction_strategy_equity"],
                 compress=False,
                 write_all_results=True,
                 bounds=bounds,
@@ -4354,7 +4379,8 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
                 "metrics": {
-                    "objectives": {"metric1": 0.5},
+                    "definition_version": 1,
+                    "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
             }
@@ -4476,7 +4502,7 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "drawdown_max_fraction_usd",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.3,
             }
@@ -4491,80 +4517,7 @@ class TestEvaluator:
 
         assert len(evaluator.limit_checks) > 0
         # Check that metric key is created (could be max, mean, etc.)
-        assert "drawdown_max_fraction_usd" in evaluator.limit_checks[0]["metric_key"]
-
-    def test_optimizer_can_skip_btc_analysis_when_no_btc_metrics_are_needed(self):
-        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
-        from config.schema import get_expanded_config_prototype
-
-        mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "fills_gap_p95_hours"]
-        mock_config["optimize"]["limits"] = [
-            {
-                "metric": "drawdown_max_fraction_strategy_equity",
-                "penalize_if": "greater_than",
-                "value": 0.3,
-            }
-        ]
-
-        evaluator = Evaluator(
-            hlcvs_specs={},
-            btc_usd_specs={},
-            msss={},
-            config=mock_config,
-        )
-
-        assert _optimizer_can_skip_btc_analysis(
-            mock_config,
-            evaluator.scoring_specs,
-            evaluator.limit_checks,
-        )
-
-    def test_optimizer_keeps_btc_analysis_for_btc_scoring_limits_or_collateral(self):
-        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
-        from config.schema import get_expanded_config_prototype
-
-        mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
-        mock_config["optimize"]["scoring"] = ["adg_fraction_btc"]
-        mock_config["optimize"]["limits"] = []
-        evaluator = Evaluator(
-            hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config
-        )
-        assert not _optimizer_can_skip_btc_analysis(
-            mock_config,
-            evaluator.scoring_specs,
-            evaluator.limit_checks,
-        )
-
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
-        mock_config["optimize"]["limits"] = [
-            {
-                "metric": "drawdown_max_fraction_btc",
-                "penalize_if": "greater_than",
-                "value": 0.3,
-            }
-        ]
-        evaluator = Evaluator(
-            hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config
-        )
-        assert not _optimizer_can_skip_btc_analysis(
-            mock_config,
-            evaluator.scoring_specs,
-            evaluator.limit_checks,
-        )
-
-        mock_config["backtest"]["btc_collateral_target_ratio"] = 1.0
-        mock_config["optimize"]["limits"] = []
-        evaluator = Evaluator(
-            hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config
-        )
-        assert not _optimizer_can_skip_btc_analysis(
-            mock_config,
-            evaluator.scoring_specs,
-            evaluator.limit_checks,
-        )
+        assert "drawdown_max_fraction_strategy_equity" in evaluator.limit_checks[0]["metric_key"]
 
     def test_build_limit_checks_uses_suite_aggregate_defaults(self):
         from optimize import Evaluator, SuiteEvaluator
@@ -4573,12 +4526,12 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "adg_fraction_strategy_equity",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0,
             },
             {
-                "metric": "recovery_max_hours_strategy_equity",
+                "metric": "peak_recovery_max_days_strategy_equity",
                 "penalize_if": "greater_than_or_equal",
                 "value": 5000,
             },
@@ -4592,16 +4545,16 @@ class TestEvaluator:
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_fraction_strategy_equity_mean",
-            "recovery_max_hours_strategy_equity_mean",
+            "cagr_fraction_strategy_equity_mean",
+            "peak_recovery_max_days_strategy_equity_mean",
         ]
 
         _suite = SuiteEvaluator(
-            base, [], {"default": "mean", "recovery_max_hours_strategy_equity": "mean"}
+            base, [], {"default": "mean", "peak_recovery_max_days_strategy_equity": "mean"}
         )
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_fraction_strategy_equity_mean",
-            "recovery_max_hours_strategy_equity_mean",
+            "cagr_fraction_strategy_equity_mean",
+            "peak_recovery_max_days_strategy_equity_mean",
         ]
 
     def test_suite_limit_checks_keep_explicit_stat_override(self):
@@ -4611,7 +4564,7 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "adg_fraction_strategy_equity",
+                "metric": "cagr_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0,
                 "reducer": "min",
@@ -4634,7 +4587,7 @@ class TestEvaluator:
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_fraction_strategy_equity_min",
+            "cagr_fraction_strategy_equity_min",
             "drawdown_max_fraction_strategy_equity_max",
         ]
 
@@ -4694,14 +4647,14 @@ class TestEvaluator:
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["objective_scenario"] = "base"
         mock_config["optimize"]["scoring"] = [
-            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
             {
                 "metric": "pain_index_fraction_strategy_equity",
                 "goal": "min",
                 "scenario": None,
             },
             {
-                "metric": "recovery_max_days_strategy_equity",
+                "metric": "peak_recovery_max_days_strategy_equity",
                 "goal": "min",
                 "scenario": None,
                 "aggregate": "max",
@@ -4750,53 +4703,49 @@ class TestEvaluator:
             config_to_individual(mock_config, base.bounds, base.sig_digits)
         )
 
-        def metric_stats(value):
-            return {
-                "mean": value,
-                "min": value,
-                "max": value,
-                "std": 0.0,
-                "median": value,
-            }
-
-        scenario_metric_payloads = [
-            {
-                "stats": {
-                    "adg_fraction_strategy_equity": metric_stats(0.01),
-                    "pain_index_fraction_strategy_equity": metric_stats(0.1),
-                    "recovery_max_days_strategy_equity": metric_stats(10.0),
-                    "position_held_max_days": metric_stats(5.0),
-                }
-            },
-            {
-                "stats": {
-                    "adg_fraction_strategy_equity": metric_stats(0.002),
-                    "pain_index_fraction_strategy_equity": metric_stats(0.5),
-                    "recovery_max_days_strategy_equity": metric_stats(50.0),
-                    "position_held_max_days": metric_stats(20.0),
-                }
-            },
+        scenario_analyses = [
+            _core_analysis({
+                "cagr_fraction_strategy_equity": 0.01,
+                "pain_index_fraction_strategy_equity": 0.1,
+                "peak_recovery_max_days_strategy_equity": 10.0,
+                "position_held_max_days": 5.0,
+            }),
+            _core_analysis({
+                "cagr_fraction_strategy_equity": 0.002,
+                "pain_index_fraction_strategy_equity": 0.5,
+                "peak_recovery_max_days_strategy_equity": 50.0,
+                "position_held_max_days": 20.0,
+            }),
         ]
 
         with patch("optimize.build_backtest_payload", return_value=object()), patch(
             "optimize.execute_backtest",
-            return_value=(None, None, {"liquidated": False}),
-        ), patch(
-            "tools.iterative_backtester.combine_analyses",
-            side_effect=scenario_metric_payloads,
+            side_effect=[(None, None, row) for row in scenario_analyses],
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
             )
 
-        assert objectives == pytest.approx((-0.01, 0.3, 50.0, 20.0))
+        assert objectives == pytest.approx(tuple(
+            2.0 / math.pi * math.atan(value)
+            for value in (-0.01, 0.3, 50.0, 20.0)
+        ))
         assert penalty == 0.0
         assert metrics["objectives"] == pytest.approx(
-            {"w_0": -0.01, "w_1": 0.3, "w_2": 50.0, "w_3": 20.0}
+            {
+                "cagr_fraction_strategy_equity": 0.01,
+                "pain_index_fraction_strategy_equity": 0.3,
+                "peak_recovery_max_days_strategy_equity": 50.0,
+                "position_held_max_days": 20.0,
+            }
         )
-        assert metrics["suite_metrics"]["metrics"]["adg_fraction_strategy_equity"]["scenarios"] == {
+        # A scenario-specific objective requests only its selected population.
+        assert metrics["suite_metrics"]["metrics"]["cagr_fraction_strategy_equity"]["scenarios"] == {
             "base": 0.01,
-            "stress": 0.002,
+        }
+        assert metrics["suite_metrics"]["metrics"]["pain_index_fraction_strategy_equity"]["scenarios"] == {
+            "base": 0.1,
+            "stress": 0.5,
         }
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
@@ -4811,7 +4760,10 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+        ]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4855,7 +4807,10 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+        ]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4901,7 +4856,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
+        mock_config["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4953,7 +4908,10 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+        ]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -5017,7 +4975,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
+        mock_config["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
 
         base = Evaluator(
             hlcvs_specs={},
@@ -5073,7 +5031,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
+        mock_config["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {
@@ -5122,25 +5080,25 @@ class TestEvaluator:
             "optimize.build_backtest_payload", return_value=object()
         ) as build_payload, patch(
             "optimize.execute_backtest",
-            return_value=(None, None, {"liquidated": False}),
-        ), patch(
-            "tools.iterative_backtester.combine_analyses",
-            return_value={
-                "stats": {"adg_fraction_strategy_equity": {"mean": 0.1}},
-                "exchanges": {
-                    "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
-                    "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
-                },
-            },
+            side_effect=[
+                (None, None, _core_analysis(
+                    {"cagr_fraction_strategy_equity": 0.1},
+                    start_timestamp_ms=1704067200000,
+                )),
+                (None, None, _core_analysis(
+                    {"cagr_fraction_strategy_equity": 0.1},
+                    start_timestamp_ms=1704153600000,
+                )),
+            ],
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
             )
 
-        assert objectives == (-0.1,)
-        assert metrics["suite_metrics"]["scenarios"]["test"]["exchanges"] == {
-            "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
-            "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
+        assert objectives == pytest.approx((2.0 / math.pi * math.atan(-0.1),))
+        assert metrics["suite_metrics"]["sources"]["test"] == {
+            "binance": {"definition_version": 1, "start_timestamp_ms": 1704067200000},
+            "bybit": {"definition_version": 1, "start_timestamp_ms": 1704153600000},
         }
         assert penalty == 0.0
         assert metrics["constraint_violation"] == 0.0
@@ -5162,7 +5120,7 @@ class TestEvaluator:
         monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
+        mock_config["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
@@ -5199,7 +5157,7 @@ class TestEvaluator:
             {
                 "rust_profile": {
                     "rust_simulation_ms": 12.5,
-                    "rust_analysis_pair_ms": 3.25,
+                    "rust_core_metrics_finalize_ms": 3.25,
                 }
             },
         )()
@@ -5208,23 +5166,20 @@ class TestEvaluator:
             "optimize.build_backtest_payload", return_value=payload
         ), patch(
             "optimize.execute_backtest",
-            return_value=(None, None, {"liquidated": False}),
-        ), patch(
-            "tools.iterative_backtester.combine_analyses",
-            return_value={"stats": {"adg_fraction_strategy_equity": {"mean": 0.1}}},
+            return_value=(None, None, _core_analysis({"cagr_fraction_strategy_equity": 0.1})),
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
             )
 
-        assert objectives == (-0.1,)
+        assert objectives == pytest.approx((2.0 / math.pi * math.atan(-0.1),))
         assert penalty == 0.0
         assert metrics["profile"]["scenarios"] == 1
         assert metrics["profile"]["exchange_evals"] == 1
         assert metrics["profile"]["total_ms"] >= 0.0
         assert "rust_backtest_ms" in metrics["profile"]
         assert metrics["profile"]["rust_simulation_ms"] == 12.5
-        assert metrics["profile"]["rust_analysis_pair_ms"] == 3.25
+        assert metrics["profile"]["rust_core_metrics_finalize_ms"] == 3.25
         assert any(
             "[opt-profile] suite_eval" in record.message for record in caplog.records
         )
@@ -5424,7 +5379,7 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
             },
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
     metrics = entry.pop("suite_metrics")
@@ -5443,7 +5398,7 @@ def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
     entry["backtest"]["aggregate"] = {"default": "max"}
     entry["optimize"]["scoring"] = [
         {
-            "metric": "adg_fraction_strategy_equity",
+            "metric": "cagr_fraction_strategy_equity",
             "goal": "max",
             "scenario": None,
             "aggregate": "max",
@@ -5451,7 +5406,7 @@ def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
     ]
     entry["optimize"]["limits"] = [
         {
-            "metric": "recovery_max_days_strategy_equity",
+            "metric": "peak_recovery_max_days_strategy_equity",
             "penalize_if": "greater_than",
             "stat": "max",
             "value": 100,
@@ -5479,7 +5434,7 @@ def test_resume_config_mismatches_rejects_changed_suite_scenarios():
         },
         "bot": {},
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
     config = deepcopy(entry)
@@ -5534,7 +5489,7 @@ def _resume_validation_entry():
             "bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [0.001, 0.01]}),
             "iters": 2,
             "population_size": 2,
-            "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
+            "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}],
         },
     }
 
@@ -5757,7 +5712,8 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
 def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "objectives": {"adg_fraction_strategy_equity": 0.1},
+        "definition_version": 1,
+        "objectives": {"cagr_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 0},
     }
@@ -5775,7 +5731,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
         results_dir=str(tmp_path),
         sig_digits=6,
         flush_interval=60,
-        scoring_keys=["adg_fraction_strategy_equity"],
+        scoring_keys=["cagr_fraction_strategy_equity"],
         compress=True,
         write_all_results=True,
         starting_iters=1,
@@ -5784,7 +5740,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
     recorder.store.add_entry = Mock(return_value=False)
     evolution_entry = deepcopy(seed_entry)
     evolution_entry["metrics"].pop("gpu_seed_bootstrap")
-    evolution_entry["metrics"]["objectives"]["adg_fraction_strategy_equity"] = 0.2
+    evolution_entry["metrics"]["objectives"]["cagr_fraction_strategy_equity"] = 0.2
     recorder.record(evolution_entry)
     recorder.close()
 
@@ -5796,7 +5752,8 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
 def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "objectives": {"adg_fraction_strategy_equity": 0.1},
+        "definition_version": 1,
+        "objectives": {"cagr_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 99},
     }
@@ -5805,7 +5762,7 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
         results_dir=str(tmp_path),
         sig_digits=6,
         flush_interval=60,
-        scoring_keys=["adg_fraction_strategy_equity"],
+        scoring_keys=["cagr_fraction_strategy_equity"],
         compress=True,
         write_all_results=True,
         starting_iters=100,
@@ -5814,7 +5771,7 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
     recorder.store.add_entry = Mock(return_value=False)
     evolution_entry = deepcopy(seed_entry)
     evolution_entry["metrics"].pop("gpu_seed_bootstrap")
-    evolution_entry["metrics"]["objectives"]["adg_fraction_strategy_equity"] = 0.2
+    evolution_entry["metrics"]["objectives"]["cagr_fraction_strategy_equity"] = 0.2
     recorder.record(evolution_entry)
     recorder.close()
 
@@ -5872,7 +5829,7 @@ def test_result_recorder_all_results_write_failure_is_fatal():
             results_dir=tmpdir,
             sig_digits=6,
             flush_interval=60,
-            scoring_keys=["metric1"],
+            scoring_keys=["cagr_fraction_strategy_equity"],
             compress=False,
             write_all_results=True,
             bounds=[(0.0, 1.0, 0.0)] * 4,
@@ -5884,7 +5841,8 @@ def test_result_recorder_all_results_write_failure_is_fatal():
                 {
                     "bot": {"long": {}, "short": {}},
                     "metrics": {
-                        "objectives": {"metric1": 0.5},
+                        "definition_version": 1,
+                        "objectives": {"cagr_fraction_strategy_equity": 0.5},
                         "constraint_violation": 0.0,
                     },
                 }
@@ -5904,15 +5862,15 @@ def test_result_recorder_preserves_unquantized_saved_param_values():
         target = target[part]
     original = float(target[path[-1]])
     target[path[-1]] = original + 0.000321
-    entry["metrics"] = {"adg_fraction": 0.1}
-    entry["optimize"]["scoring"] = ["adg_fraction"]
+    entry["metrics"] = {"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.1}}
+    entry["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         recorder = ResultRecorder(
             results_dir=tmpdir,
             sig_digits=6,
             flush_interval=60,
-            scoring_keys=["adg_fraction"],
+            scoring_keys=["cagr_fraction_strategy_equity"],
             compress=False,
             write_all_results=False,
             bounds=bounds,

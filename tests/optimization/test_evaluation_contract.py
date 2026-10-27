@@ -435,6 +435,7 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
     config = _config()
     config["bot"]["long"]["enabled"] = True
     config["optimize"].update(backend=backend, limits=[])
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 1.0
     config["backtest"].update(exchanges=["binance"], filter_by_min_effective_cost=False)
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}

@@ -164,7 +164,7 @@ def validated_rounding(reference, row, dataset_id, request_id, metrics):
         raise RuntimeError(f"Result identity differs for request {request_id!r}")
     if set(row.metrics) != set(metrics):
         raise RuntimeError(f"Requested metric set differs for request {request_id!r}")
-    if not all(math.isfinite(value) for value in row.metrics.values()):
+    if not all(value is not None and math.isfinite(value) for value in row.metrics.values()):
         raise RuntimeError(f"Nonfinite result for request {request_id!r}")
     if reference is None:
         return {}
@@ -213,10 +213,10 @@ def main(argv=None):
         "--bars", str(args.bars), "--seed", "7", "--hsl", args.hsl,
         "--hsl-drawdown-threshold-fraction", ".99", "--hsl-memory-ema-span-minutes", "1440",
     ]))
-    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+    metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
                "backtest_completion_fraction", "hsl_red_time_fraction",
-               "recovery_mean_days_strategy_equity", "recovery_p95_days_strategy_equity",
-               "recovery_worst_1pct_mean_days_strategy_equity", "active_day_turnover_proxy_mean_ratio")
+               "peak_recovery_max_days_strategy_equity", "fills_gap_max_days",
+               "pain_index_fraction_strategy_equity", "gross_exposure_rms_ratio_strategy_equity")
     recipe = dict(strategy=args.strategy, coins=args.coins, bars=args.bars,
                   candidates=args.candidates, rounds=args.rounds, hsl=args.hsl,
                   tuning_windows=args.tuning_windows, max_rounds=args.max_rounds, reference_rounds=2,

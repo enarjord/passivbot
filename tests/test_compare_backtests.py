@@ -34,7 +34,8 @@ def _write_artifact(
     (root / "analysis.json").write_text(
         json.dumps(
             {
-                "adg_fraction_strategy_equity": 0.0011 if candidate else 0.001,
+                "metric_metadata": {"definition_version": 1},
+                "cagr_fraction_strategy_equity": 0.0011 if candidate else 0.001,
                 "drawdown_max_fraction_strategy_equity": 0.21 if candidate else 0.2,
                 "position_held_max_days": 12.0 if candidate else 10.0,
             }
@@ -75,7 +76,7 @@ def test_compare_backtest_artifacts_reports_dataset_metrics_fills_and_equity(tmp
     report = compare_backtest_artifacts(base, candidate)
 
     assert report["dataset_identity"]["status"] == "same"
-    assert report["metrics"]["adg_fraction_strategy_equity"] == {
+    assert report["metrics"]["cagr_fraction_strategy_equity"] == {
         "base": 0.001,
         "candidate": 0.0011,
         "absolute_delta": pytest.approx(0.0001),
@@ -89,24 +90,39 @@ def test_compare_backtest_artifacts_reports_dataset_metrics_fills_and_equity(tmp
         "close_grid_long": -1,
         "close_unstuck_long": 1,
     }
-    assert report["strategy_equity"]["final_equity_relative_delta_fraction"] == pytest.approx(0.05)
-    assert report["strategy_equity"]["equity_rmse_initial_equity_fraction"] == pytest.approx(
-        (40 / 3) ** 0.5 / 100
-    )
-    assert report["strategy_equity"]["max_abs_relative_equity_delta_fraction"] == pytest.approx(
-        0.05
-    )
+    assert report["strategy_equity"][
+        "final_equity_relative_delta_fraction"
+    ] == pytest.approx(0.05)
+    assert report["strategy_equity"][
+        "equity_rmse_initial_equity_fraction"
+    ] == pytest.approx((40 / 3) ** 0.5 / 100)
+    assert report["strategy_equity"][
+        "max_abs_relative_equity_delta_fraction"
+    ] == pytest.approx(0.05)
     assert report["strategy_equity"]["common_sample_count"] == 3
 
 
 def test_relative_metric_delta_uses_absolute_base_and_preserves_zero_sentinel():
     metrics = _metric_comparison(
-        {"adg_fraction_strategy_equity": -0.002, "drawdown_max_fraction_strategy_equity": 0.0},
-        {"adg_fraction_strategy_equity": -0.001, "drawdown_max_fraction_strategy_equity": 0.1},
+        {
+            "definition_version": 1,
+            "cagr_fraction_strategy_equity": -0.002,
+            "drawdown_max_fraction_strategy_equity": 0.0,
+        },
+        {
+            "definition_version": 1,
+            "cagr_fraction_strategy_equity": -0.001,
+            "drawdown_max_fraction_strategy_equity": 0.1,
+        },
     )
 
-    assert metrics["adg_fraction_strategy_equity"]["relative_delta_fraction"] == pytest.approx(0.5)
-    assert metrics["drawdown_max_fraction_strategy_equity"]["relative_delta_fraction"] is None
+    assert metrics["cagr_fraction_strategy_equity"][
+        "relative_delta_fraction"
+    ] == pytest.approx(0.5)
+    assert (
+        metrics["drawdown_max_fraction_strategy_equity"]["relative_delta_fraction"]
+        is None
+    )
 
 
 def test_equity_fraction_denominators_use_base_magnitudes_and_common_samples():
@@ -121,7 +137,9 @@ def test_equity_fraction_denominators_use_base_magnitudes_and_common_samples():
 
     assert equity["common_sample_count"] == 3
     assert equity["final_equity_relative_delta_fraction"] is None
-    assert equity["equity_rmse_initial_equity_fraction"] == pytest.approx(600 ** 0.5 / 100)
+    assert equity["equity_rmse_initial_equity_fraction"] == pytest.approx(
+        600**0.5 / 100
+    )
     assert equity["max_abs_relative_equity_delta_fraction"] == pytest.approx(0.2)
 
 
@@ -186,7 +204,9 @@ def test_compare_backtests_cli_prints_human_summary_and_can_write_json(
     assert json.loads(output.read_text(encoding="utf-8"))["fills"]["count_delta"] == 0
 
 
-def test_compare_backtests_cli_json_uses_fraction_names_without_rescaling(tmp_path, capsys):
+def test_compare_backtests_cli_json_uses_fraction_names_without_rescaling(
+    tmp_path, capsys
+):
     base = _write_artifact(tmp_path / "base")
     candidate = _write_artifact(tmp_path / "candidate", candidate=True)
 
@@ -194,13 +214,17 @@ def test_compare_backtests_cli_json_uses_fraction_names_without_rescaling(tmp_pa
     report = json.loads(capsys.readouterr().out)
 
     assert report["fills"]["event_multiset_match_fraction"] == pytest.approx(2 / 3)
-    assert report["strategy_equity"]["final_equity_relative_delta_fraction"] == pytest.approx(0.05)
-    assert not {
-        "event_multiset_match_ratio", "exact_multiset_match_ratio"
-    } & report["fills"].keys()
-    assert not {
-        "final_pct_delta", "rmse_pct_of_initial", "max_abs_pct_delta"
-    } & report["strategy_equity"].keys()
+    assert report["strategy_equity"][
+        "final_equity_relative_delta_fraction"
+    ] == pytest.approx(0.05)
+    assert (
+        not {"event_multiset_match_ratio", "exact_multiset_match_ratio"}
+        & report["fills"].keys()
+    )
+    assert (
+        not {"final_pct_delta", "rmse_pct_of_initial", "max_abs_pct_delta"}
+        & report["strategy_equity"].keys()
+    )
 
 
 def test_compare_backtests_cli_returns_two_for_incomplete_artifact(tmp_path, capsys):
@@ -209,3 +233,32 @@ def test_compare_backtests_cli_returns_two_for_incomplete_artifact(tmp_path, cap
 
     assert rc == 2
     assert "missing backtest artifact file" in captured.err
+
+
+def test_metric_comparison_preserves_unavailable_and_infinite_endpoints():
+    key = "loss_profit_ratio"
+    base = {
+        "definition_version": 1,
+        key: None,
+        "metric_status": {key: {"status": "positive_infinity"}},
+    }
+    finite = {"definition_version": 1, key: 0.5}
+    row = _metric_comparison(base, finite)[key]
+    assert row["base"] is None and row["candidate"] == 0.5
+    assert row["metric_status"]["base"]["status"] == "positive_infinity"
+    assert row["comparison"] == "nonfinite" and row["absolute_delta"] is None
+    base["metric_status"][key] = {
+        "status": "undefined",
+        "reason": "no profits or losses",
+    }
+    row = _metric_comparison(base, finite)[key]
+    assert row["comparison"] == "unavailable"
+    json.dumps(row, allow_nan=False)
+
+
+def test_metric_comparison_never_compares_stale_or_missing_definitions():
+    key = "loss_profit_ratio"
+    for base in ({key: 0.4}, {"definition_version": 0, key: 0.4}):
+        row = _metric_comparison(base, {"definition_version": 1, key: 0.5})[key]
+        assert row["comparison"] == "incomparable_definition"
+        assert row["absolute_delta"] is None

@@ -11,6 +11,13 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from metrics_schema import (
+    copy_metric_value,
+    decode_metric_value,
+    MetricAggregationError,
+    require_metric_definition,
+)
+
 DATASET_IDENTITY_KEYS = (
     "cache_hash",
     "exchange",
@@ -19,13 +26,13 @@ DATASET_IDENTITY_KEYS = (
     "requested_end_date",
 )
 ANALYSIS_METRICS = (
-    "adg_fraction_strategy_equity",
+    "cagr_fraction_strategy_equity",
     "drawdown_max_fraction_strategy_equity",
     "loss_profit_ratio",
     "position_held_max_days",
-    "high_exposure_max_days_long",
-    "high_exposure_max_days_short",
-    "recovery_max_days_strategy_equity",
+    "gross_exposure_rms_ratio_strategy_equity",
+    "gross_exposure_max_ratio_strategy_equity",
+    "peak_recovery_max_days_strategy_equity",
 )
 FULL_FILL_KEY_COLUMNS = (
     "timestamp",
@@ -136,22 +143,59 @@ def _dataset_identity(base: dict, candidate: dict) -> dict:
 
 
 def _metric_comparison(base: dict, candidate: dict) -> dict:
-    """Keep source metric units; express relative deltas as delta / abs(base)."""
+    """Compare only matching current definitions; retain unavailable facts explicitly."""
     metrics = {}
+    try:
+        require_metric_definition(base)
+        require_metric_definition(candidate)
+    except MetricAggregationError:
+        for key in ANALYSIS_METRICS:
+            if key in base and key in candidate:
+                metrics[key] = {
+                    "comparison": "incomparable_definition",
+                    "absolute_delta": None,
+                    "relative_delta_fraction": None,
+                }
+        return metrics
     for key in ANALYSIS_METRICS:
         if key not in base or key not in candidate:
             continue
-        base_value = float(base[key])
-        candidate_value = float(candidate[key])
-        absolute_delta = candidate_value - base_value
-        metrics[key] = {
-            "base": base_value,
-            "candidate": candidate_value,
-            "absolute_delta": absolute_delta,
-            "relative_delta_fraction": (
-                None if base_value == 0.0 else absolute_delta / abs(base_value)
-            ),
-        }
+        row = {}
+        for name, source in (("base", base), ("candidate", candidate)):
+            field = copy_metric_value(source, key, output_name=name)
+            statuses = field.pop("metric_status", {})
+            row.update(field)
+            if statuses:
+                row.setdefault("metric_status", {}).update(statuses)
+        try:
+            base_value = decode_metric_value(base, key)
+            candidate_value = decode_metric_value(candidate, key)
+        except MetricAggregationError:
+            row.update(
+                comparison="unavailable",
+                absolute_delta=None,
+                relative_delta_fraction=None,
+            )
+        else:
+            if not math.isfinite(base_value) or not math.isfinite(candidate_value):
+                row.update(
+                    comparison="nonfinite",
+                    absolute_delta=None,
+                    relative_delta_fraction=None,
+                )
+            else:
+                delta = candidate_value - base_value
+                # Arithmetic overflow is unavailable, never a JSON Infinity literal.
+                relative = None if base_value == 0.0 else delta / abs(base_value)
+                row.update(
+                    absolute_delta=delta if math.isfinite(delta) else None,
+                    relative_delta_fraction=(
+                        relative
+                        if relative is None or math.isfinite(relative)
+                        else None
+                    ),
+                )
+        metrics[key] = row
     return metrics
 
 
@@ -259,7 +303,9 @@ def _equity_comparison(base: pd.DataFrame, candidate: pd.DataFrame) -> dict:
         "equity_rmse_initial_equity_fraction": float(
             np.sqrt(np.mean(np.square(delta))) / initial_equity
         ),
-        "max_abs_relative_equity_delta_fraction": float((delta.abs() / denominator).max()),
+        "max_abs_relative_equity_delta_fraction": float(
+            (delta.abs() / denominator).max()
+        ),
     }
 
 
@@ -311,20 +357,14 @@ def format_human_summary(report: dict) -> str:
         "Equity RMSE vs initial strategy equity: "
         f"{equity['equity_rmse_initial_equity_fraction'] * 100:.3f}%",
     ]
-    for key in (
-        "adg_fraction_strategy_equity",
-        "drawdown_max_fraction_strategy_equity",
-        "position_held_max_days",
-        "high_exposure_max_days_long",
-        "high_exposure_max_days_short",
-    ):
-        metric = report["metrics"].get(key)
-        if metric is None:
-            continue
-        lines.append(
-            f"{key}: {metric['base']:.8g} -> {metric['candidate']:.8g} "
-            f"(relative {_format_fraction_as_percent(metric['relative_delta_fraction'])})"
-        )
+    for key, metric in report["metrics"].items():
+        if "comparison" in metric:
+            lines.append(f"{key}: {metric['comparison']}; delta unavailable")
+        else:
+            lines.append(
+                f"{key}: {metric['base']:.8g} -> {metric['candidate']:.8g} "
+                f"(relative {_format_fraction_as_percent(metric['relative_delta_fraction'])})"
+            )
     type_deltas = sorted(
         fills["type_count_delta"].items(), key=lambda item: (-abs(item[1]), item[0])
     )
@@ -366,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         print(f"compare-backtests: {exc}", file=sys.stderr)
         return 2
-    payload = json.dumps(report, indent=2, sort_keys=True)
+    payload = json.dumps(report, indent=2, sort_keys=True, allow_nan=False)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(payload + "\n", encoding="utf-8")

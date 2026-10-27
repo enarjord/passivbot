@@ -29,7 +29,7 @@ def inputs(*, suite=False, fixed=False, mirror=False):
         for side in ("long", "short")
     }
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
         {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []

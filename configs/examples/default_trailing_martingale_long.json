@@ -472,21 +472,7 @@
             "tuning_mode": "auto"
         },
         "iters": 200000,
-        "limits": [
-            {
-                "enabled": true,
-                "metric": "drawdown_max_fraction_strategy_equity",
-                "penalize_if": "greater_than",
-                "reducer": "mean",
-                "value": 0.8
-            },
-            {
-                "enabled": true,
-                "metric": "backtest_completion_fraction",
-                "penalize_if": "less_than",
-                "value": 0.99
-            }
-        ],
+        "limits": [{"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.5}, {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 1.0}],
         "n_cpus": 4,
         "objective_scenario": null,
         "pareto_max_size": 1000,
@@ -516,18 +502,7 @@
             }
         },
         "round_to_n_significant_digits": 3,
-        "scoring": [
-            {"goal": "max", "metric": "adg_fraction_strategy_equity"},
-            {"goal": "max", "metric": "mdg_fraction_strategy_equity"},
-            {"goal": "max", "metric": "sortino_ratio_strategy_equity"},
-            {"goal": "max", "metric": "active_day_turnover_proxy_mean_ratio"},
-            {"goal": "max", "metric": "sharpe_ratio_strategy_equity"},
-            {"goal": "min", "metric": "recovery_max_days_strategy_equity"},
-            {"goal": "min", "metric": "position_held_max_days"},
-            {"goal": "min", "metric": "drawdown_max_fraction_strategy_equity"},
-            {"goal": "min", "metric": "loss_profit_ratio"},
-            {"goal": "min", "metric": "pain_index_fraction_strategy_equity"}
-        ],
+        "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}, {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"}],
         "seed": null,
         "write_all_results": true
     }

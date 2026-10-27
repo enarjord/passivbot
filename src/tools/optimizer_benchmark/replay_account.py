@@ -1,8 +1,10 @@
 """Ordinary-account confirmation from full outputs of either version's CPU runner.
 
-No native module or runner is imported here. Native equity timestamp k names the
-close[k] valuation, observable at end(k+1). Fill index, rather than timestamp alone,
-keeps a next-bar opening fill out of the preceding close at their shared clock.
+No native module or runner is imported here. Unversioned historical exports label
+close[k] with its candle open; core-v1 exports include their baseline and actual
+completed-close clocks. Explicit metadata selects the clock contract. Fill index,
+rather than timestamp alone, keeps next-bar opening fills out of the preceding
+close, except for a declared causal terminal observation at that opening clock.
 Gross close-sampled notional uses initial capital as its fixed denominator, so a
 depleted or clamped account balance cannot erase or invent an exposure ratio.
 """
@@ -45,11 +47,160 @@ def account_valuation_input_identity(*, hlcvs, candle_timestamps_ms, coins, mark
     return digest.hexdigest()
 
 
+def _account_observation_plan(
+    *,
+    equities,
+    native_fills,
+    timestamps,
+    capital,
+    first_bar_index,
+    last_bar_index,
+    interval,
+    bootstrap_bar_indices,
+    liquidated,
+    execution_completed,
+    metric_metadata,
+):
+    """Select a declared clock contract without guessing from a shifted timestamp."""
+    raw_times = [_clock(row[0], "native equity timestamp") for row in equities]
+    values = [_number(row[1], "ordinary account equity") for row in equities]
+    indices = []
+    for timestamp in raw_times:
+        offset = timestamp - timestamps[0]
+        if offset < 0 or offset % interval:
+            raise ValueError(
+                "native equity timestamp is outside the prepared candle grid"
+            )
+        indices.append(offset // interval)
+    start = timestamps[first_bar_index]
+    expected_end = timestamps[last_bar_index] + interval
+    if metric_metadata is None:
+        # Frozen legacy exports omit the baseline and label close[k] with open[k].
+        count = len(bootstrap_bar_indices)
+        if indices[:count] != list(bootstrap_bar_indices) or any(
+            value != capital for value in values[:count]
+        ):
+            raise ValueError(
+                "declared native bootstrap rows must retain known-flat initial capital"
+            )
+        indices, values = indices[count:], values[count:]
+        if not indices:
+            raise ValueError(
+                "native bootstrap rows do not supply evaluated account coverage"
+            )
+        final_bar = indices[-1]
+        if final_bar > last_bar_index or indices != list(
+            range(first_bar_index, final_bar + 1)
+        ):
+            raise ValueError(
+                "native equity rows must be a contiguous prefix of the expected full grid"
+            )
+        if execution_completed and not liquidated and final_bar != last_bar_index:
+            raise ValueError(
+                "successful non-liquidated native replay omitted required account observations"
+            )
+        return dict(
+            times=[start, *(timestamps[index] + interval for index in indices)],
+            equity=[capital, *values],
+            marks=[None, *indices],
+            fill_cutoffs=[first_bar_index - 1, *indices],
+            final_bar=final_bar,
+            terminal_fill_bar=None,
+            max_fill_bar=final_bar,
+            clock="legacy: bar start k stores close[k]; observed at end(k+1)",
+            definition_version=None,
+        )
+    if (
+        not isinstance(metric_metadata, Mapping)
+        or type(metric_metadata.get("definition_version")) is not int
+        or metric_metadata["definition_version"] != 1
+    ):
+        raise ValueError(
+            "native account clock metadata requires explicit core definition version 1"
+        )
+    required = {
+        "start_timestamp_ms",
+        "intended_end_timestamp_ms",
+        "actual_end_timestamp_ms",
+        "observation_interval_ms",
+        "equity_observation_count",
+    }
+    missing = required - metric_metadata.keys()
+    if missing:
+        raise ValueError(f"core-v1 account clock metadata is missing {sorted(missing)}")
+    expected = {
+        "start_timestamp_ms": start,
+        "intended_end_timestamp_ms": expected_end,
+        "actual_end_timestamp_ms": raw_times[-1],
+        "observation_interval_ms": interval,
+        "equity_observation_count": len(raw_times),
+    }
+    for field, value in expected.items():
+        if _clock(metric_metadata[field], f"metric_metadata.{field}") != value:
+            raise ValueError(
+                f"core-v1 account clock metadata {field} contradicts prepared coverage or native observations"
+            )
+    if bootstrap_bar_indices:
+        raise ValueError(
+            "core-v1 account artifacts include their evaluation baseline; legacy bootstrap rows are unsupported"
+        )
+    if (
+        indices[-1] > last_bar_index + 1
+        or indices != list(range(first_bar_index, indices[-1] + 1))
+    ):
+        raise ValueError(
+            "core-v1 equity rows must be a contiguous prefix of the expected full grid including baseline"
+        )
+    if len(raw_times) < 2:
+        raise ValueError(
+            "core-v1 account metrics require positive observed duration; no elapsed terminal interval can be invented"
+        )
+    if values[0] != capital:
+        raise ValueError(
+            "core-v1 native baseline must match frozen known-flat initial capital; rebasing is unsupported"
+        )
+    final_bar = indices[-1] - 1
+    if execution_completed and not liquidated and final_bar != last_bar_index:
+        raise ValueError(
+            "successful non-liquidated native replay omitted required account observations"
+        )
+    # The completed CPU owner records an opening terminal only when its raw
+    # account balance is depleted after fills. Prove that phase from the final
+    # executed fill's clock and post-fill USD balance; liquidation status alone
+    # also covers completed-close mark losses and cannot establish the phase.
+    # An interrupted execution does not establish that its last opening fill
+    # was included in the retained equity row, so its close coverage stays strict.
+    terminal_fill_bar = None
+    if execution_completed and liquidated and indices[-1] <= last_bar_index and len(native_fills):
+        final_fill = native_fills[-1]
+        if (
+            len(final_fill) >= 14
+            and _clock(final_fill[0], "final fill index") == indices[-1]
+            and _clock(final_fill[1], "final fill timestamp") == raw_times[-1]
+            and _number(final_fill[5], "final fill post-fill USD balance") <= 0
+        ):
+            terminal_fill_bar = indices[-1]
+    marks = [None, *(index - 1 for index in indices[1:])]
+    cutoffs = [first_bar_index - 1, *marks[1:]]
+    if terminal_fill_bar is not None:
+        cutoffs[-1] = terminal_fill_bar
+    return dict(
+        times=raw_times,
+        equity=values,
+        marks=marks,
+        fill_cutoffs=cutoffs,
+        final_bar=final_bar,
+        terminal_fill_bar=terminal_fill_bar,
+        max_fill_bar=cutoffs[-1],
+        clock="core-v1: baseline and completed-close clocks; terminal opening uses preceding completed marks",
+        definition_version=1,
+    )
+
 def metrics_from_native_replay(*, native_fills, native_equities, liquidated, execution_completed,
                                hlcvs, candle_timestamps_ms, coins, market_settings,
                                initial_capital, initial_positions, first_bar_index,
                                last_bar_index, candle_interval_ms, bootstrap_bar_indices,
-                               valuation_input_sha256):
+                               valuation_input_sha256, metric_metadata=None):
     """Require full native artifacts and a known-flat pre-first-fill baseline.
 
     Expected first/last bars come from the prepared replay contract, never from
@@ -58,7 +209,12 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     pre-evaluation bootstrap rows must equal flat initial capital; their gap to
     activation is excluded from evaluation coverage, never filled synthetically. Missing
     marks of held inventory, unknown order-side attribution or omitted fills are
-    errors. Neither native HSL signals nor strategy equity is a quality ruler.
+    errors. Core-v1 metadata validates its included baseline and completed-close
+    clocks. A completed liquidated replay can include a final opening only when
+    the final fill proves its clock and depleted post-fill account balance;
+    interrupted artifacts retain strict completed-close fill coverage. Absent
+    metadata retains the frozen historical clock adapter. Neither native HSL
+    signals nor strategy equity is a quality ruler.
     """
     import numpy as np
 
@@ -112,29 +268,13 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     equities = np.asarray(native_equities)
     if equities.ndim != 2 or equities.shape[0] < 1 or equities.shape[1] < 2:
         raise ValueError("full native ordinary-account equity rows are required")
-    observed_indices = []
-    account_values = []
-    for row in equities:
-        timestamp = _clock(row[0], "native equity timestamp")
-        offset = timestamp - timestamps[0]
-        if offset < 0 or offset % interval:
-            raise ValueError("native equity timestamp is outside the prepared candle grid")
-        observed_indices.append(offset // interval)
-        account_values.append(_number(row[1], "ordinary account equity"))
-    bootstrap_count = len(bootstrap_bar_indices)
-    if (observed_indices[:bootstrap_count] != list(bootstrap_bar_indices) or
-            any(value != capital for value in account_values[:bootstrap_count])):
-        raise ValueError("declared native bootstrap rows must retain known-flat initial capital")
-    observed_indices = observed_indices[bootstrap_count:]
-    account_values = account_values[bootstrap_count:]
-    if not observed_indices:
-        raise ValueError("native bootstrap rows do not supply evaluated account coverage")
-    final_bar = observed_indices[-1]
-    if (final_bar > last_bar_index or
-            observed_indices != list(range(first_bar_index, final_bar + 1))):
-        raise ValueError("native equity rows must be a contiguous prefix of the expected full grid")
-    if execution_completed and not liquidated and final_bar != last_bar_index:
-        raise ValueError("successful non-liquidated native replay omitted required account observations")
+    plan = _account_observation_plan(
+        equities=equities, native_fills=native_fills, timestamps=timestamps, capital=capital,
+        first_bar_index=first_bar_index, last_bar_index=last_bar_index,
+        interval=interval, bootstrap_bar_indices=bootstrap_bar_indices,
+        liquidated=liquidated, execution_completed=execution_completed,
+        metric_metadata=metric_metadata)
+    final_bar = plan["final_bar"]
 
     parsed_fills = []
     previous_index = first_bar_index
@@ -145,7 +285,7 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
         timestamp = _clock(row[1], "fill timestamp")
         coin = row[2]
         order_type = row[13]
-        if not first_bar_index <= index <= final_bar or index < previous_index:
+        if not first_bar_index <= index <= plan["max_fill_bar"] or index < previous_index:
             raise ValueError("fills must retain native bar order and lie inside observed account coverage")
         if not timestamps[index] <= timestamp <= timestamps[index] + interval:
             raise ValueError("fill timestamp is inconsistent with its native bar index")
@@ -173,10 +313,10 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
                                  is_close=close))
 
     positions = {}
-    exposure = [0.0]
+    exposure = []
     cursor = 0
-    for index in observed_indices:
-        while cursor < len(parsed_fills) and parsed_fills[cursor]["index"] <= index:
+    for index, fill_cutoff in zip(plan["marks"], plan["fill_cutoffs"]):
+        while cursor < len(parsed_fills) and parsed_fills[cursor]["index"] <= fill_cutoff:
             fill = parsed_fills[cursor]
             key = (fill["coin"], fill["pside"])
             before = positions.get(key, 0.0)  # Proven flat initialization above.
@@ -192,6 +332,8 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
         for (coin, _), size in positions.items():
             if size == 0:
                 continue
+            if index is None:
+                raise ValueError("native baseline cannot contain unproven held inventory")
             mark = _number(candles[index, coin_indices[coin], 2], f"held {coin} close mark")
             if mark <= 0:
                 raise ValueError("held inventory requires a positive causal close mark")
@@ -204,16 +346,17 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     reporting_fills = sorted(parsed_fills, key=lambda fill: (fill["timestamp_ms"], fill["sequence"]))
     result = extract_account_metrics(
         start_ms=start, expected_end_ms=timestamps[last_bar_index] + interval,
-        initial_equity=capital, timestamps_ms=[start, *(timestamps[i] + interval for i in observed_indices)],
-        equity=[capital, *account_values], gross_exposure_ratio=exposure, fills=reporting_fills,
+        initial_equity=capital, timestamps_ms=plan["times"],
+        equity=plan["equity"], gross_exposure_ratio=exposure, fills=reporting_fills,
         completed=execution_completed and final_bar == last_bar_index, liquidated=liquidated,
         sample_interval_ms=interval)
     if account_valuation_input_identity(**prepared) != valuation_input_sha256:
         raise ValueError("prepared valuation inputs changed while extracting account metrics")
     result.update(valuation_input_sha256=valuation_input_sha256,
                   exposure_denominator="initial_capital", exposure_denominator_value=capital,
-                  exposure_sampling="left-held causal close samples; known-flat initial baseline",
-                  native_equity_clock="bar start k stores close[k]; observed at end(k+1)",
+                  exposure_sampling="left-held causal marks; known-flat initial baseline",
+                  native_equity_clock=plan["clock"], native_equity_definition_version=plan["definition_version"],
+                  terminal_open_bar_index=plan["terminal_fill_bar"],
                   first_native_bar_index=first_bar_index, last_native_bar_index=final_bar,
                   excluded_bootstrap_bar_indices=list(bootstrap_bar_indices))
     return result
@@ -234,8 +377,11 @@ def cpu_confirmation_from_native(native_result, *, model, effective_config, inpu
     analysis = native_result[2]
     if not isinstance(analysis, Mapping) or type(analysis.get("liquidated")) is not bool:
         raise ValueError("native analysis must supply authoritative liquidation status")
+    if "metric_metadata" in analysis and analysis["metric_metadata"] is None:
+        raise ValueError("present native account clock metadata must declare core definition version 1")
     metrics = metrics_from_native_replay(native_fills=native_result[0], native_equities=native_result[1],
-                                         liquidated=analysis["liquidated"], **replay_inputs)
+                                         liquidated=analysis["liquidated"],
+                                         metric_metadata=analysis.get("metric_metadata"), **replay_inputs)
     if not callable(elapsed_seconds):
         raise ValueError("elapsed_seconds must sample the common-origin clock after confirmation work")
     finished = _number(elapsed_seconds(), "confirmation elapsed_seconds")

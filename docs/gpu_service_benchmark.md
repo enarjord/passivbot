@@ -36,8 +36,8 @@ must retain its request/scenario identity and liquidation flag; metrics must
 agree with the width-one reference within eight float64 reduction ULPs. This
 permits machine-scale reduction differences, not float32 replay drift. Required
 result, ownership and integrity checks remain enabled under optimized Python
-execution. Recovery and ordinary equity metrics are requested to include their
-history/reduction costs.
+execution. Canonical CAGR, drawdown, turnover, exposure and activity quantities exercise selected
+compact observations and the shared Rust finalizer; retired histories are absent.
 
 The report separates first-use latency, warm median throughput, first completion
 and 95th-percentile request latency. Compiler/cache state is retained between

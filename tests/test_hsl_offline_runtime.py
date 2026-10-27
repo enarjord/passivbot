@@ -3,6 +3,7 @@ from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import json
+import math
 import pickle
 import socket
 import os
@@ -56,7 +57,7 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     fills, equities, analysis = execute_backtest(prepared, cfg)
     report = prepared.hard_stop_plot_data["hsl"]
     assert report["mode"] == ("pside" if mode == "position_side" else mode)
-    assert analysis["hsl_trigger_count"] > 0
+    assert analysis["metric_metadata"]["hsl_trigger_count"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is False
     assert report["samples"] == []
@@ -77,7 +78,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
-    cfg["optimize"]["scoring"] = ["hsl_trigger_count"]
+    cfg["optimize"]["scoring"] = ["hsl_triggers_per_year"]
     cfg["optimize"]["limits"] = []
     manager = SharedArrayManager()
     try:
@@ -137,7 +138,12 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
             threshold_vector(evaluator.optimization_shape, 0.01), []
         )
         assert combined["constraint_violation"] == 0
-        assert combined["fitness"][0] == pytest.approx(results[0]["fitness"][0] / 2)
+        metric = "hsl_triggers_per_year"
+        low_rate = results[0]["metrics"]["objectives"][metric]
+        reduced_rate = combined["metrics"]["objectives"][metric]
+        assert reduced_rate == pytest.approx(low_rate / 2)
+        # The finite atan objective adapter follows raw scenario reduction.
+        assert combined["fitness"][0] == pytest.approx(2 / math.pi * math.atan(reduced_rate))
         suite.close()
         del restored
     finally:
@@ -223,7 +229,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
         iters=2,
         n_cpus=1,
         population_size=2,
-        scoring=[{"metric": "hsl_trigger_count", "goal": "min"}],
+        scoring=[{"metric": "hsl_triggers_per_year", "goal": "min"}],
         limits=[],
         seed=42,
         compress_results_file=False,

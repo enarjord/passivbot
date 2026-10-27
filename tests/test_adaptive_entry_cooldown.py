@@ -831,7 +831,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     assert first_entries["short" if side == "long" else "long"] < 20
 
 
-def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
+def test_exhausted_derived_warmup_rejects_an_empty_evaluation_window():
     from backtest import run_backtest
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
@@ -841,12 +841,13 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
-    baseline = run_backtest(hlcvs, copy.deepcopy(markets), cfg, "binance", btc, timestamps)
-    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
-    actual = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
-    np.testing.assert_array_equal(actual[0], baseline[0])
-    np.testing.assert_array_equal(actual[1], baseline[1])
-    assert actual[2] == baseline[2]
+    # This legacy zero budget derives more warmup than the short fixture has.
+    # It must fail rather than fabricate an empty run's analysis. The positive
+    # window no-ranking cases below independently preserve trading equality.
+    for weight in (0.0, 1.0):
+        cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = weight
+        with pytest.raises(ValueError, match="no positive evaluated interval"):
+            run_backtest(hlcvs, copy.deepcopy(markets), cfg, "binance", btc, timestamps)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

@@ -2,6 +2,7 @@ from copy import deepcopy
 import json
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config.schema import get_expanded_config_prototype
 
@@ -20,10 +21,7 @@ SPANS = ("ema_span_0", "ema_span_1")
 
 
 def legacy_config():
-    config = get_released_v8_defaults(strategy_kind=KIND)
-    config["optimize"]["scoring"] = [
-        item for item in config["optimize"]["scoring"] if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    config = without_metric_selection(get_released_v8_defaults(strategy_kind=KIND))
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):

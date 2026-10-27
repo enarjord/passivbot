@@ -53,7 +53,7 @@ try:
     dataset = PreparedGpuDataset(
         config=config, markets=markets, exchange=exchange,
         hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
-        candle_coins=ordered_coins, metrics=["adg_fraction_strategy_equity", "fills_per_day"],
+        candle_coins=ordered_coins, metrics=["cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"],
     )
     with CudaBacktestService() as service:
         service.register_dataset("scenario", dataset)
@@ -71,23 +71,21 @@ unsupported topology changes require a separately prepared dataset. The request 
 dataset IDs are caller-owned, run-local identities. The optimizer owns persistent
 content/evaluation fingerprints, precision stamps and resume compatibility separately.
 
-Portfolio `hsl_signal_ema_worst_1pct_mean_fraction` observes the maximum enabled
-HSL scope signal on each completed reporting bar before reducing its worst 1%.
-Shared replay returns one compact portfolio-tail scalar; combining already reduced
-long/short tails loses their joint clock. Requested native EMA tails retain bounded
-device observations and reduce the actual largest `max(floor(count / 100), 1)`
-samples after replay succeeds. Scopes reduce separately, retaining all capture
-histories but reserving reduction workspace for one scope at a time. Metal waits
-for the previous scope to complete before allocating the next scope's workspace;
-CUDA reuses freed intermediates on the current stream. Only compact scope means
-are retained from each completed reduction. Scratch admission includes capture and reduction;
-unrequested or disabled HSL capture remains compiled away. Temporal replay retains
-observations across dispatches, while a rejected attempt starts again with empty
-capture. Portfolio HSL reports only at portfolio scope; its long/short channels are
-zero. Reporting includes cooldown bars and the fresh mark-driven liquidation signal,
-without adding samples for fill-boundary controller refreshes. V9 parity uses the
-native shared-account engine, including single-coin requests, and rejects a missing
-portfolio summary. Required account metrics retain their independent factual curves.
+Metric requests use the native core catalog, with definitions, clocks and statuses in
+[the backtest metric contract](ai/features/backtest_metrics.md). Each replay streams a
+compact selected observation packet; the ordinary Rust core finalizer owns all
+finishing formulas. Python transports the packet and configuration metadata.
+`BacktestResult.metrics` contains requested canonical base names with finite numbers
+or `None`. `metadata.metric_status` distinguishes genuine positive/negative infinity,
+undefined quantities and invalid observations; `metadata.metric_metadata` records the
+definition version and observation clocks/counts. Unrequested quantities are absent.
+Limits and scenario reductions decode these statuses before using raw values.
+
+This metric ABI currently supports one-minute USD-collateral replay. BTC collateral
+and coarser metric replay fail with explicit capability errors. Market data may still
+contain aligned BTC reference arrays; they do not create extra metric denominations.
+Integer float32 packet counters and relative clocks must fit exact 24-bit integer
+representation. Overflow cannot become a rounded duration or apparently valid score.
 
 ## CPU completion scoring
 
@@ -494,19 +492,20 @@ inputs must fit the existing 45% free-VRAM (CUDA) or remaining recommended worki
 still fail and propagate. This is a bounded device-residency foundation, not a complete
 host/disk admission budget or adaptive multi-device scheduler.
 
-Shared multicoin replay also separates unweighted raw strategy equity from account
-reporting. Requested raw ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected
-shortfall and the three gain_multiplier-quality metrics use daily raw equity closes/minima,
-including terminal loss marks. Calmar/Sterling additionally request raw daily
-worst drawdowns. Two f32 daily columns add eight bytes per candidate per calendar
-day; these columns and their replay updates compile away when unused. USD account
-metrics and account exposure normalization keep their original source. Native
-single-coin requests use this shared path. CUDA validation does not establish Metal acceptance.
+Core observations use the declared post-warmup trading boundary, before its first
+fills, and include every supported inactive minute through the factual terminal mark.
+The initial mark does not wait for the first trade or an available position slot.
+Daily return moments use complete UTC closes; minute path and exposure moments
+include the baseline. Same-clock terminal replacement counts once and preserves a
+completed midnight close for daily returns. A fill-terminal valuation uses the latest
+completed marks plus actual executions, without reading the later candle close.
 
-Legacy `_w` suffix metrics and their capture/reduction paths are retired. Ordinary
-metrics and explicitly configured `_ew` metrics retain their separate definitions.
-Current replay requires integer candle-index clocks and structured metrics with a
-Boolean simulator terminal status. Retired replay layouts fail before execution.
+The [metric contract](ai/features/backtest_metrics.md) defines 365.25-day annualization,
+zero return threshold, corrected Sortino, pre-fill raw-balance turnover, and controller
+HSL episode losses. Reported RED includes enforced flat cooldown. Effective enabled
+zero-slot scopes remain observed and inactive; disabling every admitted effective
+policy is distinct from capacity preventing trades. Metric observation never changes
+controller permission, order arithmetic or account sizing.
 
 Admission bounds queued plus running work. The oldest waiting request chooses the next
 dataset; compatible queued requests form a bounded microbatch in their original relative
@@ -574,8 +573,7 @@ elapsed steps using the preceding observation's portfolio RED state, matching CP
 elapsed-time reporting. A flat execution observes its updated portfolio tier at the
 fill timestamp before the following bar interval; GREEN at that boundary adds no
 unobserved RED minute. First observations add no duration, terminal states add no
-unobserved tail, and temporal dispatches retain the complete clock. The two packed
-scalar labels remain unchanged. Controller-active parity checks remain required to
+unobserved tail, and temporal dispatches retain the complete clock. Controller-active parity checks remain required to
 assess observation timing and numerical discrepancies.
 
 ### Forward risk replay

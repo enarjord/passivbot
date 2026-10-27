@@ -1,32 +1,60 @@
 import json
+import math
 from pathlib import Path
 
 import pytest
 
 from config.scoring import ObjectiveSpec
+from metrics_schema import encode_metric_values
 from pareto_explorer import load_candidates
 from tools import pareto_plot
 from passivbot_cli.main import main as cli_main
 
 
-METRICS = ["adg_fraction_strategy_equity", "pain_index_fraction_strategy_equity", "sortino_ratio_strategy_equity"]
-SPECS = [ObjectiveSpec(metric=name, goal=goal) for name, goal in zip(METRICS, ["max", "min", "max"])]
+METRICS = [
+    "cagr_fraction_strategy_equity",
+    "pain_index_fraction_strategy_equity",
+    "sortino_ratio_strategy_equity",
+]
+SPECS = [
+    ObjectiveSpec(metric=name, goal=goal)
+    for name, goal in zip(METRICS, ["max", "min", "max"])
+]
 
 
 def write_candidate(path, values=(0.02, 0.1, 2.0), *, layout="named"):
     objectives = dict(zip(METRICS, values))
     entry = {"optimize": {"scoring": [spec.to_config() for spec in SPECS]}}
     if layout == "named":
-        entry["metrics"] = {"objectives": objectives}
+        entry["metrics"] = {
+            "definition_version": 1,
+            "objectives": encode_metric_values(objectives),
+        }
     elif layout == "legacy":
-        entry["metrics"] = {"objectives": {f"w_{i}": -value if spec.goal == "max" else value
-                                          for i, (spec, value) in enumerate(zip(SPECS, values))}}
+        entry["metrics"] = {
+            "objectives": {
+                f"w_{i}": -value if spec.goal == "max" else value
+                for i, (spec, value) in enumerate(zip(SPECS, values))
+            }
+        }
     elif layout == "suite":
-        entry["suite_metrics"] = {"metrics": {name: {"aggregated": value,
-                                                   "stats": {stat: value + 10 for stat in ("mean", "min", "max", "std", "median")},
-                                                   "scenarios": {"example": value + 20}}
-                                               for name, value in objectives.items()}}
-    path.write_text(json.dumps(entry))
+        entry["suite_metrics"] = {
+            "definition_version": 1,
+            "metrics": {
+                name: {
+                    **encode_metric_values({"aggregated": value}),
+                    "stats": encode_metric_values(
+                        {
+                            stat: value + 10
+                            for stat in ("mean", "min", "max", "std", "median")
+                        }
+                    ),
+                    "scenarios": encode_metric_values({"example": value + 20}),
+                }
+                for name, value in objectives.items()
+            },
+        }
+    path.write_text(json.dumps(entry, allow_nan=False))
 
 
 @pytest.fixture
@@ -34,8 +62,11 @@ def front(tmp_path):
     path = tmp_path / "run" / "pareto"
     path.mkdir(parents=True)
     # Includes dominated, coincident and constant-axis projections: keep every member.
-    for name, values in [("a", (0.02, 0.1, 2.0)), ("b", (0.01, 0.2, 2.0)),
-                         ("c", (0.02, 0.1, 2.0))]:
+    for name, values in [
+        ("a", (0.02, 0.1, 2.0)),
+        ("b", (0.01, 0.2, 2.0)),
+        ("c", (0.02, 0.1, 2.0)),
+    ]:
         write_candidate(path / f"{name}.json", values)
     (path / "selection.json").write_text('{"selected": ["a.json"]}')
     return path
@@ -53,8 +84,10 @@ def test_dataset_includes_objectives_and_preserves_members(front):
     assert pareto_plot.select_metrics([], data) == METRICS[:2]
 
 
-@pytest.mark.parametrize("layout", ["named", "legacy", "suite"])
-def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(tmp_path, layout):
+@pytest.mark.parametrize("layout", ["named", "suite"])
+def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(
+    tmp_path, layout
+):
     path = tmp_path / "candidate.json"
     write_candidate(path, layout=layout)
     _, candidates, specs = load_candidates(path)
@@ -63,27 +96,40 @@ def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(tmp_pat
     for name, value in zip(METRICS, [0.02, 0.1, 2.0]):
         assert metrics[name]["values"] == [value]
     if layout == "suite":
-        assert metrics["stats.adg_fraction_strategy_equity.mean"]["values"] == [10.02]
-        assert metrics["stats.adg_fraction_strategy_equity.std"]["goal"] is None
+        assert metrics["stats.cagr_fraction_strategy_equity.mean"]["values"] == [10.02]
+        assert metrics["stats.cagr_fraction_strategy_equity.std"]["goal"] is None
 
 
-def test_requested_axis_order_and_aliases():
-    data = {"metrics": [{"key": name, "count": 1} for name in ["adg_fraction_usd", METRICS[1]]]}
-    assert pareto_plot.select_metrics([METRICS[1], "adg_fraction"], data) == [METRICS[1], "adg_fraction_usd"]
+def test_requested_axis_order_uses_exact_current_selectors():
+    data = {"metrics": [{"key": name, "count": 1} for name in METRICS]}
+    assert pareto_plot.select_metrics([METRICS[1], METRICS[0]], data) == [
+        METRICS[1],
+        METRICS[0],
+    ]
     with pytest.raises(ValueError, match="distinct"):
-        pareto_plot.select_metrics(["adg_fraction", "adg_fraction_usd"], data)
+        pareto_plot.select_metrics([METRICS[0], METRICS[0]], data)
+    with pytest.raises(ValueError, match="Unknown"):
+        pareto_plot.select_metrics([METRICS[1], "adg_fraction"], data)
 
 
-@pytest.mark.parametrize("metrics", [[METRICS[0]], METRICS + ["other"], [METRICS[0]] * 2, ["unknown", METRICS[0]]])
+@pytest.mark.parametrize(
+    "metrics",
+    [[METRICS[0]], METRICS + ["other"], [METRICS[0]] * 2, ["unknown", METRICS[0]]],
+)
 def test_invalid_selection(metrics):
     with pytest.raises(ValueError):
-        pareto_plot.select_metrics(metrics, {"metrics": [{"key": spec.metric, "count": 1} for spec in SPECS]})
+        pareto_plot.select_metrics(
+            metrics, {"metrics": [{"key": spec.metric, "count": 1} for spec in SPECS]}
+        )
 
 
-@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), "bad"])
+@pytest.mark.parametrize("bad", [None, True, "bad"])
 def test_bad_objectives_fail_without_output(tmp_path, bad):
     source = tmp_path / "candidate.json"
-    write_candidate(source, (bad, 0.1, 2.0))
+    write_candidate(source)
+    entry = json.loads(source.read_text())
+    entry["metrics"]["objectives"][METRICS[0]] = bad
+    source.write_text(json.dumps(entry, allow_nan=False))
     output = tmp_path / "plot.html"
     with pytest.raises(SystemExit) as exc:
         pareto_plot.main([str(source), *METRICS[:2], "-o", str(output)])
@@ -95,20 +141,34 @@ def test_cli_dispatch_offline_html_and_source_preservation(front, tmp_path):
     before = {p.name: p.read_bytes() for p in front.iterdir()}
     for dimensions in (2, 3):
         output = tmp_path / "plots" / f"{dimensions}d.html"
-        assert cli_main(["tool", "pareto-plot", str(front.parent), *METRICS[:dimensions],
-                         "--output", str(output)]) == 0
+        assert (
+            cli_main(
+                [
+                    "tool",
+                    "pareto-plot",
+                    str(front.parent),
+                    *METRICS[:dimensions],
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
         page = output.read_text()
         assert "Plotly.react" in page
         assert "plotly.js v" in page
-        assert '<script src=' not in page
+        assert "<script src=" not in page
         assert "a.json" in page
-        assert "optimize" not in json.dumps(read_payload(page))  # no full config in export
+        assert "optimize" not in json.dumps(
+            read_payload(page)
+        )  # no full config in export
     assert {p.name: p.read_bytes() for p in front.iterdir()} == before
 
 
 def test_list_metrics_without_plot(front, monkeypatch, capsys):
     def no_plot(*args):
         pytest.fail("Listing metrics must not render a figure")
+
     monkeypatch.setattr(pareto_plot, "render_html", no_plot)
     assert pareto_plot.main([str(front), "--list-metrics"]) == 0
     assert f"{METRICS[1]} (min;" in capsys.readouterr().out
@@ -143,7 +203,9 @@ def test_missing_empty_and_malformed_inputs(tmp_path):
 
 def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda uri: calls.append(uri) or True)
+    monkeypatch.setattr(
+        pareto_plot.webbrowser, "open", lambda uri: calls.append(uri) or True
+    )
     monkeypatch.chdir(tmp_path)
     args = [str(front), *METRICS[:2]]
     assert pareto_plot.main(args) == 0
@@ -167,24 +229,42 @@ def test_export_without_cli_axes_contains_all_metrics(front, tmp_path):
 
 def test_non_objective_metrics_missing_values_and_explicit_statistics(front):
     from dataclasses import replace
+
     _, candidates, specs = load_candidates(front)
-    candidates[0] = replace(candidates[0], aggregated_values={"extra": 9.0},
-                            stats_flat={"extra_mean": 2.0, "extra_std": 3.0,
-                                        "position_held_mean_hours_mean": 7.0,
-                                        "unavailable_mean": float("nan")})
+    extra, held, unavailable = (
+        "fills_gap_max_days",
+        "position_held_time_weighted_mean_hours",
+        "hsl_red_time_fraction",
+    )
+    candidates[0] = replace(
+        candidates[0],
+        aggregated_values={extra: 9.0},
+        stats_flat={
+            extra + "_mean": 2.0,
+            extra + "_std": 3.0,
+            held + "_mean": 7.0,
+            unavailable + "_mean": None,
+            "metric_status": {
+                unavailable
+                + "_mean": {"status": "undefined", "reason": "no observations"}
+            },
+        },
+    )
     data = pareto_plot.build_dataset(candidates, specs)
     metrics = {metric["key"]: metric for metric in data["metrics"]}
-    assert metrics["extra"]["values"] == [9.0, None, None]
-    assert metrics["extra"]["goal"] is None
-    assert metrics["extra"]["count"] == 1
-    assert metrics["stats.extra.mean"]["values"] == [2.0, None, None]
-    assert metrics["stats.extra.std"]["goal"] is None
-    assert metrics["position_held_mean_hours"]["values"] == [7.0, None, None]
-    assert metrics["unavailable"]["count"] == 0
-    assert metrics["unavailable"]["min"] is None
-    assert pareto_plot.select_metrics([METRICS[0], "extra"], data) == [METRICS[0], "extra"]
+    assert metrics[extra]["values"] == [9.0, None, None]
+    assert metrics[extra]["goal"] is None
+    assert metrics[extra]["count"] == 1
+    assert metrics[f"stats.{extra}.mean"]["values"] == [2.0, None, None]
+    assert metrics[f"stats.{extra}.std"]["goal"] is None
+    assert metrics[held]["values"] == [7.0, None, None]
+    assert metrics[unavailable]["count"] == 0
+    assert metrics[unavailable]["min"] is None
+    assert metrics[unavailable]["statuses"][0]["status"] == "undefined"
+    assert pareto_plot.select_metrics([METRICS[0], extra], data) == [METRICS[0], extra]
     with pytest.raises(ValueError, match="unavailable"):
-        pareto_plot.select_metrics([METRICS[0], "unavailable"], data)
+        pareto_plot.select_metrics([METRICS[0], unavailable], data)
+    assert data["definition_version"] == 1
     json.dumps(data, allow_nan=False)
 
 
@@ -200,13 +280,22 @@ def test_browser_logic(tmp_path):
     import shutil
     import subprocess
     from tools.pareto_plot_page import SCRIPT
+
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is needed only to test the embedded browser logic")
     script = tmp_path / "pareto-plot.cjs"
     script.write_text(SCRIPT)
-    subprocess.run([node, str(Path(__file__).with_name("pareto_plot_browser_logic.cjs")), str(script)],
-                   check=True, capture_output=True, text=True)
+    subprocess.run(
+        [
+            node,
+            str(Path(__file__).with_name("pareto_plot_browser_logic.cjs")),
+            str(script),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_statistics_inherit_explicit_scoring_direction(tmp_path):
@@ -216,76 +305,106 @@ def test_statistics_inherit_explicit_scoring_direction(tmp_path):
     specs[0] = ObjectiveSpec(metric=METRICS[0], goal="min")
     data = pareto_plot.build_dataset(candidates, specs)
     metrics = {metric["key"]: metric for metric in data["metrics"]}
-    assert metrics["stats.adg_fraction_strategy_equity.mean"]["goal"] == "min"
-    assert metrics["stats.adg_fraction_strategy_equity.std"]["goal"] is None
+    assert metrics["stats.cagr_fraction_strategy_equity.mean"]["goal"] == "min"
+    assert metrics["stats.cagr_fraction_strategy_equity.std"]["goal"] is None
 
 
-@pytest.mark.parametrize("alias,canonical", [
-    ("stats.adg_fraction.mean", "stats.adg_fraction_usd.mean"),
-    ("stats.adg_fraction_strategy_equity.mean", "stats.adg_fraction_strategy_equity.mean"),
-])
-def test_statistic_selectors_accept_metric_aliases(alias, canonical):
+def test_statistic_selectors_use_exact_current_metric_names():
+    canonical = "stats.cagr_fraction_strategy_equity.mean"
     data = {"metrics": [{"key": name, "count": 1} for name in [canonical, METRICS[1]]]}
-    assert pareto_plot.select_metrics([alias, METRICS[1]], data) == [canonical, METRICS[1]]
+    assert pareto_plot.select_metrics([canonical, METRICS[1]], data) == [
+        canonical,
+        METRICS[1],
+    ]
+    with pytest.raises(ValueError, match="Unknown"):
+        pareto_plot.select_metrics(["stats.adg_fraction.mean", METRICS[1]], data)
 
 
-def test_statistic_selector_alias_duplicates_are_rejected():
-    data = {"metrics": [{"key": "stats.adg_fraction_usd.mean", "count": 1}]}
-    with pytest.raises(ValueError, match="distinct"):
-        pareto_plot.select_metrics(["stats.adg_fraction.mean", "stats.adg_fraction_usd.mean"], data)
-
-
-def test_cli_statistic_alias_selects_exported_column(tmp_path):
+def test_cli_statistic_selects_exported_column(tmp_path):
     source, output = tmp_path / "candidate.json", tmp_path / "plot.html"
     write_candidate(source, layout="suite")
-    assert pareto_plot.main([str(source), "stats.adg_fraction_strategy_equity.mean", METRICS[1],
-                            "-o", str(output)]) == 0
+    selector = "stats.cagr_fraction_strategy_equity.mean"
+    assert pareto_plot.main([str(source), selector, METRICS[1], "-o", str(output)]) == 0
     data = read_payload(output.read_text())
-    assert data["selected"] == ["stats.adg_fraction_strategy_equity.mean", METRICS[1]]
-    assert next(metric for metric in data["metrics"] if metric["key"] == data["selected"][0])["values"] == [10.02]
+    assert data["selected"] == [selector, METRICS[1]]
+    assert next(metric for metric in data["metrics"] if metric["key"] == selector)[
+        "values"
+    ] == [10.02]
 
 
 @pytest.mark.parametrize("canonical_first", [True, False])
 @pytest.mark.parametrize("source", ["stats_flat", "aggregated_values"])
-def test_removed_owned_alias_stays_separate_in_either_order(front, canonical_first, source):
+def test_retired_selectors_are_rejected_without_alias_grouping(
+    front, canonical_first, source
+):
     from dataclasses import replace
+
     _, candidates, specs = load_candidates(front)
     suffix = "_mean" if source == "stats_flat" else ""
-    entries = [("sharpe_ratio_strategy_equity" + suffix, 0.25),
-               ("sharpe_ratio_strategy_pnl_rebased" + suffix, 99.0)]
+    entries = [
+        ("sharpe_ratio_strategy_equity" + suffix, 0.25),
+        ("sharpe_ratio_strategy_pnl_rebased" + suffix, 99.0),
+    ]
     if not canonical_first:
         entries.reverse()
     candidates[0] = replace(candidates[0], **{source: dict(entries)})
-    data = pareto_plot.build_dataset(candidates, specs)
-    metrics = {metric["key"]: metric for metric in data["metrics"]}
-    assert metrics["sharpe_ratio_strategy_equity"]["values"] == [0.25, None, None]
-    if source == "stats_flat":
-        assert metrics["stats.sharpe_ratio_strategy_equity.mean"]["values"] == [0.25, None, None]
+    with pytest.raises(ValueError, match="unknown or retired"):
+        pareto_plot.build_dataset(candidates, specs)
 
 
-def test_removed_currency_prefix_is_not_translated_or_collapsed():
-    assert pareto_plot._canonical_values({"adg_fraction": 0.1, "usd_adg": 0.2}) == {
-        "adg_fraction_usd": 0.1, "usd_adg": 0.2,
-    }
+def test_legacy_fitness_is_rejected_without_output(tmp_path):
+    source, output = tmp_path / "old.json", tmp_path / "plot.html"
+    write_candidate(source, layout="legacy")
+    with pytest.raises(SystemExit):
+        pareto_plot.main([str(source), "-o", str(output)])
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "value,status", [(math.inf, "positive_infinity"), (-math.inf, "negative_infinity")]
+)
+def test_true_infinite_values_preserve_status_without_plot_coordinates(
+    tmp_path, value, status
+):
+    source, output = tmp_path / "candidate.json", tmp_path / "plot.html"
+    write_candidate(source, (value, 0.1, 2.0))
+    assert pareto_plot.main([str(source), *METRICS[1:], "-o", str(output)]) == 0
+    data = read_payload(output.read_text())
+    row = next(item for item in data["metrics"] if item["key"] == METRICS[0])
+    assert row["values"] == [None] and row["count"] == 0
+    assert row["statuses"][0]["status"] == status
+    assert row["min"] is None and row["max"] is None
+    json.dumps(data, allow_nan=False)
 
 
 @pytest.mark.parametrize("input_kind", ["run", "pareto", "custom", "file"])
 def test_default_output_uses_input_name(front, tmp_path, monkeypatch, input_kind):
     monkeypatch.chdir(tmp_path)
-    source = {"run": front.parent, "pareto": front, "file": front / "a.json"}.get(input_kind)
+    source = {"run": front.parent, "pareto": front, "file": front / "a.json"}.get(
+        input_kind
+    )
     if input_kind == "custom":
         source = tmp_path / "custom_front"
         front.rename(source)
-    name = {"run": "run", "pareto": "run", "custom": "custom_front", "file": "a"}[input_kind]
+    name = {"run": "run", "pareto": "run", "custom": "custom_front", "file": "a"}[
+        input_kind
+    ]
     assert cli_main(["tool", "pareto-plot", str(source)]) == 0
     output = tmp_path / "pareto_plots" / f"{name}.html"
-    assert read_payload(output.read_text())["names"] == (["a.json"] if input_kind == "file" else ["a.json", "b.json", "c.json"])
+    assert read_payload(output.read_text())["names"] == (
+        ["a.json"] if input_kind == "file" else ["a.json", "b.json", "c.json"]
+    )
     assert not (tmp_path / "pareto-plot-2d.html").exists()
 
 
 def test_omitted_path_discovers_latest_populated_run(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    for run in ["2026-01-01_old", "2026-02-01_latest", "2026-03-01_empty", "2026-04-01_sidecar"]:
+    for run in [
+        "2026-01-01_old",
+        "2026-02-01_latest",
+        "2026-03-01_empty",
+        "2026-04-01_sidecar",
+    ]:
         front = tmp_path / "optimize_results" / run / "pareto"
         front.mkdir(parents=True)
         if run.endswith("sidecar"):
@@ -316,7 +435,9 @@ def test_omitted_path_list_metrics_and_custom_output(front, tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("empty_root", [False, True])
-def test_omitted_path_without_candidates_fails_clearly(tmp_path, monkeypatch, capsys, empty_root):
+def test_omitted_path_without_candidates_fails_clearly(
+    tmp_path, monkeypatch, capsys, empty_root
+):
     monkeypatch.chdir(tmp_path)
     if empty_root:
         (tmp_path / "optimize_results" / "empty" / "pareto").mkdir(parents=True)
@@ -328,7 +449,9 @@ def test_omitted_path_without_candidates_fails_clearly(tmp_path, monkeypatch, ca
 
 
 @pytest.mark.parametrize("bad", ["{", "{}", None])
-def test_latest_malformed_candidate_is_not_hidden_by_fallback(tmp_path, monkeypatch, bad):
+def test_latest_malformed_candidate_is_not_hidden_by_fallback(
+    tmp_path, monkeypatch, bad
+):
     monkeypatch.chdir(tmp_path)
     for name in ("2026-01-01_older", "2026-02-01_latest"):
         front = tmp_path / "optimize_results" / name / "pareto"
@@ -336,7 +459,9 @@ def test_latest_malformed_candidate_is_not_hidden_by_fallback(tmp_path, monkeypa
         write_candidate(front / "candidate.json")
     newest = front / "candidate.json"
     if bad is None:
-        write_candidate(newest, (None, 0.1, 2.0))
+        payload = json.loads(newest.read_text())
+        payload["metrics"]["objectives"][METRICS[0]] = None
+        newest.write_text(json.dumps(payload, allow_nan=False))
     elif bad == "{":
         newest.write_text(bad)
     else:
@@ -350,8 +475,47 @@ def test_latest_malformed_candidate_is_not_hidden_by_fallback(tmp_path, monkeypa
 
 def test_plot_directory_is_ignored_from_repository_subdirectories():
     import subprocess
+
     result = subprocess.run(
-        ["git", "check-ignore", "--no-index", "pareto_plots/front.html", "src/pareto_plots/front.html"],
-        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=True,
+        [
+            "git",
+            "check-ignore",
+            "--no-index",
+            "pareto_plots/front.html",
+            "src/pareto_plots/front.html",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    assert result.stdout.splitlines() == ["pareto_plots/front.html", "src/pareto_plots/front.html"]
+    assert result.stdout.splitlines() == [
+        "pareto_plots/front.html",
+        "src/pareto_plots/front.html",
+    ]
+
+
+def test_support_metadata_is_not_exported_as_numeric_plot_columns(tmp_path):
+    source = tmp_path / "candidate.json"
+    write_candidate(source)
+    entry = json.loads(source.read_text())
+    entry["metrics"].update(
+        metric_metadata={"definition_version": 1, "observation_count": 1234},
+        liquidated=False,
+    )
+    source.write_text(json.dumps(entry, allow_nan=False))
+    _, candidates, specs = load_candidates(source)
+    dataset = pareto_plot.build_dataset(candidates, specs)
+    assert {metric["key"] for metric in dataset["metrics"]} == set(METRICS)
+    assert dataset["definition_version"] == 1
+
+
+def test_stale_definition_version_cannot_be_exported(tmp_path):
+    source, output = tmp_path / "candidate.json", tmp_path / "plot.html"
+    write_candidate(source)
+    entry = json.loads(source.read_text())
+    entry["metrics"]["definition_version"] = 0
+    source.write_text(json.dumps(entry, allow_nan=False))
+    with pytest.raises(SystemExit):
+        pareto_plot.main([str(source), "--output", str(output)])
+    assert not output.exists()

@@ -46,17 +46,18 @@ def _write_candidate(
         "live": {"leverage": 10},
         "optimize": {
             "scoring": [
-                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
                 {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "metrics": {
+            "definition_version": 1,
             "objectives": {
-                "adg_fraction_strategy_equity": adg_fraction,
+                "cagr_fraction_strategy_equity": adg_fraction,
                 "drawdown_max_fraction_strategy_equity": drawdown,
             },
             "stats": {
-                "adg_fraction_strategy_equity": _metric_stats(
+                "cagr_fraction_strategy_equity": _metric_stats(
                     adg_fraction,
                     min_value=adg_fraction * 0.5,
                     max_value=adg_fraction * 1.5,
@@ -95,8 +96,8 @@ def test_analyze_summarizes_config_params_and_scoring_metrics(sample_pareto_dir:
     assert param_by_name["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"]["median"] == 0.02
 
     metric_by_name = {item["name"]: item for item in payload["metrics"]}
-    assert set(metric_by_name) == {"adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"}
-    assert metric_by_name["adg_fraction_strategy_equity"]["mean"] == pytest.approx(0.002)
+    assert set(metric_by_name) == {"cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"}
+    assert metric_by_name["cagr_fraction_strategy_equity"]["mean"] == pytest.approx(0.002)
     assert metric_by_name["drawdown_max_fraction_strategy_equity"]["median"] == pytest.approx(0.35)
 
 
@@ -107,7 +108,7 @@ def test_analyze_applies_limits_and_writes_outputs(sample_pareto_dir: Path, tmp_
         [
             str(sample_pareto_dir.parent),
             "--limit",
-            "adg_fraction_strategy_equity>0.0005",
+            "cagr_fraction_strategy_equity>0.0005",
             "--params",
             "bot.long.risk.total_wallet_exposure_limit_ratio",
             "--metrics",
@@ -212,3 +213,125 @@ def test_format_analysis_shows_only_visible_metric_correlations():
     assert "a_metric" in text
     assert "b_metric" in text
     assert "z_hidden_metric" not in text
+
+
+def test_analyzer_retains_infinite_endpoints_and_unavailable_distributions(
+    tmp_path, capsys
+):
+    import math
+    from metrics_schema import encode_metric_values
+    from pareto_explorer import load_candidates
+    from pareto_analyzer import resolve_metric_series_value, run_from_args
+
+    metric = "sharpe_ratio_strategy_equity"
+    short = "short_net_profit_contribution_fraction"
+    pareto = tmp_path / "pareto"
+    pareto.mkdir()
+    for name, value in (
+        ("finite", 1.5),
+        ("positive", math.inf),
+        ("negative", -math.inf),
+    ):
+        payload = {
+            "optimize": {"scoring": [metric]},
+            "metrics": {
+                "definition_version": 1,
+                "objectives": encode_metric_values({metric: value}),
+                "stats": {
+                    short: {
+                        "mean": None,
+                        "metric_status": {
+                            "mean": {
+                                "status": "undefined",
+                                "reason": "no positive combined profit",
+                            }
+                        },
+                    }
+                },
+            },
+        }
+        (pareto / f"{name}.json").write_text(json.dumps(payload, allow_nan=False))
+    _, candidates, _ = load_candidates(pareto)
+    ordered = sorted(
+        candidates, key=lambda row: resolve_metric_series_value(row, metric)
+    )
+    assert [candidate.path.stem for candidate in ordered] == [
+        "negative",
+        "finite",
+        "positive",
+    ]
+    args = build_parser().parse_args(
+        [
+            str(pareto),
+            "--metrics",
+            "all",
+            "--params",
+            "none",
+            "--json",
+            "--output-dir",
+            str(tmp_path / "output"),
+        ]
+    )
+    report = run_from_args(args)
+    output = capsys.readouterr().out
+    json.loads(
+        output,
+        parse_constant=lambda value: pytest.fail(f"raw nonfinite literal {value}"),
+    )
+    json.dumps(report, allow_nan=False)
+    summaries = {row["name"]: row for row in report["metrics"]}
+    summary = summaries[metric]
+    assert summary["count"] == 3 and summary["finite_count"] == 1
+    assert summary["positive_infinity_count"] == summary["negative_infinity_count"] == 1
+    assert summary["min"] is None and summary["max"] is None
+    assert summary["metric_status"]["min"]["status"] == "negative_infinity"
+    assert summary["metric_status"]["max"]["status"] == "positive_infinity"
+    assert summary["mean"] is None and summary["median"] == 1.5
+    assert summary["metric_status"]["mean"]["status"] == "undefined"
+    for field in ("std", "p05", "p25", "p75", "p95"):
+        assert (
+            summary[field] is None
+            and summary["metric_status"][field]["status"] == "undefined"
+        )
+    assert (
+        summary["min_file"] == "negative.json"
+        and summary["max_file"] == "positive.json"
+    )
+    unavailable = summaries[short]
+    assert unavailable["count"] == 0 and unavailable["unavailable_count"] == 3
+    assert (
+        unavailable["unavailable_sources"]["finite.json"]["reason"]
+        == "no positive combined profit"
+    )
+    assert unavailable["mean"] is None
+    text = format_analysis(report, show=50, corr_limit=10)
+    assert "+infinity=1" in text and "unavailable=3" in text and "undefined" in text
+    json.loads(
+        (tmp_path / "output" / "summary.json").read_text(),
+        parse_constant=lambda value: pytest.fail(value),
+    )
+
+
+def test_analyzer_single_infinite_population_is_not_dropped(tmp_path):
+    import math
+    from metrics_schema import encode_metric_values
+    from pareto_analyzer import summarize_series
+    from pareto_explorer import ParetoCandidate
+
+    metric = "omega_ratio_strategy_equity"
+    candidate = ParetoCandidate(
+        tmp_path / "infinite.json", {}, {metric: math.inf}, {}, {}
+    )
+    row = summarize_series(
+        group="metric",
+        name=metric,
+        candidates=[candidate],
+        value_maps=[encode_metric_values({metric: math.inf})],
+    ).to_dict()
+    assert row["count"] == 1 and row["finite_count"] == 0
+    assert row["metric_status"]["mean"]["status"] == "positive_infinity"
+    assert row["metric_status"]["median"]["status"] == "positive_infinity"
+    assert (
+        row["range"] is None and row["metric_status"]["range"]["status"] == "undefined"
+    )
+    json.dumps(row, allow_nan=False)

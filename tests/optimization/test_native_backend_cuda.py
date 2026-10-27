@@ -58,43 +58,40 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         import session_artifacts
         config["optimize"]["seed"] = None
         monkeypatch.setattr(session_artifacts.secrets, "randbits", lambda _bits: 12)
-    config["optimize"]["scoring"] = [dict(metric="adg_fraction_strategy_equity", goal="max"),
-                                      dict(metric="drawdown_max_fraction_strategy_equity", goal="min")]
+    config["optimize"]["scoring"] = [dict(metric="cagr_fraction_strategy_equity", goal="max"),
+                                      dict(metric="ulcer_index_fraction_strategy_equity", goal="min")]
     config["optimize"]["limits"] = [dict(metric="backtest_completion_fraction", penalize_if="less_than", value=0.99)]
     if additional_equity:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_fraction_strategy_equity", goal="max"),
-            dict(metric="calmar_ratio_usd", goal="max"),
+            dict(metric="cagr_fraction_strategy_equity", goal="max"),
+            dict(metric="ulcer_index_fraction_strategy_equity", goal="min"),
         ]
         config["optimize"]["limits"].append(dict(
-            metric="mdg_fraction_per_twel_ratio_usd_long", penalize_if="greater_than", value=1.0,
+            metric="position_exposure_utilization_rms_ratio_long", penalize_if="greater_than", value=1.0,
         ))
     if raw_equity:
         config["optimize"]["scoring"] = [
-            dict(metric="adg_fraction_strategy_equity", goal="max"),
-            dict(metric="calmar_ratio_strategy_equity", goal="max"),
+            dict(metric="cagr_fraction_strategy_equity", goal="max"),
+            dict(metric="pain_index_fraction_strategy_equity", goal="min"),
         ]
         config["optimize"]["limits"].append(dict(
-            metric="expected_shortfall_1pct_fraction_strategy_equity", penalize_if="greater_than", value=1.0,
+            metric="drawdown_max_fraction_strategy_equity", penalize_if="greater_than", value=1.0,
         ))
     if portfolio_ema:
         config["optimize"]["scoring"].append(dict(
-            metric="hsl_signal_ema_worst_1pct_mean_fraction", goal="min",
+            metric="gross_exposure_rms_ratio_strategy_equity", goal="min",
+        ))
+        config["optimize"]["limits"].append(dict(
+            metric="hsl_red_time_fraction", penalize_if="greater_than", value=.9,
         ))
     if recovery:
-        config["optimize"]["scoring"] = [
-            dict(metric="adg_fraction_strategy_equity", goal="max"),
-            dict(metric="recovery_p95_days_strategy_equity", goal="min"),
-        ]
+        config["optimize"]["limits"].append(dict(
+            metric="peak_recovery_max_days_strategy_equity", penalize_if="greater_than", value=10,
+        ))
     if hsl_tail:
-        config["optimize"]["scoring"] = [
-            dict(metric="adg_fraction_strategy_equity", goal="max"),
-            dict(metric="hsl_signal_ema_worst_1pct_mean_fraction", goal="min"),
-        ]
         config["optimize"]["limits"].extend(
-            dict(metric=f"hsl_signal_ema_worst_1pct_mean_fraction_{side}",
-                 penalize_if="greater_than", value=0.05)
-            for side in ("long", "short")
+            dict(metric=name, penalize_if="greater_than", value=.05)
+            for name in ("hsl_panic_episode_loss_max_fraction", "hsl_panic_episode_loss_mean_fraction")
         )
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     if screening:
@@ -203,7 +200,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             assert len(stored) == 1
             assert stored[0][CONTRACT_KEY]["execution"]["engine"] == engine
             if recovery:
-                assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= len(candles) / 1440
+                assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= 1
             if hsl_tail:
                 tail = stored[0]["metrics"]["unpenalized_objectives"][1]
                 assert math.isfinite(tail) and tail >= 0

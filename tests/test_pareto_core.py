@@ -23,17 +23,17 @@ def test_dominance_prefers_lower_violation_and_better_objectives():
 
 
 def test_extract_objectives_respects_scoring_order():
-    entry = {"metrics": {"objectives": {"w_1": 2.0, "w_0": 1.0, "w_2": 3.0}}}
-    obj, keys = extract_objectives(entry, scoring_keys=["m0", "m1", "m2"])
-    assert obj == (1.0, 2.0, 3.0)
-    assert keys == ["m0", "m1", "m2"]
+    names = ["cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
+    entry = {"metrics": {"definition_version": 1, "objectives": dict(zip(reversed(names), [3., 2., 1.]))}}
+    obj, keys = extract_objectives(entry, scoring_keys=names)
+    assert obj == (1., 2., 3.)
+    assert keys == names
 
 
-def test_extract_objectives_resolves_canonical_metric_alias_keys():
-    entry = {"metrics": {"objectives": {"adg_fraction": 0.1}}}
-    obj, keys = extract_objectives(entry, scoring_keys=["adg_fraction"])
-    assert obj == (0.1,)
-    assert keys == ["adg_fraction_usd"]
+def test_extract_objectives_rejects_retired_metric_alias_keys():
+    entry = {"metrics": {"definition_version": 1, "objectives": {"adg_fraction": 0.1}}}
+    with pytest.raises(ValueError, match="unknown or retired"):
+        extract_objectives(entry, scoring_keys=["adg_fraction"])
 
 
 def test_prune_preserves_extremes_and_uses_crowding():
@@ -67,7 +67,7 @@ def test_prune_rejects_nonfinite_objectives_before_selecting_extremes():
     }
     violations = {k: 0.0 for k in front}
 
-    with pytest.raises(ValueError, match="non-finite value"):
+    with pytest.raises(ValueError, match="undefined objective"):
         prune_front_with_extremes(front, objectives, violations, max_size=2)
 
 
@@ -79,8 +79,8 @@ def test_compute_ideal_weighted_respects_mixed_objective_goals():
         ]
     )
     specs = [
-        ObjectiveSpec(metric="adg_fraction_strategy_equity", goal="max"),
-        ObjectiveSpec(metric="peak_recovery_hours", goal="min"),
+        ObjectiveSpec(metric="cagr_fraction_strategy_equity", goal="max"),
+        ObjectiveSpec(metric="peak_recovery_max_days_strategy_equity", goal="min"),
     ]
 
     ideal = compute_ideal(values, mode="weighted", weights=np.array([0.25, 0.25]), objective_specs=specs)

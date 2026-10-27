@@ -184,9 +184,21 @@ def test_migration_keeps_explicit_null_in_scenario_and_fixed_policy_patches(stru
 def test_full_public_released_defaults_report_metric_and_memory_choices():
     source = get_released_v8_defaults(strategy_kind="trailing_martingale")
     before = deepcopy(source)
-    with pytest.raises(ValueError, match="retired metric"):
+    with pytest.raises(ValueError, match="acknowledge-metric-formula-change"):
         migrate(source, memory_span_minutes=123.5)
-    result = migrate(source, best_effort=True)
+    with pytest.raises(ValueError, match="metric-replacement"):
+        migrate(source, memory_span_minutes=123.5, acknowledge_metric_formula_change=True)
+    with pytest.raises(ValueError, match="metric-replacement"):
+        migrate(source, best_effort=True)
+    replacements = {
+        "adg_strategy_eq": "cagr_fraction_strategy_equity",
+        "adg_strategy_eq_w": "cagr_fraction_strategy_equity_ew",
+        "mdg_strategy_eq": "cagr_fraction_strategy_equity",
+        "volume_pct_per_day_avg": "gross_turnover_ratio_per_day",
+        "strategy_eq_recovery_days_max": "peak_recovery_max_days_strategy_equity",
+        "strategy_eq_underwater_pct_mean": "pain_index_fraction_strategy_equity",
+    }
+    result = migrate(source, best_effort=True, metric_replacements=replacements)
     assert source == before
     assert result.config["bot"]["long"]["risk"]["max_positions"] == 7
     expected_pymoo = deepcopy(source["optimize"]["pymoo"])
@@ -204,7 +216,7 @@ def test_full_public_released_defaults_report_metric_and_memory_choices():
     assert result.config["optimize"]["pymoo"] == expected_pymoo
     assert result.config["backtest"]["filter_by_min_effective_cost"] is False
     guesses = [item for item in result.changes if item.get("best_effort")]
-    assert any(item["old"] == "adg_strategy_eq_w" and item["new"] == "adg_fraction_strategy_equity_ew" for item in guesses)
+    assert any(item["old"] == "adg_strategy_eq_w" and item["new"] == "cagr_fraction_strategy_equity_ew" for item in guesses)
     assert any(item["path"] == "backtest.ew_half_life_days" for item in guesses)
     assert any(item["path"] == "live.pnls_max_lookback_days" for item in guesses)
     assert migrate(result.config).changes == []

@@ -125,12 +125,17 @@ def test_released_fixed_selector_shorthand_retains_exact_native_gene_membership(
 
 @pytest.mark.parametrize("field", ["market_order_slippage_fraction", "limit_order_fill_buffer_fraction"])
 def test_resume_detects_changed_canonical_execution_assumptions(field):
-    from optimization.evaluation_contract import build_evaluation_contract
+    from optimization.evaluation_contract import CONTRACT_CACHE_KEY, CONTRACT_KEY, build_evaluation_contract
     from optimize import _resume_config_mismatches
 
     config = get_template_config()
+    contract = build_evaluation_contract(config)
+    assert contract["core_metric_definition_version"] == 1
+    assert contract["implementation"]
+    config[CONTRACT_CACHE_KEY] = deepcopy(contract)
     recorded = deepcopy(config)
-    recorded["optimizer_evaluation_contract"] = build_evaluation_contract(config)
+    recorded[CONTRACT_KEY] = deepcopy(contract)
+    recorded.pop(CONTRACT_CACHE_KEY)
     assert _resume_config_mismatches(recorded, config) == []
     config["backtest"][field] = 0.001234567
     assert any(field in mismatch for mismatch in _resume_config_mismatches(recorded, config))

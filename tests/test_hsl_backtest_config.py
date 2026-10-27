@@ -110,27 +110,29 @@ def test_native_hsl_transport_and_report(mode):
         for key in side
     )
     full = run(args)
-    report = full[4]["hsl"]
+    report = full[3]["hsl"]
     assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert any("panic" in str(fill[13]) for fill in full[0])
     assert "hard_stop_time_in_yellow_pct" not in full[2]
     assert "hard_stop_time_in_orange_pct" not in full[2]
-    assert full[2]["hsl_trigger_count"] == report["summary"]["triggers"]
-    assert (
-        full[2]["hsl_panic_fill_loss_sum_usd"]
-        == report["summary"]["panic_fill_loss_sum_usd"]
-    )
+    metadata = full[2]["metric_metadata"]
+    assert metadata["definition_version"] == 1
+    assert metadata["hsl_trigger_count"] == report["summary"]["triggers"]
+    panic_losses = sum(max(-(float(fill[3]) + float(fill[4])), 0.0)
+                       for fill in full[0] if "panic" in str(fill[13]))
+    assert report["summary"]["panic_fill_loss_sum_usd"] == pytest.approx(panic_losses)
+    assert metadata["hsl_execution_episode_count"] > 0
+    assert full[2]["hsl_panic_episode_loss_max_fraction"] > 0
     assert full[2]["drawdown_max_fraction_strategy_equity"] > 0.0
-    assert full[2]["hsl_signal_ema_max_fraction"] > 0.0
-    assert "drawdown_max_fraction" in full[2]
+    assert report["summary"]["signal_ema_max_fraction"] > 0.0
+    assert "drawdown_max_fraction" not in full[2]
     compact_args = deepcopy(args)
     compact_args[-1]["metrics_only"] = True
     compact = run(compact_args)
-    assert compact[4]["hsl"]["summary"] == report["summary"]
-    assert compact[4]["hsl"]["samples"] == []
-    assert compact[4]["hsl"]["events"] == []
+    assert compact[0] is None and compact[1] is None
+    assert "hsl" not in compact[3]
     assert compact[2] == full[2]
 
 
@@ -221,8 +223,8 @@ def test_coin_override_controls_actual_execution():
     args = payload()
     args[-1]["equity_hard_stop_loss"]["coins"]["AAA"][0]["enabled"] = False
     result = run(args)
-    assert result[4]["hsl"]["summary"]["triggers"] == 0
-    assert result[4]["hsl"]["summary"]["panic_close_fills"] == 0
+    assert result[3]["hsl"]["summary"]["triggers"] == 0
+    assert result[3]["hsl"]["summary"]["panic_close_fills"] == 0
     assert not any("panic" in str(fill[13]) for fill in result[0])
 
 
@@ -233,7 +235,7 @@ def test_portfolio_ignores_conflicting_inactive_side_policies():
         policy.update(enabled=True, drawdown_threshold_fraction=0.9)
     actual = run(args)
     np.testing.assert_array_equal(actual[0], expected[0])
-    assert actual[4]["hsl"] == expected[4]["hsl"]
+    assert actual[3]["hsl"] == expected[3]["hsl"]
 
 
 def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
@@ -242,8 +244,8 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
         policy.update(enabled=False)
     args[-1]["loss_gate_max_drawdown_fraction"] = 0.1
     result = run(args)
-    assert result[4]["hsl"]["summary"]["triggers"] == 0
-    assert result[4]["hsl"]["samples"] == []
+    assert result[3]["hsl"]["summary"]["triggers"] == 0
+    assert result[3]["hsl"]["samples"] == []
 
 
 def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
@@ -261,7 +263,7 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
         assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
         assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
         assert "realized_loss_gate_lookback_minutes" not in args[-1]
-        counts.append(run(args)[2]["hsl_trigger_count"])
+        counts.append(run(args)[2]["metric_metadata"]["hsl_trigger_count"])
     # At span1 each new minute forgets earlier currency loss. The same gradual
     # decline crosses RED only when the independently selected slow span retains
     # its accumulated loss. This is not the former finite-window boundary rule.
@@ -274,7 +276,7 @@ def test_fractional_finite_cooldown_deadline_survives_flat_green_observations():
     cfg["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
     args = payload(cfg=cfg, mss=markets)
     args[-1]["hsl_detailed_report"] = True
-    report = run(args)[4]["hsl"]
+    report = run(args)[3]["hsl"]
     flat_at = None
     checked = 0
     for row in report["events"]:
@@ -301,7 +303,7 @@ def test_cached_payload_cannot_change_effective_policy():
 
 
 def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
-    from backtest import process_forager_fills
+    from backtest import build_backtest_frames
 
     args = list(payload("portfolio"))
     args[-1]["btc_collateral_target_ratio"] = 0.5
@@ -309,13 +311,14 @@ def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
     result = run(args)
     assert result[1].shape[1] == 4
     assert np.ptp(result[1][:, 1]) > 1.0
-    _, _, frame = process_forager_fills(
-        result[0], args[-1]["coins"], args[0], result[1], balance_sample_divider=1
+    _, frame = build_backtest_frames(
+        result[0], result[1]
     )
     expected = []
     for timestamp, *_ in result[1]:
-        k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000)
-        fills = [row for row in result[0] if row[1] <= timestamp]
+        k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000) - 1
+        # Completed close precedes next-bar fills carrying the same timestamp.
+        fills = [row for row in result[0] if int(row[0]) <= k]
         realized = sum(float(row[3]) + float(row[4]) for row in fills)
         size, basis = (
             (float(fills[-1][11]), float(fills[-1][12])) if fills else (0.0, 0.0)
@@ -335,10 +338,10 @@ def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
     assert len(result[0]) == 0
     assert result[1][-1, 1] > 1300.0
     np.testing.assert_allclose(result[1][:, 3], 1000.0)
-    assert result[2]["gain_multiplier_strategy_equity"] == 0.0
+    assert result[2]["cagr_fraction_strategy_equity"] == 0.0
     assert result[2]["drawdown_max_fraction_strategy_equity"] == 0.0
-    assert result[2]["drawdown_max_fraction_strategy_equity_long"] == 0.0
-    assert result[2]["drawdown_max_fraction_strategy_equity_short"] == 0.0
+    assert "drawdown_max_fraction_strategy_equity_long" not in result[2]
+    assert "drawdown_max_fraction_strategy_equity_short" not in result[2]
 
 
 def test_general_strategy_metrics_survive_disabled_hsl():
@@ -346,10 +349,10 @@ def test_general_strategy_metrics_survive_disabled_hsl():
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy.update(enabled=False)
     result = run(args)
-    assert result[2]["hsl_trigger_count"] == 0
+    assert result[2]["metric_metadata"]["hsl_trigger_count"] == 0
     assert result[2]["drawdown_max_fraction_strategy_equity"] > 0
-    assert result[2]["drawdown_max_fraction_strategy_equity_long"] > 0
-    assert result[2]["drawdown_max_fraction_strategy_equity_short"] == 0
+    assert not result[2]["metric_metadata"]["hsl_enabled"]
+    np.testing.assert_array_equal(result[1][:, 1], result[1][:, 3])
     assert result[1].shape[1] == 4
 
 
@@ -396,15 +399,16 @@ def test_execute_backtest_preserves_hsl_report_and_shared_metrics(compact):
     args[-1]["metrics_only"] = compact
     prepared = prepared_payload(args)
     _, _, analysis = execute_backtest(prepared, cfg)
-    assert analysis["hsl_trigger_count"] > 0
+    assert analysis["metric_metadata"]["hsl_trigger_count"] > 0
     assert "hard_stop_triggers_usd" not in analysis
     assert not any(
         "time_in_orange" in key or "time_in_yellow" in key for key in analysis
     )
-    assert (
-        prepared.hard_stop_plot_data["hsl"]["summary"]["triggers"]
-        == analysis["hsl_trigger_count"]
-    )
+    if compact:
+        assert prepared.hard_stop_plot_data == {}
+    else:
+        assert (prepared.hard_stop_plot_data["hsl"]["summary"]["triggers"]
+                == analysis["metric_metadata"]["hsl_trigger_count"])
 
 
 def test_dataset_subset_preserves_only_selected_coin_policies():
@@ -434,7 +438,7 @@ def test_dataset_subset_preserves_only_selected_coin_policies():
     }
     cfg, _, _ = inputs()
     _, _, analysis = execute_backtest(subset, cfg)
-    assert analysis["hsl_trigger_count"] > 0
+    assert analysis["metric_metadata"]["hsl_trigger_count"] > 0
 
 
 @pytest.mark.parametrize("btc_cap", [0.0, 0.5])
@@ -455,25 +459,34 @@ def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
     assert np.isfinite(result[1][:, 3]).all()
     assert result[2]["drawdown_max_fraction_strategy_equity"] > 0
     timestamp, account_equity, _, strategy_equity = result[1][-1]
-    fills = [row for row in result[0] if row[1] <= timestamp]
+    k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000) - 1
+    fills = [row for row in result[0] if int(row[0]) <= k]
     assert fills
-    k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000)
     realized = sum(float(row[3]) + float(row[4]) for row in fills)
     size, basis = float(fills[-1][11]), float(fills[-1][12])
     expected = 1000.0 + realized + size * (args[0][k, 0, 2] - basis)
-    assert account_equity == pytest.approx(990.0)
+    assert account_equity <= 990.0
     assert strategy_equity == pytest.approx(expected, abs=1e-9)
-    assert strategy_equity != pytest.approx(account_equity)
+    if btc_cap == 0:
+        assert strategy_equity == account_equity
+    else:
+        assert strategy_equity != pytest.approx(account_equity)
 
 
-def test_disabled_hsl_zero_balance_keeps_halt_loss_metric_finite():
+def test_disabled_hsl_zero_balance_rejects_required_trading_input():
     args = payload()
     args[-1]["starting_balance"] = 0.0
-    args[-1]["global_warmup_bars"] = len(args[0])
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy["enabled"] = False
-    result = run(args)
-    assert result[2]["hsl_panic_loss_starting_balance_fraction"] == 0.0
+    with pytest.raises(ValueError, match="NonFiniteInput.*balance"):
+        run(args)
+
+
+def test_no_positive_post_warmup_window_fails_explicitly():
+    args = payload()
+    args[-1]["global_warmup_bars"] = len(args[0])
+    with pytest.raises(ValueError, match="no positive evaluated interval"):
+        run(args)
 
 
 def test_native_boundary_rejects_explicit_legacy_engine():
@@ -490,7 +503,7 @@ def test_native_missing_selector_retains_exact_hsl_results():
     implicit = run(args)
     np.testing.assert_array_equal(implicit[0], selected[0])
     assert implicit[2] == selected[2]
-    assert implicit[4] == selected[4]
+    assert implicit[3] == selected[3]
 
 
 @pytest.mark.parametrize("slots", [1, 10])

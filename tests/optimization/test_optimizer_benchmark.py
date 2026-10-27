@@ -295,11 +295,11 @@ def test_summary_counts_completed_work_over_total_wall_time():
 
 
 def result(value=1.0, liquidated=False):
-    return dict(status="completed", samples=[dict(results=[dict(metrics={"adg_fraction_strategy_equity": value}, liquidated=liquidated)])])
+    return dict(status="completed", samples=[dict(results=[dict(metrics={"definition_version": 1, "cagr_fraction_strategy_equity": value}, liquidated=liquidated)])])
 
 
 def test_missing_policy_liquidation_and_nonfinite_never_pass():
-    metric = ["adg_fraction_strategy_equity"]
+    metric = ["cagr_fraction_strategy_equity"]
     exact = {metric[0]: dict(absolute=0, relative=0)}
     assert numerical_comparison(result(), result(), metric, exact)["status"] == "passed"
     for observed, policy in ((result(), {}), (result(liquidated=None), exact),
@@ -321,11 +321,11 @@ def test_nonfinite_json_evidence_is_retained():
 
 def test_empty_candidate_results_are_unassessed():
     empty = dict(status="completed", samples=[dict(results=[])])
-    assert numerical_comparison(empty, empty, ["adg_fraction_strategy_equity"], {})["status"] == "unassessed"
+    assert numerical_comparison(empty, empty, ["cagr_fraction_strategy_equity"], {})["status"] == "unassessed"
 
 
 def test_numerical_tolerance_cannot_hide_a_constraint_flip():
-    metric = "adg_fraction_strategy_equity"
+    metric = "cagr_fraction_strategy_equity"
     policy = {metric: dict(absolute=1, relative=0)}
     checks = [dict(metric=metric, mode="greater_than", bound=.5, penalty_weight=1)]
     comparison = numerical_comparison(result(.49), result(.51), [metric], policy, checks)
@@ -478,7 +478,7 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
     def candidate(_task):
         nonlocal calls
         calls += 1
-        return dict(metrics={"adg_fraction_strategy_equity": 1.0 + (variation and calls > len(entry["configs"]))},
+        return dict(metrics={"definition_version": 1, "cagr_fraction_strategy_equity": 1.0 + (variation and calls > len(entry["configs"]))},
                     liquidated=False, latency_seconds=calls / 1000)
     monkeypatch.setattr(worker, "cpu_candidate", candidate)
     import importlib.metadata
@@ -494,13 +494,13 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
     assert outcome["dependency_versions"]["torch"] is None
     hashes = [sample["results_sha256"] for sample in outcome["samples"]]
     assert (len(set(hashes)) > 1) == variation
-    comparison = numerical_comparison(outcome, outcome, ["adg_fraction_strategy_equity"],
-                                     {"adg_fraction_strategy_equity": dict(absolute=0, relative=0)})
+    comparison = numerical_comparison(outcome, outcome, ["cagr_fraction_strategy_equity"],
+                                     {"cagr_fraction_strategy_equity": dict(absolute=0, relative=0)})
     assert comparison["status"] == ("repeat_variation_unassessed" if variation else "passed")
 
 
 def test_cohort_digest_covers_terminal_status():
-    rows = [dict(metrics={"adg_fraction_strategy_equity": 1.0}, liquidated=False)]
+    rows = [dict(metrics={"cagr_fraction_strategy_equity": 1.0}, liquidated=False)]
     assert cohort_digest(rows) != cohort_digest([dict(metrics=rows[0]["metrics"], liquidated=True)])
 
 
@@ -592,12 +592,12 @@ def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
             clock[0] += 2.0
             autotune.BatchController.observe(controller, 1, 2.0)
             result = Future()
-            result.set_result(SimpleNamespace(metrics={"score": 1.0}, liquidated=False))
+            result.set_result(SimpleNamespace(metrics={"cagr_fraction_strategy_equity": 1.0}, metadata={"metric_metadata": {"definition_version": 1}}, liquidated=False))
             return result
     monkeypatch.setattr(native, "NativeBacktestService", Service)
     arrays = (np.zeros((2, 1, 4)), np.ones(2), np.arange(2))
     config = {"optimize": {"gpu": {}}, "backtest": {"coins": {"fake": ["BTC"]}}}
-    entry = dict(id="fixture", configs=[config], metrics=["score"], markets={}, exchange="fake")
+    entry = dict(id="fixture", configs=[config], metrics=["cagr_fraction_strategy_equity"], markets={}, exchange="fake")
     report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100)
     assert report["parameter_seconds"] == 100.0
     assert report["setup_seconds"] == 200.0
@@ -755,9 +755,9 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
 def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
     from tools.optimizer_benchmark.report import compare
-    names = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
+    names = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
     result = dict(status="completed", samples=[dict(seconds=1.0, completed=1,
-        results=[dict(metrics=dict(zip(names, [0.01, 0.1])), liquidated=False)])])
+        results=[dict(metrics={"definition_version": 1, **dict(zip(names, [0.01, 0.1]))}, liquidated=False)])])
     other = deepcopy(result)
     if profiling:
         other[profiling] = {"wall_seconds": 1.0} if profiling == "host_profile" else True
@@ -875,3 +875,42 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
         if spec["path"][:3] == ("bot", "portfolio", "hsl") and spec["path"][-1] == "drawdown_threshold_fraction":
             assert (spec["low"] < spec["high"]) == (scope == "portfolio")
     assert all(candidate["bot"]["long"]["risk"]["max_positions"] == 2 for candidate in population)
+
+
+def test_report_preserves_infinite_and_unavailable_metric_statuses():
+    from tools.optimizer_benchmark.report import compare_values
+    metric = "omega_ratio_strategy_equity"
+    source = {"definition_version": 1, metric: None, "metric_status": {metric: {"status": "positive_infinity"}}}
+    comparison = compare_values(source, source, [metric], {metric: {"absolute": 0, "relative": 0, "matching_infinity": True}})
+    assert comparison["passed"]
+    assert comparison["metrics"][metric]["metric_status"]["cpu"]["status"] == "positive_infinity"
+    json.dumps(comparison, allow_nan=False)
+    unavailable = {"definition_version": 1, metric: None, "metric_status": {metric: {"status": "undefined", "reason": "flat returns"}}}
+    comparison = compare_values(source, unavailable, [metric], {metric: {"absolute": 0, "relative": 0}})
+    assert not comparison["passed"]
+    assert comparison["metrics"][metric]["metric_status"]["gpu"]["reason"] == "flat returns"
+    json.dumps(comparison, allow_nan=False)
+
+
+def test_benchmark_rank_assessment_uses_growth_and_continuous_risk():
+    from tools.optimizer_benchmark.report import ranking_assessment
+    cagr, ulcer = "cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"
+    reference = {"status": "completed", "samples": [{"results": [
+        {"metrics": {"definition_version": 1, cagr: .4, ulcer: .02}}, {"metrics": {"definition_version": 1, cagr: .3, ulcer: .03}}]}]}
+    assessed = ranking_assessment(reference, reference)
+    assert assessed["status"] == "assessed"
+    assert assessed["objectives"] == {cagr: "max", ulcer: "min"}
+    assert assessed["reference_front"] == [0]
+    assert assessed["front_members_match"]
+
+
+def test_benchmark_reports_missing_or_stale_metric_definition_as_unavailable():
+    from tools.optimizer_benchmark.report import compare_values, ranking_assessment
+    metric = "cagr_fraction_strategy_equity"
+    policy = {metric: {"absolute": 0, "relative": 0}}
+    for source in ({metric: .3}, {"definition_version": 0, metric: .3}):
+        comparison = compare_values(source, {"definition_version": 1, metric: .3}, [metric], policy)
+        assert not comparison["passed"]
+        assert "unavailable_cpu" in comparison["metrics"][metric]["status"]
+        old = {"status": "completed", "samples": [{"results": [{"metrics": source}]}]}
+        assert ranking_assessment(old, old)["status"] == "unassessed"

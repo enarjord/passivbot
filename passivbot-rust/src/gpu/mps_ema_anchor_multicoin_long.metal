@@ -1,14 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#ifndef PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 0
-#endif
-
-#ifndef PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 0
-#endif
-
 #ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
 #define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
 #endif
@@ -27,40 +19,15 @@ constant int UNSTUCK_EMA_OVERRIDE_START = 28;
 constant int ADAPTIVE_OVERRIDE_START = 30;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 27;
-#if PASSIVBOT_BTC_RISK_ENABLED
-constant int DAILY_COLS = 12 + 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
-#else
-constant int DAILY_COLS = 9 + 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 68 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-constant int FUSED_SCALAR_COLS = 73 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-#elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 66 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-constant int FUSED_SCALAR_COLS = 71 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 64 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-constant int FUSED_SCALAR_COLS = 69 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-#else
-constant int SCALAR_COLS = 62 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-constant int FUSED_SCALAR_COLS = 67 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
-#endif
-constant int GAP_BINS = 512;
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
-#endif
+constant int DAILY_COLS = 9 + 4 * 0 + 2 * 0;
+constant int SCALAR_COLS = 62;
+constant int FUSED_SCALAR_COLS = 67;
 
 // PASSIVBOT_ADAPTIVE_TIMING
 
 // PASSIVBOT_UNSTUCK_EMA_COMMON
 
 // PASSIVBOT_HSL_COMMON
-
-// PASSIVBOT_BTC_RISK_COMMON
-
-// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON
-
-// PASSIVBOT_ENTRY_INTERVAL_COMMON
 
 // PASSIVBOT_MULTICOIN_COMMON
 
@@ -114,15 +81,7 @@ struct EmaMulticoinSideState {
 #else
     HslState coin_hsl[MAX_COINS];
 #endif
-    HslStrategyEquityStats hsl_strategy_eq;
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float hsl_report_ema_max;
-    float hsl_portfolio_report_ema_max;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    HslDrawdownEmaTailStats hsl_ema_tail;
-    HslDrawdownEmaTailStats hsl_portfolio_ema_tail;
-#endif
+
     bool market_ema_bootstrapped[MAX_COINS];
     bool hourly_ema_bootstrapped[MAX_COINS];
     float ema0[MAX_COINS];
@@ -228,81 +187,41 @@ struct EmaMulticoinSideConfig {
 // long+short kernel can apply both directional fill passes to one account and
 // one chronology without reconstructing totals from directional summaries.
 struct EmaMulticoinFillState {
-    float pnl_recovery_peak;
-    float pnl_recovery_peak_k;
-    float pnl_recovery_max_min;
-    float profit_sum;
-    float loss_sum;
-    float profit_sum_long;
-    float loss_sum_long;
-    float profit_sum_short;
-    float loss_sum_short;
+
     float fill_count;
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
     int hsl_fill_sequence;
 #endif
     float fill_count_entry;
     float fill_count_long;
-    float held_max_min;
-    float held_sum_min;
-    float held_sum_sq_min;
-    float held_count;
-    float position_unchanged_max_min;
-    float day_volume;
-    float day_fill_count;
+
 };
 
 inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
     EmaMulticoinFillState fills;
-    fills.pnl_recovery_peak = -INFINITY;
-    fills.pnl_recovery_peak_k = -1.0f;
-    fills.pnl_recovery_max_min = 0.0f;
-    fills.profit_sum = 0.0f;
-    fills.loss_sum = 0.0f;
-    fills.profit_sum_long = 0.0f;
-    fills.loss_sum_long = 0.0f;
-    fills.profit_sum_short = 0.0f;
-    fills.loss_sum_short = 0.0f;
+
     fills.fill_count = 0.0f;
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
     fills.hsl_fill_sequence = 0;
 #endif
     fills.fill_count_entry = 0.0f;
     fills.fill_count_long = 0.0f;
-    fills.held_max_min = 0.0f;
-    fills.held_sum_min = 0.0f;
-    fills.held_sum_sq_min = 0.0f;
-    fills.held_count = 0.0f;
-    fills.position_unchanged_max_min = 0.0f;
-    fills.day_volume = 0.0f;
-    fills.day_fill_count = 0.0f;
+
     return fills;
 }
 
 inline void record_ema_multicoin_volume(
-    thread EmaMulticoinFillState& fills, float qty, float price, float balance
+    thread EmaMulticoinFillState& fills, thread JointPortfolioAccount& account,
+    thread EmaMulticoinSideState& side, int coin, int step,
+    float qty, float price, float balance, float c_mult
 ) {
-    // Match analysis.rs: fill quantities are not contract-multiplier scaled.
-    const float normalized = fabs(qty) * price / balance;
-    fills.day_volume += normalized;
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    core_record_notional(account.core, fabs(qty) * price * c_mult);
+    account.core.fill_mark_price[coin] = price;
+    account.core.fill_mark_step[coin] = float(step);
+#endif
 }
 
-inline void record_ema_multicoin_gross_pnl(
-    float pnl,
-    thread EmaMulticoinFillState& fills,
-    bool short_side
-) {
-    record_gross_pnl(pnl, fills.profit_sum, fills.loss_sum);
-    if (short_side) {
-        record_gross_pnl(
-            pnl, fills.profit_sum_short, fills.loss_sum_short
-        );
-    } else {
-        record_gross_pnl(
-            pnl, fills.profit_sum_long, fills.loss_sum_long
-        );
-    }
-}
 
 inline void record_ema_multicoin_close_fill(
     thread EmaMulticoinSideState& side,
@@ -331,29 +250,29 @@ inline void record_ema_multicoin_close_fill(
     bool at_bar_close = false
 ) {
     const int event_minute = k + (at_bar_close ? 1 : 0);
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    if (actual_size_after == 0.0f && side.position_open_k[coin] >= 0.0f)
+        core_complete_holding(account.core, side.position_open_k[coin], float(event_minute));
+#endif
 #if !PASSIVBOT_HSL_DISABLED
     hsl_before_fill(side.coin_hsl[coin], account.balance, fill_price, event_minute);
 #endif
 
-#if PASSIVBOT_HSL_DISABLED
-    // Forced delists retain their HSL panic-loss diagnostics even when the
-    // controller is disabled. Ordinary closes need no HSL state at all.
-    if (is_hsl_panic) {
-        record_hsl_panic_fill(
-            side.hsl, net_pnl, hsl_equity_before_fills
-        );
-    }
-#else
+#if !PASSIVBOT_HSL_DISABLED
     const bool coin_hsl_mode =
         side.hsl.signal_mode == HSL_SIGNAL_COIN;
-    if (is_hsl_panic) {
+    // Delist closes share a panic order label but are not controller executions.
+    if (is_hsl_panic && !at_bar_close) {
         if (coin_hsl_mode) {
             record_hsl_panic_fill(
-                side.coin_hsl[coin], net_pnl, hsl_equity_before_fills
+                side.coin_hsl[coin], net_pnl, account.balance
             );
+        } else if (side.hsl.signal_mode == HSL_SIGNAL_UNIFIED
+                   && opposite_hsl != nullptr && !side.hsl.hsl_owner) {
+            record_hsl_panic_fill(*opposite_hsl, net_pnl, account.balance);
         } else {
             record_hsl_panic_fill(
-                side.hsl, net_pnl, hsl_equity_before_fills
+                side.hsl, net_pnl, account.balance
             );
         }
     }
@@ -368,13 +287,11 @@ inline void record_ema_multicoin_close_fill(
         fills.hsl_fill_sequence++, short_side ? -actual_size_after : actual_size_after,
         actual_size_after == 0.0f ? 0.0f : position_price, short_side);
 #endif
-    record_ema_multicoin_gross_pnl(gross_pnl, fills, short_side);
     record_realized_net(
         net_pnl, account,
-        fills.day_fill_count, fills.fill_count,
+        fills.fill_count,
         fills.fill_count_entry, fills.fill_count_long,
-        fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
-        fills.pnl_recovery_max_min, float(event_minute), false, !short_side
+        float(event_minute), false, !short_side
     );
     if (collect_coin_fill_counts) {
         coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
@@ -499,15 +416,7 @@ inline void init_ema_multicoin_side_state(
     int coin_count
 ) {
     side.hsl = config.hsl_template;
-    side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    side.hsl_report_ema_max = 0.0f;
-    side.hsl_portfolio_report_ema_max = 0.0f;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
-    side.hsl_portfolio_ema_tail = init_hsl_drawdown_ema_tail_stats();
-#endif
+
     side.max_tradable_seen = 0;
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
@@ -2704,18 +2613,9 @@ inline bool process_ema_multicoin_side_fills(
             psize[c] = new_size;
             if (went_flat) {
                 pprice[c] = 0.0f;
-                if (position_open_k[c] >= 0.0f) {
-                    float held_min = float(k) - position_open_k[c];
-                    fills.held_max_min = fmax(
-                        fills.held_max_min, held_min
-                    );
-                    fills.held_sum_min += held_min;
-                    fills.held_sum_sq_min += held_min * held_min;
-                    fills.held_count += 1.0f;
-                }
                 position_open_k[c] = -1.0f;
             }
-            record_ema_multicoin_volume(fills, adjusted, fill_price, balance);
+            record_ema_multicoin_volume(fills, account, side, c, k, adjusted, fill_price, balance, c_mult);
             if (use_secondary) {
                 secondary_close_qty[c] = 0.0f;
                 secondary_close_market[c] = false;
@@ -2758,10 +2658,9 @@ inline bool process_ema_multicoin_side_fills(
 #endif
             record_realized_net(
                 -fee, account,
-                fills.day_fill_count, fills.fill_count,
+                fills.fill_count,
                 fills.fill_count_entry, fills.fill_count_long,
-                fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
-                fills.pnl_recovery_max_min, float(k),
+                float(k),
                 true, !short_side
             );
 #if !PASSIVBOT_HSL_DISABLED
@@ -2799,18 +2698,12 @@ inline bool process_ema_multicoin_side_fills(
                 new_price, short_side);
 #endif
             last_increase_k[c] = float(k);
-            record_ema_multicoin_volume(fills, adjusted, fill_price, balance);
+            record_ema_multicoin_volume(fills, account, side, c, k, adjusted, fill_price, balance, c_mult);
             entry_qty[c] = 0.0f;
             entry_market[c] = false;
             any_fill = true;
         }
         if (executed_close || filled_entry) {
-            if (position_last_fill_k[c] >= 0.0f) {
-                fills.position_unchanged_max_min = fmax(
-                    fills.position_unchanged_max_min,
-                    float(k) - position_last_fill_k[c]
-                );
-            }
             position_last_fill_k[c] = psize[c] > 0.0f ? float(k) : -1.0f;
         }
     }
@@ -2903,21 +2796,8 @@ inline bool force_close_ema_multicoin_delisted_position(
     }
     side.psize[coin] = 0.0f;
     side.pprice[coin] = 0.0f;
-    if (side.position_open_k[coin] >= 0.0f) {
-        const float held_min = float(k) - side.position_open_k[coin];
-        fills.held_max_min = fmax(fills.held_max_min, held_min);
-        fills.held_sum_min += held_min;
-        fills.held_sum_sq_min += held_min * held_min;
-        fills.held_count += 1.0f;
-    }
     side.position_open_k[coin] = -1.0f;
-    record_ema_multicoin_volume(fills, close_qty, close_price, account.balance);
-    if (side.position_last_fill_k[coin] >= 0.0f) {
-        fills.position_unchanged_max_min = fmax(
-            fills.position_unchanged_max_min,
-            float(k) - side.position_last_fill_k[coin]
-        );
-    }
+    record_ema_multicoin_volume(fills, account, side, coin, k + 1, close_qty, close_price, account.balance, c_mult);
     side.position_last_fill_k[coin] = -1.0f;
     return true;
 }
@@ -3015,57 +2895,23 @@ struct EmaMulticoinReplayState {
     EmaMulticoinSideState side;
     JointPortfolioAccount account;
     EmaMulticoinFillState fills;
-    float fills_active_days_count;
-    int last_active_fill_day;
+
     bool alive;
     bool equity_started;
-    float run_peak;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    RawStrategyRiskState raw_strategy_risk;
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-    float raw_strategy_day_end;
-    float raw_strategy_day_min;
-#endif
-    float max_dd;
-    float absolute_net_wallet_exposure_max_ratio;
-    float absolute_net_wallet_exposure_mean_ratio;
-    float total_wallet_exposure_samples;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms;
 #endif
     float first_fill_k;
     float last_fill_k;
-    float gap_max_min;
-    float gap_sum_squared_hours;
-    float last_high_k;
-    float recovery_max_min;
-    float account_peak;
-    float account_peak_k;
-    float account_recovery_max_min;
+
     float first_eq_k;
     float last_eq_k;
     int liquidation_day;
 #if !PASSIVBOT_HSL_DISABLED
     HslTimeObservation hsl_time;
 #endif
-    int current_day;
-    bool day_touched;
-    float day_end;
-    float day_min;
-    float day_dd;
-    float day_has_fill;
-    float day_min_balance;
-    float day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-    BtcRiskState btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    EquityBalanceDiffState equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-    int recovery_start_k;
-#endif
+
 };
 kernel void passivbot_ema_multicoin_replay_state_bytes(device uint* result) {
     result[0] = sizeof(EmaMulticoinReplayState);
@@ -3073,12 +2919,6 @@ kernel void passivbot_ema_multicoin_replay_state_bytes(device uint* result) {
 struct EmaMulticoinFusedReplayState {
     EmaMulticoinReplayState common;
     EmaMulticoinSideState short_side;
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float portfolio_hsl_report_ema_max;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    HslDrawdownEmaTailStats portfolio_hsl_ema_tail;
-#endif
 };
 kernel void passivbot_ema_multicoin_fused_replay_state_bytes(device uint* result) {
     result[0] = sizeof(EmaMulticoinFusedReplayState);
@@ -3102,18 +2942,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    device float* equity_balance_diff,
-#endif
     device float* daily,
     device float* scalars,
-    device int* gap_hist,
     device float* coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    device float* recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    device float* hsl_ema_tail_samples,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    device float* core_output,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -3127,14 +2960,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const int B = sizes[0];
     const int T = sizes[1];
     const int C = sizes[2];
-    const int D = sizes[3];
     const int requested_start_k = sizes[4];
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    const int recovery_stride = sizes[8];
-    const int recovery_sample_count = sizes[9];
-#endif
     if (b >= uint(B)) return;
     const int stop_k = clamp(end_steps[b], 1, T - 1);
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
@@ -3181,7 +3009,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     );
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
     const bool side_activation = run_settings[15] > 0.5f;
-    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
@@ -3193,140 +3020,63 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #if !PASSIVBOT_HSL_DISABLED
     thread float* coin_realized_pnl = side.coin_realized_pnl;
 #endif
-    for (int j = 0; begin_k == 1 && j < GAP_BINS; ++j) {
-        gap_hist[int(b) * GAP_BINS + j] = 0;
-    }
 
     JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    account.core = init_core_gpu(starting_balance, max(max(global_warmup, 1) + 1, requested_start_k));
+#endif
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
-    thread float& pnl_recovery_peak_k = fills.pnl_recovery_peak_k;
-    thread float& pnl_recovery_max_min = fills.pnl_recovery_max_min;
-    thread float& profit_sum = fills.profit_sum;
-    thread float& loss_sum = fills.loss_sum;
+
     thread float& fill_count = fills.fill_count;
     thread float& fill_count_entry = fills.fill_count_entry;
     thread float& fill_count_long = fills.fill_count_long;
-    float fills_active_days_count = 0.0f;
-    int last_active_fill_day = -1;
+
     bool alive = true;
     bool equity_started = false;
-    float run_peak = -INFINITY;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    RawStrategyRiskState raw_strategy_risk = {-INFINITY, 0.0f, 0.0f, 0.0f, 0.0f};
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-    float raw_strategy_day_end = 0.0f;
-    float raw_strategy_day_min = INFINITY;
-#endif
-    float max_dd = 0.0f;
-    float absolute_net_wallet_exposure_max_ratio = 0.0f;
-    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
-    float total_wallet_exposure_samples = 0.0f;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
 #endif
-    thread float& held_max_min = fills.held_max_min;
-    thread float& held_sum_min = fills.held_sum_min;
-    thread float& held_sum_sq_min = fills.held_sum_sq_min;
-    thread float& held_count = fills.held_count;
-    thread float& position_unchanged_max_min = fills.position_unchanged_max_min;
+
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
-    float gap_max_min = 0.0f;
-    float gap_sum_squared_hours = 0.0f;
-    float last_high_k = -1.0f;
-    float recovery_max_min = 0.0f;
-    float account_peak = -INFINITY;
-    float account_peak_k = -1.0f;
-    float account_recovery_max_min = 0.0f;
+
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
-#if PASSIVBOT_BTC_RISK_ENABLED
-    BtcRiskState btc_risk = init_btc_risk_state();
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    EquityBalanceDiffState equity_balance_diff_state =
-        init_equity_balance_diff_state();
-#endif
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    int recovery_start_k = -1;
-#endif
     int liquidation_day = -1;
     HslTimeObservation hsl_time = init_hsl_time_observation();
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    hsl_time.last_step = account.core.start_step - 1.0f;
+#endif
 
 
-    int current_day = 0;
-    bool day_touched = false;
-    float day_end = 0.0f;
-    float day_min = INFINITY;
-    float day_dd = 0.0f;
-    thread float& day_volume = fills.day_volume;
-    float day_has_fill = 0.0f;
-    float day_min_balance = INFINITY;
-    float day_start_balance = balance;
-    thread float& day_fill_count = fills.day_fill_count;
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (begin_k > 1) {
         side = replay_states[b].side;
         account = replay_states[b].account;
         fills = replay_states[b].fills;
-        fills_active_days_count = replay_states[b].fills_active_days_count;
-        last_active_fill_day = replay_states[b].last_active_fill_day;
+
         alive = replay_states[b].alive;
         equity_started = replay_states[b].equity_started;
-        run_peak = replay_states[b].run_peak;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        raw_strategy_risk = replay_states[b].raw_strategy_risk;
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        raw_strategy_day_end = replay_states[b].raw_strategy_day_end;
-        raw_strategy_day_min = replay_states[b].raw_strategy_day_min;
-#endif
-        max_dd = replay_states[b].max_dd;
-        absolute_net_wallet_exposure_max_ratio = replay_states[b].absolute_net_wallet_exposure_max_ratio;
-        absolute_net_wallet_exposure_mean_ratio = replay_states[b].absolute_net_wallet_exposure_mean_ratio;
-        total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].exposure_rms;
 #endif
         first_fill_k = replay_states[b].first_fill_k;
         last_fill_k = replay_states[b].last_fill_k;
-        gap_max_min = replay_states[b].gap_max_min;
-        gap_sum_squared_hours = replay_states[b].gap_sum_squared_hours;
-        last_high_k = replay_states[b].last_high_k;
-        recovery_max_min = replay_states[b].recovery_max_min;
-        account_peak = replay_states[b].account_peak;
-        account_peak_k = replay_states[b].account_peak_k;
-        account_recovery_max_min = replay_states[b].account_recovery_max_min;
+
         first_eq_k = replay_states[b].first_eq_k;
         last_eq_k = replay_states[b].last_eq_k;
         liquidation_day = replay_states[b].liquidation_day;
 #if !PASSIVBOT_HSL_DISABLED
         hsl_time = replay_states[b].hsl_time;
 #endif
-        current_day = replay_states[b].current_day;
-        day_touched = replay_states[b].day_touched;
-        day_end = replay_states[b].day_end;
-        day_min = replay_states[b].day_min;
-        day_dd = replay_states[b].day_dd;
-        day_has_fill = replay_states[b].day_has_fill;
-        day_min_balance = replay_states[b].day_min_balance;
-        day_start_balance = replay_states[b].day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        btc_risk = replay_states[b].btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        equity_balance_diff_state = replay_states[b].equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-        recovery_start_k = replay_states[b].recovery_start_k;
-#endif
+
     }
 #endif
-
 
 #if !PASSIVBOT_HSL_DISABLED
     bind_hsl_multicoin_hsl(side.hsl, side.coin_hsl,
@@ -3351,50 +3101,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
-        if (day_index != current_day) {
-            if (day_touched && current_day >= 0 && current_day < D) {
-                int output = (int(b) * D + current_day) * DAILY_COLS;
-                daily[output + 0] = day_end;
-                daily[output + 1] = day_min;
-                daily[output + 2] = day_dd;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-                write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
-#endif
-                daily[output + 3] = day_volume;
-                daily[output + 4] = day_has_fill;
-                daily[output + 5] = day_min_balance;
-                daily[output + 6] = balance - day_start_balance;
-                daily[output + 7] = balance;
-                daily[output + 8] = day_fill_count;
-#if PASSIVBOT_BTC_RISK_ENABLED
-                write_btc_risk_day(btc_risk, daily, output, 9);
-#endif
-            }
-            current_day = day_index;
-            day_touched = false;
-            day_end = 0.0f;
-            day_min = INFINITY;
-            day_dd = 0.0f;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            reset_raw_strategy_risk_day(raw_strategy_risk);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-            raw_strategy_day_end = 0.0f;
-            raw_strategy_day_min = INFINITY;
-#endif
-            day_volume = 0.0f;
-            day_has_fill = 0.0f;
-            day_min_balance = INFINITY;
-            day_start_balance = balance;
-            day_fill_count = 0.0f;
-#if PASSIVBOT_BTC_RISK_ENABLED
-            reset_btc_risk_day(btc_risk);
-#endif
-        }
 
 #if PASSIVBOT_HSL_DISABLED
         float hsl_equity_before_fills = 0.0f;
@@ -3461,7 +3167,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
         // Refresh HSL after fills, before forager selection and next orders.
 #if !PASSIVBOT_HSL_DISABLED
-        const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
         const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
             side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, 0.0f
         );
@@ -3601,25 +3306,20 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
         any_fill = any_fill || forced_delist_fill;
         if (any_fill) {
-            day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
-                float gap = float(k) - last_fill_k;
-                int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1
-                );
-                gap_hist[int(b) * GAP_BINS + bin] += 1;
-                const float gap_hours = gap * interval_ms / 3600000.0f;
-                gap_sum_squared_hours += gap_hours * gap_hours;
-                gap_max_min = fmax(gap_max_min, gap);
+
             }
             if (first_fill_k < 0.0f) first_fill_k = float(k);
             last_fill_k = float(k);
         }
 
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        float core_gross_notional = 0.0f;
+        float core_unrealized_long = 0.0f;
+        float core_unrealized_short = 0.0f;
+#endif
         float unrealized = 0.0f;
-        float position_cost = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
-        float rms_exposure[2] = {0.0f, 0.0f};
         float rms_position[2] = {0.0f, 0.0f};
 #endif
         for (int c = 0; c < C; ++c) {
@@ -3630,14 +3330,25 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
             if (psize[c] > 0.0f) {
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+                // A fill-boundary terminal sees completed marks and actual executions only.
+                const float core_price = post_fill_balance_depleted
+                    ? (account.core.fill_mark_step[c] == float(k)
+                        ? account.core.fill_mark_price[c] : bars[((k - 1) * C + c) * 4 + 2])
+                    : close;
+                core_gross_notional += fabs(psize[c] * core_price * coin_settings[coin_offset + 4]);
+                const float core_upnl = psize[c] * coin_settings[coin_offset + 4]
+                    * (short_side ? pprice[c] - core_price : core_price - pprice[c]);
+                if (short_side) core_unrealized_short += core_upnl;
+                else core_unrealized_long += core_upnl;
+#endif
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
                 const float e = psize[c] * pprice[c] * coin_settings[coin_offset + 4] / balance;
-                rms_exposure[int(short_side)] += e;
+
                 rms_position[int(short_side)] += exposure_rms_position_moment(e,
                     exposure_rms.base_wel[int(short_side) * MAX_COINS + c], twel);
 #endif
-                position_cost += psize[c] * pprice[c]
-                    * coin_settings[coin_offset + 4];
                 if (mark_valid) {
                     unrealized += psize[c] * coin_settings[coin_offset + 4]
                         * (short_side ? pprice[c] - close : close - pprice[c]);
@@ -3650,151 +3361,45 @@ inline void passivbot_ema_anchor_multicoin_impl(
             && alive && balance > 0.0f
             && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
                 balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
-            int sampled_tier = record_multicoin_hsl_report(
-                hsl, coin_hsl, C, effective_n_positions, hsl_ema_eligible
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-                , side.hsl_report_ema_max
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                , side.hsl_ema_tail
-#endif
-            );
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-            side.hsl_portfolio_report_ema_max = fmax(side.hsl_portfolio_report_ema_max,
-                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-            side.hsl_portfolio_ema_tail.last_sample = NAN;
-#endif
-            update_hsl_drawdown_ema_tail_stats(side.hsl_portfolio_ema_tail,
-                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-            hsl_ema_tail_samples[int(b) * 2 * T + k] = side.hsl_ema_tail.last_sample;
-            hsl_ema_tail_samples[(int(b) * 2 + 1) * T + k]
-                = side.hsl_portfolio_ema_tail.last_sample;
-#endif
-#endif
+
+            const int sampled_tier = record_multicoin_hsl_report(hsl, coin_hsl, C, effective_n_positions);
             if (sampled_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
+        }
+#endif
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        if (alive && float(k) >= account.core.start_step) {
+            account.core.net_profit_long = short_side ? 0.0f : account.core.realized_long + core_unrealized_long;
+            account.core.net_profit_short = short_side ? account.core.realized_short + core_unrealized_short : 0.0f;
+            const float core_equity = post_fill_balance_depleted
+                ? account.balance + core_unrealized_long + core_unrealized_short : equity;
+            const bool core_liquidated = account.balance <= 0.0f || equity <= liquidation_floor;
+            const int core_step = k + (core_liquidated && post_fill_balance_depleted ? 0 : 1);
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+            const float core_util_long = rms_position[0];
+            const float core_util_short = rms_position[1];
+#else
+            const float core_util_long = 0.0f;
+            const float core_util_short = 0.0f;
+            if (CORE_WANTS(UTIL_LONG)) account.core.utilization_long_invalid = 1.0f;
+            if (CORE_WANTS(UTIL_SHORT)) account.core.utilization_short_invalid = 1.0f;
+#endif
+            core_observe_equity(account.core, core_equity, core_step, start_day_minute,
+                core_gross_notional, core_util_long, core_util_short,
+                core_liquidated && post_fill_balance_depleted);
+            account.core.liquidated = core_liquidated ? 1.0f : 0.0f;
         }
 #endif
         bool active = equity_started && alive;
         if (active) {
             // Ordinary side-equity statistics share the factual equity clock,
             // independent of HSL mode, permission and protection specialization.
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-            update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
-                starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-            const float raw_strategy_equity = starting_balance
-                + realized_pnl_cumsum_last + unrealized;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            update_raw_strategy_risk(
-                raw_strategy_equity, raw_strategy_risk);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-            raw_strategy_day_end = raw_strategy_equity;
-            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
-#endif
-#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
-            if (any_fill) {
-                int active_fill_day = multicoin_active_fill_day(
-                    k, int(first_eq_k), interval_ms
-                );
-                if (active_fill_day != last_active_fill_day) {
-                    fills_active_days_count += 1.0f;
-                    last_active_fill_day = active_fill_day;
-                }
-            }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
-            float effective_equity = liquidated ? liquidation_floor : equity;
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-            if (recovery_stride > 0 && recovery_start_k < 0) {
-                recovery_start_k = k;
-                // Strategy recovery retains factual PnL/UPNL, including losses
-                // below the separately clamped account liquidation floor.
-                recovery_samples[int(b) * recovery_sample_count]
-                    = raw_strategy_equity;
-            } else if (recovery_stride > 0) {
-                const int recovery_elapsed = k - recovery_start_k;
-                const bool recovery_terminal = liquidated || k == stop_k - 1;
-                const bool recovery_regular =
-                    recovery_elapsed % recovery_stride == 0;
-                if (recovery_regular || recovery_terminal) {
-                    const int sample_index = recovery_terminal
-                        ? (recovery_elapsed + recovery_stride - 1)
-                            / recovery_stride
-                        : recovery_elapsed / recovery_stride;
-                    if (sample_index < recovery_sample_count) {
-                        recovery_samples[
-                            int(b) * recovery_sample_count + sample_index
-                        ] = raw_strategy_equity;
-                    }
-                }
-            }
-#endif
-            if (effective_equity >= account_peak) {
-                if (account_peak_k >= 0.0f) {
-                    account_recovery_max_min = fmax(
-                        account_recovery_max_min, float(k) - account_peak_k
-                    );
-                }
-                account_peak = effective_equity;
-                account_peak_k = float(k);
-            }
-            if (effective_equity > run_peak) {
-                if (last_high_k >= 0.0f) {
-                    recovery_max_min = fmax(
-                        recovery_max_min, float(k) - last_high_k
-                    );
-                }
-                last_high_k = float(k);
-                run_peak = effective_equity;
-            }
-            float drawdown = fmax(
-                (run_peak - effective_equity) / fmax(fabs(run_peak), 1.0e-12f), 0.0f
-            );
-            max_dd = fmax(max_dd, drawdown);
-            day_end = effective_equity;
-            day_min = fmin(day_min, effective_equity);
-            day_min_balance = fmin(day_min_balance, balance);
-            day_dd = fmax(day_dd, drawdown);
-#if PASSIVBOT_BTC_RISK_ENABLED
-            update_btc_risk_state(
-                btc_risk, effective_equity, btc_prices[k]
-            );
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-            update_equity_balance_diff_state(
-                equity_balance_diff_state,
-                balance,
-                effective_equity,
-                btc_prices,
-                k,
-                starting_balance,
-                any_fill
-            );
-#endif
-            day_touched = true;
-            if (!liquidated) {
-                float twe_abs = position_cost / balance;
-#if PASSIVBOT_EXPOSURE_RMS_ENABLED
-                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
-                    rms_position[0], rms_position[1], short_side ? 0.0f : twel, short_side ? twel : 0.0f);
-#endif
-                total_wallet_exposure_samples += 1.0f;
-                absolute_net_wallet_exposure_mean_ratio += (
-                    twe_abs - absolute_net_wallet_exposure_mean_ratio
-                ) / total_wallet_exposure_samples;
-                absolute_net_wallet_exposure_max_ratio = fmax(
-                    absolute_net_wallet_exposure_max_ratio, twe_abs
-                );
-            }
+
+
             if (liquidated) {
 #if !PASSIVBOT_HSL_DISABLED
                 // Normal bar reports are at k+1 in CPU time; a terminal fill
@@ -3817,84 +3422,27 @@ inline void passivbot_ema_anchor_multicoin_impl(
         replay_states[b].side = side;
         replay_states[b].account = account;
         replay_states[b].fills = fills;
-        replay_states[b].fills_active_days_count = fills_active_days_count;
-        replay_states[b].last_active_fill_day = last_active_fill_day;
+
         replay_states[b].alive = alive;
         replay_states[b].equity_started = equity_started;
-        replay_states[b].run_peak = run_peak;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        replay_states[b].raw_strategy_risk = raw_strategy_risk;
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        replay_states[b].raw_strategy_day_end = raw_strategy_day_end;
-        replay_states[b].raw_strategy_day_min = raw_strategy_day_min;
-#endif
-        replay_states[b].max_dd = max_dd;
-        replay_states[b].absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
-        replay_states[b].absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
-        replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].exposure_rms = exposure_rms;
 #endif
         replay_states[b].first_fill_k = first_fill_k;
         replay_states[b].last_fill_k = last_fill_k;
-        replay_states[b].gap_max_min = gap_max_min;
-        replay_states[b].gap_sum_squared_hours = gap_sum_squared_hours;
-        replay_states[b].last_high_k = last_high_k;
-        replay_states[b].recovery_max_min = recovery_max_min;
-        replay_states[b].account_peak = account_peak;
-        replay_states[b].account_peak_k = account_peak_k;
-        replay_states[b].account_recovery_max_min = account_recovery_max_min;
+
         replay_states[b].first_eq_k = first_eq_k;
         replay_states[b].last_eq_k = last_eq_k;
         replay_states[b].liquidation_day = liquidation_day;
 #if !PASSIVBOT_HSL_DISABLED
         replay_states[b].hsl_time = hsl_time;
 #endif
-        replay_states[b].current_day = current_day;
-        replay_states[b].day_touched = day_touched;
-        replay_states[b].day_end = day_end;
-        replay_states[b].day_min = day_min;
-        replay_states[b].day_dd = day_dd;
-        replay_states[b].day_has_fill = day_has_fill;
-        replay_states[b].day_min_balance = day_min_balance;
-        replay_states[b].day_start_balance = day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        replay_states[b].btc_risk = btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        replay_states[b].equity_balance_diff_state = equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-        replay_states[b].recovery_start_k = recovery_start_k;
-#endif
+
         return;
     }
 #endif
 
-
-    if (day_touched && current_day >= 0 && current_day < D) {
-        int output = (int(b) * D + current_day) * DAILY_COLS;
-        daily[output + 0] = day_end;
-        daily[output + 1] = day_min;
-        daily[output + 2] = day_dd;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
-#endif
-        daily[output + 3] = day_volume;
-        daily[output + 4] = day_has_fill;
-        daily[output + 5] = day_min_balance;
-        daily[output + 6] = balance - day_start_balance;
-        daily[output + 7] = balance;
-        daily[output + 8] = day_fill_count;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        write_btc_risk_day(btc_risk, daily, output, 9);
-#endif
-    }
 
     float total_size = 0.0f;
     float total_cost = 0.0f;
@@ -3904,36 +3452,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
         total_size += psize[c];
         total_cost += psize[c] * pprice[c] * coin_settings[c * COIN_COLS + 4];
         open_positions += 1;
-        if (position_open_k[c] >= 0.0f && last_eq_k >= 0.0f) {
-            float held_min = last_eq_k - position_open_k[c];
-            held_max_min = fmax(held_max_min, held_min);
-            held_sum_min += held_min;
-            held_sum_sq_min += held_min * held_min;
-            held_count += 1.0f;
-        }
-        if (position_last_fill_k[c] >= 0.0f && last_eq_k >= 0.0f) {
-            position_unchanged_max_min = fmax(
-                position_unchanged_max_min,
-                last_eq_k - position_last_fill_k[c]
-            );
-        }
     }
-    if (pnl_recovery_peak_k >= 0.0f && last_eq_k >= 0.0f) {
-        pnl_recovery_max_min = fmax(
-            pnl_recovery_max_min, last_eq_k - pnl_recovery_peak_k
-        );
-    }
+
     int scalar_offset = int(b) * SCALAR_COLS;
-    scalars[scalar_offset + 0] = max_dd;
-    scalars[scalar_offset + 1] = held_max_min * interval_ms;
-    scalars[scalar_offset + 2] = gap_max_min * interval_ms;
+
     scalars[scalar_offset + 3] = first_fill_k >= 0.0f
         ? first_fill_k * interval_ms : -1.0f;
     scalars[scalar_offset + 4] = last_fill_k >= 0.0f
         ? last_fill_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
-    scalars[scalar_offset + 6] = last_high_k >= 0.0f
-        ? last_high_k * interval_ms : -1.0f;
+
     // Both indices are exact within the admitted native replay length.
     scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
@@ -3945,48 +3472,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 14] = float(open_positions);
     scalars[scalar_offset + 15] = short_side ? total_size : 0.0f;
     scalars[scalar_offset + 16] = short_side ? total_cost : 0.0f;
-    scalars[scalar_offset + 18] = profit_sum;
-    scalars[scalar_offset + 19] = loss_sum;
-    scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
-    int entry_effective_n_positions =
-        wallet_exposure_denominator_n_positions(
-            n_positions, side.max_tradable_seen
-        );
-    float entry_base_limit = entry_effective_n_positions > 0
-        ? twel / float(entry_effective_n_positions) : 0.0f;
-    float entry_initial_qty_fraction = coin_override_or(
-        coin_overrides, 0, 0, base_qty_fraction
-    );
-    float entry_allowance_fraction = coin_override_or(
-        coin_overrides, 0, 12, allowance_fraction
-    );
-    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio(
-        entry_base_limit, twel, entry_allowance_fraction) * entry_initial_qty_fraction;
-    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
-    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
+
     scalars[scalar_offset + 24] = fill_count;
     scalars[scalar_offset + 25] = fill_count_entry;
     scalars[scalar_offset + 26] = fill_count_long;
-    scalars[scalar_offset + 27] = fills_active_days_count;
-    scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
-    scalars[scalar_offset + 29] = held_sum_min * interval_ms;
-    scalars[scalar_offset + 30] = held_count;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
-        hsl_drawdown_ema_mean_worst_1pct(side.hsl_portfolio_ema_tail);
-#endif
-    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = held_sum_sq_min *
-        (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
-#if PASSIVBOT_EXPOSURE_RMS_ENABLED
-    finish_exposure_rms(exposure_rms, scalars, scalar_offset + SCALAR_COLS - 7);
-#endif
-    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
-        account_recovery_max_min = fmax(
-            account_recovery_max_min, last_eq_k - account_peak_k
-        );
-    }
-    scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
+
 #if PASSIVBOT_HSL_DISABLED
     write_one_side_hsl_outputs(
         hsl, short_side,
@@ -4014,66 +3504,26 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
     }
 #endif
-    // Native metric maxima use the same bar observations as CPU analysis,
-    // independently of controller refreshes at fill/terminal boundaries.
-    scalars[scalar_offset + 17] = 0.0f;
-    scalars[scalar_offset + 55] = 0.0f;
-    scalars[scalar_offset + 56] = 0.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    scalars[scalar_offset + 17] = side.hsl_portfolio_report_ema_max;
-    scalars[scalar_offset + 55] = short_side ? 0.0f : side.hsl_report_ema_max;
-    scalars[scalar_offset + 56] = short_side ? side.hsl_report_ema_max : 0.0f;
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    {
+        CoreGpuState core_result = account.core;
+        for (int c = 0; c < C; ++c) {
+            if (side.psize[c] > 0.0f && side.position_open_k[c] >= 0.0f)
+                core_complete_holding(core_result, side.position_open_k[c], core_result.pending_step);
+        }
+        core_result.hsl_enabled = scalars[scalar_offset + 32] > 0.0f || scalars[scalar_offset + 33] > 0.0f ? 1.0f : 0.0f;
+        core_result.hsl_trigger_count = scalars[scalar_offset + 34] <= 16777216.0f - scalars[scalar_offset + 35]
+            ? scalars[scalar_offset + 34] + scalars[scalar_offset + 35] : NAN;
+        core_result.hsl_episode_sum = scalars[scalar_offset + 52];
+        core_result.hsl_episode_max = scalars[scalar_offset + 53];
+        core_result.hsl_episode_count = scalars[scalar_offset + 54];
+        HslTimeObservation core_time = hsl_time;
+        advance_hsl_time_observation(core_time, core_result.pending_step - 1.0f);
+        core_result.hsl_observed_steps = core_result.hsl_enabled > 0.0f ? core_time.observed_steps : 0.0f;
+        core_result.hsl_red_steps = core_result.hsl_enabled > 0.0f ? core_time.red_steps : 0.0f;
+        write_core_gpu(core_result, core_output, int(b) * CORE_GPU_PACKET_COLS, start_day_minute);
+    }
 #endif
-    // The untraded opposite side is a constant curve over the same equity
-    // horizon. Strict new-peak recovery includes that entire unrecovered tail.
-    const float inactive_recovery_ms = first_eq_k >= 0.0f && last_eq_k >= 0.0f
-        ? fmax(last_eq_k - first_eq_k, 0.0f) * interval_ms : 0.0f;
-    scalars[scalar_offset + 57] = short_side ? inactive_recovery_ms
-        : hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms;
-    scalars[scalar_offset + 58] = short_side
-        ? hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms
-        : inactive_recovery_ms;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + 59] = short_side ? 0.0f
-        : hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail);
-    scalars[scalar_offset + 60] = short_side
-        ? hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail) : 0.0f;
-#endif
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    scalars[scalar_offset + 61] = short_side ? 0.0f
-        : hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq);
-    scalars[scalar_offset + 62] = short_side
-        ? hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq) : 0.0f;
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    scalars[scalar_offset + 63] = short_side ? 0.0f
-        : hsl_strategy_equity_drawdown_mean_worst_1pct(side.hsl_strategy_eq);
-    scalars[scalar_offset + 64] = short_side
-        ? hsl_strategy_equity_drawdown_mean_worst_1pct(side.hsl_strategy_eq)
-        : 0.0f;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    write_equity_balance_diff_state(
-        equity_balance_diff_state, equity_balance_diff, b
-    );
-#endif
-}
-
-inline float ema_multicoin_initial_entry_balance_fraction(
-    thread const EmaMulticoinSideConfig& config,
-    constant float* coin_overrides,
-    int effective_n_positions
-) {
-    float base_limit = effective_n_positions > 0
-        ? config.twel / float(effective_n_positions) : 0.0f;
-    float initial_qty_fraction = coin_override_or(
-        coin_overrides, 0, 0, config.base_qty_fraction
-    );
-    float allowance_fraction = coin_override_or(
-        coin_overrides, 0, 12, config.allowance_fraction
-    );
-    return allowed_wallet_exposure_limit_ratio(
-        base_limit, config.twel, allowance_fraction) * initial_qty_fraction;
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
@@ -4250,18 +3700,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    device float* equity_balance_diff,
-#endif
     device float* daily,
     device float* scalars,
-    device int* gap_hist,
     device float* coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    device float* recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    device float* hsl_ema_tail_samples,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    device float* core_output,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -4274,14 +3717,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const int B = sizes[0];
     const int T = sizes[1];
     const int C = sizes[2];
-    const int D = sizes[3];
     const int requested_start_k = sizes[4];
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    const int recovery_stride = sizes[8];
-    const int recovery_sample_count = sizes[9];
-#endif
     if (b >= uint(B)) return;
     const int stop_k = clamp(end_steps[b], 1, T - 1);
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
@@ -4297,16 +3735,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     for (int j = 0; begin_k == 1 && j < FUSED_SCALAR_COLS; ++j) {
         scalars[scalar_offset + j] = 0.0f;
     }
-    for (int j = 0; begin_k == 1 && j < GAP_BINS; ++j) {
-        gap_hist[int(b) * GAP_BINS + j] = 0;
-    }
     if (C < 1 || C > MAX_COINS) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-        recovery_samples[int(b) * recovery_sample_count]
-            = RECOVERY_FAIL_CLOSED_SENTINEL;
-#endif
         return;
     }
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
@@ -4330,10 +3761,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     if (!topology_valid) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-        recovery_samples[int(b) * recovery_sample_count]
-            = RECOVERY_FAIL_CLOSED_SENTINEL;
-#endif
         return;
     }
 
@@ -4367,69 +3794,32 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const bool filter_by_min_effective_cost_short = run_settings[17] > 0.5f;
     const bool long_activation = run_settings[18] > 0.5f;
     const bool short_activation = run_settings[19] > 0.5f;
-    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
         starting_balance
     );
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    account.core = init_core_gpu(starting_balance, max(max(global_warmup, 1) + 1, requested_start_k));
+#endif
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
-    float fills_active_days_count = 0.0f;
-    int last_active_fill_day = -1;
-    float run_peak = -INFINITY;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-    RawStrategyRiskState raw_strategy_risk = {-INFINITY, 0.0f, 0.0f, 0.0f, 0.0f};
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-    float raw_strategy_day_end = 0.0f;
-    float raw_strategy_day_min = INFINITY;
-#endif
-    float max_dd = 0.0f;
-    float absolute_net_wallet_exposure_max_ratio = 0.0f;
-    float absolute_net_wallet_exposure_mean_ratio = 0.0f;
-    float total_wallet_exposure_samples = 0.0f;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
     ExposureRmsState exposure_rms = init_exposure_rms();
 #endif
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
-    float gap_max_min = 0.0f;
-    float gap_sum_squared_hours = 0.0f;
-    float last_high_k = -1.0f;
-    float recovery_max_min = 0.0f;
-    float account_peak = -INFINITY;
-    float account_peak_k = -1.0f;
-    float account_recovery_max_min = 0.0f;
+
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
-#if PASSIVBOT_BTC_RISK_ENABLED
-    BtcRiskState btc_risk = init_btc_risk_state();
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    EquityBalanceDiffState equity_balance_diff_state =
-        init_equity_balance_diff_state();
-#endif
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    int recovery_start_k = -1;
-#endif
     int liquidation_day = -1;
     HslTimeObservation hsl_time = init_hsl_time_observation();
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    float portfolio_hsl_report_ema_max = 0.0f;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    HslDrawdownEmaTailStats portfolio_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    hsl_time.last_step = account.core.start_step - 1.0f;
 #endif
 
-    int current_day = 0;
-    bool day_touched = false;
-    float day_end = 0.0f;
-    float day_min = INFINITY;
-    float day_dd = 0.0f;
-    float day_has_fill = 0.0f;
-    float day_min_balance = INFINITY;
-    float day_start_balance = account.balance;
+
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (begin_k > 1) {
@@ -4437,66 +3827,25 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         short_side = replay_states[b].short_side;
         account = replay_states[b].common.account;
         fills = replay_states[b].common.fills;
-        fills_active_days_count = replay_states[b].common.fills_active_days_count;
-        last_active_fill_day = replay_states[b].common.last_active_fill_day;
+
         alive = replay_states[b].common.alive;
         equity_started = replay_states[b].common.equity_started;
-        run_peak = replay_states[b].common.run_peak;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        raw_strategy_risk = replay_states[b].common.raw_strategy_risk;
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        raw_strategy_day_end = replay_states[b].common.raw_strategy_day_end;
-        raw_strategy_day_min = replay_states[b].common.raw_strategy_day_min;
-#endif
-        max_dd = replay_states[b].common.max_dd;
-        absolute_net_wallet_exposure_max_ratio = replay_states[b].common.absolute_net_wallet_exposure_max_ratio;
-        absolute_net_wallet_exposure_mean_ratio = replay_states[b].common.absolute_net_wallet_exposure_mean_ratio;
-        total_wallet_exposure_samples = replay_states[b].common.total_wallet_exposure_samples;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         exposure_rms = replay_states[b].common.exposure_rms;
 #endif
         first_fill_k = replay_states[b].common.first_fill_k;
         last_fill_k = replay_states[b].common.last_fill_k;
-        gap_max_min = replay_states[b].common.gap_max_min;
-        gap_sum_squared_hours = replay_states[b].common.gap_sum_squared_hours;
-        last_high_k = replay_states[b].common.last_high_k;
-        recovery_max_min = replay_states[b].common.recovery_max_min;
-        account_peak = replay_states[b].common.account_peak;
-        account_peak_k = replay_states[b].common.account_peak_k;
-        account_recovery_max_min = replay_states[b].common.account_recovery_max_min;
+
         first_eq_k = replay_states[b].common.first_eq_k;
         last_eq_k = replay_states[b].common.last_eq_k;
         liquidation_day = replay_states[b].common.liquidation_day;
 #if !PASSIVBOT_HSL_DISABLED
         hsl_time = replay_states[b].common.hsl_time;
 #endif
-        current_day = replay_states[b].common.current_day;
-        day_touched = replay_states[b].common.day_touched;
-        day_end = replay_states[b].common.day_end;
-        day_min = replay_states[b].common.day_min;
-        day_dd = replay_states[b].common.day_dd;
-        day_has_fill = replay_states[b].common.day_has_fill;
-        day_min_balance = replay_states[b].common.day_min_balance;
-        day_start_balance = replay_states[b].common.day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        btc_risk = replay_states[b].common.btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        equity_balance_diff_state = replay_states[b].common.equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-        recovery_start_k = replay_states[b].common.recovery_start_k;
-#endif
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        portfolio_hsl_report_ema_max = replay_states[b].portfolio_hsl_report_ema_max;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-        portfolio_hsl_ema_tail = replay_states[b].portfolio_hsl_ema_tail;
-#endif
+
     }
 #endif
-
 
     const bool hsl_long_owner = long_config.twel > 0.0f && long_config.n_positions > 0;
     const bool hsl_unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
@@ -4531,50 +3880,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
-        if (day_index != current_day) {
-            if (day_touched && current_day >= 0 && current_day < D) {
-                int output = (int(b) * D + current_day) * DAILY_COLS;
-                daily[output + 0] = day_end;
-                daily[output + 1] = day_min;
-                daily[output + 2] = day_dd;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-                write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-                daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
-#endif
-                daily[output + 3] = fills.day_volume;
-                daily[output + 4] = day_has_fill;
-                daily[output + 5] = day_min_balance;
-                daily[output + 6] = account.balance - day_start_balance;
-                daily[output + 7] = account.balance;
-                daily[output + 8] = fills.day_fill_count;
-#if PASSIVBOT_BTC_RISK_ENABLED
-                write_btc_risk_day(btc_risk, daily, output, 9);
-#endif
-            }
-            current_day = day_index;
-            day_touched = false;
-            day_end = 0.0f;
-            day_min = INFINITY;
-            day_dd = 0.0f;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            reset_raw_strategy_risk_day(raw_strategy_risk);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-            raw_strategy_day_end = 0.0f;
-            raw_strategy_day_min = INFINITY;
-#endif
-            fills.day_volume = 0.0f;
-            day_has_fill = 0.0f;
-            day_min_balance = INFINITY;
-            day_start_balance = account.balance;
-            fills.day_fill_count = 0.0f;
-#if PASSIVBOT_BTC_RISK_ENABLED
-            reset_btc_risk_day(btc_risk);
-#endif
-        }
 
         prepare_coin_hsl_budgets(
             long_side.coin_hsl, long_config.coin_hsl_mode,
@@ -4729,10 +4034,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 || hsl_mark_terminal_observation_eligible(
                     account.balance, hsl_equity, liquidation_floor,
                     hsl_report_at_fill_boundary));
-        const bool long_hsl_ema_eligible =
-            long_side.hsl.enabled && !long_side.hsl.halted;
-        const bool short_hsl_ema_eligible =
-            short_side.hsl.enabled && !short_side.hsl.halted;
         if (can_sample_hsl) {
             bool hsl_valid = update_ema_multicoin_dual_side_hsl(
                 long_side, long_config, long_effective_n_positions,
@@ -4907,27 +4208,21 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         any_fill = any_fill || forced_delist_fill;
         if (any_fill) {
-            day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
-                float gap = float(k) - last_fill_k;
-                int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale),
-                    0, GAP_BINS - 1
-                );
-                gap_hist[int(b) * GAP_BINS + bin] += 1;
-                const float gap_hours = gap * interval_ms / 3600000.0f;
-                gap_sum_squared_hours += gap_hours * gap_hours;
-                gap_max_min = fmax(gap_max_min, gap);
+
             }
             if (first_fill_k < 0.0f) first_fill_k = float(k);
             last_fill_k = float(k);
         }
 
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        float core_gross_notional = 0.0f;
+        float core_unrealized_long = 0.0f;
+        float core_unrealized_short = 0.0f;
+#endif
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
-        float net_position_cost = 0.0f;
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
-        float rms_exposure[2] = {0.0f, 0.0f};
         float rms_position[2] = {0.0f, 0.0f};
 #endif
         for (int c = 0; c < C; ++c) {
@@ -4942,28 +4237,48 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 && isfinite(close);
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+                // A fill-boundary terminal sees completed marks and actual executions only.
+                const float core_price = post_fill_balance_depleted
+                    ? (account.core.fill_mark_step[c] == float(k)
+                        ? account.core.fill_mark_price[c] : bars[((k - 1) * C + c) * 4 + 2])
+                    : close;
+                core_gross_notional += fabs(long_side.psize[c] * core_price * coin_settings[coin_offset + 4]);
+                const float core_upnl = long_side.psize[c] * coin_settings[coin_offset + 4]
+                    * (false ? long_side.pprice[c] - core_price : core_price - long_side.pprice[c]);
+                core_unrealized_long += core_upnl;
+#endif
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
                 const float e = long_side.psize[c] * long_side.pprice[c] * c_mult / account.balance;
-                rms_exposure[0] += e;
+
                 rms_position[0] += exposure_rms_position_moment(e,
                     exposure_rms.base_wel[0 * MAX_COINS + c], long_config.twel);
 #endif
-                net_position_cost += long_side.psize[c]
-                    * long_side.pprice[c] * c_mult;
                 if (mark_valid) {
                     long_unrealized += long_side.psize[c] * c_mult
                         * (close - long_side.pprice[c]);
                 }
             }
             if (short_side.psize[c] > 0.0f) {
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+                // A fill-boundary terminal sees completed marks and actual executions only.
+                const float core_price = post_fill_balance_depleted
+                    ? (account.core.fill_mark_step[c] == float(k)
+                        ? account.core.fill_mark_price[c] : bars[((k - 1) * C + c) * 4 + 2])
+                    : close;
+                core_gross_notional += fabs(short_side.psize[c] * core_price * coin_settings[coin_offset + 4]);
+                const float core_upnl = short_side.psize[c] * coin_settings[coin_offset + 4]
+                    * (true ? short_side.pprice[c] - core_price : core_price - short_side.pprice[c]);
+                core_unrealized_short += core_upnl;
+#endif
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
                 const float e = short_side.psize[c] * short_side.pprice[c] * c_mult / account.balance;
-                rms_exposure[1] += e;
+
                 rms_position[1] += exposure_rms_position_moment(e,
                     exposure_rms.base_wel[1 * MAX_COINS + c], short_config.twel);
 #endif
-                net_position_cost -= short_side.psize[c]
-                    * short_side.pprice[c] * c_mult;
                 if (mark_valid) {
                     short_unrealized += short_side.psize[c] * c_mult
                         * (short_side.pprice[c] - close);
@@ -4977,173 +4292,45 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         if (can_sample_hsl && (joint_portfolio_can_generate(
                 account, equity, liquidation_floor) || hsl_mark_terminal_observation_eligible(
                     account.balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
-            int long_tier = record_multicoin_hsl_report(
-                long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
-                long_hsl_ema_eligible
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-                , long_side.hsl_report_ema_max
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                , long_side.hsl_ema_tail
-#endif
-            );
-            int short_tier = record_multicoin_hsl_report(
-                short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions,
-                short_hsl_ema_eligible
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-                , short_side.hsl_report_ema_max
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                , short_side.hsl_ema_tail
-#endif
-            );
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-            portfolio_hsl_report_ema_max = fmax(portfolio_hsl_report_ema_max, fmax(
-                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
-                    C, long_effective_n_positions),
-                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
-                    C, short_effective_n_positions)));
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-            portfolio_hsl_ema_tail.last_sample = NAN;
-#endif
-            update_hsl_drawdown_ema_tail_stats(portfolio_hsl_ema_tail, fmax(
-                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
-                    C, long_effective_n_positions),
-                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
-                    C, short_effective_n_positions)));
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-            hsl_ema_tail_samples[(int(b) * 3) * T + k] = long_side.hsl_ema_tail.last_sample;
-            hsl_ema_tail_samples[(int(b) * 3 + 1) * T + k] = short_side.hsl_ema_tail.last_sample;
-            hsl_ema_tail_samples[(int(b) * 3 + 2) * T + k] = portfolio_hsl_ema_tail.last_sample;
-#endif
-#endif
+
+            const int long_tier = record_multicoin_hsl_report(long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions);
+            const int short_tier = record_multicoin_hsl_report(short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions);
             if (long_tier >= 0 || short_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
         }
 #endif
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        if (alive && float(k) >= account.core.start_step) {
+            account.core.net_profit_long = account.core.realized_long + core_unrealized_long;
+            account.core.net_profit_short = account.core.realized_short + core_unrealized_short;
+            const float core_equity = post_fill_balance_depleted
+                ? account.balance + core_unrealized_long + core_unrealized_short : equity;
+            const bool core_liquidated = account.balance <= 0.0f || equity <= liquidation_floor;
+            const int core_step = k + (core_liquidated && post_fill_balance_depleted ? 0 : 1);
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+            const float core_util_long = rms_position[0];
+            const float core_util_short = rms_position[1];
+#else
+            const float core_util_long = 0.0f;
+            const float core_util_short = 0.0f;
+            if (CORE_WANTS(UTIL_LONG)) account.core.utilization_long_invalid = 1.0f;
+            if (CORE_WANTS(UTIL_SHORT)) account.core.utilization_short_invalid = 1.0f;
+#endif
+            core_observe_equity(account.core, core_equity, core_step, start_day_minute,
+                core_gross_notional, core_util_long, core_util_short,
+                core_liquidated && post_fill_balance_depleted);
+            account.core.liquidated = core_liquidated ? 1.0f : 0.0f;
+        }
+#endif
         bool active = equity_started && alive;
         if (active) {
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-            update_hsl_strategy_equity_stats(long_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_long + long_unrealized, day_index);
-            update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_short + short_unrealized, day_index);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-            const float raw_strategy_equity = starting_balance + account.realized_pnl_long
-                + account.realized_pnl_short + long_unrealized + short_unrealized;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-            update_raw_strategy_risk(
-                raw_strategy_equity, raw_strategy_risk);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-            raw_strategy_day_end = raw_strategy_equity;
-            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
-#endif
-#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
-            if (any_fill) {
-                int active_fill_day = multicoin_active_fill_day(
-                    k, int(first_eq_k), interval_ms
-                );
-                if (active_fill_day != last_active_fill_day) {
-                    fills_active_days_count += 1.0f;
-                    last_active_fill_day = active_fill_day;
-                }
-            }
             bool liquidated = account.balance <= 0.0f
                 || equity <= liquidation_floor;
-            float effective_equity = liquidated
-                ? liquidation_floor : equity;
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-            if (recovery_stride > 0 && recovery_start_k < 0) {
-                recovery_start_k = k;
-                // Strategy recovery retains factual PnL/UPNL, including losses
-                // below the separately clamped account liquidation floor.
-                recovery_samples[int(b) * recovery_sample_count]
-                    = raw_strategy_equity;
-            } else if (recovery_stride > 0) {
-                const int recovery_elapsed = k - recovery_start_k;
-                const bool recovery_terminal = liquidated || k == stop_k - 1;
-                const bool recovery_regular =
-                    recovery_elapsed % recovery_stride == 0;
-                if (recovery_regular || recovery_terminal) {
-                    const int sample_index = recovery_terminal
-                        ? (recovery_elapsed + recovery_stride - 1)
-                            / recovery_stride
-                        : recovery_elapsed / recovery_stride;
-                    if (sample_index < recovery_sample_count) {
-                        recovery_samples[
-                            int(b) * recovery_sample_count + sample_index
-                        ] = raw_strategy_equity;
-                    }
-                }
-            }
-#endif
-            if (effective_equity >= account_peak) {
-                if (account_peak_k >= 0.0f) {
-                    account_recovery_max_min = fmax(
-                        account_recovery_max_min,
-                        float(k) - account_peak_k
-                    );
-                }
-                account_peak = effective_equity;
-                account_peak_k = float(k);
-            }
-            if (effective_equity > run_peak) {
-                if (last_high_k >= 0.0f) {
-                    recovery_max_min = fmax(
-                        recovery_max_min, float(k) - last_high_k
-                    );
-                }
-                last_high_k = float(k);
-                run_peak = effective_equity;
-            }
-            float drawdown = fmax(
-                (run_peak - effective_equity)
-                    / fmax(fabs(run_peak), 1.0e-12f),
-                0.0f
-            );
-            max_dd = fmax(max_dd, drawdown);
-            day_end = effective_equity;
-            day_min = fmin(day_min, effective_equity);
-            day_min_balance = fmin(day_min_balance, account.balance);
-            day_dd = fmax(day_dd, drawdown);
-#if PASSIVBOT_BTC_RISK_ENABLED
-            update_btc_risk_state(
-                btc_risk, effective_equity, btc_prices[k]
-            );
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-            update_equity_balance_diff_state(
-                equity_balance_diff_state,
-                account.balance,
-                effective_equity,
-                btc_prices,
-                k,
-                starting_balance,
-                any_fill
-            );
-#endif
-            day_touched = true;
-            if (!liquidated) {
-                float twe_abs = fabs(net_position_cost / account.balance);
-#if PASSIVBOT_EXPOSURE_RMS_ENABLED
-                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
-                    rms_position[0], rms_position[1], long_config.twel, short_config.twel);
-#endif
-                total_wallet_exposure_samples += 1.0f;
-                absolute_net_wallet_exposure_mean_ratio += (
-                    twe_abs - absolute_net_wallet_exposure_mean_ratio
-                ) / total_wallet_exposure_samples;
-                absolute_net_wallet_exposure_max_ratio = fmax(
-                    absolute_net_wallet_exposure_max_ratio, twe_abs
-                );
-            }
+
+
             if (liquidated) {
 #if !PASSIVBOT_HSL_DISABLED
                 // Normal bar reports are at k+1 in CPU time; a terminal fill
@@ -5169,90 +4356,27 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         replay_states[b].short_side = short_side;
         replay_states[b].common.account = account;
         replay_states[b].common.fills = fills;
-        replay_states[b].common.fills_active_days_count = fills_active_days_count;
-        replay_states[b].common.last_active_fill_day = last_active_fill_day;
+
         replay_states[b].common.alive = alive;
         replay_states[b].common.equity_started = equity_started;
-        replay_states[b].common.run_peak = run_peak;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        replay_states[b].common.raw_strategy_risk = raw_strategy_risk;
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        replay_states[b].common.raw_strategy_day_end = raw_strategy_day_end;
-        replay_states[b].common.raw_strategy_day_min = raw_strategy_day_min;
-#endif
-        replay_states[b].common.max_dd = max_dd;
-        replay_states[b].common.absolute_net_wallet_exposure_max_ratio = absolute_net_wallet_exposure_max_ratio;
-        replay_states[b].common.absolute_net_wallet_exposure_mean_ratio = absolute_net_wallet_exposure_mean_ratio;
-        replay_states[b].common.total_wallet_exposure_samples = total_wallet_exposure_samples;
+
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         replay_states[b].common.exposure_rms = exposure_rms;
 #endif
         replay_states[b].common.first_fill_k = first_fill_k;
         replay_states[b].common.last_fill_k = last_fill_k;
-        replay_states[b].common.gap_max_min = gap_max_min;
-        replay_states[b].common.gap_sum_squared_hours = gap_sum_squared_hours;
-        replay_states[b].common.last_high_k = last_high_k;
-        replay_states[b].common.recovery_max_min = recovery_max_min;
-        replay_states[b].common.account_peak = account_peak;
-        replay_states[b].common.account_peak_k = account_peak_k;
-        replay_states[b].common.account_recovery_max_min = account_recovery_max_min;
+
         replay_states[b].common.first_eq_k = first_eq_k;
         replay_states[b].common.last_eq_k = last_eq_k;
         replay_states[b].common.liquidation_day = liquidation_day;
 #if !PASSIVBOT_HSL_DISABLED
         replay_states[b].common.hsl_time = hsl_time;
 #endif
-        replay_states[b].common.current_day = current_day;
-        replay_states[b].common.day_touched = day_touched;
-        replay_states[b].common.day_end = day_end;
-        replay_states[b].common.day_min = day_min;
-        replay_states[b].common.day_dd = day_dd;
-        replay_states[b].common.day_has_fill = day_has_fill;
-        replay_states[b].common.day_min_balance = day_min_balance;
-        replay_states[b].common.day_start_balance = day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        replay_states[b].common.btc_risk = btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        replay_states[b].common.equity_balance_diff_state = equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-        replay_states[b].common.recovery_start_k = recovery_start_k;
-#endif
-#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        replay_states[b].portfolio_hsl_report_ema_max = portfolio_hsl_report_ema_max;
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-        replay_states[b].portfolio_hsl_ema_tail = portfolio_hsl_ema_tail;
-#endif
+
         return;
     }
 #endif
 
-
-    if (day_touched && current_day >= 0 && current_day < D) {
-        int output = (int(b) * D + current_day) * DAILY_COLS;
-        daily[output + 0] = day_end;
-        daily[output + 1] = day_min;
-        daily[output + 2] = day_dd;
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-        write_raw_strategy_risk_day(raw_strategy_risk, daily, output + DAILY_COLS - 4);
-#endif
-#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
-        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
-        daily[output + DAILY_COLS - 4 * PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
-#endif
-        daily[output + 3] = fills.day_volume;
-        daily[output + 4] = day_has_fill;
-        daily[output + 5] = day_min_balance;
-        daily[output + 6] = account.balance - day_start_balance;
-        daily[output + 7] = account.balance;
-        daily[output + 8] = fills.day_fill_count;
-#if PASSIVBOT_BTC_RISK_ENABLED
-        write_btc_risk_day(btc_risk, daily, output, 9);
-#endif
-    }
 
     float long_total_size = 0.0f;
     float long_total_cost = 0.0f;
@@ -5266,64 +4390,20 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             long_total_cost += long_side.psize[c]
                 * long_side.pprice[c] * c_mult;
             open_positions += 1;
-            if (long_side.position_open_k[c] >= 0.0f
-                && last_eq_k >= 0.0f) {
-                float held_min = last_eq_k
-                    - long_side.position_open_k[c];
-                fills.held_max_min = fmax(fills.held_max_min, held_min);
-                fills.held_sum_min += held_min;
-                fills.held_sum_sq_min += held_min * held_min;
-                fills.held_count += 1.0f;
-            }
-            if (long_side.position_last_fill_k[c] >= 0.0f
-                && last_eq_k >= 0.0f) {
-                fills.position_unchanged_max_min = fmax(
-                    fills.position_unchanged_max_min,
-                    last_eq_k - long_side.position_last_fill_k[c]
-                );
-            }
         }
         if (short_side.psize[c] > 0.0f) {
             short_total_size += short_side.psize[c];
             short_total_cost += short_side.psize[c]
                 * short_side.pprice[c] * c_mult;
             open_positions += 1;
-            if (short_side.position_open_k[c] >= 0.0f
-                && last_eq_k >= 0.0f) {
-                float held_min = last_eq_k
-                    - short_side.position_open_k[c];
-                fills.held_max_min = fmax(fills.held_max_min, held_min);
-                fills.held_sum_min += held_min;
-                fills.held_sum_sq_min += held_min * held_min;
-                fills.held_count += 1.0f;
-            }
-            if (short_side.position_last_fill_k[c] >= 0.0f
-                && last_eq_k >= 0.0f) {
-                fills.position_unchanged_max_min = fmax(
-                    fills.position_unchanged_max_min,
-                    last_eq_k - short_side.position_last_fill_k[c]
-                );
-            }
         }
     }
-    if (fills.pnl_recovery_peak_k >= 0.0f && last_eq_k >= 0.0f) {
-        fills.pnl_recovery_max_min = fmax(
-            fills.pnl_recovery_max_min,
-            last_eq_k - fills.pnl_recovery_peak_k
-        );
-    }
 
-
-    scalars[scalar_offset + 0] = max_dd;
-    scalars[scalar_offset + 1] = fills.held_max_min * interval_ms;
-    scalars[scalar_offset + 2] = gap_max_min * interval_ms;
     scalars[scalar_offset + 3] = first_fill_k >= 0.0f
         ? first_fill_k * interval_ms : -1.0f;
     scalars[scalar_offset + 4] = last_fill_k >= 0.0f
         ? last_fill_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
-    scalars[scalar_offset + 6] = last_high_k >= 0.0f
-        ? last_high_k * interval_ms : -1.0f;
+
     // Both indices are exact within the admitted native replay length.
     scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
@@ -5335,47 +4415,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     scalars[scalar_offset + 14] = float(open_positions);
     scalars[scalar_offset + 15] = short_total_size;
     scalars[scalar_offset + 16] = short_total_cost;
-    // Derive portfolio gross-PnL outputs from their directional reductions so
-    // the public total/directional metric contract stays algebraically exact
-    // despite different float32 accumulation orders.
-    scalars[scalar_offset + 18] =
-        fills.profit_sum_long + fills.profit_sum_short;
-    scalars[scalar_offset + 19] =
-        fills.loss_sum_long + fills.loss_sum_short;
-    scalars[scalar_offset + 20] =
-        fills.position_unchanged_max_min * interval_ms;
-    scalars[scalar_offset + 21] = ema_multicoin_initial_entry_balance_fraction(
-        long_config, long_coin_overrides,
-        wallet_exposure_denominator_n_positions(
-            long_config.n_positions, long_side.max_tradable_seen
-        )
-    );
-    scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio;
-    scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio;
+
     scalars[scalar_offset + 24] = fills.fill_count;
     scalars[scalar_offset + 25] = fills.fill_count_entry;
     scalars[scalar_offset + 26] = fills.fill_count_long;
-    scalars[scalar_offset + 27] = fills_active_days_count;
-    scalars[scalar_offset + 28] =
-        fills.pnl_recovery_max_min * interval_ms;
-    scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
-    scalars[scalar_offset + 30] = fills.held_count;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
-        hsl_drawdown_ema_mean_worst_1pct(portfolio_hsl_ema_tail);
-#endif
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = fills.held_sum_sq_min *
-        (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
-#if PASSIVBOT_EXPOSURE_RMS_ENABLED
-    finish_exposure_rms(exposure_rms, scalars, scalar_offset + FUSED_SCALAR_COLS - 7);
-#endif
-    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
-        account_recovery_max_min = fmax(
-            account_recovery_max_min, last_eq_k - account_peak_k
-        );
-    }
-    scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
+
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(
             long_side.coin_hsl, short_side.coin_hsl, C,
@@ -5391,60 +4435,30 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     }
-    scalars[scalar_offset + 17] = 0.0f;
-    scalars[scalar_offset + 55] = 0.0f;
-    scalars[scalar_offset + 56] = 0.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-    scalars[scalar_offset + 17] = portfolio_hsl_report_ema_max;
-    scalars[scalar_offset + 55] = long_side.hsl_report_ema_max;
-    scalars[scalar_offset + 56] = short_side.hsl_report_ema_max;
-#endif
-    scalars[scalar_offset + 57] = ema_multicoin_initial_entry_balance_fraction(
-        short_config, short_coin_overrides,
-        wallet_exposure_denominator_n_positions(
-            short_config.n_positions, short_side.max_tradable_seen
-        )
-    );
-    scalars[scalar_offset + 58] = fills.profit_sum_long;
-    scalars[scalar_offset + 59] = fills.loss_sum_long;
-    scalars[scalar_offset + 60] = fills.profit_sum_short;
-    scalars[scalar_offset + 61] = fills.loss_sum_short;
-    scalars[scalar_offset + 62] = hsl_strategy_equity_recovery_max_steps(
-        long_side.hsl_strategy_eq
-    ) * interval_ms;
-    scalars[scalar_offset + 63] = hsl_strategy_equity_recovery_max_steps(
-        short_side.hsl_strategy_eq
-    ) * interval_ms;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + 64] = hsl_drawdown_ema_mean_worst_1pct(
-        long_side.hsl_ema_tail
-    );
-    scalars[scalar_offset + 65] = hsl_drawdown_ema_mean_worst_1pct(
-        short_side.hsl_ema_tail
-    );
-#endif
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    scalars[scalar_offset + 66] = hsl_strategy_equity_drawdown_max(
-        long_side.hsl_strategy_eq
-    );
-    scalars[scalar_offset + 67] = hsl_strategy_equity_drawdown_max(
-        short_side.hsl_strategy_eq
-    );
-#endif
-#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    scalars[scalar_offset + 68]
-        = hsl_strategy_equity_drawdown_mean_worst_1pct(
-            long_side.hsl_strategy_eq
-        );
-    scalars[scalar_offset + 69]
-        = hsl_strategy_equity_drawdown_mean_worst_1pct(
-            short_side.hsl_strategy_eq
-        );
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    write_equity_balance_diff_state(
-        equity_balance_diff_state, equity_balance_diff, b
-    );
+
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    {
+        CoreGpuState core_result = account.core;
+        for (int c = 0; c < C; ++c) {
+            if (long_side.psize[c] > 0.0f && long_side.position_open_k[c] >= 0.0f)
+                core_complete_holding(core_result, long_side.position_open_k[c], core_result.pending_step);
+        }
+        for (int c = 0; c < C; ++c) {
+            if (short_side.psize[c] > 0.0f && short_side.position_open_k[c] >= 0.0f)
+                core_complete_holding(core_result, short_side.position_open_k[c], core_result.pending_step);
+        }
+        core_result.hsl_enabled = scalars[scalar_offset + 32] > 0.0f || scalars[scalar_offset + 33] > 0.0f ? 1.0f : 0.0f;
+        core_result.hsl_trigger_count = scalars[scalar_offset + 34] <= 16777216.0f - scalars[scalar_offset + 35]
+            ? scalars[scalar_offset + 34] + scalars[scalar_offset + 35] : NAN;
+        core_result.hsl_episode_sum = scalars[scalar_offset + 52];
+        core_result.hsl_episode_max = scalars[scalar_offset + 53];
+        core_result.hsl_episode_count = scalars[scalar_offset + 54];
+        HslTimeObservation core_time = hsl_time;
+        advance_hsl_time_observation(core_time, core_result.pending_step - 1.0f);
+        core_result.hsl_observed_steps = core_result.hsl_enabled > 0.0f ? core_time.observed_steps : 0.0f;
+        core_result.hsl_red_steps = core_result.hsl_enabled > 0.0f ? core_time.red_steps : 0.0f;
+        write_core_gpu(core_result, core_output, int(b) * CORE_GPU_PACKET_COLS, start_day_minute);
+    }
 #endif
 }
 
@@ -5464,18 +4478,11 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    device float* equity_balance_diff,
-#endif
     device float* daily,
     device float* scalars,
-    device int* gap_hist,
     device float* coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    device float* recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    device float* hsl_ema_tail_samples,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    device float* core_output,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -5485,11 +4492,7 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #endif
     uint b [[thread_position_in_grid]]
 ) {
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    constant int* end_steps = sizes + 10;
-#else
     constant int* end_steps = sizes + 8;
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     // Metal kernel buffers cannot expose structs containing thread pointers.
     // Rebind transient HSL context pointers after loading each temporal chunk.
@@ -5503,15 +4506,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        equity_balance_diff,
-#endif
-        daily, scalars, gap_hist, coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-        recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-        hsl_ema_tail_samples,
+        daily, scalars, coin_fill_counts,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        core_output,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
@@ -5536,18 +4533,11 @@ kernel void passivbot_ema_anchor_multicoin(
 #if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    device float* equity_balance_diff,
-#endif
     device float* daily,
     device float* scalars,
-    device int* gap_hist,
     device float* coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    device float* recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    device float* hsl_ema_tail_samples,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    device float* core_output,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -5557,11 +4547,7 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
     uint b [[thread_position_in_grid]]
 ) {
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    constant int* end_steps = sizes + 10;
-#else
     constant int* end_steps = sizes + 8;
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     // Metal kernel buffers cannot expose structs containing thread pointers.
     // Rebind transient HSL context pointers after loading each temporal chunk.
@@ -5580,15 +4566,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        equity_balance_diff,
-#endif
-        daily, scalars, gap_hist, coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-        recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-        hsl_ema_tail_samples,
+        daily, scalars, coin_fill_counts,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        core_output,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
@@ -5613,18 +4593,11 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    device float* equity_balance_diff,
-#endif
     device float* daily,
     device float* scalars,
-    device int* gap_hist,
     device float* coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    device float* recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-    device float* hsl_ema_tail_samples,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    device float* core_output,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -5634,11 +4607,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
     uint b [[thread_position_in_grid]]
 ) {
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    constant int* end_steps = sizes + 10;
-#else
     constant int* end_steps = sizes + 8;
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     // Metal kernel buffers cannot expose structs containing thread pointers.
     // Rebind transient HSL context pointers after loading each temporal chunk.
@@ -5652,15 +4621,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
 #endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-        equity_balance_diff,
-#endif
-        daily, scalars, gap_hist, coin_fill_counts,
-#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-        recovery_samples,
-#endif
-#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
-        hsl_ema_tail_samples,
+        daily, scalars, coin_fill_counts,
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+        core_output,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED

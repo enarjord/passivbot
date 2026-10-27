@@ -32,24 +32,15 @@ from optimization.gpu.model import (
 from optimization.gpu.coin_parameters import build_coin_override_parameters
 
 from optimization.gpu.service import (
-    CORE_OUTPUT_KEYS,
-    DIRECTIONAL_HSL_OUTPUT_KEYS,
     MPS_MAX_DISPATCH_CANDIDATE_BARS,
     SharedAccountReplay,
-    _btc_daily_price_context,
-    _candidate_wallet_exposure_limit_ratio_outputs,
-    _candidate_position_slot_outputs,
     _hsl_lookback_bars,
-    _directional_entry_initial_metrics,
-    _directional_gross_pnl_outputs,
     _gpu_proxy_execution_checkpoint_contract,
     _gpu_profile_unattributed_seconds,
     _add_gpu_terminal_profile,
     _hsl_params,
-    _hsl_diagnostics_needed,
     _mps_dispatch_batch_size,
     _mps_multicoin_dispatch_plan,
-    _mps_strategy_eq_recovery_distribution,
     _new_gpu_dispatch_progress,
     _new_gpu_proxy_profile,
     _update_gpu_dispatch_progress,
@@ -131,7 +122,7 @@ def test_proxy_constructors_reject_exact_only_metrics_before_setup(
     torch = pytest.importorskip("torch")
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
 
-    with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+    with pytest.raises(ValueError, match="GPU core metrics are not implemented"):
         proxy_cls(
             config=get_template_config(),
             hlcvs=None,
@@ -277,41 +268,10 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
     assert original["timestamps"]["count"] == 3
 
 
-def test_btc_daily_price_context_matches_proxy_utc_day_grid():
-    day_ms = 86_400_000
-    context = _btc_daily_price_context(
-        [10.0, 12.0, 11.0, 20.0],
-        [0, day_ms - 1, day_ms, 2 * day_ms - 1],
-        expected_count=4,
-        expected_days=2,
-    )
-
-    assert context["btc_day_end_price"].tolist() == [12.0, 20.0]
 
 
-@pytest.mark.parametrize(
-    "btc_prices",
-    ([10.0, float("nan")], [10.0, 0.0], [10.0]),
-)
-def test_btc_daily_price_context_rejects_unsafe_series(btc_prices):
-    with pytest.raises(ValueError, match="MPS BTC analysis"):
-        _btc_daily_price_context(
-            btc_prices,
-            [0, 60_000],
-            expected_count=2,
-            expected_days=1,
-        )
 
 
-def test_btc_daily_price_context_rejects_skipped_utc_days():
-    day_ms = 86_400_000
-    with pytest.raises(ValueError, match="missing prepared prices"):
-        _btc_daily_price_context(
-            [10.0, 20.0],
-            [0, 2 * day_ms],
-            expected_count=2,
-            expected_days=3,
-        )
 
 
 def test_gpu_proxy_execution_checkpoint_contract_rejects_timestamp_shape_mismatch():
@@ -338,75 +298,8 @@ def test_forward_hsl_keeps_only_an_inert_binding(enabled, expected):
 
 
 
-@pytest.mark.parametrize("malformed", [None, "dtype", "device", "columns", "rows", "bounds", "ambiguous", "non_tensor"])
-def test_compact_recovery_output_remains_on_device_and_rejects_bad_transport(monkeypatch, malformed):
-    class Device:
-        type = "cuda"
-    class Tensor:
-        device = Device()
-        dtype = "float32"
-        shape = (2, 7)
-        ndim = 2
-        def cpu(self):
-            pytest.fail("compact recovery transport must not copy to CPU")
-    fake = ModuleType("optimization.gpu.mps_kernel")
-    fake.torch = SimpleNamespace(Tensor=Tensor, float32="float32")
-    fake.MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
-    fake.strategy_eq_recovery_distribution_from_samples = lambda *a, **k: pytest.fail("compact recovery must not reduce twice")
-    monkeypatch.setitem(sys.modules, "optimization.gpu.mps_kernel", fake)
-    stats, bounds = Tensor(), Tensor()
-    bounds.shape = (2,)
-    output = {"strategy_eq_recovery_distribution": stats, "last_eq_ts": bounds}
-    if malformed == "dtype": stats.dtype = "float64"
-    elif malformed == "device": stats.device = SimpleNamespace(type="cpu")
-    elif malformed == "columns": stats.shape = (2, 6)
-    elif malformed == "rows": stats.shape = (1, 7)
-    elif malformed == "bounds": output.pop("last_eq_ts")
-    elif malformed == "ambiguous": output["strategy_eq_recovery_samples"] = object()
-    elif malformed == "non_tensor": output["strategy_eq_recovery_distribution"] = object()
-    if malformed:
-        with pytest.raises(RuntimeError, match="(Invalid compact GPU|Ambiguous GPU) recovery output"):
-            _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"})
-    else:
-        assert _mps_strategy_eq_recovery_distribution(output, {"recovery_mean_days_strategy_equity"}) is stats
-        assert _mps_strategy_eq_recovery_distribution(output, {"adg_fraction_strategy_equity"}) is None
 
 
-def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
-    needed = {"recovery_p99_days_strategy_equity"}
-
-    assert _mps_strategy_eq_recovery_distribution({}, {"adg_fraction_strategy_equity"}) is None
-    with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
-        _mps_strategy_eq_recovery_distribution({}, needed)
-
-    samples = object()
-    expected = SimpleNamespace()
-    expected.cpu = lambda: (_ for _ in ()).throw(
-        AssertionError("recovery distribution left MPS during reduction")
-    )
-    called = {}
-
-    def fake_postprocessor(values, *, sample_interval_days):
-        called["values"] = values
-        called["sample_interval_days"] = sample_interval_days
-        return expected
-
-    fake_mps_kernel = ModuleType("optimization.gpu.mps_kernel")
-    fake_mps_kernel.strategy_eq_recovery_distribution_from_samples = fake_postprocessor
-    monkeypatch.setitem(sys.modules, "optimization.gpu.mps_kernel", fake_mps_kernel)
-    actual = _mps_strategy_eq_recovery_distribution(
-        {
-            "strategy_eq_recovery_samples": samples,
-            "strategy_eq_recovery_sample_interval_days": 1.0 / 24.0,
-        },
-        needed,
-    )
-
-    assert called == {
-        "values": samples,
-        "sample_interval_days": 1.0 / 24.0,
-    }
-    assert actual is expected
 
 
 
@@ -518,9 +411,10 @@ def test_gpu_terminal_profile_rebases_recent_window_steps():
         profile,
         {
             "alive": torch.as_tensor([False]),
-            "last_eq_ts": torch.as_tensor([75 * 60_000.0]),
         },
+        [{"metric_metadata": {"actual_end_timestamp_ms": 1_700_000_000_000 + 75 * 60_000}}],
         interval_ms=60_000,
+        origin_timestamp_ms=1_700_000_000_000,
         effective_start_step=50,
         effective_end_step=100,
     )
@@ -664,25 +558,6 @@ def test_gpu_profile_unattributed_seconds_excludes_nested_runner_and_transfer():
 
 
 
-def test_core_output_contract_retains_gross_pnl_aggregates():
-    assert {
-        "profit_sum",
-        "loss_sum",
-        "position_unchanged_max_ms",
-        "initial_entry_balance_fraction",
-        "initial_entry_balance_fraction_long",
-        "initial_entry_balance_fraction_short",
-        "absolute_net_wallet_exposure_max_ratio",
-        "absolute_net_wallet_exposure_mean_ratio",
-        "day_fill_count",
-        "fill_count",
-        "fill_count_entry",
-        "fill_count_long",
-        "fills_active_days_count",
-        "coin_fill_counts",
-        "pnl_recovery_max_ms",
-        "account_recovery_max_ms",
-    } <= CORE_OUTPUT_KEYS
 
 
 
@@ -702,108 +577,6 @@ def test_multicoin_exposure_eligibility_unions_fused_sides():
     assert eligible.tolist() == [False, True, True]
 
 
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
-    torch = pytest.importorskip("torch")
-    values = torch.tensor([0.1, 0.2, 0.3])
-
-    metrics = _directional_entry_initial_metrics(side, values)
-
-    assert metrics[f"initial_entry_balance_fraction_{side}"].tolist() == values.tolist()
-    other = "short" if side == "long" else "long"
-    assert metrics[f"initial_entry_balance_fraction_{other}"].shape == values.shape
-    assert metrics[f"initial_entry_balance_fraction_{other}"].tolist() == [0.0, 0.0, 0.0]
-
-
-def test_candidate_wallet_exposure_limit_ratios_preserve_sides_and_base_fallback():
-    torch = pytest.importorskip("torch")
-
-    outputs = _candidate_wallet_exposure_limit_ratio_outputs(
-        [
-            {"long_total_wallet_exposure_limit_ratio": 1.25},
-            {
-                "long_total_wallet_exposure_limit_ratio": 1.5,
-                "short_total_wallet_exposure_limit_ratio": 0.75,
-            },
-        ],
-        {"long": 1.0, "short": 0.5},
-        torch=torch,
-    )
-
-    assert outputs["candidate_total_wallet_exposure_limit_ratio_long"].tolist() == [
-        1.25,
-        1.5,
-    ]
-    assert outputs["candidate_total_wallet_exposure_limit_ratio_short"].tolist() == [
-        0.5,
-        0.75,
-    ]
-
-
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_directional_gross_pnl_outputs_zero_the_inactive_side(side):
-    torch = pytest.importorskip("torch")
-    profit = torch.tensor([7.0])
-    loss = torch.tensor([2.0])
-
-    outputs = _directional_gross_pnl_outputs(side, profit, loss)
-    other_side = "short" if side == "long" else "long"
-
-    assert outputs[f"profit_sum_{side}"] is profit
-    assert outputs[f"loss_sum_{side}"] is loss
-    assert outputs[f"profit_sum_{other_side}"].item() == 0.0
-    assert outputs[f"loss_sum_{other_side}"].item() == 0.0
-
-
-def test_candidate_position_slots_follow_candidate_positions_and_enabledness():
-    torch = pytest.importorskip("torch")
-
-    outputs = _candidate_position_slot_outputs(
-        [
-            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit_ratio": 0.0},
-            {"short_n_positions": 2.0},
-        ],
-        {"long": 2.0, "short": 1.0},
-        {"long": 1.0, "short": 0.5},
-        torch=torch,
-    )
-
-    assert outputs["position_slots_long"].tolist() == [3.0, 2.0]
-    assert outputs["position_slots_short"].tolist() == [0.0, 2.0]
-
-
-
-
-
-
-def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
-    assert {
-        "hsl_triggers_long",
-        "hsl_duration_sum_steps",
-        "hsl_restart_retrigger_count",
-        "hsl_halt_to_restart_equity_loss",
-        "hsl_panic_close_loss_sum",
-        "hsl_panic_loss_drawdown_count",
-        "hsl_strategy_eq_recovery_max_ms_long",
-        "hsl_strategy_eq_recovery_max_ms_short",
-        "hsl_drawdown_ema_mean_worst_1pct_long",
-        "hsl_drawdown_ema_mean_worst_1pct_short",
-        "hsl_drawdown_raw_mean_worst_1pct_long",
-        "hsl_drawdown_raw_mean_worst_1pct_short",
-    } <= DIRECTIONAL_HSL_OUTPUT_KEYS
-
-
-def test_hsl_diagnostics_are_requested_only_for_hsl_metric_families():
-    assert not _hsl_diagnostics_needed(
-        {
-            "adg_fraction_strategy_equity",
-            "drawdown_max_fraction_strategy_equity",
-            "fills_per_day",
-        }
-    )
-    assert _hsl_diagnostics_needed({"hsl_triggers_per_year"})
-    assert _hsl_diagnostics_needed({"hsl_signal_ema_max_fraction_long"})
-    assert _hsl_diagnostics_needed({"recovery_max_days_strategy_equity_long"})
 
 
 
@@ -816,159 +589,22 @@ def test_hsl_diagnostics_are_requested_only_for_hsl_metric_families():
 
 
 
-def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
-    torch = pytest.importorskip("torch")
-    proxy = SharedAccountReplay.__new__(SharedAccountReplay)
-    proxy.hsl_signal_mode = "coin"
-
-    proxy.batch_size = 1
-    proxy._torch = torch
-    proxy.profile_enabled = False
-    proxy.metrics_data = {"ts0": 0.0}
-    proxy.run = SimpleNamespace()
-    proxy.sides = ["long"]
-    proxy.needed_metrics = {"hsl_panic_fill_loss_sum_usd"}
-    proxy.weighted_equity_metrics = ()
-    proxy._parameter_matrix = lambda candidates, side=None: np.zeros(
-        (len(candidates), 0)
-    )
-    raw = {
-        key: torch.zeros(1)
-        for key in (
-            "first_fill_ts",
-            "last_fill_ts",
-            "last_high_ts",
-            "first_eq_ts",
-            "last_eq_ts",
-            "profit_sum",
-            "loss_sum",
-            "initial_entry_balance_fraction",
-        )
-    }
-    raw["hsl_triggers_long"] = torch.tensor([2.0])
-    raw["hsl_panic_close_loss_sum"] = torch.tensor([37.5])
-    proxy.runners = {"long": SimpleNamespace(run=lambda *args, **kwargs: raw)}
-
-    def reduce(output, *args, **kwargs):
-        assert output["hsl_triggers_long"].item() == 2.0
-        assert output["hsl_panic_close_loss_sum"].item() == 37.5
-        return {"hsl_panic_fill_loss_sum_usd": output["hsl_panic_close_loss_sum"]}
-
-    proxy._compute_objectives = reduce
-
-    assert proxy.evaluate([{}]) == [{"hsl_panic_fill_loss_sum_usd": 37.5}]
 
 
-@pytest.mark.parametrize(
-    ("param_keys", "candidate_key"),
-    [
-        (EMA_ANCHOR_MULTICOIN_PARAM_KEYS, "offset_fraction"),
-        (
-            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
-            "entry_initial_qty_fraction",
-        ),
-    ],
-)
-@pytest.mark.parametrize("missing_summary", ["none", "raw", "growth", "calmar", "portfolio_ema"])
-def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
-    param_keys, candidate_key, missing_summary
-):
-    torch = pytest.importorskip("torch")
-    proxy = SharedAccountReplay.__new__(SharedAccountReplay)
-    proxy.hsl_signal_mode = "coin"
 
-    proxy.batch_size = 2
-    proxy._torch = torch
-    proxy.profile_enabled = False
-    proxy.metrics_data = {"ts0": 1_000.0}
-    proxy.run = SimpleNamespace()
-    proxy.sides = ["long", "short"]
-    proxy.needed_metrics = {
-        "none": {"hsl_trigger_count"},
-        "raw": {"drawdown_max_fraction_strategy_equity"},
-        "growth": {"adg_fraction_strategy_equity"},
-        "calmar": {"calmar_ratio_strategy_equity"},
-        "portfolio_ema": {"hsl_signal_ema_worst_1pct_mean_fraction"},
-    }[missing_summary]
-    proxy.param_keys = param_keys
-    proxy.base_params = {
-        side: {
-            key: float(index + (100 if side == "short" else 0))
-            for index, key in enumerate(param_keys)
-        }
-        for side in ("long", "short")
-    }
-    seen = {}
 
-    def run(params, **kwargs):
-        seen["params"] = params.copy()
-        seen["kwargs"] = kwargs
-        batch = len(params)
-        raw = {
-            key: torch.zeros(batch)
-            for key in (
-                "first_fill_ts",
-                "last_fill_ts",
-                "last_high_ts",
-                "first_eq_ts",
-                "last_eq_ts",
-            )
-        }
-        raw["hsl_triggers_long"] = torch.tensor([1.0, 2.0])
-        raw["hsl_triggers_short"] = torch.tensor([3.0, 4.0])
-        return raw
 
-    proxy.fused_runner = SimpleNamespace(run=run)
-    proxy.runners = {}
 
-    def reduce(output, *args, **kwargs):
-        assert output["hsl_unified_scope"].tolist() == [True, False]
-        return {
-            "hsl_trigger_count": output["hsl_triggers_long"]
-            + output["hsl_triggers_short"]
-        }
 
-    proxy._compute_objectives = reduce
-    candidates = [
-        {f"long_{candidate_key}": 0.25, f"short_{candidate_key}": 0.5,
-         "long_hsl_signal_mode": 0, "short_hsl_signal_mode": 0},
-        {f"long_{candidate_key}": 0.75, f"short_{candidate_key}": 1.0,
-         "long_hsl_signal_mode": 2, "short_hsl_signal_mode": 2},
-    ]
 
-    if missing_summary in {"raw", "calmar"}:
-        with pytest.raises(RuntimeError, match="raw strategy-risk summary is missing"):
-            proxy.evaluate(candidates)
-        return
 
-    if missing_summary == "growth":
-        with pytest.raises(RuntimeError, match="raw strategy-equity daily summaries are missing"):
-            proxy.evaluate(candidates)
-        return
 
-    if missing_summary == "portfolio_ema":
-        with pytest.raises(RuntimeError, match="portfolio HSL EMA-tail summary is missing"):
-            proxy.evaluate(candidates)
-        return
 
-    if missing_summary == "weighted":
-        with pytest.raises(RuntimeError, match="weighted equity summary is missing"):
-            proxy.evaluate(candidates)
-        return
 
-    assert proxy.evaluate(candidates) == [
-        {"hsl_trigger_count": 4.0},
-        {"hsl_trigger_count": 6.0},
-    ]
-    assert seen["params"].shape == (
-        2,
-        len(param_keys) * 2,
-    )
-    parameter_index = param_keys.index(candidate_key)
-    side_width = len(param_keys)
-    assert seen["params"][:, parameter_index].tolist() == [0.25, 0.75]
-    assert seen["params"][:, side_width + parameter_index].tolist() == [0.5, 1.0]
-    assert seen["kwargs"] == {"profile": False}
+
+
+
+
 
 
 @pytest.mark.parametrize(
@@ -1006,13 +642,13 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     ),
     [
         ({"hsl_red_time_fraction"}, False, False, False, False),
-        ({"hsl_signal_ema_worst_1pct_mean_fraction"}, True, False, False, False),
-        ({"drawdown_max_fraction_strategy_equity_long"}, False, True, False, False),
-        ({"drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long"}, False, True, True, False),
-        ({"recovery_p99_days_strategy_equity"}, False, False, False, True),
-        ({"entry_interval_p95_hours"}, False, False, False, False),
-        ({"fills_top_symbol_fraction"}, False, False, False, False),
-        ({"fills_active_symbols_count"}, False, False, False, False),
+        ({"cagr_fraction_strategy_equity_ew"}, False, False, False, False),
+        ({"drawdown_max_fraction_strategy_equity"}, False, False, False, False),
+        ({"pain_index_fraction_strategy_equity"}, False, False, False, False),
+        ({"peak_recovery_max_days_strategy_equity"}, False, False, False, False),
+        ({"gross_turnover_ratio_per_day"}, False, False, False, False),
+        ({"loss_profit_ratio"}, False, False, False, False),
+        ({"position_exposure_utilization_rms_ratio_long"}, False, False, False, False),
     ],
 )
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
@@ -1208,14 +844,14 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert long_overrides[1, wallet_exposure_column] == 0.0
     assert short_overrides[0, wallet_exposure_column] == 0.0
     assert np.isnan(short_overrides[1, wallet_exposure_column])
-    assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
+    assert constructed["kwargs"].get("hsl_ema_tail_enabled", False) is tail_enabled
     assert constructed["kwargs"]["collect_coin_fill_counts"] is bool(
         needed_metrics & {"fills_top_symbol_fraction", "fills_active_symbols_count"}
     )
-    assert constructed["kwargs"]["hsl_raw_drawdown_enabled"] is raw_drawdown_enabled
-    assert constructed["kwargs"]["hsl_raw_tail_enabled"] is raw_tail_enabled
+    assert constructed["kwargs"].get("hsl_raw_drawdown_enabled", False) is raw_drawdown_enabled
+    assert constructed["kwargs"].get("hsl_raw_tail_enabled", False) is raw_tail_enabled
     assert (
-        constructed["kwargs"]["recovery_distribution_enabled"]
+        constructed["kwargs"].get("recovery_distribution_enabled", False)
         is recovery_distribution_enabled
     )
     assert "high_exposure_enabled" not in constructed["kwargs"]
@@ -1225,7 +861,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         constructed["kwargs"]["dynamic_wel_by_tradability"]
         is dynamic_wel_by_tradability
     )
-    assert constructed["kwargs"]["entry_interval_enabled"] is (
+    assert constructed["kwargs"].get("entry_interval_enabled", False) is (
         strategy_kind == "trailing_martingale"
         and "entry_interval_p95_hours" in needed_metrics
     )
@@ -2517,7 +2153,7 @@ def _suite_batch_proxy():
         base_params={"long": {"n_positions": 4}}, backtest={"loss_gate_max_drawdown_fraction": 1}
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
-    proxy.needed_metrics = {"adg_fraction_strategy_equity"}
+    proxy.needed_metrics = {"cagr_fraction_strategy_equity"}
     proxy.weighted_equity_metrics = ()
     proxy.couple_unstuck_emas = False
     proxy.batch_size = 1024

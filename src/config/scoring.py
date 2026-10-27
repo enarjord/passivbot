@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Any, Iterable, Sequence
 
 from .access import require_config_dict
 from .limits import resolve_reducer_mode
 from .log_output import log_config_message
-from .metrics import canonicalize_metric_name, reject_retired_metric, split_metric_curve
+from .metrics import (
+    canonicalize_metric_name,
+    reject_retired_metric,
+    CORE_METRIC_CATALOG,
+    metric_base_name,
+)
 from .reducers import REDUCER_ALIASES, normalize_reducer, reducer_from_aliases
 
 OBJECTIVE_GOALS = ("min", "max")
@@ -19,139 +25,9 @@ class ScenarioSelection(Enum):
 
 
 DEFAULT_OBJECTIVE_GOALS = {
-    "adg_fraction_ew": "max",
-    "sharpe_ratio_ew": "max",
-    "sortino_ratio_ew": "max",
-    "omega_ratio_ew": "max",
-    "adg_fraction_strategy_equity_ew": "max",
-    "sharpe_ratio_strategy_equity_ew": "max",
-    "sortino_ratio_strategy_equity_ew": "max",
-    "omega_ratio_strategy_equity_ew": "max",
-    "analysis_duration_days": "max",
-    "position_episodes_per_day": "min",
-    "position_held_time_weighted_mean_hours": "min",
-    "position_held_mean_hours": "min",
-    "position_held_max_hours": "min",
-    "position_held_median_hours": "min",
-    "position_unchanged_max_hours": "min",
-    "entry_interval_mean_hours": "min",
-    "entry_interval_median_hours": "min",
-    "entry_interval_p95_hours": "min",
-    "entry_interval_p99_hours": "min",
-    "entry_interval_max_hours": "min",
-    "fills_active_days_count": "max",
-    "fills_active_day_fraction": "max",
-    "fills_active_symbols_count": "max",
-    "fills_count": "max",
-    "fills_close_count": "max",
-    "fills_entry_count": "max",
-    "fills_count_long": "max",
-    "fills_count_short": "max",
-    "fills_gap_max_days": "min",
-    "fills_gap_mean_hours": "min",
-    "fills_gap_median_hours": "min",
-    "fills_gap_p95_hours": "min",
-    "fills_gap_p99_hours": "min",
-    "fills_gap_time_weighted_mean_hours": "min",
-    "fills_per_day": "max",
-    "fills_close_per_day": "max",
-    "fills_entry_per_day": "max",
-    "fills_per_day_long": "max",
-    "fills_per_day_per_position_slot": "max",
-    "fills_per_day_per_position_slot_long": "max",
-    "fills_per_day_per_position_slot_short": "max",
-    "fills_per_day_short": "max",
-    "fills_top_symbol_fraction": "min",
-    "backtest_completion_fraction": "max",
-    "high_exposure_mean_hours_long": "min",
-    "high_exposure_max_hours_long": "min",
-    "high_exposure_mean_hours_short": "min",
-    "high_exposure_max_hours_short": "min",
-    "daily_realized_pnl_mean_fraction": "max",
-    "gain_multiplier_strategy_equity": "max",
-    "adg_fraction_strategy_equity": "max",
-    "adg_rolling_hmean_fraction_strategy_equity": "max",
-    "adg_time_integrated_fraction_strategy_equity": "max",
-    "positive_log_return_participation_score_strategy_equity": "max",
-    "mdg_fraction_strategy_equity": "max",
-    "sharpe_ratio_strategy_equity": "max",
-    "sortino_ratio_strategy_equity": "max",
-    "omega_ratio_strategy_equity": "max",
-    "expected_shortfall_1pct_fraction_strategy_equity": "min",
-    "calmar_ratio_strategy_equity": "max",
-    "sterling_ratio_strategy_equity": "max",
-    "drawdown_max_fraction_strategy_equity": "min",
-    "drawdown_max_fraction_strategy_equity_long": "min",
-    "drawdown_max_fraction_strategy_equity_short": "min",
-    "hsl_signal_ema_max_fraction": "min",
-    "hsl_signal_ema_max_fraction_long": "min",
-    "hsl_signal_ema_max_fraction_short": "min",
-    "hsl_signal_ema_worst_1pct_mean_fraction": "min",
-    "hsl_signal_ema_worst_1pct_mean_fraction_long": "min",
-    "hsl_signal_ema_worst_1pct_mean_fraction_short": "min",
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity": "min",
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long": "min",
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short": "min",
-    "pain_index_fraction_strategy_equity": "min",
-    "ulcer_index_fraction_strategy_equity": "min",
-    "recovery_mean_days_strategy_equity": "min",
-    "recovery_median_days_strategy_equity": "min",
-    "recovery_p95_days_strategy_equity": "min",
-    "recovery_p99_days_strategy_equity": "min",
-    "recovery_worst_5pct_mean_days_strategy_equity": "min",
-    "recovery_worst_1pct_mean_days_strategy_equity": "min",
-    "recovery_max_days_strategy_equity": "min",
-    "recovery_max_hours_strategy_equity": "min",
-    "recovery_max_hours_strategy_equity_long": "min",
-    "recovery_max_hours_strategy_equity_short": "min",
-    "recovery_max_days_strategy_equity_long": "min",
-    "recovery_max_days_strategy_equity_short": "min",
-    "daily_realized_pnl_median_fraction": "max",
-    "sharpe_ratio_realized_pnl": "max",
-    "sortino_ratio_realized_pnl": "max",
-    "adg_fraction": "max",
-    "adg_fraction_per_twel_ratio_long": "max",
-    "adg_fraction_per_twel_ratio_short": "max",
-    "calmar_ratio": "max",
-    "drawdown_max_fraction": "min",
-    "drawdown_daily_worst_1pct_mean_fraction": "min",
-    "equity_balance_gap_negative_max_fraction": "min",
-    "equity_balance_gap_negative_mean_fraction": "min",
-    "equity_balance_gap_positive_max_fraction": "min",
-    "equity_balance_gap_positive_mean_fraction": "min",
-    "adg_to_paper_loss_max_ratio": "max",
-    "adg_to_paper_loss_mean_ratio": "max",
-    "adg_to_absolute_net_exposure_max_ratio": "max",
-    "adg_to_absolute_net_exposure_mean_ratio": "max",
-    "equity_choppiness_ratio": "min",
-    "equity_jerkiness_ratio": "min",
-    "peak_recovery_max_hours": "min",
-    "expected_shortfall_1pct_fraction": "min",
-    "exponential_fit_mse_log_ratio_squared": "min",
-    "gain_multiplier": "max",
-    "gain_multiplier_per_twel_ratio_long": "max",
-    "gain_multiplier_per_twel_ratio_short": "max",
-    "loss_profit_ratio": "min",
-    "mdg_fraction": "max",
-    "mdg_fraction_per_twel_ratio_long": "max",
-    "mdg_fraction_per_twel_ratio_short": "max",
-    "omega_ratio": "max",
-    "sharpe_ratio": "max",
-    "sortino_ratio": "max",
-    "sterling_ratio": "max",
-    "absolute_net_wallet_exposure_max_ratio": "min",
-    "absolute_net_wallet_exposure_mean_ratio": "min",
-    "wallet_exposure_rms_ratio_long": "min",
-    "wallet_exposure_rms_ratio_short": "min",
-    "gross_wallet_exposure_rms_ratio": "min",
-    "wallet_exposure_utilization_rms_ratio_long": "min",
-    "wallet_exposure_utilization_rms_ratio_short": "min",
-    "position_exposure_utilization_rms_ratio_long": "min",
-    "position_exposure_utilization_rms_ratio_short": "min",
-    "absolute_net_wallet_exposure_median_ratio": "min",
-    "active_day_turnover_proxy_mean_ratio": "max",
-    "initial_entry_balance_fraction_long": "max",
-    "initial_entry_balance_fraction_short": "max",
+    name: {"maximize": "max", "minimize": "min"}[item["role"]]
+    for name, item in CORE_METRIC_CATALOG.items()
+    if item["role"] != "limit"
 }
 
 
@@ -193,7 +69,9 @@ def _normalize_scenario(value: Any, *, path: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"{path} must be a scenario label string or null, got {value!r}")
+        raise ValueError(
+            f"{path} must be a scenario label string or null, got {value!r}"
+        )
     scenario = value.strip()
     if not scenario:
         raise ValueError(f"{path} must be a non-empty scenario label or null")
@@ -201,16 +79,7 @@ def _normalize_scenario(value: Any, *, path: str) -> str | None:
 
 
 def default_objective_goal(metric: str) -> str | None:
-    canonical = canonicalize_metric_name(metric)
-    goal = DEFAULT_OBJECTIVE_GOALS.get(canonical) or DEFAULT_OBJECTIVE_GOALS.get(str(metric).strip())
-    if goal is not None:
-        return goal
-    base_metric, curve = split_metric_curve(canonical)
-    if curve is not None:
-        goal = DEFAULT_OBJECTIVE_GOALS.get(base_metric)
-        if goal is not None:
-            return goal
-    return None
+    return DEFAULT_OBJECTIVE_GOALS.get(metric_base_name(metric))
 
 
 def _normalize_spec(
@@ -220,7 +89,9 @@ def _normalize_spec(
     unknown_goal: str,
 ) -> tuple[ObjectiveSpec, bool]:
     if isinstance(item, ObjectiveSpec):
-        reject_retired_metric(item.metric, path=f"config.optimize.scoring[{index}].metric")
+        reject_retired_metric(
+            item.metric, path=f"config.optimize.scoring[{index}].metric"
+        )
         scenario = item.scenario
         if scenario is not ScenarioSelection.INHERIT:
             scenario = _normalize_scenario(
@@ -229,7 +100,9 @@ def _normalize_spec(
             )
         spec = ObjectiveSpec(
             metric=canonicalize_metric_name(item.metric),
-            goal=_normalize_goal(item.goal, path=f"config.optimize.scoring[{index}].goal"),
+            goal=_normalize_goal(
+                item.goal, path=f"config.optimize.scoring[{index}].goal"
+            ),
             scenario=scenario,
             reducer=normalize_reducer(
                 item.reducer,
@@ -247,7 +120,9 @@ def _normalize_spec(
         reject_retired_metric(item, path=f"config.optimize.scoring[{index}]")
         metric = canonicalize_metric_name(item.strip())
         if not metric:
-            raise ValueError(f"config.optimize.scoring[{index}] must be a non-empty metric name")
+            raise ValueError(
+                f"config.optimize.scoring[{index}] must be a non-empty metric name"
+            )
         goal = default_objective_goal(metric)
         if goal is None:
             if unknown_goal == "error":
@@ -265,10 +140,14 @@ def _normalize_spec(
                 f"config.optimize.scoring[{index}] has unknown field(s): "
                 f"{', '.join(unknown_fields)}"
             )
-        reject_retired_metric(item.get("metric", ""), path=f"config.optimize.scoring[{index}].metric")
+        reject_retired_metric(
+            item.get("metric", ""), path=f"config.optimize.scoring[{index}].metric"
+        )
         metric = canonicalize_metric_name(str(item.get("metric", "")).strip())
         if not metric:
-            raise ValueError(f"config.optimize.scoring[{index}].metric must be a non-empty string")
+            raise ValueError(
+                f"config.optimize.scoring[{index}].metric must be a non-empty string"
+            )
         raw_goal = item.get("goal")
         if raw_goal is None:
             goal = default_objective_goal(metric)
@@ -279,7 +158,9 @@ def _normalize_spec(
                     )
                 goal = unknown_goal
         else:
-            goal = _normalize_goal(raw_goal, path=f"config.optimize.scoring[{index}].goal")
+            goal = _normalize_goal(
+                raw_goal, path=f"config.optimize.scoring[{index}].goal"
+            )
         scenario = (
             _normalize_scenario(
                 item.get("scenario"),
@@ -297,12 +178,15 @@ def _normalize_spec(
                 f"config.optimize.scoring[{index}] cannot set both a named scenario "
                 "and reducer"
             )
-        return ObjectiveSpec(
-            metric=metric,
-            goal=goal,
-            scenario=scenario,
-            reducer=reducer,
-        ), False
+        return (
+            ObjectiveSpec(
+                metric=metric,
+                goal=goal,
+                scenario=scenario,
+                reducer=reducer,
+            ),
+            False,
+        )
 
     raise ValueError(
         "config.optimize.scoring entries must be strings or objects like "
@@ -326,18 +210,24 @@ def normalize_scoring_entries(
     changed = False
     seen_metrics: dict[str, ObjectiveSpec] = {}
     for idx, item in enumerate(scoring):
-        spec, converted_legacy = _normalize_spec(item, index=idx, unknown_goal=unknown_goal)
+        spec, converted_legacy = _normalize_spec(
+            item, index=idx, unknown_goal=unknown_goal
+        )
         changed = changed or converted_legacy or not isinstance(item, ObjectiveSpec)
         if dedupe and spec.metric in seen_metrics:
             if spec != seen_metrics[spec.metric]:
-                raise ValueError(f"config.optimize.scoring[{idx}] conflicts with another objective for {spec.metric!r}")
+                raise ValueError(
+                    f"config.optimize.scoring[{idx}] conflicts with another objective for {spec.metric!r}"
+                )
             continue
         normalized.append(spec)
         seen_metrics[spec.metric] = spec
     return normalized, changed
 
 
-def normalize_scoring_config(config: dict, *, verbose: bool = True, tracker=None) -> None:
+def normalize_scoring_config(
+    config: dict, *, verbose: bool = True, tracker=None
+) -> None:
     optimize_cfg = require_config_dict(config, "optimize")
     before = optimize_cfg.get("scoring", [])
     normalized, changed = normalize_scoring_entries(before, unknown_goal="error")
@@ -368,7 +258,9 @@ def objective_metric_names(config_or_scoring: Any) -> list[str]:
 
 
 def objective_goal_map(config_or_scoring: Any) -> dict[str, str]:
-    return {spec.metric: spec.goal for spec in extract_objective_specs(config_or_scoring)}
+    return {
+        spec.metric: spec.goal for spec in extract_objective_specs(config_or_scoring)
+    }
 
 
 def objective_index_map(config_or_scoring: Any) -> dict[str, list[int]]:
@@ -388,7 +280,11 @@ def resolve_objective_basis(
     default_scenario: str | None,
     reducer_cfg: dict[str, Any] | None,
 ) -> ObjectiveBasis:
-    scenario = default_scenario if spec.scenario is ScenarioSelection.INHERIT else spec.scenario
+    scenario = (
+        default_scenario
+        if spec.scenario is ScenarioSelection.INHERIT
+        else spec.scenario
+    )
     if scenario is not None:
         if spec.reducer is not None:
             raise ValueError(
@@ -402,11 +298,21 @@ def resolve_objective_basis(
 
 
 def to_engine_value(spec: ObjectiveSpec, raw_value: float) -> float:
-    return float(raw_value) * spec.engine_sign
+    value = float(raw_value)
+    if math.isnan(value):
+        raise ValueError("undefined objective cannot be adapted")
+    return (2.0 / math.pi) * math.atan(value * spec.engine_sign)
 
 
 def from_engine_value(spec: ObjectiveSpec, engine_value: float) -> float:
-    return float(engine_value) * spec.engine_sign
+    value = float(engine_value)
+    if not math.isfinite(value) or abs(value) > 1:
+        raise ValueError("invalid adapted objective")
+    return (
+        math.copysign(math.inf, value)
+        if abs(value) == 1
+        else math.tan(value * math.pi / 2)
+    ) * spec.engine_sign
 
 
 def dominates_objectives(

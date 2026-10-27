@@ -1,34 +1,43 @@
-"""Shared helpers for structured metric payloads used by suites and pareto outputs."""
+"""Versioned core values, explicit statuses and requested raw reductions.
 
-from __future__ import annotations
+Python reduces producer values but never reimplements a trading metric formula.
+All persisted payloads are JSON-safe: extended-real endpoints use null plus status.
+"""
 
-from typing import Any, Dict, Iterable, Mapping
-
-import numpy as np
+from collections.abc import Mapping
+from copy import deepcopy
+import math
+import statistics
+from numbers import Real
 
 from config.metrics import (
-    ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, canonical_metric_name,
-    canonicalize_metric_name, split_metric_stat_suffix
+    CORE_METRIC_DEFINITION_VERSION,
+    KNOWN_METRICS,
+    STAT_SUFFIXES,
+    metric_base_name,
 )
-from config.ew import EW_METRICS, is_ew_metric
 
 PERIOD_KEYS = ("effective_start_date", "effective_end_date")
 
 
-def evaluation_period(payload: Mapping[str, Any]) -> dict:
-    """Non-aggregatable evaluation boundaries, kept separate from numeric stats."""
+class MetricAggregationError(ValueError):
+    """A selected quantity has incomplete or undefined observation support."""
+
+    def __init__(self, message, *, status="invalid"):
+        super().__init__(message)
+        self.status = status
+
+
+def evaluation_period(payload):
     return {key: payload[key] for key in PERIOD_KEYS if key in payload}
 
 
-def shared_evaluation_period(payloads: Mapping[str, Mapping[str, Any]]) -> dict:
+def shared_evaluation_period(payloads):
     periods = [evaluation_period(value) for value in payloads.values()]
-    if periods and all(period == periods[0] for period in periods):
-        return periods[0]
-    return {}
+    return periods[0] if periods and all(item == periods[0] for item in periods) else {}
 
 
-def attach_result_metrics(config: dict, *, metrics=None, suite_metrics=None) -> dict:
-    """Replace prior evaluation output on an already sanitized config copy."""
+def attach_result_metrics(config, *, metrics=None, suite_metrics=None):
     config.pop("metrics", None)
     config.pop("suite_metrics", None)
     if metrics is not None:
@@ -38,215 +47,264 @@ def attach_result_metrics(config: dict, *, metrics=None, suite_metrics=None) -> 
     return config
 
 
-MetricStats = Dict[str, float]
-ScenarioMetrics = Dict[str, Dict[str, MetricStats]]
-KNOWN_ANALYSIS_METRICS = set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRICS)
-
-
-class MetricAggregationError(ValueError):
-    """Raised when metric payloads cannot be safely aggregated for scoring."""
-
-
-def _is_number(value: Any) -> bool:
-    if isinstance(value, (int, float, np.integer, np.floating)):
-        return np.isfinite(value)
-    return False
-
-
-def _is_numeric_value(value: Any) -> bool:
-    return isinstance(value, (int, float, np.integer, np.floating))
-
-
-def _is_known_metric_key(key: Any) -> bool:
-    return canonical_metric_name(str(key)) in KNOWN_ANALYSIS_METRICS
-
-
-def _safe_float(value: Any) -> float:
-    if not _is_number(value):
-        raise MetricAggregationError(f"non-finite metric value {value!r}")
+def decode_metric_value(payload, name):
+    if name not in payload:
+        raise MetricAggregationError(f"required metric {name!r} is missing")
+    value = payload[name]
+    status = payload.get("metric_status", {}).get(name, {})
+    tag = status.get("status", "finite") if isinstance(status, Mapping) else None
+    if tag in {"positive_infinity", "negative_infinity"}:
+        if value is not None:
+            raise MetricAggregationError(
+                f"infinite metric {name!r} must use null plus status"
+            )
+        return math.inf if tag == "positive_infinity" else -math.inf
+    if tag != "finite" or value is None:
+        raise MetricAggregationError(
+            f"required metric {name!r} unavailable: {status!r}",
+            status="undefined" if tag == "undefined" else "invalid",
+        )
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(value)
+    ):
+        raise MetricAggregationError(f"malformed finite metric {name!r}: {value!r}")
     return float(value)
 
 
-def _build_stats(values: Iterable[float]) -> MetricStats:
-    arr = np.asarray(list(values), dtype=float)
-    if arr.size == 0:
-        raise MetricAggregationError("cannot build stats from an empty metric sample")
-    if not np.all(np.isfinite(arr)):
-        raise MetricAggregationError("cannot build stats from non-finite metric values")
-    return {
-        "mean": float(np.mean(arr)),
-        "min": float(np.min(arr)),
-        "max": float(np.max(arr)),
-        "std": float(np.std(arr)),
-        "median": float(np.median(arr)),
-    }
+def encode_metric_values(values):
+    result, statuses = {}, {}
+    for name, raw in values.items():
+        if isinstance(raw, bool) or not isinstance(raw, Real) or math.isnan(raw):
+            raise MetricAggregationError(
+                f"cannot serialize undefined raw metric {name!r}"
+            )
+        value = float(raw)
+        result[name] = value if math.isfinite(value) else None
+        if not math.isfinite(value):
+            statuses[name] = {
+                "status": "positive_infinity" if value > 0 else "negative_infinity"
+            }
+    if statuses:
+        result["metric_status"] = statuses
+    return result
 
 
-def validate_required_ew_metrics(analyses, required_metrics):
-    """Require each selected exchange/scenario source before any reduction."""
-    required = {
-        split_metric_stat_suffix(canonicalize_metric_name(str(metric)))[0]
-        for metric in required_metrics if is_ew_metric(metric)
-    }
+def copy_metric_value(payload, name, *, output_name=None):
+    """Copy one validated JSON-safe fact, preserving explicit unavailable statuses."""
+    target = name if output_name is None else output_name
+    if name not in payload:
+        raise MetricAggregationError(f"required metric {name!r} is missing")
+    status = payload.get("metric_status", {}).get(name)
+    if (
+        payload[name] is None
+        and isinstance(status, Mapping)
+        and status.get("status") in {"undefined", "invalid"}
+    ):
+        return {target: None, "metric_status": {target: deepcopy(status)}}
+    encoded = encode_metric_values({target: decode_metric_value(payload, name)})
+    if isinstance(status, Mapping):
+        encoded.setdefault("metric_status", {})[target] = deepcopy(status)
+    return encoded
+
+
+def raw_reduce(values, mode):
+    values = list(values)
+    if not values or any(
+        isinstance(x, bool) or not isinstance(x, Real) or math.isnan(x) for x in values
+    ):
+        raise MetricAggregationError("empty or undefined reduction population")
+    if mode == "min":
+        return min(values)
+    if mode == "max":
+        return max(values)
+    if mode == "median":
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        return (
+            ordered[middle]
+            if len(ordered) % 2
+            else raw_reduce(ordered[middle - 1 : middle + 1], "mean")
+        )
+    positive, negative = math.inf in values, -math.inf in values
+    if mode == "std":
+        if positive or negative:
+            raise MetricAggregationError(
+                "standard deviation of infinite inputs is undefined", status="undefined"
+            )
+        value = statistics.pstdev(values)
+    elif mode == "mean":
+        if positive and negative:
+            raise MetricAggregationError(
+                "opposing infinities make the mean undefined", status="undefined"
+            )
+        if positive or negative:
+            return math.inf if positive else -math.inf
+        try:
+            value = math.fsum(x / len(values) for x in values)
+        except OverflowError as error:
+            raise MetricAggregationError("finite reduction overflow") from error
+    else:
+        raise ValueError(f"unsupported metric reducer {mode!r}")
+    if not math.isfinite(value):
+        raise MetricAggregationError("finite reduction overflow")
+    return value
+
+
+def require_metric_definition(payload):
+    metadata = payload.get("metric_metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise MetricAggregationError("malformed core metric metadata")
+    version = payload.get("definition_version", metadata.get("definition_version"))
+    if isinstance(version, bool) or version != CORE_METRIC_DEFINITION_VERSION:
+        raise MetricAggregationError(
+            "core metric definition version missing or stale; re-evaluate this result"
+        )
+
+
+def validate_required_core_metrics(analyses, required_metrics):
+    required = {metric_base_name(name) for name in required_metrics}
     for label, analysis in analyses.items():
-        for metric in sorted(required):
-            value = analysis.get(metric)
-            if isinstance(value, bool) or not _is_number(value):
+        require_metric_definition(analysis)
+        for name in sorted(required):
+            if name not in KNOWN_METRICS:
+                raise MetricAggregationError(f"unknown core metric {name!r}")
+            try:
+                decode_metric_value(analysis, name)
+            except MetricAggregationError as error:
                 raise MetricAggregationError(
-                    f"required EW metric {metric!r} unavailable for {label!r}: {value!r}"
-                )
+                    f"required metric {name!r} unavailable for {label!r}: {error}"
+                ) from error
 
 
-def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
-    """Combine per-exchange analysis dicts into structured scenario metrics."""
-
+def build_scenario_metrics(analyses, *, required_metrics=None, reducers=None):
     if not analyses:
-        raise MetricAggregationError("no analysis payloads available for scenario metrics")
-
-    stats: Dict[str, MetricStats] = {}
-    metric_names = set()
-    for label, analysis in analyses.items():
-        if not isinstance(analysis, Mapping):
-            raise MetricAggregationError(
-                f"analysis payload for {label!r} must be a mapping, got {type(analysis).__name__}"
+        raise MetricAggregationError("no analysis sources available")
+    required = (
+        None
+        if required_metrics is None
+        else {metric_base_name(name) for name in required_metrics}
+    )
+    if required is not None:
+        validate_required_core_metrics(analyses, required)
+    else:
+        for analysis in analyses.values():
+            require_metric_definition(analysis)
+    names = (
+        required
+        if required is not None
+        else set().union(*(set(row) & KNOWN_METRICS for row in analyses.values()))
+    )
+    stats = {}
+    for name in sorted(names):
+        modes = set((reducers or {}).get(name, {"mean"}))
+        try:
+            values = [decode_metric_value(row, name) for row in analyses.values()]
+            stats[name] = encode_metric_values(
+                {mode: raw_reduce(values, mode) for mode in sorted(modes)}
             )
-        for metric, raw_value in analysis.items():
-            if _is_number(raw_value):
-                metric_names.add(metric)
-                continue
-            if _is_numeric_value(raw_value) or _is_known_metric_key(metric):
-                raise MetricAggregationError(
-                    f"non-finite metric {metric!r} for {label!r}: {raw_value!r}"
-                )
-    if not metric_names:
-        raise MetricAggregationError("analysis payloads contained no metrics")
-
-    for metric in sorted(metric_names):
-        if metric in EW_METRICS and any(metric not in analysis for analysis in analyses.values()):
-            continue
-        values = []
-        for label, analysis in analyses.items():
-            if metric not in analysis:
-                continue
-            raw_value = analysis[metric]
-            if not _is_number(raw_value):
-                raise MetricAggregationError(
-                    f"non-finite metric {metric!r} for {label!r}: {raw_value!r}"
-                )
-            values.append(_safe_float(raw_value))
-        stats[metric] = _build_stats(values)
-
-    payload = {"stats": stats, **shared_evaluation_period(analyses)}
-    metadata = {
-        label: analysis["ew_metadata"]
-        for label, analysis in analyses.items() if "ew_metadata" in analysis
-    }
-    if metadata:
-        payload["ew_metadata"] = metadata
-    periods = {label: evaluation_period(analysis) for label, analysis in analyses.items()}
-    if any(periods.values()):
-        payload["exchanges"] = periods
-    return payload
-
-
-def build_standalone_metrics(analysis: Mapping[str, Any], exchange: str) -> Dict[str, Any]:
-    """Persist standalone diagnostics without applying optimizer scoring validation."""
-    period = evaluation_period(analysis)
-    payload = {
-        "stats": {
-            metric: _build_stats([value])
-            for metric, value in analysis.items()
-            if _is_number(value)
+        except MetricAggregationError as error:
+            if required is not None and name in required:
+                raise
+            stats[name] = {mode: None for mode in modes}
+            stats[name]["metric_status"] = {
+                mode: {"status": error.status, "reason": str(error)} for mode in modes
+            }
+    return {
+        "definition_version": CORE_METRIC_DEFINITION_VERSION,
+        "stats": stats,
+        **shared_evaluation_period(analyses),
+        "sources": {
+            label: deepcopy(row.get("metric_metadata", {}))
+            for label, row in analyses.items()
         },
-        **period,
     }
-    if "ew_metadata" in analysis:
-        payload["ew_metadata"] = {exchange: analysis["ew_metadata"]}
-    if period:
-        payload["exchanges"] = {exchange: period}
-    diagnostics = {
-        metric: str(float(value))
-        for metric, value in analysis.items()
-        if _is_numeric_value(value) and not _is_number(value)
-    }
-    if diagnostics:
-        payload["nonfinite_diagnostics"] = diagnostics
-    return payload
 
 
-def flatten_metric_stats(stats: Mapping[str, MetricStats], *, prefix: str = "") -> Dict[str, float]:
-    """Convert structured stats to the legacy flat format used by scoring/limits."""
+def build_standalone_metrics(analysis, exchange):
+    return build_scenario_metrics({exchange: analysis})
 
-    flattened: Dict[str, float] = {}
-    required_fields = ("mean", "min", "max", "std", "median")
-    for metric, values in stats.items():
-        missing = [field for field in required_fields if field not in values]
-        if missing:
-            raise MetricAggregationError(
-                f"metric {metric!r} missing stat field(s): {', '.join(missing)}"
-            )
-        for field in required_fields:
-            key = f"{prefix}{metric}_{field}"
-            flattened[key] = _safe_float(values[field])
-    return flattened
+
+def flatten_metric_stats(stats, *, prefix=""):
+    values, unavailable = {}, {}
+    for name, fields in stats.items():
+        if name not in KNOWN_METRICS:
+            raise MetricAggregationError(f"unknown core metric in statistics: {name!r}")
+        for mode in STAT_SUFFIXES:
+            if mode not in fields:
+                continue
+            key = f"{prefix}{name}_{mode}"
+            try:
+                values[key] = decode_metric_value(fields, mode)
+            except MetricAggregationError:
+                unavailable[key] = fields.get("metric_status", {}).get(
+                    mode, {"status": "undefined"}
+                )
+    result = encode_metric_values(values)
+    if unavailable:
+        result.update({key: None for key in unavailable})
+        result.setdefault("metric_status", {}).update(unavailable)
+    return result
 
 
 def merge_suite_payload(
-    aggregate_stats: Mapping[str, MetricStats],
-    *,
-    aggregate_values: Mapping[str, float] | None = None,
-    scenario_metrics: Mapping[str, Mapping[str, Any]] | None = None,
-) -> Dict[str, Any]:
-    """
-    Build the suite metrics payload embedded in Pareto members.
-
-    Returns a structure where each metric contains aggregate stats/value
-    plus per-scenario means when available.
-    """
-
+    aggregate_stats, *, aggregate_values=None, scenario_metrics=None
+):
     scenario_metrics = scenario_metrics or {}
-    metric_names = set(aggregate_stats.keys())
-    for stats in scenario_metrics.values():
-        metric_names.update(stats.get("stats", {}).keys())
-
-    suite_metrics: Dict[str, Any] = {}
-    for metric in sorted(metric_names):
-        aggregate_stat = dict(aggregate_stats.get(metric, {}))
-        aggregated_value = None
-        if aggregate_values and metric in aggregate_values:
-            aggregated_value = aggregate_values[metric]
-        elif aggregate_stat:
-            aggregated_value = aggregate_stat.get("mean")
-        metric_entry = {
-            "stats": aggregate_stat,
-            "aggregated": aggregated_value,
-            "scenarios": {},
-        }
-        for label, stats in scenario_metrics.items():
-            scenario_stat = stats.get("stats", {}).get(metric)
-            if scenario_stat:
-                value = scenario_stat.get("mean")
-                if value is not None:
-                    metric_entry["scenarios"][label] = value
-        suite_metrics[metric] = metric_entry
-
-    payload: Dict[str, Any] = {"metrics": suite_metrics}
+    names = set(aggregate_stats).union(
+        *(set(row.get("stats", {})) for row in scenario_metrics.values())
+    )
+    metric_rows = {}
+    for name in sorted(names):
+        row = {"stats": deepcopy(aggregate_stats.get(name, {})), "scenarios": {}}
+        if aggregate_values is not None and name in aggregate_values:
+            row.update(
+                encode_metric_values(
+                    {"aggregated": decode_metric_value(aggregate_values, name)}
+                )
+            )
+        elif "mean" in row["stats"]:
+            try:
+                row.update(
+                    encode_metric_values(
+                        {"aggregated": decode_metric_value(row["stats"], "mean")}
+                    )
+                )
+            except MetricAggregationError as error:
+                row["aggregated"] = None
+                row.setdefault("metric_status", {})["aggregated"] = {
+                    "status": error.status,
+                    "reason": str(error),
+                }
+        for label, scenario in scenario_metrics.items():
+            fields = scenario.get("stats", {}).get(name)
+            if fields is not None:
+                try:
+                    value = decode_metric_value(fields, "mean")
+                    encoded = encode_metric_values({label: value})
+                    statuses = encoded.pop("metric_status", {})
+                    row["scenarios"].update(encoded)
+                    if statuses:
+                        row["scenarios"].setdefault("metric_status", {}).update(
+                            statuses
+                        )
+                except MetricAggregationError as error:
+                    row["scenarios"][label] = None
+                    row["scenarios"].setdefault("metric_status", {})[label] = {
+                        "status": error.status,
+                        "reason": str(error),
+                    }
+        metric_rows[name] = row
+    result = {
+        "definition_version": CORE_METRIC_DEFINITION_VERSION,
+        "metrics": metric_rows,
+    }
     if scenario_metrics:
-        metadata = {
-            label: metrics["ew_metadata"]
-            for label, metrics in scenario_metrics.items() if "ew_metadata" in metrics
+        result["scenario_labels"] = list(scenario_metrics)
+        result["sources"] = {
+            label: deepcopy(row.get("sources", {}))
+            for label, row in scenario_metrics.items()
         }
-        if metadata:
-            payload["ew_metadata"] = metadata
-        payload["scenario_labels"] = list(scenario_metrics.keys())
-        periods = {
-            label: {
-                **evaluation_period(metrics),
-                **({"exchanges": metrics["exchanges"]} if "exchanges" in metrics else {}),
-            }
-            for label, metrics in scenario_metrics.items()
-        }
-        if any(periods.values()):
-            payload["scenarios"] = periods
-        payload.update(shared_evaluation_period(scenario_metrics))
-    return payload
+        result.update(shared_evaluation_period(scenario_metrics))
+    return result

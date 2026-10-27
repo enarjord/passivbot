@@ -19,7 +19,6 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
 
     config, candles, markets, btc, timestamps = _fixture(side, 1, "initial")
     config = generated_template(config, mode)
-    config['live'].update(hsl_signal_mode=mode)
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = True
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0
@@ -40,8 +39,8 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
             inventory_offset_exposure_coefficient=0., entry_qty_exposure_coefficient=0.,
         )
     if mode == "portfolio":
-        config["bot"]["hsl"] = deepcopy(config["bot"][side]["hsl"])
-        config["bot"]["hsl"]["enabled"] = True
+        config["bot"]["portfolio"]["hsl"] = deepcopy(config["bot"][side]["hsl"])
+        config["bot"]["portfolio"]["hsl"]["enabled"] = True
     count = 16
     candles = np.full((count, 1, 4), 100., dtype=np.float64)
     candles[:, :, 3] = 1.
@@ -74,13 +73,13 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     verify_loaded_runtime_extension()
     config, candles, markets, btc, timestamps = _recovered_panic_inputs(side, mode, strategy_kind)
     payload = build_backtest_payload(candles, markets, deepcopy(config), "bybit", btc,
-                                     timestamps, metrics_only=False, skip_btc_analysis=True)
+                                     timestamps, metrics_only=False, metric_requests=["gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"])
     _, _, analysis = execute_backtest(payload, config)
     report = payload.hard_stop_plot_data["hsl"]
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["red_minutes"] == 0
     assert report["summary"]["observed_minutes"] > 0
-    metrics = {"fills_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"}
+    metrics = {"gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"}
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
         needed_metrics=metrics, factual_hsl=True)

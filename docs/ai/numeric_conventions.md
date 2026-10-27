@@ -68,9 +68,9 @@ use 0 through 100; do not convert them through a spelling-only change.
 
 For new or renamed metric families, use
 `<base_with_unit>_<curve>[_<position_side>][_ew]` when those qualifiers apply.
-Use `usd`, `btc`, and `strategy_equity` consistently for the curve basis and put exponential
-weighting last. For example, `adg_fraction_usd_ew` and `sharpe_ratio_btc_ew` disclose different
-quantities without turning a conventional quotient into a fraction.
+Core backtest metrics use one `strategy_equity` basis and put exponential weighting last,
+for example `cagr_fraction_strategy_equity_ew`. `sharpe_ratio_strategy_equity` remains a
+conventional quotient. Current core selectors have no USD/BTC denomination aliases.
 
 Within a metric base, prefer statistic before unit, for example `drawdown_max_fraction` or
 `entry_interval_p95_hours`. Preserve a metric's intrinsic statistic separately from outer

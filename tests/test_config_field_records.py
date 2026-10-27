@@ -117,8 +117,8 @@ def test_scoring_and_limit_scenario_null_remains_distinct_from_omission():
     source = get_template_config()
     source["optimize"]["objective_scenario"] = "base"
     source["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": None},
-        {"metric": "mdg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max", "scenario": None},
+        {"metric": "sharpe_ratio_strategy_equity", "goal": "max"},
     ]
     source["optimize"]["limits"] = [
         {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.8,

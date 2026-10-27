@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 pub const CORE_METRIC_DEFINITION_VERSION: u32 = 1;
 pub const YEAR_DAYS: f64 = 365.25;
+pub const DEFAULT_EW_HALF_LIFE_DAYS: f64 = 180.0;
 pub const DAY_MS: u64 = 86_400_000;
 pub const MINUTE_MS: u64 = 60_000;
 const HOUR_MS: f64 = 3_600_000.0;
@@ -62,6 +63,7 @@ pub struct MetricDefinition {
     pub name: &'static str,
     pub unit: &'static str,
     pub role: MetricRole,
+    pub requires_minute_observations: bool,
 }
 
 macro_rules! definition {
@@ -71,6 +73,7 @@ macro_rules! definition {
             name: $name,
             unit: $unit,
             role: MetricRole::$role,
+            requires_minute_observations: Metric::$metric.requires_minute_observations(),
         }
     };
 }
@@ -191,6 +194,20 @@ pub const METRIC_CATALOG: [MetricDefinition; 25] = [
 ];
 
 impl Metric {
+    pub const fn requires_minute_observations(self) -> bool {
+        matches!(
+            self,
+            Self::DrawdownMax
+                | Self::Ulcer
+                | Self::Pain
+                | Self::PeakRecoveryMax
+                | Self::CagrEw
+                | Self::PositionUtilizationLong
+                | Self::PositionUtilizationShort
+                | Self::GrossExposureRms
+                | Self::GrossExposureMax
+        )
+    }
     pub fn definition(self) -> &'static MetricDefinition {
         &METRIC_CATALOG[self as usize]
     }
@@ -439,15 +456,18 @@ pub struct Finalization {
 pub struct MetricsMetadata {
     pub definition_version: u32,
     pub year_days: f64,
+    pub observation_interval_ms: u64,
     pub start_timestamp_ms: u64,
     pub intended_end_timestamp_ms: u64,
     pub actual_end_timestamp_ms: u64,
-    pub minute_observation_count: u64,
+    pub equity_observation_count: u64,
     pub daily_return_count: u64,
     pub daily_first_close_timestamp_ms: Option<u64>,
     pub daily_last_close_timestamp_ms: Option<u64>,
     pub fill_count: u64,
     pub holding_episode_count: u64,
+    /// Present only for a selected recovery metric with valid path support.
+    pub peak_recovery_tail_censored: Option<bool>,
     pub hsl_enabled: bool,
     pub hsl_trigger_count: u64,
     pub hsl_execution_episode_count: u64,
@@ -458,6 +478,79 @@ pub struct MetricsMetadata {
 pub struct CoreMetricsResult {
     pub metrics: BTreeMap<&'static str, MetricValue>,
     pub metadata: MetricsMetadata,
+}
+
+/// Backend-neutral completed statistics. A producer must include baseline and
+/// unfinished tails once. No observation or fill histories cross this boundary.
+#[derive(Clone, Debug, Default)]
+pub struct CoreMetricsSummary {
+    pub equity: EquitySummary,
+    pub daily: DailySummary,
+    pub fills: FillSummary,
+    pub holding: HoldingSummary,
+    pub exposure: ExposureSummary,
+}
+#[derive(Clone, Debug, Default)]
+pub struct EquitySummary {
+    pub end_timestamp_ms: u64,
+    pub final_strategy_equity: f64,
+    pub observation_count: u64,
+    pub clock_valid: bool,
+    pub all_equity_finite: bool,
+    pub all_equity_positive: bool,
+    pub drawdown_sum: f64,
+    pub drawdown_squares: f64,
+    pub drawdown_max: f64,
+    pub recovery_max_ms: u64,
+    /// A summary carries the producer's tail fact without reconstructing a start.
+    pub peak_recovery_tail_censored: Option<bool>,
+    pub ew_log_sum: f64,
+    pub ew_days_sum: f64,
+    pub ew_valid: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct DailySummary {
+    pub first_close_timestamp_ms: Option<u64>,
+    pub last_close_timestamp_ms: Option<u64>,
+    pub return_count: u64,
+    pub mean: f64,
+    pub m2: f64,
+    pub downside_squares: f64,
+    pub gains: f64,
+    pub losses: f64,
+    pub valid: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct FillSummary {
+    pub count: u64,
+    pub last_timestamp_ms: u64,
+    pub max_gap_ms: u64,
+    pub turnover_sum: f64,
+    pub realized_profit: f64,
+    pub realized_loss: f64,
+    pub clock_valid: bool,
+    pub turnover_valid: bool,
+    pub realized_valid: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct HoldingSummary {
+    pub count: u64,
+    pub sum_hours: f64,
+    pub sum_squares: f64,
+    pub max_hours: f64,
+    pub valid: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct ExposureSummary {
+    pub first_timestamp_ms: Option<u64>,
+    pub last_timestamp_ms: Option<u64>,
+    pub observation_count: u64,
+    pub gross_squares: f64,
+    pub gross_max: f64,
+    pub utilization_sums: [f64; 2],
+    pub clock_valid: bool,
+    pub gross_valid: bool,
+    pub utilization_valid: [bool; 2],
 }
 
 #[derive(Clone, Debug, Default)]
@@ -624,6 +717,7 @@ struct ExposureStats {
     invalid_gross: bool,
     invalid_utilization: [bool; 2],
     terminal: bool,
+    last_timestamp_ms: Option<u64>,
 }
 impl ExposureStats {
     fn commit(&mut self, request: MetricRequest) {
@@ -696,6 +790,7 @@ impl ExposureStats {
                 self.invalid_clock = true;
             }
         }
+        self.last_timestamp_ms = Some(observation.timestamp_ms);
         self.pending = Some(observation);
     }
 }
@@ -707,6 +802,7 @@ impl ExposureStats {
 pub struct CoreMetrics {
     request: MetricRequest,
     window: EvaluationWindow,
+    observation_interval_ms: u64,
     initial_equity: f64,
     pending_equity: Option<(u64, f64)>,
     previous_equity: Option<(u64, f64)>,
@@ -715,10 +811,12 @@ pub struct CoreMetrics {
     clock_invalid: bool,
     equity_invalid: bool,
     equity_nonpositive: bool,
+    path_moments_invalid: bool,
     terminal: bool,
     peak: f64,
     peak_timestamp_ms: u64,
     underwater_start: Option<u64>,
+    peak_recovery_tail_censored: Option<bool>,
     recovery_max_ms: u64,
     drawdown_sum: f64,
     drawdown_squares: f64,
@@ -747,6 +845,24 @@ impl CoreMetrics {
         initial_strategy_equity: f64,
         ew_half_life_days: Option<f64>,
     ) -> Result<Self, String> {
+        Self::new_with_interval(
+            request,
+            window,
+            initial_strategy_equity,
+            ew_half_life_days,
+            MINUTE_MS,
+        )
+    }
+    pub fn new_with_interval(
+        request: MetricRequest,
+        window: EvaluationWindow,
+        initial_strategy_equity: f64,
+        ew_half_life_days: Option<f64>,
+        observation_interval_ms: u64,
+    ) -> Result<Self, String> {
+        if observation_interval_ms == 0 || observation_interval_ms % MINUTE_MS != 0 {
+            return Err("observation interval must be a positive whole number of minutes".into());
+        }
         if window.intended_end_timestamp_ms <= window.start_timestamp_ms {
             return Err("evaluation window must have positive duration".into());
         }
@@ -758,6 +874,7 @@ impl CoreMetrics {
         Ok(Self {
             request,
             window,
+            observation_interval_ms,
             initial_equity: initial_strategy_equity,
             pending_equity: Some((window.start_timestamp_ms, initial_strategy_equity)),
             previous_equity: None,
@@ -766,10 +883,12 @@ impl CoreMetrics {
             clock_invalid: false,
             equity_invalid: !initial_strategy_equity.is_finite(),
             equity_nonpositive: initial_strategy_equity <= 0.0,
+            path_moments_invalid: false,
             terminal: false,
             peak: initial_strategy_equity,
             peak_timestamp_ms: window.start_timestamp_ms,
             underwater_start: None,
+            peak_recovery_tail_censored: Some(false),
             recovery_max_ms: 0,
             drawdown_sum: 0.0,
             drawdown_squares: 0.0,
@@ -792,6 +911,130 @@ impl CoreMetrics {
             exposure: ExposureStats::default(),
         })
     }
+    /// Restore already-finalized device moments and reuse the ordinary finish
+    /// formulas/status handling. This observer is sealed against further samples.
+    pub fn from_summary(
+        request: MetricRequest,
+        window: EvaluationWindow,
+        initial_strategy_equity: f64,
+        ew_half_life_days: Option<f64>,
+        observation_interval_ms: u64,
+        summary: CoreMetricsSummary,
+    ) -> Result<Self, String> {
+        let mut state = Self::new_with_interval(
+            request,
+            window,
+            initial_strategy_equity,
+            ew_half_life_days,
+            observation_interval_ms,
+        )?;
+        let e = summary.equity;
+        let elapsed = e.end_timestamp_ms.checked_sub(window.start_timestamp_ms);
+        let expected_count = elapsed
+            .map(|d| d / observation_interval_ms + 1 + u64::from(d % observation_interval_ms != 0));
+        state.pending_equity = None;
+        state.previous_equity = Some((e.end_timestamp_ms, e.final_strategy_equity));
+        state.last_timestamp_ms = e.end_timestamp_ms;
+        state.count = e.observation_count;
+        state.clock_invalid = !e.clock_valid || expected_count != Some(e.observation_count);
+        state.equity_invalid |= !e.all_equity_finite || !e.final_strategy_equity.is_finite();
+        state.equity_nonpositive |= !e.all_equity_positive || e.final_strategy_equity <= 0.0;
+        state.path_moments_invalid = ![e.drawdown_sum, e.drawdown_squares, e.drawdown_max]
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0)
+            || elapsed.is_none_or(|duration| e.recovery_max_ms > duration);
+        state.terminal = true;
+        state.drawdown_sum = e.drawdown_sum;
+        state.drawdown_squares = e.drawdown_squares;
+        state.drawdown_max = e.drawdown_max;
+        state.recovery_max_ms = e.recovery_max_ms;
+        state.peak_recovery_tail_censored = e.peak_recovery_tail_censored;
+        state.ew_log_sum = e.ew_log_sum;
+        state.ew_days_sum = e.ew_days_sum;
+        state.ew_invalid = !e.ew_valid || !e.ew_log_sum.is_finite() || !e.ew_days_sum.is_finite();
+        let d = summary.daily;
+        state.daily = DailyStats {
+            first: d.first_close_timestamp_ms,
+            previous: d.last_close_timestamp_ms.map(|t| (t, 1.0)),
+            count: d.return_count,
+            mean: d.mean,
+            m2: d.m2,
+            downside_squares: d.downside_squares,
+            gains: d.gains,
+            losses: d.losses,
+            invalid: !d.valid
+                || ![d.mean, d.m2, d.downside_squares, d.gains, d.losses]
+                    .iter()
+                    .all(|v| v.is_finite())
+                || d.m2 < 0.0
+                || d.downside_squares < 0.0
+                || d.gains < 0.0
+                || d.losses < 0.0
+                || match (d.first_close_timestamp_ms, d.last_close_timestamp_ms) {
+                    (Some(a), Some(b)) => {
+                        b.checked_sub(a).map(|n| n / DAY_MS) != Some(d.return_count)
+                    }
+                    (None, None) => d.return_count != 0,
+                    _ => true,
+                },
+        };
+        let f = summary.fills;
+        state.fill_count = f.count;
+        state.last_fill_timestamp_ms = f.last_timestamp_ms;
+        state.fill_gap_max_ms = f.max_gap_ms;
+        state.fill_clock_invalid = !f.clock_valid
+            || f.last_timestamp_ms < window.start_timestamp_ms
+            || (f.count == 0 && f.last_timestamp_ms != window.start_timestamp_ms)
+            || elapsed.is_none_or(|duration| f.max_gap_ms > duration);
+        state.turnover_sum = f.turnover_sum;
+        state.turnover_invalid =
+            !f.turnover_valid || !f.turnover_sum.is_finite() || f.turnover_sum < 0.0;
+        state.realized_profit = f.realized_profit;
+        state.realized_loss = f.realized_loss;
+        state.realized_invalid = !f.realized_valid
+            || !f.realized_profit.is_finite()
+            || !f.realized_loss.is_finite()
+            || f.realized_profit < 0.0
+            || f.realized_loss < 0.0;
+        let h = summary.holding;
+        state.holding = HoldingStats {
+            open: BTreeMap::new(),
+            count: h.count,
+            sum_hours: h.sum_hours,
+            sum_squares: h.sum_squares,
+            max_hours: h.max_hours,
+            invalid: !h.valid
+                || ![h.sum_hours, h.sum_squares, h.max_hours]
+                    .iter()
+                    .all(|v| v.is_finite() && *v >= 0.0),
+        };
+        let x = summary.exposure;
+        state.exposure = ExposureStats {
+            pending: None,
+            first: x.first_timestamp_ms,
+            count: x.observation_count,
+            gross_squares: x.gross_squares,
+            gross_max: x.gross_max,
+            utilization_sums: x.utilization_sums,
+            invalid_clock: !x.clock_valid
+                || x.first_timestamp_ms != Some(window.start_timestamp_ms)
+                || x.last_timestamp_ms != Some(e.end_timestamp_ms)
+                || x.observation_count != e.observation_count,
+            invalid_gross: !x.gross_valid
+                || !x.gross_squares.is_finite()
+                || !x.gross_max.is_finite()
+                || x.gross_squares < 0.0
+                || x.gross_max < 0.0,
+            invalid_utilization: [0, 1].map(|i| {
+                !x.utilization_valid[i]
+                    || !x.utilization_sums[i].is_finite()
+                    || x.utilization_sums[i] < 0.0
+            }),
+            terminal: true,
+            last_timestamp_ms: x.last_timestamp_ms,
+        };
+        Ok(state)
+    }
     pub fn request(&self) -> MetricRequest {
         self.request
     }
@@ -810,7 +1053,9 @@ impl CoreMetrics {
             return;
         }
         let delta = timestamp - self.last_timestamp_ms;
-        if (!terminal && delta != MINUTE_MS) || (terminal && delta > MINUTE_MS) {
+        if (!terminal && delta != self.observation_interval_ms)
+            || (terminal && delta > self.observation_interval_ms)
+        {
             self.clock_invalid = true;
             return;
         }
@@ -848,6 +1093,7 @@ impl CoreMetrics {
                 } else if self.underwater_start.is_none() {
                     self.underwater_start = Some(self.peak_timestamp_ms);
                 }
+                self.peak_recovery_tail_censored = Some(self.underwater_start.is_some());
                 let d = (self.peak - equity) / self.peak;
                 self.drawdown_sum += d;
                 self.drawdown_squares += d * d;
@@ -940,7 +1186,7 @@ impl CoreMetrics {
         }
     }
     pub fn observe_exposure(&mut self, observation: ExposureObservation) {
-        if self.request.needs_exposure() {
+        if self.request.needs_exposure() && self.observation_interval_ms == MINUTE_MS {
             self.exposure.observe(
                 observation,
                 self.request,
@@ -965,7 +1211,7 @@ impl CoreMetrics {
             .map(|(_, e)| e)
             .unwrap_or(state.initial_equity);
         let holding = state.holding.with_tails(end);
-        let exposure_end = state.exposure.pending.map(|x| x.timestamp_ms);
+        let exposure_end = state.exposure.last_timestamp_ms;
         state.exposure.commit(state.request);
         let mut metrics = BTreeMap::new();
         for definition in METRIC_CATALOG
@@ -975,6 +1221,10 @@ impl CoreMetrics {
             let metric = definition.metric;
             let value = if !time_valid {
                 MetricValue::invalid("invalid_evaluation_clock")
+            } else if metric.requires_minute_observations()
+                && state.observation_interval_ms != MINUTE_MS
+            {
+                MetricValue::invalid("unsupported_observation_interval")
             } else {
                 match metric {
                     Metric::Cagr | Metric::CagrEw => {
@@ -1002,10 +1252,15 @@ impl CoreMetrics {
                     | Metric::Pain
                     | Metric::PeakRecoveryMax => {
                         if state.equity_invalid
+                            || state.path_moments_invalid
                             || !state.initial_equity.is_finite()
                             || state.initial_equity <= 0.0
                         {
                             MetricValue::invalid("invalid_drawdown_curve")
+                        } else if metric == Metric::PeakRecoveryMax
+                            && state.peak_recovery_tail_censored.is_none()
+                        {
+                            MetricValue::invalid("missing_recovery_tail_status")
                         } else {
                             MetricValue::finite(match metric {
                                 Metric::DrawdownMax => state.drawdown_max,
@@ -1181,20 +1436,26 @@ impl CoreMetrics {
             };
             metrics.insert(definition.name, value);
         }
+        let peak_recovery_tail_censored = metrics
+            .get(Metric::PeakRecoveryMax.definition().name)
+            .filter(|value| value.status == MetricStatus::Finite)
+            .and(state.peak_recovery_tail_censored);
         CoreMetricsResult {
             metrics,
             metadata: MetricsMetadata {
                 definition_version: CORE_METRIC_DEFINITION_VERSION,
                 year_days: YEAR_DAYS,
+                observation_interval_ms: state.observation_interval_ms,
                 start_timestamp_ms: state.window.start_timestamp_ms,
                 intended_end_timestamp_ms: state.window.intended_end_timestamp_ms,
                 actual_end_timestamp_ms: end,
-                minute_observation_count: state.count,
+                equity_observation_count: state.count,
                 daily_return_count: state.daily.count,
                 daily_first_close_timestamp_ms: state.daily.first,
                 daily_last_close_timestamp_ms: state.daily.previous.map(|(t, _)| t),
                 fill_count: state.fill_count,
                 holding_episode_count: holding.count,
+                peak_recovery_tail_censored,
                 hsl_enabled: finalization.hsl.enabled,
                 hsl_trigger_count: finalization.hsl.trigger_count,
                 hsl_execution_episode_count: finalization.hsl.execution_episode_count,
@@ -1361,7 +1622,7 @@ mod tests {
         close(number(&result, Metric::Pain), 0.4 / 6.0);
         close(number(&result, Metric::Ulcer), 0.1);
         close(number(&result, Metric::PeakRecoveryMax), 3.0 / 1440.0);
-        assert_eq!(result.metadata.minute_observation_count, 6);
+        assert_eq!(result.metadata.equity_observation_count, 6);
         let mut plateau = new(&[Metric::PeakRecoveryMax], 3 * MINUTE_MS);
         for (i, equity) in [100.0, 90.0, 100.0].into_iter().enumerate() {
             plateau.observe_minute((i as u64 + 1) * MINUTE_MS, equity);
@@ -1391,14 +1652,14 @@ mod tests {
         state.observe_minute(MINUTE_MS, 90.0);
         state.observe_terminal(MINUTE_MS + MINUTE_MS / 2, 80.0);
         let result = state.finish(finalization(MINUTE_MS + MINUTE_MS / 2));
-        assert_eq!(result.metadata.minute_observation_count, 3);
+        assert_eq!(result.metadata.equity_observation_count, 3);
         close(number(&result, Metric::Pain), 0.1);
         close(number(&result, Metric::Completion), 0.75);
         let mut same = new(&[Metric::Pain], MINUTE_MS);
         same.observe_minute(MINUTE_MS, 90.0);
         same.observe_terminal(MINUTE_MS, 80.0);
         let result = same.finish(finalization(MINUTE_MS));
-        assert_eq!(result.metadata.minute_observation_count, 2);
+        assert_eq!(result.metadata.equity_observation_count, 2);
         close(number(&result, Metric::Pain), 0.1);
     }
 
@@ -1860,13 +2121,248 @@ mod tests {
         let state = flat(&[Metric::Pain, Metric::HoldingMax], end);
         assert!(state.holding.open.is_empty());
         let result = state.finish(finalization(end));
-        assert_eq!(result.metadata.minute_observation_count, 100_001);
+        assert_eq!(result.metadata.equity_observation_count, 100_001);
         close(number(&result, Metric::Pain), 0.0);
         let mut missing = new(&[Metric::Cagr], 2 * MINUTE_MS);
         missing.observe_minute(2 * MINUTE_MS, 100.0);
         assert_eq!(
             value(&missing.finish(finalization(2 * MINUTE_MS)), Metric::Cagr).status,
             MetricStatus::Invalid
+        );
+    }
+    fn summary_of(state: &CoreMetrics, end: u64) -> CoreMetricsSummary {
+        let mut e = state.clone();
+        e.commit_equity();
+        let mut exposure = e.exposure.clone();
+        let exposure_end = exposure.last_timestamp_ms;
+        exposure.commit(e.request);
+        let holding = e.holding.with_tails(end);
+        CoreMetricsSummary {
+            equity: EquitySummary {
+                end_timestamp_ms: end,
+                final_strategy_equity: e.previous_equity.unwrap().1,
+                observation_count: e.count,
+                clock_valid: !e.clock_invalid,
+                all_equity_finite: !e.equity_invalid,
+                all_equity_positive: !e.equity_nonpositive,
+                drawdown_sum: e.drawdown_sum,
+                drawdown_squares: e.drawdown_squares,
+                drawdown_max: e.drawdown_max,
+                recovery_max_ms: e
+                    .recovery_max_ms
+                    .max(e.underwater_start.map_or(0, |t| end - t)),
+                peak_recovery_tail_censored: e.peak_recovery_tail_censored,
+                ew_log_sum: e.ew_log_sum,
+                ew_days_sum: e.ew_days_sum,
+                ew_valid: !e.ew_invalid,
+            },
+            daily: DailySummary {
+                first_close_timestamp_ms: e.daily.first,
+                last_close_timestamp_ms: e.daily.previous.map(|(t, _)| t),
+                return_count: e.daily.count,
+                mean: e.daily.mean,
+                m2: e.daily.m2,
+                downside_squares: e.daily.downside_squares,
+                gains: e.daily.gains,
+                losses: e.daily.losses,
+                valid: !e.daily.invalid,
+            },
+            fills: FillSummary {
+                count: e.fill_count,
+                last_timestamp_ms: e.last_fill_timestamp_ms,
+                max_gap_ms: e.fill_gap_max_ms,
+                turnover_sum: e.turnover_sum,
+                realized_profit: e.realized_profit,
+                realized_loss: e.realized_loss,
+                clock_valid: !e.fill_clock_invalid,
+                turnover_valid: !e.turnover_invalid,
+                realized_valid: !e.realized_invalid,
+            },
+            holding: HoldingSummary {
+                count: holding.count,
+                sum_hours: holding.sum_hours,
+                sum_squares: holding.sum_squares,
+                max_hours: holding.max_hours,
+                valid: !holding.invalid,
+            },
+            exposure: ExposureSummary {
+                first_timestamp_ms: exposure.first,
+                last_timestamp_ms: exposure_end,
+                observation_count: exposure.count,
+                gross_squares: exposure.gross_squares,
+                gross_max: exposure.gross_max,
+                utilization_sums: exposure.utilization_sums,
+                clock_valid: !exposure.invalid_clock,
+                gross_valid: !exposure.invalid_gross,
+                utilization_valid: exposure.invalid_utilization.map(|v| !v),
+            },
+        }
+    }
+    #[test]
+    fn completed_sufficient_statistics_reuse_the_exact_streaming_finalizer() {
+        let levels = [100.0, 110.0, 99.0, 108.9];
+        let end = 3 * DAY_MS;
+        let mut state = daily(&levels, &METRIC_CATALOG.map(|d| d.metric));
+        for t in (0..=end).step_by(MINUTE_MS as usize) {
+            let mut x = exposure(t, 2.0, [0.25, 0.5]);
+            x.strategy_equity = levels[(t / DAY_MS) as usize];
+            state.observe_exposure(x);
+        }
+        state.observe_fill(fill(MINUTE_MS, 0, PositionSide::Long, 0.0, 1.0));
+        state.observe_fill(fill(DAY_MS, 0, PositionSide::Long, 1.0, 0.0));
+        let summary = summary_of(&state, end);
+        let reconstructed = CoreMetrics::from_summary(
+            MetricRequest::all(),
+            state.window,
+            state.initial_equity,
+            state.half_life_days,
+            MINUTE_MS,
+            summary.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.finish(finalization(end)).metrics,
+            reconstructed.finish(finalization(end)).metrics
+        );
+        assert_eq!(
+            state
+                .finish(finalization(end))
+                .metadata
+                .equity_observation_count,
+            reconstructed
+                .finish(finalization(end))
+                .metadata
+                .equity_observation_count
+        );
+        let mut bad = summary;
+        bad.equity.observation_count -= 1;
+        let bad = CoreMetrics::from_summary(
+            request(&[Metric::Cagr]),
+            state.window,
+            100.0,
+            None,
+            MINUTE_MS,
+            bad,
+        )
+        .unwrap();
+        assert_eq!(
+            value(&bad.finish(finalization(end)), Metric::Cagr).status,
+            MetricStatus::Invalid
+        );
+    }
+    #[test]
+    fn coarser_statistics_are_labeled_and_minute_only_quantities_are_unavailable() {
+        let request = request(&[Metric::Cagr, Metric::Pain, Metric::Volatility]);
+        let end = 2 * DAY_MS;
+        let mut state = CoreMetrics::new_with_interval(
+            request,
+            EvaluationWindow {
+                start_timestamp_ms: 0,
+                intended_end_timestamp_ms: end,
+            },
+            100.0,
+            None,
+            5 * MINUTE_MS,
+        )
+        .unwrap();
+        for t in (5 * MINUTE_MS..=end).step_by((5 * MINUTE_MS) as usize) {
+            state.observe_minute(t, 100.0);
+        }
+        for t in [0, DAY_MS, 2 * DAY_MS] {
+            state.observe_daily_close(t, 100.0);
+        }
+        let result = state.finish(finalization(end));
+        assert_eq!(result.metadata.observation_interval_ms, 5 * MINUTE_MS);
+        close(number(&result, Metric::Cagr), 0.0);
+        close(number(&result, Metric::Volatility), 0.0);
+        assert_eq!(
+            value(&result, Metric::Pain).reason,
+            Some("unsupported_observation_interval")
+        );
+        for d in METRIC_CATALOG {
+            assert_eq!(
+                d.requires_minute_observations,
+                d.metric.requires_minute_observations()
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_tail_censoring_distinguishes_flat_recovered_and_unfinished_curves() {
+        for (curve, censored, recovery_minutes) in [
+            ([100.0, 100.0, 100.0], false, 0.0),
+            ([90.0, 95.0, 100.0], false, 3.0),
+            ([90.0, 95.0, 99.0], true, 3.0),
+        ] {
+            let mut state = new(&[Metric::PeakRecoveryMax], 3 * MINUTE_MS);
+            for (i, equity) in curve.into_iter().enumerate() {
+                state.observe_minute((i as u64 + 1) * MINUTE_MS, equity);
+            }
+            let result = state.finish(finalization(3 * MINUTE_MS));
+            assert_eq!(result.metadata.peak_recovery_tail_censored, Some(censored));
+            close(
+                number(&result, Metric::PeakRecoveryMax),
+                recovery_minutes / 1440.0,
+            );
+        }
+        let mut unselected = new(&[Metric::Pain], MINUTE_MS);
+        unselected.observe_minute(MINUTE_MS, 90.0);
+        assert_eq!(
+            unselected
+                .finish(finalization(MINUTE_MS))
+                .metadata
+                .peak_recovery_tail_censored,
+            None
+        );
+        let mut invalid = new(&[Metric::PeakRecoveryMax], MINUTE_MS);
+        invalid.observe_minute(MINUTE_MS, f64::NAN);
+        assert_eq!(
+            invalid
+                .finish(finalization(MINUTE_MS))
+                .metadata
+                .peak_recovery_tail_censored,
+            None
+        );
+    }
+
+    #[test]
+    fn imported_recovery_tail_preserves_producer_censoring_without_inventing_duration() {
+        let metrics = [Metric::PeakRecoveryMax, Metric::Pain];
+        let mut original = new(&metrics, 3 * MINUTE_MS);
+        for (i, equity) in [100.0, 90.0, 95.0].into_iter().enumerate() {
+            original.observe_minute((i as u64 + 1) * MINUTE_MS, equity);
+        }
+        let summary = summary_of(&original, 3 * MINUTE_MS);
+        assert_eq!(summary.equity.peak_recovery_tail_censored, Some(true));
+        let restore = |summary| {
+            CoreMetrics::from_summary(
+                request(&metrics),
+                original.window,
+                original.initial_equity,
+                None,
+                MINUTE_MS,
+                summary,
+            )
+            .unwrap()
+            .finish(finalization(3 * MINUTE_MS))
+        };
+        let imported = restore(summary.clone());
+        assert_eq!(imported.metadata.peak_recovery_tail_censored, Some(true));
+        assert_eq!(
+            imported.metrics,
+            original.finish(finalization(3 * MINUTE_MS)).metrics
+        );
+        let mut missing_tail = summary;
+        missing_tail.equity.peak_recovery_tail_censored = None;
+        let incomplete = restore(missing_tail);
+        assert_eq!(
+            value(&incomplete, Metric::PeakRecoveryMax).status,
+            MetricStatus::Invalid
+        );
+        assert_eq!(incomplete.metadata.peak_recovery_tail_censored, None);
+        assert_eq!(
+            value(&incomplete, Metric::Pain),
+            value(&imported, Metric::Pain)
         );
     }
 }

@@ -16,10 +16,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TICK_WINDOW_METRICS = (
-    "adg_fraction_strategy_equity", "adg_fraction_strategy_equity_ew", "drawdown_max_fraction_strategy_equity",
-    "drawdown_max_fraction_strategy_equity_long", "drawdown_max_fraction_strategy_equity_short",
-    "backtest_completion_fraction", "recovery_p95_days_strategy_equity",
-    "hsl_red_time_fraction", "entry_interval_p99_hours", "fills_per_day",
+    "cagr_fraction_strategy_equity", "cagr_fraction_strategy_equity_ew", "drawdown_max_fraction_strategy_equity",
+    "ulcer_index_fraction_strategy_equity", "pain_index_fraction_strategy_equity",
+    "backtest_completion_fraction", "peak_recovery_max_days_strategy_equity",
+    "hsl_red_time_fraction", "position_held_time_weighted_mean_hours", "gross_turnover_ratio_per_day",
 )
 
 

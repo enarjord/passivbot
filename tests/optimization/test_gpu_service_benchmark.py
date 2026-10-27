@@ -1,4 +1,6 @@
 import hashlib
+import os
+from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 
@@ -115,7 +117,8 @@ except RuntimeError as error:
         raise
 else:
     raise SystemExit('Optimized Python skipped result validation')
-'''], capture_output=True, text=True)
+'''], capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")})
     assert completed.returncode == 0, completed.stderr
 
 

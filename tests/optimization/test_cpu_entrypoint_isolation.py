@@ -69,7 +69,7 @@ def test_cpu_backtest_exports_and_plots_without_gpu_imports(tmp_path, strategy):
         config["disable_plotting"] = ["coin_fills", "hard_stop"]
         payload = build_backtest_payload(
             candles, markets, config, "binance", btc, timestamps,
-            metrics_only=False, skip_btc_analysis=True,
+            metrics_only=False,
         )
         fills, equity, analysis = execute_backtest(payload, config)
         assert len(fills) > 0 and len(equity) > 0
@@ -97,7 +97,7 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
         backend = sys.argv[3]
         config["optimize"].update(backend=backend, population_size=4, iters=8, seed=12, n_cpus=2)
         config["optimize"]["scoring"] = [
-            dict(metric="adg_fraction_strategy_equity", goal="max"),
+            dict(metric="cagr_fraction_strategy_equity", goal="max"),
             dict(metric="drawdown_max_fraction_strategy_equity", goal="min"),
         ]
         config["optimize"]["limits"] = [

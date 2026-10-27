@@ -18,7 +18,7 @@ def inputs():
         candle_coins=["B", "C", "A"],
         btc=SharedArraySpec("btc", (10,), "<f8"),
         timestamps=SharedArraySpec("timestamps", (10,), "<i8"),
-        exchange="binance", metrics=["fills_per_day"],
+        exchange="binance", metrics=["gross_turnover_ratio_per_day"],
         time_range=[2, 8], coin_indices=[2, 0],
     )
 
@@ -35,14 +35,14 @@ def test_prepared_dataset_snapshots_metadata_and_selection_without_attaching(mon
     values["time_range"][0] = 0
     values["coin_indices"].reverse()
     values["candle_coins"].reverse()
-    values["metrics"].append("adg_fraction_strategy_equity")
+    values["metrics"].append("cagr_fraction_strategy_equity")
     assert json.loads(dataset.config_json)["backtest"]["coins"]["binance"] == ["A", "B"]
     assert json.loads(dataset.markets_json)["A"]["price_step"] == 0.01
     assert dataset.time_range == (2, 8)
     assert dataset.timestamp_range == (2, 8)
     assert dataset.coin_indices == (2, 0)
     assert dataset.candle_coins == ("B", "C", "A")
-    assert dataset.metrics == ("fills_per_day",)
+    assert dataset.metrics == ("gross_turnover_ratio_per_day",)
     with pytest.raises(FrozenInstanceError):
         dataset.exchange = "bybit"
 
@@ -52,7 +52,7 @@ def test_prepared_dataset_snapshots_metadata_and_selection_without_attaching(mon
     {"coin_indices": (0, 0)}, {"coin_indices": (0, 3)}, {"coin_indices": (True, 0)},
     {"coin_indices": (0, 2)}, {"candle_coins": ["B", "C", "D"]},
     {"candle_coins": ["B", "C"]}, {"candle_coins": ["B", "C", "B"]}, {"candle_coins": "BCA"},
-    {"metrics": []}, {"metrics": "fills_per_day"}, {"exchange": ""},
+    {"metrics": []}, {"metrics": "gross_turnover_ratio_per_day"}, {"exchange": ""},
     {"timestamps": SharedArraySpec("ts", (9,), "<i8")},
     {"timestamp_range": (0, 5)}, {"timestamp_range": (0, 11)},
     {"timestamp_range": (False, 6)}, {"timestamp_range": (0,)},
@@ -201,7 +201,7 @@ def test_cuda_facade_refreshes_learned_ceiling_before_claiming_more_work(monkeyp
         def evaluate_results(self, candidates):
             batches.append(len(candidates))
             self.ceiling = 2  # Successful GPU work learned a larger history.
-            return [ReplayResult({"fills_per_day": item["value"]}, liquidated=False)
+            return [ReplayResult({"gross_turnover_ratio_per_day": item["value"]}, liquidated=False)
                     for item in candidates]
         def _remember_factual_capacities(self):
             pass
@@ -230,7 +230,7 @@ def test_cuda_facade_refreshes_learned_ceiling_before_claiming_more_work(monkeyp
                        for i in range(1, 16))
         release.set()
         results = [future.result(timeout=3) for future in futures]
-        assert [result.metrics["fills_per_day"] for result in results] == list(range(16))
+        assert [result.metrics["gross_turnover_ratio_per_day"] for result in results] == list(range(16))
         assert all(result.liquidated is False for result in results)
         assert service._batch_policy._ceilings["market"] == 2
     finally:

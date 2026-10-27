@@ -74,8 +74,8 @@ passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 300
   --seed 43 --hsl portfolio --gpu-engine native --hsl-drawdown-threshold-fraction 0.002 \
   --hsl-drawdown-fraction-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
-  --metrics adg_fraction_strategy_equity drawdown_max_fraction_strategy_equity hsl_red_time_fraction \
-  hsl_red_duration_max_minutes --report stress.json
+  --metrics cagr_fraction_strategy_equity drawdown_max_fraction_strategy_equity hsl_red_time_fraction \
+  hsl_panic_episode_loss_max_fraction --report stress.json
 ```
 
 This is an adversarial diagnostic, not a blanket release gate. Missing policies remain
@@ -132,15 +132,15 @@ contain coin identities and a small sample of fills.
 
 ## Policies and reports
 
-The default requested metrics are `adg_fraction_strategy_equity`, `drawdown_max_fraction_strategy_equity`
-and `fills_per_day`. Configured limit metrics are also requested. Defaults include
+Requests must use the native core catalog. Retired denomination, smoothing and presentation variants are rejected. The default requested metrics are `cagr_fraction_strategy_equity`, `drawdown_max_fraction_strategy_equity`
+and `gross_turnover_ratio_per_day`. Configured limit metrics are also requested. Defaults include
 provisional tolerances for these metrics and `backtest_completion_fraction`. They are
 measurement gates, not release-wide accepted discrepancies. Supply a JSON policy to
 override or extend them:
 
 ```json
 {
-  "adg_fraction_strategy_equity": {"absolute": 0.0000001, "relative": 0.0001},
+  "cagr_fraction_strategy_equity": {"absolute": 0.00001, "relative": 0.001},
   "fills_gap_max_days": {"absolute": 0.0007, "relative": 0},
   "omega_ratio_strategy_equity": {
     "absolute": 0.00001, "relative": 0.0001, "matching_infinity": true
@@ -157,7 +157,7 @@ successful comparisons with mismatches.
 
 Canonical limit checks run independently of the numerical tolerance. Even a metric
 within tolerance can flip feasibility. Scalar/single-scenario reducers use the singleton
-observation; missing or non-finite observations cannot become apparently feasible.
+observation; missing, invalid or undefined observations cannot become apparently feasible. Genuine infinities retain their mathematical statuses; undefined dispersion remains unassessed.
 Suite-scoped checks remain unassessed.
 
 Standard JSON goes to stdout; simulator chatter goes to stderr. `--compact` removes

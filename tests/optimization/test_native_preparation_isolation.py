@@ -73,8 +73,8 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
                 for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             }
         config["optimize"]["scoring"] = [
-            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
-            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+            {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
         ]
         config["optimize"]["limits"] = []
         columns = config["backtest"].pop("coins")
@@ -85,7 +85,7 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
             config=config, markets=markets, exchange="binance", hlcvs=spec,
             btc=SharedArraySpec("btc", btc.shape, btc.dtype.str),
             timestamps=SharedArraySpec("timestamps", timestamps.shape, timestamps.dtype.str),
-            candle_coins=coins, metrics=DEFAULT_METRICS,
+            candle_coins=coins, metrics=(*DEFAULT_METRICS, "ulcer_index_fraction_strategy_equity"),
         )
         evaluator = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
         evaluator.evaluate = forbidden

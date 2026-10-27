@@ -10,6 +10,15 @@ from typing import Any, Dict, Iterable, Optional
 from config import load_prepared_config
 from config.access import require_config_value
 from config.overrides import parse_overrides
+from config.metrics import KNOWN_METRICS, reject_retired_metric
+from metrics_schema import (
+    copy_metric_value,
+    decode_metric_value,
+    encode_metric_values,
+    MetricAggregationError,
+    require_metric_definition,
+)
+from optimization.evaluation_payload import unpack_evaluation_payload
 from logging_setup import configure_logging, resolve_log_level
 from rust_utils import collect_runtime_provenance, sha256_file
 from suite_runner import extract_suite_config
@@ -24,67 +33,109 @@ def collect_rust_binary_provenance() -> Dict[str, Any]:
     return collect_runtime_provenance()
 
 
-def extract_metric_means(payload: Dict[str, Any]) -> Dict[str, float]:
-    metrics: Dict[str, float] = {}
+DEFAULT_METRICS = (
+    "cagr_fraction_strategy_equity",
+    "ulcer_index_fraction_strategy_equity",
+    "drawdown_max_fraction_strategy_equity",
+    "backtest_completion_fraction",
+)
+
+
+def _merge_value(target, source, key, name):
+    value = copy_metric_value(source, key, output_name=name)
+    statuses = value.pop("metric_status", {})
+    target.update(value)
+    target.get("metric_status", {}).pop(name, None)
+    if not target.get("metric_status"):
+        target.pop("metric_status", None)
+    if statuses:
+        target.setdefault("metric_status", {}).update(statuses)
+
+
+def extract_metric_means(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Read only current core facts, preserving unavailable and infinite statuses."""
+    metrics = {}
     if not isinstance(payload, dict):
         return metrics
-    payload_root = payload
-    if isinstance(payload.get("metrics"), dict):
-        payload_root = payload["metrics"]
-    stats = payload_root.get("stats")
-    if isinstance(stats, dict):
-        for metric, value in stats.items():
-            if isinstance(value, dict) and value.get("mean") is not None:
-                metrics[metric] = float(value["mean"])
-            elif isinstance(value, (int, float)):
-                metrics[metric] = float(value)
-    suite_metrics = payload_root.get("suite_metrics")
-    if suite_metrics is None:
-        suite_metrics = payload.get("suite_metrics")
-    if isinstance(suite_metrics, dict):
-        for metric, entry in (suite_metrics.get("metrics") or {}).items():
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("aggregated") is not None:
-                metrics[metric] = float(entry["aggregated"])
-                continue
-            stats_entry = entry.get("stats")
-            if isinstance(stats_entry, dict) and stats_entry.get("mean") is not None:
-                metrics[metric] = float(stats_entry["mean"])
+    root = (
+        payload.get("metrics") if isinstance(payload.get("metrics"), dict) else payload
+    )
+    stats = root.get("stats")
+    flat_names = set(root) & KNOWN_METRICS
+    if isinstance(stats, dict) or flat_names:
+        require_metric_definition(root)
+        for name in sorted(flat_names):
+            _merge_value(metrics, root, name, name)
+        for name, fields in (stats or {}).items():
+            reject_retired_metric(name, path="replay statistic")
+            if "mean" in fields:
+                _merge_value(metrics, fields, "mean", name)
+    suite = root.get("suite_metrics", payload.get("suite_metrics"))
+    if isinstance(suite, dict):
+        require_metric_definition(suite)
+        for name, row in suite.get("metrics", {}).items():
+            reject_retired_metric(name, path="replay suite metric")
+            if "aggregated" in row:
+                _merge_value(metrics, row, "aggregated", name)
+            elif "mean" in row.get("stats", {}):
+                _merge_value(metrics, row["stats"], "mean", name)
     return metrics
 
 
 def select_metrics(
-    metrics: Dict[str, float], preferred: Optional[Iterable[str]] = None
-) -> Dict[str, float]:
-    if preferred is None:
-        preferred = (
-            "daily_realized_pnl_mean_fraction",
-            "daily_realized_pnl_median_fraction",
-            "peak_recovery_max_hours_realized_pnl",
-            "position_held_max_hours",
-            "backtest_completion_fraction",
-        )
-    out: Dict[str, float] = {}
-    for key in preferred:
+    metrics: Dict[str, Any], preferred: Optional[Iterable[str]] = None
+) -> Dict[str, Any]:
+    out = {}
+    for key in DEFAULT_METRICS if preferred is None else preferred:
+        reject_retired_metric(key, path="replay metric request")
         if key in metrics:
-            out[key] = metrics[key]
+            _merge_value(out, metrics, key, key)
+        else:
+            out[key] = None
+            out.setdefault("metric_status", {})[key] = {
+                "status": "invalid",
+                "reason": "requested metric was not stored by this source",
+            }
     return out
 
 
 def compare_metric_maps(
-    left: Dict[str, float], right: Dict[str, float], *, tolerance: float = 1e-12
-) -> Dict[str, Dict[str, float]]:
-    deltas: Dict[str, Dict[str, float]] = {}
-    for key in sorted(set(left) | set(right)):
-        lval = left.get(key)
-        rval = right.get(key)
-        if lval is None or rval is None:
-            deltas[key] = {"left": lval, "right": rval, "abs_diff": float("inf")}
+    left: Dict[str, Any], right: Dict[str, Any], *, tolerance: float = 1e-12
+) -> Dict[str, Dict[str, Any]]:
+    deltas = {}
+    for key in sorted((set(left) | set(right)) - {"metric_status"}):
+        row = {}
+        for name, values in (("left", left), ("right", right)):
+            if key in values:
+                _merge_value(row, values, key, name)
+            else:
+                row[name] = None
+        if key not in left or key not in right:
+            row.update(comparison="missing", abs_diff=None)
+            deltas[key] = row
             continue
-        diff = abs(float(lval) - float(rval))
-        if diff > tolerance:
-            deltas[key] = {"left": float(lval), "right": float(rval), "abs_diff": diff}
+        try:
+            lval, rval = decode_metric_value(left, key), decode_metric_value(right, key)
+        except MetricAggregationError:
+            row.update(comparison="unavailable", abs_diff=None)
+            deltas[key] = row
+            continue
+        if lval == rval:
+            continue  # Equal genuine infinite endpoints match without inf-inf subtraction.
+        difference = abs(lval - rval)
+        if difference > tolerance:
+            row.update(encode_metric_values({"abs_diff": difference}))
+            # Merge absolute-difference status with any source endpoint statuses.
+            endpoint_status = {}
+            for name, values in (("left", left), ("right", right)):
+                endpoint_status.update(
+                    copy_metric_value(values, key, output_name=name).get(
+                        "metric_status", {}
+                    )
+                )
+            if endpoint_status:
+                row.setdefault("metric_status", {}).update(endpoint_status)
+            deltas[key] = row
     return deltas
 
 
@@ -130,10 +181,12 @@ async def run_optimizer_replay(config: Dict[str, Any]) -> Dict[str, Any]:
     shared_btc_np = {}
     if use_combined:
         exchange = "combined"
-        coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, ts = await prepare_hlcvs_mss(
-            cfg, exchange
+        coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, ts = (
+            await prepare_hlcvs_mss(cfg, exchange)
         )
-        hlcvs, ts, btc_usd_prices = _maybe_aggregate_backtest_data(hlcvs, ts, btc_usd_prices, mss, cfg)
+        hlcvs, ts, btc_usd_prices = _maybe_aggregate_backtest_data(
+            hlcvs, ts, btc_usd_prices, mss, cfg
+        )
         cfg["backtest"]["coins"][exchange] = coins
         timestamps[exchange] = ts
         msss[exchange] = mss
@@ -143,8 +196,8 @@ async def run_optimizer_replay(config: Dict[str, Any]) -> Dict[str, Any]:
         shared_btc_np[exchange] = btc_usd_prices
     else:
         for exchange in backtest_exchanges:
-            coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, ts = await prepare_hlcvs_mss(
-                cfg, exchange
+            coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, ts = (
+                await prepare_hlcvs_mss(cfg, exchange)
             )
             hlcvs, ts, btc_usd_prices = _maybe_aggregate_backtest_data(
                 hlcvs, ts, btc_usd_prices, mss, cfg
@@ -169,9 +222,13 @@ async def run_optimizer_replay(config: Dict[str, Any]) -> Dict[str, Any]:
     selected = deepcopy(cfg["backtest"]["coins"])
     source_map = _coin_source_map(cfg["backtest"]["coins"], msss)
 
-    individual = HarnessIndividual(config_to_individual(cfg, evaluator.bounds, evaluator.sig_digits))
+    individual = HarnessIndividual(
+        config_to_individual(cfg, evaluator.bounds, evaluator.sig_digits)
+    )
     overrides = cfg.get("optimize", {}).get("enable_overrides", [])
-    objectives, penalty, metrics_payload = evaluator.evaluate(individual, overrides)
+    objectives, penalty, metrics_payload, _vector = unpack_evaluation_payload(
+        evaluator.evaluate(individual, overrides)
+    )
     return {
         "mode": "single",
         "objectives": list(objectives),
@@ -222,15 +279,15 @@ async def run_backtest_replay(config: Dict[str, Any]) -> Dict[str, Any]:
     use_combined = len(backtest_exchanges) > 1
     if use_combined:
         exchange = "combined"
-        coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = await prepare_hlcvs_mss(
-            cfg, exchange
+        coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = (
+            await prepare_hlcvs_mss(cfg, exchange)
         )
         cfg["backtest"]["coins"][exchange] = coins
         cfg["backtest"]["cache_dir"][exchange] = str(cache_dir)
         _fills, _equities, analysis, _payload = run_backtest(
             hlcvs, mss, cfg, exchange, btc_usd_prices, timestamps, return_payload=True
         )
-        metrics = {k: float(v) for k, v in analysis.items() if isinstance(v, (int, float))}
+        metrics = extract_metric_means(analysis)
         return {
             "mode": "single",
             "exchange": exchange,
@@ -240,8 +297,8 @@ async def run_backtest_replay(config: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     exchange = backtest_exchanges[0]
-    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = await prepare_hlcvs_mss(
-        cfg, exchange
+    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = (
+        await prepare_hlcvs_mss(cfg, exchange)
     )
     cfg["backtest"]["coins"][exchange] = coins
     cfg["backtest"]["cache_dir"][exchange] = str(cache_dir)
@@ -250,7 +307,7 @@ async def run_backtest_replay(config: Dict[str, Any]) -> Dict[str, Any]:
     )
     return {
         "mode": "single",
-        "metrics": {k: float(v) for k, v in analysis.items() if isinstance(v, (int, float))},
+        "metrics": extract_metric_means(analysis),
         "selected_coins": deepcopy(cfg["backtest"]["coins"]),
         "coin_sources": _coin_source_map({exchange: coins}, {exchange: mss}),
     }
@@ -266,13 +323,7 @@ def build_report(
     metric_keys: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     optimizer_metrics = optimizer.get("metrics", {})
-    backtest_metrics_raw = backtest.get("metrics", {})
-    if optimizer.get("mode") == "single" and backtest.get("mode") == "single" and all(
-        isinstance(v, (int, float)) for v in backtest_metrics_raw.values()
-    ):
-        backtest_metrics = backtest_metrics_raw
-    else:
-        backtest_metrics = backtest_metrics_raw
+    backtest_metrics = backtest.get("metrics", {})
     if metric_keys is not None:
         selected = tuple(metric_keys)
         optimizer_metrics = select_metrics(optimizer_metrics, selected)
@@ -301,9 +352,13 @@ def build_report(
             "coin_sources": backtest.get("coin_sources"),
         },
         "diffs": {
-            "stored_vs_optimizer": compare_metric_maps(stored_metrics, optimizer_metrics),
+            "stored_vs_optimizer": compare_metric_maps(
+                stored_metrics, optimizer_metrics
+            ),
             "stored_vs_backtest": compare_metric_maps(stored_metrics, backtest_metrics),
-            "optimizer_vs_backtest": compare_metric_maps(optimizer_metrics, backtest_metrics),
+            "optimizer_vs_backtest": compare_metric_maps(
+                optimizer_metrics, backtest_metrics
+            ),
         },
     }
 
@@ -364,7 +419,7 @@ async def async_main(args: argparse.Namespace) -> int:
         metric_keys=metric_keys,
     )
     if args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     else:
         print_report(report)
     return 0
@@ -382,8 +437,8 @@ def parse_args() -> argparse.Namespace:
         "--metrics",
         default="",
         help=(
-            "Comma-separated metrics to compare. Defaults to daily_realized_pnl_mean_fraction, daily_realized_pnl_median_fraction, "
-            "peak_recovery_max_hours_realized_pnl, position_held_max_hours, backtest_completion_fraction."
+            "Comma-separated current BASE metrics to compare. Defaults to CAGR, Ulcer, "
+            "maximum drawdown and completion on the strategy-equity core basis."
         ),
     )
     parser.add_argument("--json", action="store_true", help="Emit the report as JSON.")

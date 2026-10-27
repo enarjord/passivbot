@@ -64,8 +64,8 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
             for key in ("max_positions", "total_wallet_exposure_limit_ratio")
         }}
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
-        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+        {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
     if fixed:
@@ -89,7 +89,8 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
             config=effective, markets=markets, exchange="binance", hlcvs=spec,
             btc=SharedArraySpec("btc", (len(candles),), "<f8"),
             timestamps=SharedArraySpec("timestamps", (len(candles),), "<i8"),
-            candle_coins=candle_coins, coin_indices=selected_indices, metrics=DEFAULT_METRICS,
+            candle_coins=candle_coins, coin_indices=selected_indices,
+            metrics=(*DEFAULT_METRICS, "ulcer_index_fraction_strategy_equity"),
         )
         bindings.append(ScenarioBinding(context.label, context.label, dataset))
     planner = NativeCandidatePlanner(evaluator, bindings)

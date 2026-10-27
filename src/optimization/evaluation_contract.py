@@ -13,8 +13,9 @@ from optimization.evaluation_implementation import evaluation_implementation_ide
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 
-CONTRACT_VERSION = 10
+CONTRACT_VERSION = 11
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -122,6 +123,8 @@ def build_evaluation_contract(config: dict) -> dict:
         }
     contract = {
         "version": CONTRACT_VERSION,
+        "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
+        "objective_adapter": "two_over_pi_atan_signed_raw_after_reduction_v1",
         "age_admission": "side_initial_entry_v1",
         "side_activation": "explicit_side_initial_and_dca_v1",
         "forager_hysteresis": {"abi": 1, "policy": hysteresis},
@@ -167,6 +170,10 @@ def build_evaluation_contract(config: dict) -> dict:
 
 def recorded_evaluation_contract(template: dict) -> dict:
     contract = template.get(CONTRACT_CACHE_KEY)
+    if isinstance(contract, dict) and (
+        contract.get("version") != CONTRACT_VERSION or contract.get("core_metric_definition_version") != CORE_METRIC_DEFINITION_VERSION
+    ):
+        raise ValueError("cached evaluation contract has stale metric semantics; re-evaluate")
     return deepcopy(
         contract if isinstance(contract, dict) else build_evaluation_contract(template)
     )

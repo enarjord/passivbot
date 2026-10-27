@@ -39,7 +39,7 @@ def test_ew_subset_screening_evolves_with_meaningful_promotion_scores(monkeypatc
         base, original = suite_inputs(manager)
         config = deepcopy(base.config)
         config["backtest"]["ew_half_life_days"] = 30.0
-        config["optimize"].update(scoring=[{"metric": "adg_fraction_strategy_equity_ew", "goal": "max"}], limits=[])
+        config["optimize"].update(scoring=[{"metric": "cagr_fraction_strategy_equity_ew", "goal": "max"}], limits=[])
         base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
                                   config, timestamps=base.timestamps)
         suite = optimize.SuiteEvaluator(base, original.contexts, {"default": "mean"})
@@ -71,7 +71,9 @@ def test_screened_offspring_use_only_full_survivor_fitness_and_records(monkeypat
         for record in records:
             assert record["suite_metrics"]
             assert all(set(value["scenarios"]) == {"base", "stress"}
-                       for value in record["suite_metrics"].values() if "scenarios" in value)
+                       for value in record["suite_metrics"].values()
+                       if isinstance(value, dict) and "scenarios" in value)
+            assert record["suite_metrics"]["definition_version"] == 1
         completed = len(records)
         execute(base, SimpleNamespace(record=records.append), path, evaluator=suite, resume=True)
         assert len(records) == completed  # Completed checkpoints do not start another cohort.

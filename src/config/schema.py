@@ -5,6 +5,7 @@ from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .bot_defaults import get_common_bot_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
+from .metrics import DEFAULT_EW_HALF_LIFE_DAYS
 
 CONFIG_SCHEMA_VERSION = "v9.0.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
@@ -57,7 +58,7 @@ def _build_template_config():
                 "organillo_csv": None,
                 "organillo_sha256": None,
                 "end_date": "now",
-                "ew_half_life_days": None,
+                "ew_half_life_days": DEFAULT_EW_HALF_LIFE_DAYS,
                 "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": None,
                 "gap_tolerance_ohlcvs_minutes": 120,
@@ -366,16 +367,8 @@ def _build_template_config():
                         },
                     ],
                     "scoring": [
-                        {"goal": "max", "metric": "adg_fraction_strategy_equity"},
-                        {"goal": "max", "metric": "mdg_fraction_strategy_equity"},
-                        {"goal": "max", "metric": "sortino_ratio_strategy_equity"},
-                        {"goal": "max", "metric": "active_day_turnover_proxy_mean_ratio"},
-                        {"goal": "max", "metric": "sharpe_ratio_strategy_equity"},
-                        {"goal": "min", "metric": "recovery_max_days_strategy_equity"},
-                        {"goal": "min", "metric": "position_held_max_days"},
-                        {"goal": "min", "metric": "drawdown_max_fraction_strategy_equity"},
-                        {"goal": "min", "metric": "loss_profit_ratio"},
-                        {"goal": "min", "metric": "pain_index_fraction_strategy_equity"},
+                        {"goal": "max", "metric": "cagr_fraction_strategy_equity"},
+                        {"goal": "min", "metric": "ulcer_index_fraction_strategy_equity"},
                     ],
                 },
             },

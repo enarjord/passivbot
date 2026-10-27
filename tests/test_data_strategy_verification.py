@@ -532,7 +532,7 @@ class TestAggregationVariations:
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "a"}, {"label": "b"}],
-            reducer={"default": "mean", "mdg_fraction": "min", "sharpe_ratio": "median"},
+            reducer={"default": "mean", "cagr_fraction_strategy_equity": "min", "sharpe_ratio_strategy_equity": "median"},
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
@@ -540,8 +540,8 @@ class TestAggregationVariations:
         _, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
         assert reducer_cfg["default"] == "mean"
-        assert reducer_cfg["mdg_fraction"] == "min"
-        assert reducer_cfg["sharpe_ratio"] == "median"
+        assert reducer_cfg["cagr_fraction_strategy_equity"] == "min"
+        assert reducer_cfg["sharpe_ratio_strategy_equity"] == "median"
 
 
 # =============================================================================
@@ -694,7 +694,12 @@ class TestLegacyMigration:
         original = deepcopy(cfg)
         with pytest.raises(ValueError, match="migrate-config-v9"):
             format_config(cfg, verbose=False)
-        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        result = migrate(
+            cfg, memory_span_minutes=43200.0,
+            metric_replacements={"mdg": "cagr_fraction_strategy_equity"},
+            acknowledge_metric_formula_change=True,
+        )
+        formatted = format_config(result.config, verbose=False)
         assert cfg == original
 
         assert "combine_ohlcvs" not in formatted["backtest"]
@@ -704,7 +709,9 @@ class TestLegacyMigration:
         assert formatted["backtest"]["scenarios"][1]["label"] == "binance"
         assert formatted["backtest"]["scenarios"][2]["label"] == "bybit"
         assert formatted["backtest"]["reducer"]["default"] == "mean"
-        assert formatted["backtest"]["reducer"]["mdg_fraction"] == "min"
+        assert formatted["backtest"]["reducer"]["cagr_fraction_strategy_equity"] == "min"
+        assert any(change["old"] == "mdg" and change["new"] == "cagr_fraction_strategy_equity"
+                   and "definition version 1" in change["reason"] for change in result.changes)
 
 
 # =============================================================================

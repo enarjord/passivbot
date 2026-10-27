@@ -68,3 +68,12 @@ assert.notEqual(singleton.traces[1].marker.symbol,singleton.traces[2].marker.sym
 const rescaled = {names:['a','b','c','d'],metrics:[metric('x',[0,6,8,10],'max'),metric('y',[0,4,7,10],'min')]};
 assert.equal(computeView(rescaled,['x','y'],['max','min'],[]).selected,1);
 assert.equal(computeView(rescaled,['x','y'],['max','min'],[bound('x','floor',6)]).selected,2);
+
+// Status-encoded infinite raw values obey off-axis bounds but have no axis coordinate.
+const statusData = {names:['positive','negative','undefined'],metrics:[
+    metric('x',[1,2,3],'max'),metric('y',[3,2,1],'min'),
+    {...metric('raw',[null,null,null],null),statuses:[{status:'positive_infinity'},{status:'negative_infinity'},{status:'undefined'}]}
+]};
+assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','floor',0)]).indices,[0]);
+assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','ceiling',0)]).indices,[1]);
+assert.deepEqual(computeView(statusData,['x','raw'],['max','min'],[]).indices,[]);

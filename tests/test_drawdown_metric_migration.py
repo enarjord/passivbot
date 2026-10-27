@@ -22,4 +22,4 @@ def test_old_drawdown_formula_requires_explicit_replacement_and_acknowledgment(o
     changes = []
     replace_retired_metrics(source, replacements={old: new}, acknowledge=True, changes=changes)
     assert source['optimize']['scoring'] == [{'metric': new, 'goal': 'min'}]
-    assert changes[0]['reason'] == 'acknowledged explicit metric formula replacement'
+    assert 'definition version 1' in changes[0]['reason']

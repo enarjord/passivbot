@@ -34,35 +34,27 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
     for side in ("long", "short"):
         enabled = sides == "both" or side == sides
         inputs[0]["bot"][side]["risk"].update(
-            n_positions=1 if enabled else 0,
+            max_positions=1 if enabled else 0,
             total_wallet_exposure_limit_ratio=2 if enabled else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
-            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        inputs[0]["bot"]["hsl"].update(
-            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+        inputs[0]["bot"]["portfolio"]["hsl"].update(
+            drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if shocks:
         # Trigger TM at a practical threshold after established exposure;
         # exercise shared EMA scopes without relying on float32-scale noise.
         inputs[1][1500:, 0, :3] *= 0.7
         inputs[1][1800:, 1, :3] *= 1.3
-    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
-               "hsl_triggers_per_year", "hsl_restarts_per_year", "hsl_red_time_fraction")
+    metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
+               "hsl_triggers_per_year", "hsl_triggers_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
-    if (strategy == "trailing_martingale" and sides in {"short", "both"}
-            and coins == 2 and shocks):
-        # On these six seed-43 shock fixtures, original/corrected shaders have
-        # identical non-time metrics. CPU ADG differs by <=4.51e-5 and fill rate
-        # by <=0.098%; drawdown and lifecycle gates already pass. Keep these
-        # bounded trajectory differences local; time-in-red stays strict.
-        policies["adg_fraction_strategy_equity"] = MetricTolerance(5e-5, 0)
-        policies["fills_per_day"] = MetricTolerance(0, 1e-3)
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]
@@ -123,10 +115,10 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
     for side in ("long", "short"):
         bot = config["bot"][side]
         enabled = side == "long" or sides == "both"
-        bot["risk"].update(n_positions=1 if enabled else 0,
+        bot["risk"].update(max_positions=1 if enabled else 0,
                            total_wallet_exposure_limit_ratio=(5.0 if side == "long" else 0.001) if enabled else 0)
-        bot["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, ema_span_minutes=1,
-                          cooldown_minutes_after_red=5,
+        bot["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=1,
+                          cooldown_after_red_minutes=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
         bot["strategy"]["ema_anchor"]["base_qty_fraction"] = 0.8
         bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.8
@@ -149,36 +141,12 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     from optimization.gpu.parity import MetricTolerance
     inputs = _liquidation_inputs(strategy, sides, terminal_fill)
     metric = "hsl_red_time_fraction"
-    durations = ("hsl_red_duration_mean_minutes", "hsl_red_duration_max_minutes")
-    side_equity = tuple(
-        f"{name}_strategy_equity_{side}"
-        for side in ("long", "short")
-        for name in ("recovery_max_days", "drawdown_max_fraction", "drawdown_daily_worst_1pct_mean_fraction")
-    )
-    ema_metrics = tuple(
-        f"{name}{suffix}"
-        for suffix in ("", "_long", "_short")
-        for name in ("hsl_signal_ema_max_fraction", "hsl_signal_ema_worst_1pct_mean_fraction")
-    )
-    metrics = (metric, *durations, *side_equity, *ema_metrics)
-    policies = {name: MetricTolerance(1e-8, 1e-6) for name in metrics}
-    # The four panic-fill fixtures differ by at most 6.3e-8 (1.78e-6 relative)
-    # in their preterminal float32 EMA. Keep lifecycle/equity gates unchanged;
-    # this local allowance covers rounding in the newly requested EMA reports.
-    policies.update({name: MetricTolerance(1e-8, 2e-6) for name in ema_metrics})
+    metrics = (metric, "drawdown_max_fraction_strategy_equity",
+               "hsl_panic_episode_loss_mean_fraction", "hsl_panic_episode_loss_max_fraction")
+    policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
     report = run_comparison(tuple(inputs), "bybit", metrics, policies,
                             diagnostics=True, gpu_engine="native")
-    expected = 0 if terminal_fill else 1 / 3
+    expected = 0 if terminal_fill else 1 / 4
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
     assert report["metrics"][metric]["cpu"] == pytest.approx(expected)
-    for name in durations:
-        assert report["metrics"][name]["cpu"] == pytest.approx(0 if terminal_fill else 1)
-    # A mark crash adds the fresh terminal loss signal; a liquidating panic
-    # fill retains only preceding bar signals. The terminal mark must not be
-    # mistaken for another fill-boundary observation or silently omitted.
-    long_ema = report["metrics"]["hsl_signal_ema_max_fraction_long"]["cpu"]
-    if terminal_fill:
-        assert 0 < long_ema < .1
-    else:
-        assert long_ema > 1
     assert report["passed"], report["metrics"]

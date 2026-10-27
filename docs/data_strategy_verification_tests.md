@@ -1,5 +1,10 @@
 # Verification Test Suite: Data Strategy Redesign
 
+> Historical scenario-flattening verification plan. Its legacy migration examples do not
+> describe current config loading or metric formulas. Use [current suite examples](suite_examples.md)
+> and the [explicit v8 migration guide](v8_to_v9_migration.md) for current behavior.
+
+
 You are testing the new flattened scenario configuration system for passivbot's backtest/optimizer suite mode. The key behavior rules are:
 
 | Config State | Expected Behavior |

@@ -48,7 +48,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
         "--unstuck",
     ]))
-    config["live"].update(loss_gate_max_drawdown_fraction=0.1, lookback_ema_span_minutes=8.0)
+    config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_fraction=.1, memory_ema_span_minutes=8.)
     key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(
@@ -56,7 +56,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         exchange="binance", needed_metrics=DEFAULT_METRICS, batch_size=1,
     )
     expected = reference.evaluate_results(candidates)
-    assert expected[0].metrics["fills_per_day"] > 0
+    assert expected[0].metrics["gross_turnover_ratio_per_day"] > 0
     assert expected[0].metrics != expected[3].metrics
     del reference
     gc.collect()
@@ -204,7 +204,7 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
             bot["close"].update(qty_fraction=1., threshold_base_fraction=.5,
                                 threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
                                 threshold_log_range_1h_coefficient=0.)
-    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+    metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
                "position_held_max_hours", "hsl_red_time_fraction")
     snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]
     active = False
@@ -236,7 +236,7 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
             first = service.submit(BacktestRequest("completed", "held", {"long_hsl_enabled": 0.}))
             retained = first.result(timeout=600)
             saved_metrics = dict(retained.metrics)
-            assert retained.metrics["fills_per_day"] > 0
+            assert retained.metrics["gross_turnover_ratio_per_day"] > 0
             active = True
             interrupted = service.submit(BacktestRequest("interrupted", "held", {}))
             deadline = time.monotonic() + 600

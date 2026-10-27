@@ -49,13 +49,12 @@ pip install -e ".[full]"
 
 ## Session identity and output names
 
-For exponential recency weighting, set `backtest.ew_half_life_days` (for example,
-`180`) and select a metric such as `adg_fraction_strategy_equity_ew`. The setting defaults to
-`null`, and existing objectives retain their behavior. CPU and native GPU use the
-[same daily-return definition](metrics.md#exponential-recency-weighting).
-Legacy `_w` metrics and their capture workspaces are removed. Ordinary metrics and explicit
-`_ew` metrics have distinct formulas. Half-life and definition version participate in evaluation
-identity; changing them requires fresh evaluation, using old numeric candidates only as seeds.
+For exponential recency weighting, select `cagr_fraction_strategy_equity_ew`.
+`backtest.ew_half_life_days` resolves to 180 days when omitted or null; an explicit value must be
+positive and finite. CPU and native GPU use the same calendar-weighted minute log-growth
+[definition](metrics.md). One half-life applies across the campaign. Half-life and metric definition
+version participate in evaluation identity; changing either requires fresh evaluation. Old
+candidate configurations may still seed that fresh run.
 
 Optimizer sessions use the [shared session naming format](backtesting.md#backtest-results)
 under `optimize_results/`. Small suites include their actual coin names and the number of
@@ -127,7 +126,7 @@ list of objective objects:
 
 ```json
 "scoring": [
-  {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+  {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
   {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"}
 ]
 ```
@@ -139,12 +138,11 @@ list of objective objects:
 The older shorthand form is still accepted for built-in metrics with known default goals:
 
 ```json
-"scoring": ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
+"scoring": ["cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
 ```
 
-Passivbot normalizes that shorthand to the canonical object form during config formatting. For
-custom or newly added metrics, use the explicit object form so the optimizer knows whether to
-minimize or maximize the metric.
+Passivbot normalizes that shorthand to the canonical object form during config formatting. Use the explicit object form to choose a direction. Selectors must belong to the core catalog;
+new metrics require an implementation change.
 
 ### Backend Selection
 
@@ -208,8 +206,8 @@ passivbot optimize configs/examples/ema_anchor.json --optimizer-backend gpu
 The service selects Metal automatically on supported Macs. Both EMA Anchor and
 Trailing Martingale use the native shared-account replay, including long/short,
 suites and HSL. Metal uses float32 replay/EW arithmetic, integer UTC clocks and
-float64 host analysis of compact daily summaries; full replay histories remain
-on the device. Saved fitness records a distinct Metal precision identity, so
+the shared Rust finalizer for compact sufficient-statistic packets; metric observation state is
+bounded per candidate. Saved fitness records a distinct Metal precision identity, so
 CUDA and Metal checkpoints are not interchangeable. This backend is experimental;
 fixture parity does not certify every long-history trading path.
 
@@ -225,8 +223,7 @@ single-coin runs, long/short and hedged/one-way portfolios. The current ceiling 
 per prepared scenario. Other strategies, BTC collateral and continuous changes to
 scenario-owned coin patches are explicit errors. Enabled HSL requires one-minute candles.
 Requested metrics must belong to the code-owned GPU surface; unsupported names fail
-rather than returning fabricated values. Float32 replay and bounded histogram reductions
-can differ from CPU float64 results. See the
+rather than returning fabricated values. Float32 replay and accumulation can differ from CPU float64 results. See the
 [feature and approximation inventory](plans/gpu_optimizer_inventory.md) and
 [acceptance evidence](plans/gpu_optimizer_acceptance.md) for measured limits.
 
@@ -621,12 +618,11 @@ operator-risk settings such as:
 
 These overrides set the finite cooldown after a qualifying flatten during optimizer
 evaluations. Portfolio mode uses `bot.portfolio.hsl.cooldown_after_red_minutes` instead of side
-paths. There is no permanent restart selector. Inspect strategy-equity drawdown and
-recovery with `drawdown_max_fraction_strategy_equity`, `drawdown_daily_worst_1pct_mean_fraction_strategy_equity`,
-and `recovery_max_days_strategy_equity`. The `hsl_signal_ema_max_fraction` and
-`hsl_signal_ema_worst_1pct_mean_fraction` fields describe the enabled HSL signal
-scopes and are within-model diagnostics. Use independent ordinary-account equity
-and account-based metrics for cross-version economic comparisons.
+paths. Inspect strategy drawdown and recovery with `drawdown_max_fraction_strategy_equity`,
+`ulcer_index_fraction_strategy_equity` and `peak_recovery_max_days_strategy_equity`. HSL loss
+limits use `hsl_panic_episode_loss_max_fraction` and `hsl_panic_episode_loss_mean_fraction`;
+`hsl_red_time_fraction` includes reported RED cooldown. Detailed HSL reports remain optional
+backtest artifacts. Use exported account equity and fills for independent economic comparisons.
 
 Migrate v8 starting configurations explicitly before using them with v9. The main optimizer
 config owns HSL activation, memory and cooldown policy; numeric starting suggestions do not
@@ -670,14 +666,14 @@ Each object-form `optimize.scoring` entry may override the default:
   "optimize": {
     "objective_scenario": "base",
     "scoring": [
-      {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+      {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
       {
         "metric": "pain_index_fraction_strategy_equity",
         "goal": "min",
         "scenario": null
       },
       {
-        "metric": "recovery_max_days_strategy_equity",
+        "metric": "peak_recovery_max_days_strategy_equity",
         "goal": "min",
         "scenario": null,
         "reducer": "max"
@@ -748,12 +744,12 @@ Each evaluation written to disk now includes a compact `suite_metrics` payload:
 ```json
 "suite_metrics": {
   "aggregate": {
-    "aggregated": {"adg_fraction_btc": 0.0012, "...": "..."},
-    "stats": {"adg_fraction_btc": {"mean": 0.0011, "min": 0.0008, "max": 0.0014, "std": 1.5e-4}}
+    "aggregated": {"cagr_fraction_strategy_equity": 0.0012, "...": "..."},
+    "stats": {"cagr_fraction_strategy_equity": {"mean": 0.0011, "min": 0.0008, "max": 0.0014, "std": 1.5e-4}}
   },
   "scenarios": {
-    "scenario_a": {"stats": {"adg_fraction_btc": {"mean": 0.0012, "min": 0.0011, ...}}},
-    "scenario_b": {"stats": {"adg_fraction_btc": {"mean": 0.0009, ...}}}
+    "scenario_a": {"stats": {"cagr_fraction_strategy_equity": {"mean": 0.0012, "min": 0.0011, ...}}},
+    "scenario_b": {"stats": {"cagr_fraction_strategy_equity": {"mean": 0.0009, ...}}}
   }
 }
 ```
@@ -840,7 +836,7 @@ Example:
 
 ```bash
 passivbot tool pareto \
-  -o sharpe_ratio_strategy_equity,adg_fraction_strategy_equity,recovery_max_days_strategy_equity \
+  -o sharpe_ratio_strategy_equity,cagr_fraction_strategy_equity,peak_recovery_max_days_strategy_equity \
   -m ideal
 ```
 
@@ -863,7 +859,7 @@ isn't needed.
 To enforce constraints during optimization, populate `optimize.limits` with a list of limit
 objects. Each object describes when to penalize a result:
 
-- `metric`: canonical metric name (e.g. `drawdown_max_fraction_btc`, `loss_profit_ratio`, `adg_fraction`).
+- `metric`: canonical metric name (e.g. `drawdown_max_fraction_strategy_equity`, `loss_profit_ratio`, `cagr_fraction_strategy_equity`).
 - `penalize_if`: comparison operator. Use `<`, `<=`, `>`, `>=`, `==` (or aliases like `less_than`
   / `greater_than`), `outside_range`
   to keep a metric within `[low, high]`, or `inside_range` to forbid a band.
@@ -893,29 +889,29 @@ Example:
     "value": 0.7
   },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
-  {"metric": "adg_fraction", "penalize_if": "<", "value": 0.0008, "reducer": "mean"}
+  {"metric": "cagr_fraction_strategy_equity", "penalize_if": "<", "value": 0.2, "reducer": "mean"}
 ]
 ```
 
 CLI overrides can replace the full limit set with the same JSON/HJSON payload:
 
 ```bash
-passivbot optimize --limits '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
 ```
 
 For quicker one-off edits, use repeatable `--limit` entries. The symbolic scalar operators
 in `--limit` are written as keep conditions, matching `pareto_store.py` filtering:
-- `--limit 'adg_fraction > 0.0008'` means keep only results with `adg_fraction > 0.0008`
-- `--limit 'drawdown_max_fraction <= 0.35'` means keep only results with `drawdown_max_fraction <= 0.35`
+- `--limit 'cagr_fraction_strategy_equity > 0.2'` means keep only results with `cagr_fraction_strategy_equity > 0.2`
+- `--limit 'drawdown_max_fraction_strategy_equity <= 0.35'` means keep only results with `drawdown_max_fraction_strategy_equity <= 0.35`
 
 ```bash
 passivbot optimize \
   --clear-limits \
-  --limit 'drawdown_max_fraction <= 0.35' \
+  --limit 'drawdown_max_fraction_strategy_equity <= 0.35' \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.5 scenario=base' \
   --limit 'backtest_completion_fraction>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg_fraction > 0.0008 reducer=mean'
+  --limit 'cagr_fraction_strategy_equity > 0.2 reducer=mean'
 ```
 
 You can also combine both forms. `--limits` loads a whole list first, and each `--limit`
@@ -923,8 +919,8 @@ appends one more canonical entry:
 
 ```bash
 passivbot optimize \
-  --limits '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]' \
-  --limit 'recovery_max_days_strategy_equity <= 21'
+  --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]' \
+  --limit 'peak_recovery_max_days_strategy_equity <= 21'
 ```
 
 Semantics:
@@ -935,112 +931,35 @@ Semantics:
   `<=`, `==`). Explicit JSON/HJSON limit objects still use direct `penalize_if` semantics.
 - `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
-Limit violations do not disqualify a config. They produce positive penalty scores in optimizer
-engine space: if a limit metric matches a configured scoring metric, the penalty replaces that
-objective's engine score for the candidate; unmatched/global penalties affect every objective.
-Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is
-assumed.
+Limit violations produce penalties in optimizer engine space. A candidate satisfying all limits
+ranks ahead of a candidate with violations. Every numeric selector accepts lower and upper
+penalties independently or together. Selected unavailable values make the candidate infeasible;
+they cannot pass a limit through an empty or missing value.
 
 ## Performance Metrics
 
-Backtest statistics originate in the Rust engine (`passivbot-rust/src/analysis.rs`) and are
-augmented in Python (`src/backtest.py`). The optimizer aggregates them per exchange and then
-over all exchanges before scoring.
+Rust owns the [core metric catalog and formulas](metrics.md): 24 quantities, with separate long
+and short selectors for position utilization. Objectives and enabled limits determine which
+accumulators run for each optimizer candidate. Regular backtests report the core catalog.
+Retired metrics, alternate units, automatic side copies and USD/BTC presentation variants are
+not emitted. Strategy-equity metrics exclude direct collateral revaluation and conversion costs.
 
-### How Metrics Feed Scoring
+Use CAGR for endpoint growth, or CAGR EW for recency-weighted growth. Sharpe, Sortino, Omega and
+volatility use complete UTC daily returns. Drawdown, Ulcer, Pain, exposure and recovery retain
+minute observations, including flat periods. Passivbot uses exactly 365.25 days per year and
+subtracts no risk-free return. Maximum drawdown is primarily a limit; Ulcer and Pain are useful
+continuous risk objectives when paired with a growth or activity condition.
 
-- `optimize.scoring` lists the objective metrics. Each entry becomes a fitness component in
-  sorted order.
-- Each scoring entry is normalized to `{metric, goal}`. `goal: "max"` means higher raw metric
-  values are better; `goal: "min"` means lower raw metric values are better.
-- For every metric, `Evaluator.combine_analyses` computes mean/min/max/std across all
-  exchanges in the run. The scoring logic uses the mean (`{metric}_mean`).
-- Internally, Passivbot converts all objectives into optimizer engine space where lower is better,
-  so CPU and GPU pymoo searches receive consistent minimization-style values.
-- Penalties from `optimize.limits` replace affected engine objective scores when a bound is
-  violated, turning constraint breaches into very poor scores while preserving the raw metrics
-  stored for inspection.
-- Metrics are emitted with both USD and BTC suffixes (for example, `adg_fraction_usd` and `adg_fraction_btc`).
-- `_btc` metrics use BTC-denominated balance/equity as the numeraire even when
-  `backtest.btc_collateral_target_ratio = 0`, so they can be used to compare strategy performance against
-  passive BTC exposure.
-- The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
-- Exposure-normalized variants (e.g., `adg_fraction_per_twel_ratio_long`) divide the base metric by
-  that side’s configured `total_wallet_exposure_limit_ratio`, letting you compare bots that use
-  different leverage budgets.
+Authored selectors use the exact catalog name. Put `reducer` in the objective or limit object,
+or in `backtest.reducer`; do not append a reducer, unit or denomination suffix. Only requested
+outer reductions are computed, using every required exchange and scenario. Raw metric values
+and explicit unavailable/infinite statuses are persisted with their definition version.
 
-### Returns & Growth
-| Metric | Description |
-|--------|-------------|
-| `adg_fraction` | Average Daily Gain (smoothed geometric)  |
-| `mdg_fraction` | Median Daily Gain  |
-| `gain_multiplier` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
-| `adg_fraction_strategy_equity` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
-| `adg_rolling_hmean_fraction_strategy_equity` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
-| `adg_time_integrated_fraction_strategy_equity` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
-| `positive_log_return_participation_score_strategy_equity` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_fraction_strategy_equity`. |
-| `mdg_fraction_strategy_equity` | Median-day version of the same strategy-equity growth family |
-| `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
-
-### Risk Metrics
-| Metric | Description |
-|--------|-------------|
-| `drawdown_max_fraction` | Maximum peak-to-trough drawdown |
-| `pain_index_fraction_strategy_equity` | Mean full-resolution strategy-equity drawdown, including zeros; minimize |
-| `ulcer_index_fraction_strategy_equity` | Root mean square full-resolution strategy-equity drawdown, including zeros; minimize |
-| `drawdown_daily_worst_1pct_mean_fraction` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
-| `drawdown_max_fraction_strategy_equity` | Worst drawdown on collateral-agnostic strategy equity |
-| `hsl_signal_ema_max_fraction` | Worst portfolio EMA-smoothed strategy-equity drawdown, using each observation's maximum enabled HSL signal scope |
-| `drawdown_daily_worst_1pct_mean_fraction_strategy_equity` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
-| `drawdown_worst_mean_1pct_strategy_eq_{long,short}` | Mean of worst 1% daily worst strategy-equity drawdowns for the long or short HSL controller |
-| `hsl_signal_ema_worst_1pct_mean_fraction` | Mean of worst 1% portfolio EMA-smoothed drawdown observations; each observation takes the maximum enabled HSL signal scope before tail selection |
-| `expected_shortfall_1pct_fraction` | Mean of worst 1% daily losses (CVaR) |
-| `equity_balance_gap_negative_max_fraction` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
-| `equity_balance_gap_negative_mean_fraction` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
-
-### Ratios & Efficiency
-| Metric | Description |
-|--------|-------------|
-| `sharpe_ratio` | Return-to-volatility ratio  |
-| `sortino_ratio` | Return-to-downside-volatility ratio |
-| `calmar_ratio` | Return divided by maximum drawdown |
-| `sterling_ratio` | Return divided by the average of the worst 1% drawdowns |
-| `omega_ratio` | Sum of positive returns / sum of absolute negative returns |
-| `*_strategy_eq` ratios | Collateral-agnostic ratio family using the strategy-equity curve |
-
-### Position & Execution Metrics
-| Metric | Description |
-|--------|-------------|
-| `position_episodes_per_day` | Average number of unique positions opened per day |
-| `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
-| `position_held_time_weighted_mean_hours` | Minimize `sum(held_hours^2) / sum(held_hours)` across coin/side holding episodes, including open tails. Adds and partial closes do not reset an episode. Returns zero when no positive holding time exists; supported by CPU and GPU scoring. |
-| `position_unchanged_max_hours`, `position_unchanged_max_days` | Longest span without modifying an existing position, in hours and equivalent days |
-| `fills_gap_time_weighted_mean_hours` | Time-weighted mean portfolio no-fill gap: `sum(gap_hours^2) / sum(gap_hours)` over unique fill timestamps and the analysis boundaries. Lower values reward distributing fills through long droughts instead of clustering activity. |
-| `active_day_turnover_proxy_mean_ratio` | Average traded volume as % of account per day,  |
-| `peak_recovery_max_hours_usd`, `_btc`; `peak_recovery_max_days_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_max_days_usd", "penalize_if": ">", "value": 7}`). |
-| `peak_recovery_max_hours_realized_pnl`, `peak_recovery_max_days_realized_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
-| `recovery_mean_days_strategy_equity`, `recovery_median_days_strategy_equity`, `recovery_p95_days_strategy_equity`, `recovery_p99_days_strategy_equity`, `recovery_worst_5pct_mean_days_strategy_equity`, `recovery_worst_1pct_mean_days_strategy_equity`, `recovery_max_days_strategy_equity` | Per-sample strategy-equity time-to-exceed distribution in days. Each sample measures how long until a later strategy-equity sample strictly exceeds it; unrecovered samples use the open tail to the backtest end. |
-| `recovery_max_hours_strategy_equity`, `recovery_max_days_strategy_equity` | Legacy max-recovery metrics. `recovery_max_days_strategy_equity` is an alias for `recovery_max_days_strategy_equity`; the hours variant remains available for older configs. |
-| `peak_recovery_hours_strategy_eq_{long,short}`, `peak_recovery_days_strategy_eq_{long,short}` | Longest strict time-to-exceed interval for the long or short HSL strategy-equity controller, including an unrecovered tail through the backtest end. |
-| `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
-| `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
-
-### Equity Curve Quality
-| Metric | Description |
-|--------|-------------|
-| `equity_choppiness_ratio` | Normalized total variation (lower is smoother) |
-| `equity_jerkiness_ratio` | Normalized mean absolute second derivative |
-| `exponential_fit_mse_log_ratio_squared` | MSE from a log-linear equity fit |
-
-Legacy `_w` variants are unavailable. To emphasize recent returns, explicitly opt into
-[exponential metrics](metrics.md#exponential-recency-weighting); they use a different definition.
-
-The equity-balance difference metrics are derived by computing `(equity - balance) / balance`
-minute-by-minute. Positive deviations contribute exclusively to the `*_pos_*` metrics, while
-negative deviations contribute exclusively to the `*_neg_*` metrics; no cross-contamination
-occurs. This mirrors the separation implemented in `passivbot-rust/src/analysis.rs` and helps
-highlight asymmetric behavior in bots whose equity routinely sits above or below the
-account’s wallet exposure limit baseline.
+After raw reductions and limit comparisons, a minimization engine receives
+`(2 / pi) * atan(sign * value)`, with `sign = -1` for maximization and `+1` for minimization.
+Genuine infinite objectives map to finite endpoints. This monotonic adapter preserves ordering
+and Pareto dominance but changes distances and crowding. Saved fitness from an earlier metric
+or evaluator definition requires fresh evaluation.
 
 ## Utilities
 

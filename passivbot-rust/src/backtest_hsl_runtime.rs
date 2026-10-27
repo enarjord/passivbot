@@ -618,7 +618,6 @@ mod tests {
             metrics_only: false,
             ew_half_life_days: None,
             hsl_detailed_report: true,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
@@ -1314,5 +1313,105 @@ mod tests {
                 .unwrap()
                 .scale_budget_with_excess_allowance
         );
+    }
+
+    #[test]
+    fn forced_delisting_while_genuinely_red_does_not_create_or_enlarge_hsl_execution_episode() {
+        for side in [LONG, SHORT] {
+            for prior_partial_hsl_fill in [false, true] {
+                let adverse_price = if side == LONG { 90.0 } else { 110.0 };
+                let values = candles(1, adverse_price);
+                let btc = Array1::from_elem(6, 20_000.0);
+                let mut p = params("coin", 1);
+                // Keep the real controller RED through the next close boundary.
+                for policy in &mut p.equity_hard_stop_loss.hsl.as_mut().unwrap().sides {
+                    policy.memory_ema_span_minutes = 1000.0;
+                }
+                let mut exchange = ExchangeParams::default();
+                exchange.taker_fee_fraction = 0.002;
+                let mut bt = Backtest::new(values.view(), btc.view(), bots(1), vec![exchange], &p);
+                let entry = order(
+                    if side == LONG { 1.0 } else { -1.0 },
+                    if side == LONG {
+                        OrderType::EntryInitialNormalLong
+                    } else {
+                        OrderType::EntryInitialNormalShort
+                    },
+                );
+                let mut entry_exec = execution(100.0);
+                entry_exec.fee_fraction = 0.0;
+                if side == LONG {
+                    bt.process_entry_fill_long(1, 0, &entry, entry_exec)
+                } else {
+                    bt.process_entry_fill_short(1, 0, &entry, entry_exec)
+                }
+                .unwrap();
+                bt.update_hsl(1).unwrap();
+                assert_eq!(bt.hsl_action(side, 0), Action::Panic);
+                if prior_partial_hsl_fill {
+                    let partial = order(
+                        if side == LONG { -0.25 } else { 0.25 },
+                        if side == LONG {
+                            OrderType::ClosePanicLong
+                        } else {
+                            OrderType::ClosePanicShort
+                        },
+                    );
+                    let mut partial_exec = execution(adverse_price);
+                    partial_exec.fee_fraction = 0.0;
+                    if side == LONG {
+                        bt.process_close_fill_long(2, 0, &partial, partial_exec)
+                    } else {
+                        bt.process_close_fill_short(2, 0, &partial, partial_exec)
+                    }
+                    .unwrap();
+                    assert_eq!(bt.hsl_action(side, 0), Action::Panic);
+                }
+                let before = bt.hsl_report.core_summary(true);
+                assert_eq!(before.trigger_count, 1);
+                assert_eq!(
+                    before.execution_episode_count,
+                    u64::from(prior_partial_hsl_fill)
+                );
+                let expected_hsl_loss = if prior_partial_hsl_fill {
+                    2.5 / 1000.0
+                } else {
+                    0.0
+                };
+                assert!((before.episode_loss_fraction_sum - expected_hsl_loss).abs() < 1e-12);
+                bt.last_valid_timestamps[0] = Some(2);
+                bt.force_close_delisted_positions(2).unwrap();
+                let after = bt.hsl_report.core_summary(true);
+                assert_eq!(
+                    after.execution_episode_count,
+                    before.execution_episode_count
+                );
+                assert_eq!(
+                    after.episode_loss_fraction_sum,
+                    before.episode_loss_fraction_sum
+                );
+                assert_eq!(
+                    after.episode_loss_fraction_max,
+                    before.episode_loss_fraction_max
+                );
+                assert_eq!(
+                    bt.hsl_report.summary.panic_close_fills,
+                    u32::from(prior_partial_hsl_fill)
+                );
+                assert_eq!(bt.positions.long[0].size, 0.0);
+                assert_eq!(bt.positions.short[0].size, 0.0);
+                let forced = bt.fills.last().unwrap();
+                assert_eq!(forced.index, 2);
+                assert_eq!(forced.timestamp_ms, 3 * 60_000);
+                assert_eq!(forced.fill_price, adverse_price);
+                assert_eq!(
+                    forced.pnl,
+                    if prior_partial_hsl_fill { -7.5 } else { -10.0 }
+                );
+                assert!(forced.fee_paid < 0.0);
+                // The delisting loss and fee still enter ordinary account economics.
+                assert!((bt.balance.usd_total_balance - (990.0 + forced.fee_paid)).abs() < 1e-10);
+            }
+        }
     }
 }

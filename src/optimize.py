@@ -94,8 +94,7 @@ from config.shared_bot import (
     get_grouped_bot_value,
 )
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-from config.metrics import KNOWN_METRICS, resolve_metric_value, split_metric_curve
-from config.ew import is_ew_metric
+from config.metrics import resolve_metric_value, metric_base_name, metric_stat_key, CORE_METRIC_DEFINITION_VERSION, validate_core_metric_requests
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -191,8 +190,9 @@ from suite_runner import (
 )
 from metrics_schema import (
     MetricAggregationError,
+    encode_metric_values,
     build_scenario_metrics,
-    validate_required_ew_metrics,
+    validate_required_core_metrics,
     flatten_metric_stats,
 )
 from optimization.bounds import (
@@ -613,36 +613,6 @@ def _profile_add(timings: Dict[str, float] | None, key: str, started: float) -> 
         timings[key] = timings.get(key, 0.0) + (time.perf_counter() - started) * 1000.0
 
 
-def _metric_uses_btc_denominated_analysis(metric: Any) -> bool:
-    metric = str(metric or "").strip().lower()
-    return metric.endswith("_btc") or "_btc_" in metric
-
-
-def _optimizer_can_skip_btc_analysis(
-    config: Dict[str, Any],
-    scoring_specs: Sequence[ObjectiveSpec],
-    limit_checks: Sequence[Dict[str, Any]],
-) -> bool:
-    try:
-        btc_collateral_target_ratio = float(
-            get_optional_config_value(config, "backtest.btc_collateral_target_ratio", 0.0) or 0.0
-        )
-    except (TypeError, ValueError):
-        return False
-    if btc_collateral_target_ratio > 0.0:
-        return False
-    if any(
-        _metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs
-    ):
-        return False
-    for check in limit_checks or []:
-        if _metric_uses_btc_denominated_analysis(check.get("metric")):
-            return False
-        if _metric_uses_btc_denominated_analysis(check.get("metric_key")):
-            return False
-    return True
-
-
 def _format_objectives(
     values: Sequence[float] | dict[str, Any],
     *,
@@ -654,16 +624,16 @@ def _format_objectives(
             for idx, key in enumerate(scoring_keys):
                 value = resolve_metric_value(values, key)
                 if value is None:
-                    value = values.get(f"w_{idx}")
-                if value is None:
                     continue
                 parts.append(f"{key}={float(value):.3g}")
             if parts:
                 return "[" + ", ".join(parts) + "]"
-        for key, value in values.items():
-            if value is None:
+        for key in values:
+            if key == "metric_status":
                 continue
-            parts.append(f"{key}={float(value):.3g}")
+            value = resolve_metric_value(values, key)
+            if value is not None:
+                parts.append(f"{key}={float(value):.3g}")
         return "[" + ", ".join(parts) + "]" if parts else "[]"
     if isinstance(values, np.ndarray):
         values = values.tolist()
@@ -672,14 +642,6 @@ def _format_objectives(
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
 
 
-def _currency_fallback_metric(metric: str) -> str | None:
-    """Keep curve-free scoring fallback without treating shared cash as a curve."""
-    base, curve = split_metric_curve(metric)
-    if curve is not None:
-        return base
-    if metric not in KNOWN_METRICS and metric.endswith(("_usd", "_btc")):
-        return metric.rsplit("_", 1)[0]
-    return None
 
 
 def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -> str:
@@ -695,6 +657,9 @@ def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -
 def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
     name = exc.__class__.__name__
     message = str(exc)
+    if isinstance(exc, ValueError) and message == "replay has no positive evaluated interval after declared warmup":
+        # This candidate has no scored window; never invent flat observations.
+        return True
     if name == "PanicException":
         return any(
             pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS
@@ -746,6 +711,21 @@ def _suite_config_implies_suite_mode(args) -> bool:
     )
 
 
+def _requested_metric_reducers(specs, checks, *, suite=False):
+    requests = {}
+    for spec in specs:
+        base = metric_base_name(spec.metric)
+        requests.setdefault(base, set()).add("mean" if suite else metric_stat_key(spec.metric, spec.reducer or "mean")[len(base)+1:])
+        if suite and spec.metric != base:
+            requests[base].add(metric_stat_key(spec.metric)[len(base)+1:])
+    for check in checks:
+        base = metric_base_name(check["metric"])
+        requests.setdefault(base, set()).add("mean" if suite else check["metric_key"][len(base)+1:])
+        if suite and check.get("scenario") is not None:
+            requests[base].add(check["metric_key"][len(base)+1:])
+    return requests
+
+
 def _build_invalid_candidate_metrics(
     scoring_keys: Sequence[str],
     error: str,
@@ -754,11 +734,12 @@ def _build_invalid_candidate_metrics(
     include_suite_metrics: bool = False,
 ) -> tuple[tuple[float, ...], float, dict]:
     specs = extract_objective_specs(scoring_keys)
-    raw_objectives = {spec.metric: 0.0 for spec in specs}
+    raw_objectives = {}
     objectives = tuple(to_engine_value(spec, 0.0) for spec in specs)
     metrics_payload = {
+        "definition_version": CORE_METRIC_DEFINITION_VERSION,
+        "fitness_status": "invalid",
         "objectives": raw_objectives,
-        "unpenalized_objectives": objectives,
         "constraint_violation": INVALID_BACKTEST_CANDIDATE_PENALTY,
         "error": error,
     }
@@ -771,12 +752,9 @@ def _build_invalid_candidate_metrics(
 
 def _analysis_indicates_liquidation(analysis: dict | None, config: dict) -> bool:
     del config
-    if not isinstance(analysis, dict):
-        return False
-    liquidated = analysis.get("liquidated")
-    if not isinstance(liquidated, (bool, int)):
-        return False
-    return bool(liquidated)
+    if not isinstance(analysis, dict) or not isinstance(analysis.get("liquidated"), bool):
+        raise ValueError("authoritative backtest analysis requires actual boolean liquidation status")
+    return analysis["liquidated"]
 
 
 def _set_candidate_metrics(individual, metrics_payload) -> None:
@@ -835,8 +813,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     # Released configurations without this setting used strict crossing at zero.
     old_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
     new_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
-    old_bt.setdefault("ew_half_life_days", None)
-    new_bt.setdefault("ew_half_life_days", None)
+    from config.ew import validate_ew_half_life_days
+    old_bt["ew_half_life_days"] = validate_ew_half_life_days(old_bt.get("ew_half_life_days"))
+    new_bt["ew_half_life_days"] = validate_ew_half_life_days(new_bt.get("ew_half_life_days"))
     old_opt = _canonicalize_resume_optimize(old_source.get("optimize") or {})
     new_opt = _canonicalize_resume_optimize(new_source.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
@@ -1532,6 +1511,7 @@ class Evaluator:
         self.scoring_weights = default_scoring_weights()
 
         self.build_limit_checks()
+        validate_core_metric_requests(self.config, [spec.metric for spec in self.scoring_specs] + [check["metric"] for check in self.limit_checks])
 
     def prepared_selection(self, exchange):
         specs = self.selection_specs.get(exchange)
@@ -1752,11 +1732,6 @@ class Evaluator:
         ]
         analyses = {}
         liquidated = False
-        skip_btc_analysis = _optimizer_can_skip_btc_analysis(
-            config,
-            self.scoring_specs,
-            self.limit_checks,
-        )
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
             payload = build_backtest_payload(
@@ -1767,8 +1742,9 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
                 metrics_only=True,
+                metric_requests=sorted({metric_base_name(name) for name in required_metrics}),
                 selection=self.prepared_selection(exchange) if self.selection_specs else None,
-                skip_btc_analysis=skip_btc_analysis,
+
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1805,8 +1781,9 @@ class Evaluator:
             del fills
             del equities_array
         try:
-            validate_required_ew_metrics(analyses, required_metrics)
-            scenario_metrics = build_scenario_metrics(analyses)
+            validate_required_core_metrics(analyses, required_metrics)
+            scenario_metrics = build_scenario_metrics(analyses, required_metrics=required_metrics,
+                reducers=_requested_metric_reducers(self.scoring_specs, self.limit_checks))
             aggregate_stats = scenario_metrics.get("stats", {})
             flat_stats = flatten_metric_stats(aggregate_stats)
             objectives, total_penalty, raw_objectives = self.calc_fitness(
@@ -1839,7 +1816,8 @@ class Evaluator:
             )
         metrics_payload = {
             **scenario_metrics,
-            "objectives": raw_objectives,
+            "definition_version": CORE_METRIC_DEFINITION_VERSION,
+            "objectives": encode_metric_values(raw_objectives),
             "unpenalized_objectives": tuple(
                 to_engine_value(spec, raw_objectives[spec.metric])
                 for spec in self.scoring_specs
@@ -1907,13 +1885,15 @@ class Evaluator:
                     if scenario is not None
                     else f"suite reducer {check['reducer']!r}"
                 )
-                raise ValueError(
+                raise MetricAggregationError(
                     "missing optimizer limit metric "
                     f"{check['metric_key']!r} for limit on {check['metric']!r} "
                     f"from {basis}; "
                     f"available metrics: {_format_available_metric_keys(check_metrics)}"
                 )
             penalty = compute_limit_violation(check, val)
+            if not math.isfinite(penalty):
+                raise MetricAggregationError("selected limit has an infinite violation")
             if not penalty:
                 continue
             targets = check.get("objective_indexes") or []
@@ -1925,27 +1905,25 @@ class Evaluator:
                 global_modifier += penalty
 
         total_penalty = global_modifier + sum(per_objective_modifier)
+        if not math.isfinite(total_penalty):
+            raise MetricAggregationError("optimizer limit penalty overflow")
         engine_scores = []
         raw_objectives: Dict[str, float] = {}
         for idx, spec in enumerate(self.scoring_specs):
             if objective_values is None:
-                val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-                fallback_metric = _currency_fallback_metric(spec.metric)
-                if val is None and fallback_metric is not None and not is_ew_metric(spec.metric):
-                    val = resolve_metric_value(
-                        analyses_combined,
-                        f"{fallback_metric}_mean",
-                    )
+                val = resolve_metric_value(analyses_combined, metric_stat_key(spec.metric, spec.reducer or "mean"))
             else:
                 val = objective_values[idx]
 
             if val is None:
-                raise ValueError(
+                raise MetricAggregationError(
                     "missing optimizer scoring metric "
                     f"{spec.metric!r} (expected {spec.metric}_mean); "
                     f"available metrics: {_format_available_metric_keys(analyses_combined)}"
                 )
             raw_value = float(val)
+            if math.isnan(raw_value):
+                raise MetricAggregationError("undefined selected objective")
             raw_objectives[spec.metric] = raw_value
             penalty_total = global_modifier + per_objective_modifier[idx]
             if penalty_total:
@@ -2216,105 +2194,57 @@ class SuiteEvaluator:
             ),
         ]
 
-    def score_scenario_results(
-        self, scenario_results: List[ScenarioResult], *, stage: str = "full"
-    ) -> Dict[str, Any]:
-        """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
-
-        if stage not in {"full", "screening"}:
-            raise ValueError("evaluation stage must be full or screening")
-        result_labels = {result.scenario.label for result in scenario_results}
-        for ctx in getattr(self, "contexts", []):
-            if stage == "full" and ctx.label not in result_labels and any(
-                is_ew_metric(metric)
-                for metric in self.required_metrics_for_scenario(ctx.label)
-            ):
-                raise MetricAggregationError(
-                    f"required EW scenario {ctx.label!r} is absent from evaluation"
-                )
+    def score_scenario_results(self, scenario_results, *, stage="full"):
+        from metrics_schema import require_metric_definition, encode_metric_values, decode_metric_value
+        labels = [row.scenario.label for row in scenario_results]
+        expected = {ctx.label for ctx in getattr(self, "contexts", [])}
+        if stage not in {"full", "screening"} or len(set(labels)) != len(labels):
+            raise MetricAggregationError("invalid scenario evaluation coverage")
+        if expected and (set(labels) - expected or (stage == "full" and set(labels) != expected)):
+            raise MetricAggregationError("missing required scenario observations")
+        scenario_flat = {}
         for result in scenario_results:
-            stats = result.metrics.get("stats", {})
-            validate_required_ew_metrics(
-                {
-                    result.scenario.label: {
-                        metric: values.get("mean") for metric, values in stats.items()
-                    }
-                },
-                self.required_metrics_for_scenario(result.scenario.label),
-            )
-        reduce_started = time.perf_counter()
-        reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
-        reduce_metrics_ms = (time.perf_counter() - reduce_started) * 1000.0
-        fitness_started = time.perf_counter()
-        suite_payload = build_suite_metrics_payload(scenario_results, reduced_summary)
-        reduced_stats = reduced_summary.get("stats", {})
-
-        reduced_stats_flat = flatten_metric_stats(reduced_stats)
-        flat_stats = dict(reduced_stats_flat)
-        # Override _mean with correctly aggregated values so calc_fitness
-        # and limit defaults respect the reducer config (e.g. "max" instead of "mean").
-        aggregated_values = reduced_summary.get("aggregated", {})
-        for metric, agg_value in aggregated_values.items():
-            flat_stats[f"{metric}_mean"] = agg_value
-        required_scenario_labels = {
-            basis.scenario
-            for basis in self.objective_bases
-            if basis.scenario is not None
-        }
-        required_scenario_labels.update(
-            check["scenario"]
-            for check in self.base.limit_checks
-            if check.get("scenario") is not None
-        )
-        scenario_stats_by_label = {
-            result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
-            for result in scenario_results
-            if result.scenario.label in required_scenario_labels
-        }
-        objective_values: List[float] = []
+            require_metric_definition(result.metrics)
+            flat = flatten_metric_stats(result.metrics.get("stats", {}))
+            for name in self.required_metrics_for_scenario(result.scenario.label):
+                if resolve_metric_value(flat, metric_stat_key(name)) is None:
+                    raise MetricAggregationError(f"missing selected metric {name!r}")
+            scenario_flat[result.scenario.label] = flat
+        requested, required = {}, set()
         for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
-            if basis.scenario is not None:
-                source_stats = scenario_stats_by_label[basis.scenario]
-                reducer = "mean"
-            else:
-                source_stats = reduced_stats_flat
-                reducer = basis.reducer or "mean"
-            value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            fallback_metric = _currency_fallback_metric(spec.metric)
-            if value is None and fallback_metric is not None and not is_ew_metric(spec.metric):
-                value = resolve_metric_value(
-                    source_stats,
-                    f"{fallback_metric}_{reducer}",
-                )
+            if basis.scenario is None:
+                base = metric_base_name(spec.metric)
+                requested.setdefault(base, set()).add(metric_stat_key(spec.metric, basis.reducer or "mean")[len(base)+1:])
+                required.add(base)
+            elif basis.scenario not in scenario_flat:
+                raise MetricAggregationError(f"missing objective scenario {basis.scenario!r}")
+        for check in self.base.limit_checks:
+            if check.get("scenario") is None:
+                base = metric_base_name(check["metric"])
+                requested.setdefault(base, set()).add(check["metric_key"][len(base)+1:])
+                required.add(base)
+            elif check["scenario"] not in scenario_flat:
+                raise MetricAggregationError(f"missing limit scenario {check['scenario']!r}")
+        summary = reduce_metrics(scenario_results, self.reducer_cfg,
+                                 requested_reducers=requested, required_metrics=required) if required else {"stats": {}, "aggregated": {}}
+        flat = flatten_metric_stats(summary["stats"])
+        values = []
+        for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
+            source = scenario_flat[basis.scenario] if basis.scenario is not None else flat
+            key = metric_stat_key(spec.metric, "mean" if basis.scenario is not None else basis.reducer or "mean")
+            value = resolve_metric_value(source, key)
             if value is None:
-                basis_label = (
-                    f"scenario {basis.scenario!r}"
-                    if basis.scenario is not None
-                    else f"reducer {reducer!r}"
-                )
-                raise ValueError(
-                    "missing optimizer scoring metric "
-                    f"{spec.metric!r} for {basis_label}; "
-                    f"available metrics: {_format_available_metric_keys(source_stats)}"
-                )
-            objective_values.append(float(value))
-        objectives, total_penalty = self.base.calc_fitness(
-            flat_stats,
-            limit_metrics=flat_stats,
-            scenario_limit_metrics=scenario_stats_by_label,
-            objective_values=objective_values,
-        )
-        return {
-            "objectives": tuple(objectives),
-            "unpenalized_objectives": tuple(
-                to_engine_value(spec, value)
-                for spec, value in zip(self.base.scoring_specs, objective_values)
-            ),
-            "constraint_violation": float(total_penalty),
-            "suite_metrics": suite_payload,
-            "reduce_metrics_ms": reduce_metrics_ms,
-            "fitness_payload_ms": (time.perf_counter() - fitness_started) * 1000.0,
-        }
+                raise MetricAggregationError(f"missing objective metric {key!r}")
+            values.append(value)
+        objectives, penalty = self.base.calc_fitness(flat, limit_metrics=flat,
+            scenario_limit_metrics=scenario_flat, objective_values=values)
+        return {"definition_version": CORE_METRIC_DEFINITION_VERSION,
+                "objectives": tuple(objectives),
+                "raw_objectives": encode_metric_values({spec.metric: value for spec, value in zip(self.base.scoring_specs, values)}),
+                "unpenalized_objectives": tuple(to_engine_value(spec, value) for spec, value in zip(self.base.scoring_specs, values)),
+                "constraint_violation": penalty,
+                "suite_metrics": build_suite_metrics_payload(scenario_results, summary),
+                "reduce_metrics_ms": 0.0, "fitness_payload_ms": 0.0}
 
     def evaluate(self, individual, overrides_list):
         profile_enabled = _optimize_profile_enabled()
@@ -2405,11 +2335,6 @@ class SuiteEvaluator:
         for ctx in self.contexts:
             phase_start = _profile_start(profile_enabled)
             scenario_config = self.build_scenario_candidate_config(config, ctx)
-            skip_btc_analysis = _optimizer_can_skip_btc_analysis(
-                scenario_config,
-                self.base.scoring_specs,
-                self.base.limit_checks,
-            )
             _profile_add(timings, "scenario_config_ms", phase_start)
             logging.debug(
                 "Optimizer scenario %s | start=%s end=%s coins=%s",
@@ -2451,8 +2376,9 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                     metrics_only=True,
+                    metric_requests=sorted({metric_base_name(name) for name in self.required_metrics_for_scenario(ctx.label)}),
                     selection=selection,
-                    skip_btc_analysis=skip_btc_analysis,
+
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
                 )
@@ -2515,10 +2441,12 @@ class SuiteEvaluator:
 
             phase_start = _profile_start(profile_enabled)
             try:
-                validate_required_ew_metrics(
+                validate_required_core_metrics(
                     analyses, self.required_metrics_for_scenario(ctx.label)
                 )
-                combined_metrics = combine(analyses)
+                combined_metrics = build_scenario_metrics(analyses,
+                    required_metrics=self.required_metrics_for_scenario(ctx.label),
+                    reducers=_requested_metric_reducers(self.base.scoring_specs, self.base.limit_checks, suite=True))
             except MetricAggregationError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
                 logging.debug(
@@ -2545,21 +2473,6 @@ class SuiteEvaluator:
                     individual,
                 )
             _profile_add(timings, "combine_metrics_ms", phase_start)
-            stats = combined_metrics.get("stats", {})
-            logging.debug(
-                "Scenario metrics | label=%s daily_realized_pnl_mean_fraction=%s peak_recovery_max_hours_realized_pnl=%s",
-                ctx.label,
-                (
-                    stats.get("daily_realized_pnl_mean_fraction", {}).get("mean")
-                    if isinstance(stats.get("daily_realized_pnl_mean_fraction"), dict)
-                    else stats.get("daily_realized_pnl_mean_fraction")
-                ),
-                (
-                    stats.get("peak_recovery_max_hours_realized_pnl", {}).get("mean")
-                    if isinstance(stats.get("peak_recovery_max_hours_realized_pnl"), dict)
-                    else stats.get("peak_recovery_max_hours_realized_pnl")
-                ),
-            )
             scenario_results.append(
                 ScenarioResult(
                     scenario=SuiteScenario(
@@ -2576,16 +2489,23 @@ class SuiteEvaluator:
                 )
             )
 
-        suite_fitness = self.score_scenario_results(scenario_results)
+        try:
+            suite_fitness = self.score_scenario_results(scenario_results)
+        except MetricAggregationError as error:
+            objectives, penalty, metrics = _build_invalid_candidate_metrics(self.base.config["optimize"]["scoring"], str(error), include_stats=False, include_suite_metrics=True)
+            metrics["liquidated"] = liquidated
+            _set_candidate_metrics(individual, metrics)
+            return build_evaluation_payload(objectives, penalty, metrics, individual)
         objectives = suite_fitness["objectives"]
         total_penalty = suite_fitness["constraint_violation"]
         suite_payload = suite_fitness["suite_metrics"]
         if timings is not None:
             timings["reduce_metrics_ms"] = suite_fitness["reduce_metrics_ms"]
             timings["fitness_payload_ms"] = suite_fitness["fitness_payload_ms"]
-        objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
+        objectives_map = suite_fitness["raw_objectives"]
 
         metrics_payload = {
+            "definition_version": CORE_METRIC_DEFINITION_VERSION,
             "objectives": objectives_map,
             "unpenalized_objectives": suite_fitness["unpenalized_objectives"],
             "suite_metrics": suite_payload,

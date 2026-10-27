@@ -1,6 +1,8 @@
 """Canonical TM metadata remains usable without the optional device runtime."""
 
 from decimal import Decimal
+import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -20,6 +22,7 @@ values = _tm_decimal_metadata([1.15, 1.15 - 1e-12, 1.15 + 1e-12])
 assert len({tuple(row) for row in values}) == 3
 """],
         check=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")},
     )
 
 

@@ -28,6 +28,8 @@ Rust owns formulas and accumulators; Python owns requests, orchestration and res
   an early terminal event does not invent another elapsed minute. Arithmetic observation
   means give the retained partial-terminal mark one observation, without fractional-time
   reweighting. Coarser observations must not be interpolated into supposed minute facts.
+  Declared coarser replay remains supported for factual growth/daily/activity/HSL quantities;
+  minute-only path, EW and exposure metrics are unavailable and rejected as optimizer requests.
 - Returns, volatility, drawdown and fractions use scale one; ratios are dimensionless.
   Durations state days or hours. Human percentage formatting includes `%`.
 - No risk-free or benchmark subtraction, minimum-return input, terminal CAGR smoothing,
@@ -85,7 +87,7 @@ and `w_k = 2^(-age_of_interval_endpoint_days / half_life_days)`:
 CAGR_EW = expm1(365.25 * sum(w_k * z_k) / sum(w_k * delta_k))
 ```
 
-One fixed positive half-life applies across a campaign. Decaying prior numerator and
+One fixed positive half-life applies across a campaign. The source-owned default is 180 days; omitted/null configuration resolves to that value. Decaying prior numerator and
 denominator before adding the newest interval is equivalent and needs constant storage.
 As half-life tends to infinity, this tends to ordinary CAGR on the same window.
 
@@ -100,7 +102,9 @@ Square-root annualization is a reporting convention, not a correction for serial
 Recovery begins at the last high before a decline and ends at the first return to
 that high or above. A plateau at the high is recovered; a plateau below it remains
 underwater. Include an unfinished episode through actual evaluation end, marked censored.
-With no underwater episode the maximum is zero.
+With no underwater episode the maximum is zero. Requested recovery includes
+`metric_metadata.peak_recovery_tail_censored`: true for an unfinished tail, false
+when recovered/flat, and null when support is invalid. Omit it when recovery is unrequested.
 
 Position episodes are keyed by coin and position side. A first nonzero position opens
 an episode; additions and partial closes retain its start; flattening ends it. Include
@@ -207,6 +211,7 @@ report may request the core catalog. Request masks must not alter order decision
 fills, balances, risk state or termination. Keep compact support metadata outside the
 numeric metric catalog: definition version, actual/intended clocks, daily-return count,
 half-life, observation count, HSL counts, scope policy and termination/censoring status.
+  Omit support counts for groups that were not computed rather than implying zero observations.
 Unknown core selectors fail explicitly. Every required scenario/exchange must supply
 the requested value/status; missing or invalid sources must not be dropped from a mean.
 

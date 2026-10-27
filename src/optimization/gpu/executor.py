@@ -37,7 +37,7 @@ class BatchReplay(Protocol):
 class ReplayResult:
     """Compact simulator output, before the executor attaches request identity."""
 
-    metrics: Mapping[str, float]
+    metrics: Mapping[str, float | None]
     liquidated: bool
     metadata: Mapping | None = None
 
@@ -53,7 +53,7 @@ class BacktestRequest:
 class BacktestResult:
     request_id: str
     dataset_id: str
-    metrics: dict[str, float]
+    metrics: dict[str, float | None]
     liquidated: bool
     metadata: Mapping | None = None
 
@@ -367,15 +367,25 @@ class GpuBacktestService:
             if not isinstance(row, Mapping) or not row:
                 raise RuntimeError("GPU replay must return non-empty metric mappings")
             metrics = {}
+            statuses = (metadata or {}).get("metric_status", {})
+            if not isinstance(statuses, Mapping):
+                raise RuntimeError("GPU replay metric statuses must be a mapping")
             for name, value in row.items():
                 if not isinstance(name, str) or not name:
                     raise RuntimeError("GPU replay metric names must be non-empty strings")
-                number = float(value)
-                if math.isnan(number):
-                    raise RuntimeError(f"GPU replay returned NaN metric: {name}")
-                # Infinity may be an explicit insufficient-sample metric sentinel.
-                # Its interpretation remains the canonical metric/scoring owner's job.
-                metrics[name] = number
+                status = statuses.get(name)
+                if value is None:
+                    if (not isinstance(status, Mapping) or status.get("status") not in {
+                            "positive_infinity", "negative_infinity", "undefined", "invalid"}):
+                        raise RuntimeError(f"GPU replay null metric lacks its mathematical status: {name}")
+                    metrics[name] = None
+                else:
+                    number = float(value)
+                    if not math.isfinite(number):
+                        raise RuntimeError(f"GPU replay returned nonfinite raw metric: {name}")
+                    if status is not None:
+                        raise RuntimeError(f"GPU replay finite metric has a nonfinite status: {name}")
+                    metrics[name] = number
             results.append(
                 BacktestResult(entry.request.request_id, entry.request.dataset_id, metrics, liquidated,
                                deepcopy(metadata))

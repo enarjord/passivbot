@@ -26,7 +26,6 @@ from suite_runner import (
     _coalesce_master_coins,
     _prepare_dataset_subset,
     _run_combined_dataset,
-    summarize_scenario_metrics,
     validate_suite_side_coin_lists,
 )
 
@@ -261,20 +260,6 @@ def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
     )
 
     assert master == ["BTC", "ETH", "OM", "SOL"]
-
-
-def test_summarize_scenario_metrics_prefers_mean():
-    metrics = {
-        "stats": {
-            "adg_fraction_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
-            "mdg_fraction_btc": 0.2,
-            "drawdown": {"max": -0.1},
-        }
-    }
-    simplified = summarize_scenario_metrics(metrics)
-    assert simplified["adg_fraction_btc"] == 0.1
-    assert simplified["mdg_fraction_btc"] == 0.2
-    assert simplified["drawdown"] == -0.1
 
 
 def test_apply_scenario_records_transform_log():
@@ -973,22 +958,22 @@ def test_reduce_metrics_computes_stats():
         ScenarioResult(
             scenario=SuiteScenario("a", None, None, None, None),
             per_exchange={},
-            metrics={"stats": {"metric": {"mean": 1.0, "min": 1.0, "max": 1.0, "std": 0.0}}},
+            metrics={"definition_version": 1, "stats": {"cagr_fraction_strategy_equity": {"mean": 1.0, "min": 1.0, "max": 1.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
         ScenarioResult(
             scenario=SuiteScenario("b", None, None, None, None),
             per_exchange={},
-            metrics={"stats": {"metric": {"mean": 3.0, "min": 3.0, "max": 3.0, "std": 0.0}}},
+            metrics={"definition_version": 1, "stats": {"cagr_fraction_strategy_equity": {"mean": 3.0, "min": 3.0, "max": 3.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
     ]
-    summary = reduce_metrics(scenario_results, {"default": "mean"})
-    assert summary["aggregated"]["metric"] == pytest.approx(2.0)
-    assert summary["stats"]["metric"]["max"] == pytest.approx(3.0)
-    assert summary["stats"]["metric"]["median"] == pytest.approx(2.0)
+    summary = reduce_metrics(scenario_results, {"default": "mean"}, requested_reducers={"cagr_fraction_strategy_equity": {"mean", "max", "median"}})
+    assert summary["aggregated"]["cagr_fraction_strategy_equity"] == pytest.approx(2.0)
+    assert summary["stats"]["cagr_fraction_strategy_equity"]["max"] == pytest.approx(3.0)
+    assert summary["stats"]["cagr_fraction_strategy_equity"]["median"] == pytest.approx(2.0)
 
 
 def test_prepare_dataset_subset_clips_dates(monkeypatch):
@@ -1155,21 +1140,21 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
     assert seen["plot_context"].hard_stop_plot_data == {"sample": True}
 
 
-def test_reduce_metrics_applies_configured_policy_to_canonical_duration():
-    reducer_name = "analysis_duration_days"
+def test_reduce_metrics_applies_configured_policy_to_canonical_holding_duration():
+    reducer_name = "position_held_max_days"
     results = [
         ScenarioResult(
             scenario=SuiteScenario(str(days), None, None, None, None),
             per_exchange={},
-            metrics={"stats": {
-                "analysis_duration_days": {"mean": days},
+            metrics={"definition_version": 1, "stats": {
+                "position_held_max_days": {"mean": days},
             }},
             elapsed_seconds=0.0, output_path=None,
         )
         for days in (1.0, 3.0)
     ]
     summary = reduce_metrics(results, {"default": "mean", reducer_name: "max"})
-    assert summary["aggregated"]["analysis_duration_days"] == 3.0
+    assert summary["aggregated"]["position_held_max_days"] == 3.0
 
 
 def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, tmp_path):

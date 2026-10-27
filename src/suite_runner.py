@@ -25,7 +25,6 @@ from config.load import load_input_config, prepare_config
 from config.hsl import require_current_hsl_schema
 from config_utils import effective_config_payload
 from config.access import require_config_value, require_live_value
-from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
 from config.parse import load_raw_config
@@ -2228,55 +2227,31 @@ def _recompute_index_metadata(
 # --------------------------------------------------------------------------- #
 
 
-def reduce_metrics(
-    results: Sequence[ScenarioResult], reducer_cfg: Dict[str, Any]
-) -> Dict[str, Any]:
+def reduce_metrics(results, reducer_cfg, *, requested_reducers=None, required_metrics=None):
+    from config.metrics import KNOWN_METRICS, CORE_METRIC_DEFINITION_VERSION
+    from config.limits import resolve_reducer_mode
+    from metrics_schema import raw_reduce, decode_metric_value, encode_metric_values, MetricAggregationError
     if not results:
-        return {"aggregated": {}, "stats": {}}
-    metrics_values: Dict[str, List[float]] = {}
-    for result in results:
-        stats = result.metrics.get("stats", {})
-        for metric, metric_stats in stats.items():
-            value = metric_stats.get("mean")
-            if value is None or not np.isfinite(value):
-                continue
-            metrics_values.setdefault(metric, []).append(float(value))
-
-    stats: Dict[str, Dict[str, float]] = {}
-    reduced: Dict[str, float] = {}
-    reducer_cfg = {canonicalize_metric_name(str(k)): v for k, v in reducer_cfg.items()}
-    default_mode = str(reducer_cfg.get("default", "mean")).lower()
-
-    for metric, values in metrics_values.items():
-        if not values:
-            continue
-        arr = np.asarray(values, dtype=float)
-        stats[metric] = {
-            "mean": float(np.mean(arr)),
-            "min": float(np.min(arr)),
-            "max": float(np.max(arr)),
-            "std": float(np.std(arr)),
-            "median": float(np.median(arr)),
-        }
-        canonical_metric = canonicalize_metric_name(metric)
-        mode = reducer_cfg.get(canonical_metric)
-        if mode is None and "_" in canonical_metric:
-            base = canonical_metric.rsplit("_", 1)[0]
-            mode = reducer_cfg.get(base)
-        mode = str(mode or default_mode).lower()
-        if mode == "mean":
-            reduced[metric] = stats[metric]["mean"]
-        elif mode == "max":
-            reduced[metric] = stats[metric]["max"]
-        elif mode == "min":
-            reduced[metric] = stats[metric]["min"]
-        elif mode == "std":
-            reduced[metric] = stats[metric]["std"]
-        elif mode == "median":
-            reduced[metric] = float(np.median(arr))
-        else:
-            raise ValueError(f"Unsupported reducer '{mode}' for metric '{metric}'.")
-    return {"aggregated": reduced, "stats": stats}
+        raise MetricAggregationError("no scenario results available")
+    required = set(required_metrics or ())
+    names = required or set().union(*(set(row.metrics.get("stats", {})) & KNOWN_METRICS for row in results))
+    stats, aggregate = {}, {}
+    for name in sorted(names):
+        mode = resolve_reducer_mode(name, reducer_cfg)
+        modes = set((requested_reducers or {}).get(name, {mode}))
+        try:
+            values = [decode_metric_value(row.metrics.get("stats", {}).get(name, {}), "mean") for row in results]
+            reduced = {field: raw_reduce(values, field) for field in sorted(modes)}
+            stats[name] = encode_metric_values(reduced)
+            # Report aggregates use the configured reducer only when requested.
+            if mode in reduced:
+                aggregate[name] = reduced[mode]
+        except MetricAggregationError as error:
+            if name in required:
+                raise
+            stats[name] = {field: None for field in modes}
+            stats[name]["metric_status"] = {field: {"status": error.status, "reason": str(error)} for field in modes}
+    return {"definition_version": CORE_METRIC_DEFINITION_VERSION, "aggregated": encode_metric_values(aggregate), "stats": stats}
 
 
 def build_suite_metrics_payload(
@@ -2294,31 +2269,6 @@ def build_suite_metrics_payload(
         scenario_metrics=scenario_metrics,
     )
 
-
-def summarize_scenario_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Convert a metrics dict containing only stats into a flat metric -> value map,
-    preferring the mean when available.
-    """
-
-    if not isinstance(metrics, dict):
-        return {}
-    stats = metrics.get("stats")
-    if not isinstance(stats, dict):
-        return deepcopy(metrics)
-    simplified: Dict[str, Any] = {}
-    for name, payload in stats.items():
-        if isinstance(payload, dict):
-            value = payload.get("mean")
-            if value is None:
-                for key in ("value", "max", "min"):
-                    if key in payload:
-                        value = payload[key]
-                        break
-            simplified[name] = value
-        else:
-            simplified[name] = payload
-    return simplified
 
 
 # --------------------------------------------------------------------------- #

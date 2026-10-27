@@ -60,20 +60,11 @@ const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_DECAY_SOURCE: &str = include_str!("gpu/mps_hsl_decay.metal");
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_HSL_SOURCE: &str = include_str!("gpu/mps_hsl.metal");
-const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
-const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
-const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
-const MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE: &str =
-    include_str!("gpu/mps_equity_balance_diff_common.metal");
-const MPS_ENTRY_INTERVAL_MARKER: &str = "// PASSIVBOT_ENTRY_INTERVAL_COMMON";
-const MPS_ENTRY_INTERVAL_COMMON_SOURCE: &str = include_str!("gpu/mps_entry_interval_common.metal");
 const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
 const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
 const MPS_EMA_ANCHOR_MULTICOIN_BODY: &str = include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
 const MPS_TRAILING_MARTINGALE_MULTICOIN_BODY: &str =
     include_str!("gpu/mps_trailing_martingale_multicoin.metal");
-const MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE: &str =
-    include_str!("gpu/mps_strategy_eq_recovery_distribution.metal");
 
 fn compose_hsl_source(body: &str) -> String {
     assert_eq!(body.matches(MPS_UNSTUCK_EMA_MARKER).count(), 1);
@@ -81,21 +72,6 @@ fn compose_hsl_source(body: &str) -> String {
         body.matches(MPS_HSL_MARKER).count(),
         1,
         "MPS source must contain exactly one shared-HSL marker"
-    );
-    assert_eq!(
-        body.matches(MPS_BTC_RISK_MARKER).count(),
-        1,
-        "MPS source must contain exactly one shared BTC-risk marker"
-    );
-    assert_eq!(
-        body.matches(MPS_EQUITY_BALANCE_DIFF_MARKER).count(),
-        1,
-        "MPS source must contain exactly one shared equity-balance-diff marker"
-    );
-    assert_eq!(
-        body.matches(MPS_ENTRY_INTERVAL_MARKER).count(),
-        1,
-        "MPS source must contain exactly one shared entry-interval marker"
     );
     let source = body
         .replacen(
@@ -118,17 +94,6 @@ fn compose_hsl_source(body: &str) -> String {
             MPS_HSL_MARKER,
             &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
             1,
-        )
-        .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
-        .replacen(
-            MPS_EQUITY_BALANCE_DIFF_MARKER,
-            MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
-            1,
-        )
-        .replacen(
-            MPS_ENTRY_INTERVAL_MARKER,
-            MPS_ENTRY_INTERVAL_COMMON_SOURCE,
-            1,
         );
     // Authored risk helpers fence their own arithmetic, including inlining.
     // Preserve ordinary strategy contraction outside those definitions.
@@ -144,8 +109,10 @@ fn compose_multicoin_source(body: &str) -> String {
     let body = body.replacen(
         MPS_MULTICOIN_MARKER,
         &format!(
-            "{}\n{}",
-            MPS_DECIMAL_ROUNDING_SOURCE, MPS_MULTICOIN_COMMON_SOURCE
+            "{}\n{}\n{}",
+            MPS_DECIMAL_ROUNDING_SOURCE,
+            crate::core_metrics_gpu::shader_source(),
+            MPS_MULTICOIN_COMMON_SOURCE
         ),
         1,
     );
@@ -173,9 +140,7 @@ pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
     MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE.as_str()
 }
 
-pub fn mps_strategy_eq_recovery_distribution_source() -> &'static str {
-    MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -321,121 +286,23 @@ mod tests {
         assert!(source.contains("constant int HSL_SIGNAL_COIN = 2"));
         assert!(source.contains("int ho = po + hsl_param_offset"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
-        assert!(source.contains("h.drawdown_ema_max = fmax("));
-        assert!(source.contains("output.drawdown_ema_max_long"));
-        assert!(source.contains("output.drawdown_ema_max_short"));
-        let panic_loss_aggregation = source
-            .find("output.panic_fill_loss_sum_usd += h.panic_fill_loss_sum_usd")
-            .unwrap();
-        let enabled_gate = source.find("if (!h.enabled) return;").unwrap();
-        assert!(panic_loss_aggregation < enabled_gate);
-        assert_eq!(source.matches("struct HslStrategyEquityStats").count(), 1);
-        assert_eq!(source.matches("struct HslDrawdownEmaTailStats").count(), 1);
-        assert_eq!(
-            source
-                .matches("inline HslStrategyEquityStats init_hsl_strategy_equity_stats(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            source
-                .matches("inline void update_hsl_strategy_equity_stats(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            source
-                .matches("inline float hsl_strategy_equity_recovery_max_steps(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            source
-                .matches("inline float hsl_strategy_equity_drawdown_mean_worst_1pct(")
-                .count(),
-            1
-        );
-        for signature in [
-            "inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats(",
-            "inline int hsl_drawdown_ema_tail_bin(",
-            "inline void update_hsl_drawdown_ema_tail_stats(",
-            "inline float hsl_drawdown_ema_mean_worst_1pct(",
-        ] {
-            assert_eq!(source.matches(signature).count(), 1, "{signature}");
-        }
-        assert!(source.contains("#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0"));
-        assert!(source.contains("#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0"));
-        assert!(source.contains("#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0"));
-        assert_eq!(
-            source
-                .matches("inline float hsl_strategy_equity_drawdown_max(")
-                .count(),
-            1
-        );
+        assert!(!source.contains("struct HslStrategyEquityStats"));
+        assert!(!source.contains("struct HslDrawdownEmaTailStats"));
+        assert!(source.contains("inline void finish_hsl_panic_loss("));
+        assert!(source.contains("inline void record_hsl_panic_fill("));
+        assert!(source.contains("panic_loss_drawdown_count"));
         assert!(source
             .contains("const bool shared_has_position = has_position_long || has_position_short"));
         assert!(source.contains("const bool shared_has_blocking_orders = has_blocking_orders_long"));
     }
 
-    fn assert_shared_btc_risk_contract(source: &str) {
-        assert!(!source.contains(MPS_BTC_RISK_MARKER));
-        assert!(source.contains(MPS_BTC_RISK_COMMON_SOURCE));
-        for signature in [
-            "struct BtcRiskState",
-            "inline BtcRiskState init_btc_risk_state()",
-            "inline void reset_btc_risk_day(",
-            "inline void update_btc_risk_state(",
-            "inline void write_btc_risk_day(",
-        ] {
-            assert_eq!(source.matches(signature).count(), 1, "{signature}");
-        }
-        assert!(source.contains("#if PASSIVBOT_BTC_RISK_ENABLED"));
-        assert!(source.contains("float btc_equity = usd_equity / btc_price"));
-    }
 
-    fn assert_shared_equity_balance_diff_contract(source: &str) {
-        assert!(!source.contains(MPS_EQUITY_BALANCE_DIFF_MARKER));
-        assert!(source.contains(MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE));
-        for signature in [
-            "struct EquityBalanceDiffState",
-            "inline EquityBalanceDiffState init_equity_balance_diff_state()",
-            "inline void update_equity_balance_diff_state(",
-            "inline void write_equity_balance_diff_state(",
-        ] {
-            assert_eq!(source.matches(signature).count(), 1, "{signature}");
-        }
-        assert!(source.contains("#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED"));
-        assert!(source.contains("const float diff = (equity - balance) / balance"));
-    }
 
-    fn assert_shared_entry_interval_contract(source: &str) {
-        assert!(!source.contains(MPS_ENTRY_INTERVAL_MARKER));
-        assert!(source.contains(MPS_ENTRY_INTERVAL_COMMON_SOURCE));
-        for signature in [
-            "inline void init_entry_interval_output(",
-            "inline void record_initial_entry_interval(",
-        ] {
-            assert_eq!(source.matches(signature).count(), 1, "{signature}");
-        }
-        assert!(source.contains("#if PASSIVBOT_ENTRY_INTERVAL_ENABLED"));
-        assert!(source.contains("constant int ENTRY_INTERVAL_BINS = 128"));
-        assert!(source.contains("constant int ENTRY_INTERVAL_STAT_COLS = 2"));
-        assert!(source.contains("constant int ENTRY_INTERVAL_COUNT_COLS = 129"));
-        assert!(source.contains("device int* counts"));
-    }
 
-    #[test]
-    fn strategy_eq_recovery_distribution_source_preserves_strict_rust_contract() {
-        let source = mps_strategy_eq_recovery_distribution_source();
 
-        assert!(source.contains("kernel void passivbot_strategy_eq_recovery_distribution("));
-        assert!(source.contains("if (!(value > strategy_equity_samples[offset + pending_slot]))"));
-        assert!(source.contains("constant int RECOVERY_METRIC_COLS = 7"));
-        assert!(source.contains("recovery_histogram_percentile("));
-        assert!(source.contains("recovery_histogram_mean_worst_pct("));
-        assert!(source.contains("== RECOVERY_FAIL_CLOSED_SENTINEL"));
-        assert!(source.contains("output[output_offset + metric] = full_horizon"));
-    }
+
+
+
 
     fn assert_shared_multicoin_contract(source: &str) {
         assert!(!source.contains(MPS_MULTICOIN_MARKER));
@@ -455,7 +322,6 @@ mod tests {
             "inline bool finite_positive(",
             "inline float float32_floor_nonnegative(",
             "inline void record_realized_net(",
-            "inline void record_gross_pnl(",
             "inline int wallet_exposure_denominator_n_positions(",
             "inline float coin_override_or(",
             "inline float allowed_wallet_exposure_limit_ratio(",
@@ -470,6 +336,12 @@ mod tests {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }
         assert_eq!(source.matches("struct JointPortfolioAccount").count(), 1);
+        assert_eq!(source.matches("struct CoreGpuState").count(), 1);
+        assert!(source.contains("core_observe_equity("));
+        assert!(source.contains("core_record_fill("));
+        assert!(source.contains("core_record_notional("));
+        assert!(!source.contains("gap_hist"));
+        assert!(!source.contains("record_initial_entry_interval("));
         assert!(source.contains("#ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY"));
         assert!(source.contains("#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 1"));
         assert!(source.contains("#if PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY"));
@@ -478,71 +350,16 @@ mod tests {
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
-        assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
-        assert!(source.contains("const int recovery_stride = sizes[8]"));
-        assert!(source.contains("const int recovery_sample_count = sizes[9]"));
-        assert!(source.contains("const bool recovery_terminal = liquidated || k == stop_k - 1"));
-        assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
         assert!(source.contains("return update_dual_side_hsl("));
         assert!(source.contains("account.realized_pnl_total"));
         assert!(source.contains("account.realized_pnl_long, account.realized_pnl_short"));
     }
 
-    #[test]
-    fn all_strategy_sources_compose_one_shared_btc_risk_controller() {
-        for body in [
-            MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
-        ] {
-            assert_eq!(body.matches(MPS_BTC_RISK_MARKER).count(), 1);
-            assert!(!body.contains("struct BtcRiskState"));
-        }
-        for source in [
-            mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_multicoin_source(),
-        ] {
-            assert_shared_btc_risk_contract(source);
-            assert!(source.contains("constant float* btc_prices"));
-            assert!(source.contains("update_btc_risk_state("));
-            assert!(source.contains("write_btc_risk_day("));
-        }
-    }
 
-    #[test]
-    fn all_strategy_sources_compose_one_shared_equity_balance_diff_controller() {
-        for body in [
-            MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
-        ] {
-            assert_eq!(body.matches(MPS_EQUITY_BALANCE_DIFF_MARKER).count(), 1);
-            assert!(!body.contains("struct EquityBalanceDiffState"));
-        }
-        for source in [
-            mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_multicoin_source(),
-        ] {
-            assert_shared_equity_balance_diff_contract(source);
-            assert!(source.contains("update_equity_balance_diff_state("));
-            assert!(source.contains("write_equity_balance_diff_state("));
-        }
-    }
 
-    #[test]
-    fn all_strategy_sources_compose_one_shared_entry_interval_accumulator() {
-        for body in [
-            MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
-        ] {
-            assert_eq!(body.matches(MPS_ENTRY_INTERVAL_MARKER).count(), 1);
-            assert!(!body.contains("inline void record_initial_entry_interval("));
-        }
-        for source in [
-            mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_multicoin_source(),
-        ] {
-            assert_shared_entry_interval_contract(source);
-        }
-    }
+
+
+
 
     #[test]
     fn strategy_sources_do_not_include_high_exposure_replay() {
@@ -713,13 +530,10 @@ mod tests {
         assert!(!source.contains("min_cost_exact_open_uncertain"));
         assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
-        assert!(source.contains("day_min_balance"));
+        assert!(!source.contains("day_min_balance"));
+        assert!(!source.contains("day_fill_count"));
         assert!(source.contains("constant int SCALAR_COLS = 62"));
-        assert!(source.contains("constant int SCALAR_COLS = 64"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -758,12 +572,7 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("write_dual_side_hsl_outputs("));
         assert!(source.contains("write_dual_side_coin_hsl_outputs("));
-        assert!(source.contains("hsl_strategy_equity_recovery_max_steps("));
-        assert!(source.contains("hsl_drawdown_ema_mean_worst_1pct("));
-        assert!(source.contains("hsl_strategy_equity_drawdown_max("));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
-        assert!(source.contains("net_position_cost -= short_side.psize[c]"));
-        assert!(source.contains("float twe_abs = fabs(net_position_cost / account.balance)"));
         assert!(
             source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)")
         );
@@ -837,27 +646,12 @@ mod tests {
         assert!(source.contains("bool secondary_close_market[MAX_COINS]"));
         assert!(source.contains("contribution[c] = quantity * entry_exposure_price"));
         assert!(source.contains("float price = entry_market[best]"));
-        assert!(source.contains("record_gross_pnl"));
-        assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
-        assert!(source
-            .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
-        assert!(
-            source.contains("scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio")
-        );
-        assert!(source
-            .contains("scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio"));
+        assert!(!source.contains("record_gross_pnl"));
+        assert!(!source.contains("profit_sum"));
+        assert!(!source.contains("fills.day_volume"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));
-        assert!(source.contains("scalars[scalar_offset + 27] = fills_active_days_count"));
-        assert!(source.contains("scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 29] = held_sum_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 30] = held_count"));
-        assert!(
-            source.contains("scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms")
-        );
-        assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
         assert!(source.contains("const bool hedge_mode = run_settings[10] > 0.5f"));
         assert!(source.contains("compute_ema_multicoin_one_way_initial_blocks"));
@@ -921,7 +715,6 @@ mod tests {
         let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
-        assert_shared_entry_interval_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 89"));
@@ -937,11 +730,7 @@ mod tests {
         assert!(!source.contains("min_cost_exact_open_uncertain"));
         assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int SCALAR_COLS = 62"));
-        assert!(source.contains("constant int SCALAR_COLS = 64"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")
@@ -963,17 +752,13 @@ mod tests {
         assert!(source.contains("load_trailing_martingale_multicoin_side_config("));
         assert!(source.contains("init_trailing_martingale_multicoin_side_state("));
         assert!(source.contains("init_trailing_martingale_multicoin_fill_state("));
-        assert!(source.contains("record_tm_multicoin_gross_pnl("));
+        assert!(!source.contains("record_tm_multicoin_gross_pnl("));
         assert!(source.contains("record_tm_multicoin_close_fill("));
         assert!(source.contains("record_tm_multicoin_entry_fill("));
         assert!(source.contains("finalize_tm_multicoin_close_position("));
         assert!(source.contains("apply_tm_multicoin_entry_position("));
         assert!(source.contains("update_tm_multicoin_position_fill_timestamp("));
         assert!(source.contains("process_tm_multicoin_side_fills("));
-        assert_eq!(source.matches("record_initial_entry_interval(").count(), 4);
-        assert!(source.contains("float last_initial_entry_k[MAX_COINS]"));
-        assert!(source.contains("candidate.order_type == 0"));
-        assert!(source.contains("candidate.order_type == 11"));
         assert!(source.contains("apply_tm_multicoin_recursive_entry_twel_gate("));
         assert!(source.contains("if (k < first_valid || k > last_valid) continue;"));
         assert!(source.contains("!finite_positive(bars[bar_offset + 2])"));
@@ -1002,14 +787,12 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
-        assert!(source.contains("tm_multicoin_initial_entry_balance_fraction("));
         assert!(source.contains("wallet_exposure_denominator_n_positions("));
         assert!(source.contains("coin_hsl[c].slot_count = float(effective_n_positions)"));
         assert!(source.contains("passivbot_trailing_martingale_multicoin_fused_impl("));
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin_fused("));
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig long_config ="));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
-        assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(
             source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)")
         );
@@ -1111,27 +894,12 @@ mod tests {
         assert!(source.contains("should_use_ordinary_market_execution("));
         assert!(source.contains("ordinary_market_fill_price("));
         assert!(source.contains("resize_market_close_qty("));
-        assert!(source.contains("record_gross_pnl"));
-        assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
-        assert!(source
-            .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio"));
-        assert!(
-            source.contains("scalars[scalar_offset + 22] = absolute_net_wallet_exposure_max_ratio")
-        );
-        assert!(source
-            .contains("scalars[scalar_offset + 23] = absolute_net_wallet_exposure_mean_ratio"));
+        assert!(!source.contains("record_gross_pnl"));
+        assert!(!source.contains("profit_sum"));
+        assert!(!source.contains("fills.day_volume"));
         assert!(source.contains("scalars[scalar_offset + 24] = fill_count"));
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));
-        assert!(source.contains("scalars[scalar_offset + 27] = fills_active_days_count"));
-        assert!(source.contains("scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 29] = held_sum_min * interval_ms"));
-        assert!(source.contains("scalars[scalar_offset + 30] = held_count"));
-        assert!(
-            source.contains("scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms")
-        );
-        assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
         assert!(source.contains("const bool hedge_mode = run_settings[10] > 0.5f"));
         assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));

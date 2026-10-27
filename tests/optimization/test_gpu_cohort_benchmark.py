@@ -97,9 +97,9 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
 
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),
                                    ("--warm-runs", "0"), ("--candidates", "129"),
-                                   ("--adg-floor", "nan"), ("--drawdown-ceiling", "inf"),
-                                   ("--limit", "fills_gap_p95_hours", "greater_than", "nan"),
-                                   ("--limit", "fills_gap_p95_hours", "auto", "1"),
+                                   ("--cagr-floor", "nan"), ("--drawdown-ceiling", "inf"),
+                                   ("--limit", "fills_gap_max_days", "greater_than", "nan"),
+                                   ("--limit", "fills_gap_max_days", "auto", "1"),
                                    ("--limit", "unknown", "greater_than", "1")])
 def test_invalid_workload_is_rejected_before_device_access(flags):
     with pytest.raises(SystemExit) as error:
@@ -109,20 +109,20 @@ def test_invalid_workload_is_rejected_before_device_access(flags):
 
 def test_metric_requests_include_limit_work_and_preserve_undefined_policies(tmp_path):
     path = tmp_path / "policy.json"
-    path.write_text(json.dumps({"adg_fraction_strategy_equity": {"absolute": 0.001, "relative": 0.01}}))
-    args = options("--metrics", "adg_fraction_strategy_equity", "recovery_p95_days_strategy_equity",
-                   "--limit", "active_day_turnover_proxy_mean_ratio", "greater_than", "2",
+    path.write_text(json.dumps({"cagr_fraction_strategy_equity": {"absolute": 0.001, "relative": 0.01}}))
+    args = options("--metrics", "cagr_fraction_strategy_equity", "peak_recovery_max_days_strategy_equity",
+                   "--limit", "position_held_max_days", "greater_than", "2",
                    "--tolerances", str(path))
     assert args.metrics == [*benchmark.gpu_parity.DEFAULT_METRICS,
-                            "recovery_p95_days_strategy_equity", "active_day_turnover_proxy_mean_ratio"]
-    assert args.policies["adg_fraction_strategy_equity"] == benchmark.gpu_parity.MetricTolerance(0.001, 0.01)
-    assert "recovery_p95_days_strategy_equity" not in args.policies
-    assert "active_day_turnover_proxy_mean_ratio" not in args.policies
+                            "peak_recovery_max_days_strategy_equity", "ulcer_index_fraction_strategy_equity", "position_held_max_days"]
+    assert args.policies["cagr_fraction_strategy_equity"] == benchmark.gpu_parity.MetricTolerance(0.001, 0.01)
+    assert "peak_recovery_max_days_strategy_equity" not in args.policies
+    assert "position_held_max_days" not in args.policies
 
 
-@pytest.mark.parametrize("policy", [[], {"adg_fraction_strategy_equity": {"absolute": -1, "relative": 0}},
-                                    {"adg_fraction_strategy_equity": {"absolute": True, "relative": 0}},
-                                    {"adg_fraction_strategy_equity": {"absolute": 0, "relative": float("nan")}}])
+@pytest.mark.parametrize("policy", [[], {"cagr_fraction_strategy_equity": {"absolute": -1, "relative": 0}},
+                                    {"cagr_fraction_strategy_equity": {"absolute": True, "relative": 0}},
+                                    {"cagr_fraction_strategy_equity": {"absolute": 0, "relative": float("nan")}}])
 def test_malformed_metric_policies_are_rejected_before_device_access(tmp_path, policy):
     path = tmp_path / "policy.json"
     path.write_text(json.dumps(policy))
@@ -132,19 +132,19 @@ def test_malformed_metric_policies_are_rejected_before_device_access(tmp_path, p
 
 
 def test_order_disagreements_include_ties_and_front_changes():
-    cpu = [dict(adg_fraction_strategy_equity=0.1, drawdown_max_fraction_strategy_equity=0.2),
-           dict(adg_fraction_strategy_equity=0.1, drawdown_max_fraction_strategy_equity=0.1)]
-    gpu = [dict(adg_fraction_strategy_equity=0.100001, drawdown_max_fraction_strategy_equity=0.2), cpu[1]]
+    cpu = [dict(cagr_fraction_strategy_equity=0.1, ulcer_index_fraction_strategy_equity=0.2),
+           dict(cagr_fraction_strategy_equity=0.1, ulcer_index_fraction_strategy_equity=0.1)]
+    gpu = [dict(cagr_fraction_strategy_equity=0.100001, ulcer_index_fraction_strategy_equity=0.2), cpu[1]]
     report = benchmark._ranking(cpu, gpu)
     assert report["cpu_front"] == [1]
     assert report["gpu_front"] == [0, 1]
-    assert report["pair_order_disagreements"] == {"adg_fraction_strategy_equity": 1, "drawdown_max_fraction_strategy_equity": 0}
-    assert report["cpu_adg_regret_of_gpu_max"] == 0
+    assert report["pair_order_disagreements"] == {"cagr_fraction_strategy_equity": 1, "ulcer_index_fraction_strategy_equity": 0}
+    assert report["cpu_cagr_regret_of_gpu_max"] == 0
 
 
 @pytest.mark.parametrize("value", [None, math.inf, math.nan])
 def test_missing_or_nonfinite_objectives_are_unassessed(value):
-    row = dict(adg_fraction_strategy_equity=value, drawdown_max_fraction_strategy_equity=0)
+    row = dict(cagr_fraction_strategy_equity=value, ulcer_index_fraction_strategy_equity=0)
     report = benchmark._ranking([row], [row])
     assert report == {"assessed": False, "reason": "nonfinite_or_missing_objective"}
     json.dumps(report, allow_nan=False)
@@ -153,9 +153,9 @@ def test_missing_or_nonfinite_objectives_are_unassessed(value):
 def test_diagnostic_limits_use_canonical_feasibility_and_inclusive_boundaries():
     from optimization.gpu.parity import compare_limits
 
-    checks = benchmark._checks(options("--adg-floor", "0", "--drawdown-ceiling", "0.01"))
-    cpu = dict(adg_fraction_strategy_equity=0, drawdown_max_fraction_strategy_equity=0.01)
-    gpu = dict(adg_fraction_strategy_equity=0, drawdown_max_fraction_strategy_equity=0.010000001)
+    checks = benchmark._checks(options("--cagr-floor", "0", "--drawdown-ceiling", "0.01"))
+    cpu = dict(cagr_fraction_strategy_equity=0, drawdown_max_fraction_strategy_equity=0.01)
+    gpu = dict(cagr_fraction_strategy_equity=0, drawdown_max_fraction_strategy_equity=0.010000001)
     report = compare_limits(cpu, gpu, checks)
     assert report["cpu_feasible"] is True
     assert report["gpu_feasible"] is False
@@ -166,8 +166,8 @@ def test_diagnostic_limits_use_canonical_feasibility_and_inclusive_boundaries():
 def test_additional_diagnostic_limits_use_canonical_metric_feasibility():
     from optimization.gpu.parity import compare_limits
 
-    checks = benchmark._checks(options("--limit", "fills_gap_p95_hours", "greater_than", "1"))
-    report = compare_limits({"fills_gap_p95_hours": 1.0}, {"fills_gap_p95_hours": 1.1}, checks)
+    checks = benchmark._checks(options("--limit", "fills_gap_max_days", "greater_than", "1"))
+    report = compare_limits({"fills_gap_max_days": 1.0}, {"fills_gap_max_days": 1.1}, checks)
     assert report["cpu_feasible"] is True
     assert report["gpu_feasible"] is False
     assert report["checks"][0]["status"] == "flip"
@@ -358,12 +358,12 @@ def test_cohort_reference_uses_the_native_factual_simulation_contract(monkeypatc
                         SimpleNamespace(SharedAccountReplay=reference))
     monkeypatch.setitem(sys.modules, "backtest", SimpleNamespace(
         build_backtest_payload=lambda *a, **kw: None,
-        execute_backtest=lambda *a: (None, None, {"adg_fraction_strategy_equity": 0.0}),
+        execute_backtest=lambda *a: (None, None, {"cagr_fraction_strategy_equity": 0.0}),
     ))
     monkeypatch.setattr(benchmark, "_cohort", lambda *a: (
         ({}, None, {}, None, None), [{}], [{}],
     ))
-    args = SimpleNamespace(warm_runs=0, metrics=["adg_fraction_strategy_equity"])
+    args = SimpleNamespace(warm_runs=0, metrics=["cagr_fraction_strategy_equity"])
     with pytest.raises(ReferencePrepared):
         benchmark._measure(SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: None)),
                            args, "ema_anchor", 7)
@@ -376,18 +376,18 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     if not torch.cuda.is_available():
         pytest.skip("NVIDIA CUDA required")
     path = tmp_path / "policy.json"
-    path.write_text(json.dumps({"recovery_p95_days_strategy_equity": {"absolute": 0, "relative": 0}}))
+    path.write_text(json.dumps({"peak_recovery_max_days_strategy_equity": {"absolute": 0, "relative": 0}}))
     args = options("--strategies", strategy, "--bars", "512", "--coins", "2",
                    "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto",
                    "--hsl", hsl, "--hsl-drawdown-threshold-fraction", ".002",
                    "--hsl-drawdown-fraction-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "1000",
                    "--price-shock", "0", "256", ".7", "--price-shock", "1", "320", "1.3",
-                   "--metrics", "recovery_p95_days_strategy_equity", "active_day_turnover_proxy_mean_ratio", "adg_fraction_btc",
-                   "--limit", "fills_gap_p95_hours", "greater_than", "1",
+                   "--metrics", "peak_recovery_max_days_strategy_equity", "position_held_max_days", "gross_exposure_max_ratio_strategy_equity",
+                   "--limit", "fills_gap_max_days", "greater_than", "1",
                    "--tolerances", str(path),
-                   "--objective", "adg_fraction_strategy_equity", "max",
-                   "--objective", "drawdown_max_fraction_strategy_equity", "min",
-                   "--objective", "fills_gap_p95_hours", "min")
+                   "--objective", "cagr_fraction_strategy_equity", "max",
+                   "--objective", "ulcer_index_fraction_strategy_equity", "min",
+                   "--objective", "pain_index_fraction_strategy_equity", "min")
     report = benchmark.run_benchmark(args)
     json.dumps(report, allow_nan=False)
     case = report["cases"][0]
@@ -397,13 +397,13 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     assert all(set(row["metrics"]) == set(args.metrics) for row in case["cpu_gpu_comparisons"])
     assert report["recipe"]["metrics"] == args.metrics
     assert "tolerances" not in report["recipe"] and "policies" not in report["recipe"]
-    assert report["tolerance_policy"]["active_day_turnover_proxy_mean_ratio"] is None
-    assert report["tolerance_policy"]["recovery_p95_days_strategy_equity"] == dict(
+    assert report["tolerance_policy"]["position_held_max_days"] is None
+    assert report["tolerance_policy"]["peak_recovery_max_days_strategy_equity"] == dict(
         absolute=0, relative=0, matching_infinity=False)
-    assert all(row["metrics"]["adg_fraction_btc"]["cpu"] is not None for row in case["cpu_gpu_comparisons"])
-    assert all(row["metrics"]["recovery_p95_days_strategy_equity"]["status"] in {"match", "mismatch"}
+    assert all(row["metrics"]["gross_exposure_max_ratio_strategy_equity"]["cpu"] is not None for row in case["cpu_gpu_comparisons"])
+    assert all(row["metrics"]["peak_recovery_max_days_strategy_equity"]["status"] in {"match", "mismatch"}
                for row in case["cpu_gpu_comparisons"])
-    assert all(row["metrics"]["active_day_turnover_proxy_mean_ratio"]["status"] == "unassessed"
+    assert all(row["metrics"]["position_held_max_days"]["status"] == "unassessed"
                for row in case["cpu_gpu_comparisons"])
     assert case["ranking"]["assessed"]
     assert case["ranking"]["objectives"] == args.objectives
@@ -420,15 +420,15 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
 
 
 def test_explicit_objectives_replace_default_and_request_canonical_metrics():
-    args = options('--objective', 'adg_fraction_strategy_equity', 'max',
-                   '--objective', 'fills_gap_p95_hours', 'min')
-    assert args.objectives == {'adg_fraction_strategy_equity': 'max', 'fills_gap_p95_hours': 'min'}
-    assert args.metrics == [*benchmark.gpu_parity.DEFAULT_METRICS, 'fills_gap_p95_hours']
-    assert options('--objective', 'fills_gap_p95_hours', 'min', '--objective', 'fills_gap_p95_hours', 'min').objectives == {'fills_gap_p95_hours': 'min'}
+    args = options('--objective', 'cagr_fraction_strategy_equity', 'max',
+                   '--objective', 'fills_gap_max_days', 'min')
+    assert args.objectives == {'cagr_fraction_strategy_equity': 'max', 'fills_gap_max_days': 'min'}
+    assert args.metrics == [*benchmark.gpu_parity.DEFAULT_METRICS, 'fills_gap_max_days']
+    assert options('--objective', 'fills_gap_max_days', 'min', '--objective', 'fills_gap_max_days', 'min').objectives == {'fills_gap_max_days': 'min'}
 
 
-@pytest.mark.parametrize('flags', [('--objective', 'fills_gap_p95_hours', 'auto'),
-    ('--objective', 'adg_fraction_strategy_equity', 'max', '--objective', 'adg_fraction_strategy_equity', 'min')])
+@pytest.mark.parametrize('flags', [('--objective', 'fills_gap_max_days', 'auto'),
+    ('--objective', 'cagr_fraction_strategy_equity', 'max', '--objective', 'cagr_fraction_strategy_equity', 'min')])
 def test_bad_objective_direction_is_rejected(flags):
     with pytest.raises(SystemExit) as error:
         options(*flags)
@@ -436,80 +436,48 @@ def test_bad_objective_direction_is_rejected(flags):
 
 
 def test_third_objective_exposes_front_change_hidden_by_default():
-    cpu = [dict(adg_fraction_strategy_equity=.1, drawdown_max_fraction_strategy_equity=.2, fills_gap_p95_hours=1),
-           dict(adg_fraction_strategy_equity=.1, drawdown_max_fraction_strategy_equity=.1, fills_gap_p95_hours=2)]
-    gpu = [cpu[0], {**cpu[1], 'fills_gap_p95_hours': .5}]
+    cpu = [dict(cagr_fraction_strategy_equity=.1, ulcer_index_fraction_strategy_equity=.2, fills_gap_max_days=1),
+           dict(cagr_fraction_strategy_equity=.1, ulcer_index_fraction_strategy_equity=.1, fills_gap_max_days=2)]
+    gpu = [cpu[0], {**cpu[1], 'fills_gap_max_days': .5}]
     assert benchmark._ranking(cpu, gpu)['front_members_match']
-    report = benchmark._ranking(cpu, gpu, {**benchmark.DEFAULT_OBJECTIVES, 'fills_gap_p95_hours': 'min'})
+    report = benchmark._ranking(cpu, gpu, {**benchmark.DEFAULT_OBJECTIVES, 'fills_gap_max_days': 'min'})
     assert report['cpu_front'] == [0, 1]
     assert report['gpu_front'] == [1]
-    assert report['pair_order_disagreements']['fills_gap_p95_hours'] == 1
-    assert report['cpu_regret_at_gpu_best']['fills_gap_p95_hours'] == 1
-    assert report['gpu_best_candidates']['fills_gap_p95_hours'] == 1
+    assert report['pair_order_disagreements']['fills_gap_max_days'] == 1
+    assert report['cpu_regret_at_gpu_best']['fills_gap_max_days'] == 1
+    assert report['gpu_best_candidates']['fills_gap_max_days'] == 1
 
 
 @pytest.mark.parametrize('direction,selected,regret', [('min', 1, 1), ('max', 0, 1)])
 def test_non_adg_objective_directions_and_axis_regret(direction, selected, regret):
-    cpu = [{'fills_gap_p95_hours': 1}, {'fills_gap_p95_hours': 2}]
-    gpu = [{'fills_gap_p95_hours': 2}, {'fills_gap_p95_hours': 1}]
-    report = benchmark._ranking(cpu, gpu, {'fills_gap_p95_hours': direction})
+    cpu = [{'fills_gap_max_days': 1}, {'fills_gap_max_days': 2}]
+    gpu = [{'fills_gap_max_days': 2}, {'fills_gap_max_days': 1}]
+    report = benchmark._ranking(cpu, gpu, {'fills_gap_max_days': direction})
     assert report['gpu_front'] == [selected]
-    assert report['gpu_best_candidates'] == {'fills_gap_p95_hours': selected}
-    assert report['cpu_regret_at_gpu_best'] == {'fills_gap_p95_hours': regret}
-    assert 'cpu_adg_regret_of_gpu_max' not in report
+    assert report['gpu_best_candidates'] == {'fills_gap_max_days': selected}
+    assert report['cpu_regret_at_gpu_best'] == {'fills_gap_max_days': regret}
+    assert 'cpu_cagr_regret_of_gpu_max' not in report
 
 
-@pytest.mark.parametrize('rows', [([], []), ([{'fills_gap_p95_hours': 1}], [])])
+@pytest.mark.parametrize('rows', [([], []), ([{'fills_gap_max_days': 1}], [])])
 def test_empty_or_mismatched_cohorts_are_unassessed(rows):
-    assert benchmark._ranking(*rows, {'fills_gap_p95_hours': 'min'}) == {'assessed':False, 'reason':'empty_or_mismatched_candidates'}
+    assert benchmark._ranking(*rows, {'fills_gap_max_days': 'min'}) == {'assessed':False, 'reason':'empty_or_mismatched_candidates'}
 
 
 @pytest.mark.parametrize('value', [None, float('nan'), float('inf')])
 def test_missing_extra_objective_is_unassessed(value):
-    rows = [{'fills_gap_p95_hours': value}]
-    assert benchmark._ranking(rows, rows, {'fills_gap_p95_hours': 'min'})['assessed'] is False
+    rows = [{'fills_gap_max_days': value}]
+    assert benchmark._ranking(rows, rows, {'fills_gap_max_days': 'min'})['assessed'] is False
 
 
 def test_fourth_objective_direction_changes_dominance():
-    axes = {**benchmark.DEFAULT_OBJECTIVES, "fills_gap_p95_hours": "min",
-            "mdg_fraction_strategy_equity": "max"}
-    cpu = [dict(adg_fraction_strategy_equity=.1, drawdown_max_fraction_strategy_equity=.1,
-                fills_gap_p95_hours=gap, mdg_fraction_strategy_equity=momentum)
+    axes = {**benchmark.DEFAULT_OBJECTIVES, "fills_gap_max_days": "min",
+            "cagr_fraction_strategy_equity_ew": "max"}
+    cpu = [dict(cagr_fraction_strategy_equity=.1, ulcer_index_fraction_strategy_equity=.1,
+                fills_gap_max_days=gap, cagr_fraction_strategy_equity_ew=momentum)
            for gap, momentum in [(1, 0), (2, 1), (1, 1)]]
-    gpu = [*cpu[:2], {**cpu[2], "mdg_fraction_strategy_equity": -1}]
+    gpu = [*cpu[:2], {**cpu[2], "cagr_fraction_strategy_equity_ew": -1}]
     report = benchmark._ranking(cpu, gpu, axes)
     assert report["cpu_front"] == [2]
     assert report["gpu_front"] == [0, 1]
-    assert report["pair_order_disagreements"]["mdg_fraction_strategy_equity"] == 2
-
-
-@pytest.mark.parametrize("metric,skip", [
-    ("adg_fraction_per_twel_ratio_btc_long", False),
-    ("mdg_fraction_per_twel_ratio_btc_short", False),
-    ("adg_fraction_btc_ew", False),
-    ("adg_fraction_per_twel_ratio_usd_long", True),
-    ("adg_fraction_usd_ew", True),
-])
-def test_cohort_cpu_includes_btc_curve_for_side_and_weighting_modifiers(monkeypatch, metric, skip):
-    import sys
-
-    class PayloadPrepared(Exception):
-        pass
-
-    def build_payload(*args, **kwargs):
-        assert kwargs["metrics_only"] is True
-        assert kwargs["skip_btc_analysis"] is skip
-        raise PayloadPrepared
-
-    monkeypatch.setitem(sys.modules, "backtest", SimpleNamespace(
-        build_backtest_payload=build_payload, execute_backtest=lambda *a: None,
-    ))
-    monkeypatch.setitem(sys.modules, "optimization.gpu.service", SimpleNamespace(
-        SharedAccountReplay=lambda **kwargs: pytest.fail("CPU payload preparation must happen first"),
-    ))
-    monkeypatch.setattr(benchmark, "_cohort", lambda *a: (
-        ({}, None, {}, None, None), [{}], [{}],
-    ))
-    args = SimpleNamespace(warm_runs=0, metrics=[metric])
-    with pytest.raises(PayloadPrepared):
-        benchmark._measure(None, args, "ema_anchor", 7)
+    assert report["pair_order_disagreements"]["cagr_fraction_strategy_equity_ew"] == 2

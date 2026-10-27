@@ -19,10 +19,10 @@ def result_record():
     config = get_template_config()
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     config["backtest"].update(start_date="2024-01-01", end_date="2024-01-02")
-    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     config["backtest"]["coins"] = {"combined": ["BTC"]}
-    config["metrics"] = {"objectives": {"adg_fraction_strategy_equity": 0.001}}
-    config["optimizer_evaluation_contract"] = {"version": 5}
+    config["metrics"] = {"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.001}}
+    config["optimizer_evaluation_contract"] = {"version": 11, "core_metric_definition_version": 1}
     return config
 
 
@@ -138,7 +138,7 @@ def test_saved_backtest_runtime_fields_are_only_removed_from_results(
     parent = source if len(parts) == 1 else source[parts[0]]
     parent[parts[-1]] = value
     if marked:
-        source["metrics"] = {"objectives": {"adg_fraction_strategy_equity": 0.001}}
+        source["metrics"] = {"objectives": {"cagr_fraction_strategy_equity": 0.001}}
     path = tmp_path / "config.json"
     original = json.dumps(source)
     path.write_text(original)

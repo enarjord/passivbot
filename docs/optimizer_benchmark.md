@@ -177,7 +177,10 @@ iteration counts do not by themselves establish equal search quality.
   speedup claim while retaining the diagnostic timing.
 - A successful command exit means measurements completed. Inspect numerical,
   constraint and ranking results separately; completion is not a parity pass.
-- Pareto/rank diagnostics use ADG and drawdown and are bounded to 512 candidates.
+- Numerical and rank comparisons require matching current core metric definitions.
+  Unavailable values remain explicit; genuine infinities use null plus status and only
+  match when the numerical policy permits matching infinite endpoints.
+- Pareto/rank diagnostics use CAGR and Ulcer Index and are bounded to 512 candidates.
   They do not establish repeated-seed evolutionary quality or near-limit agreement.
 
 The controller uses POSIX process groups (macOS/Linux). Time and memory limits apply separately to each worker process tree. Timeout or

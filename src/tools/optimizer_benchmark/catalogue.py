@@ -89,6 +89,8 @@ def select_cases(profile, patterns=()):
 
 
 def declared_gpu_support(case):
+    if "coarse_candles" in case.features:
+        return "GPU core metric replay currently requires 1m candles"
     if "btc_collateral" in case.features:
         return "GPU collateral simulation unsupported"
     if case.strategy == "ema_anchor" and "position_enforcer" in case.features:

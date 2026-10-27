@@ -4,7 +4,7 @@ Quick-and-dirty visualizer for iterative backtester history logs.
 
 Example:
     python src/tools/iterative_history_plot.py backtests/iterative/iterative_20251025_113401 \
-        --output tmp/flat_vs_adg.png
+        --output tmp/recovery_vs_cagr.png
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _collect_metric(entry: Dict, metric: str) -> float | None:
     # support analysis_combined names, if stored
     combined = entry.get("analysis_combined", {})
     if combined:
-        return combined.get(metric) or combined.get(f"{metric}_mean")
+        return combined[metric] if metric in combined else combined.get(f"{metric}_mean")
     return None
 
 
@@ -142,13 +142,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--x-metric",
-        default="peak_recovery_max_hours_usd",
-        help="Metric to plot on X axis (default: peak_recovery_max_hours_usd).",
+        default="peak_recovery_max_days_strategy_equity",
+        help="Metric to plot on X axis (default: peak_recovery_max_days_strategy_equity).",
     )
     parser.add_argument(
         "--y-metric",
-        default="adg_btc_w",
-        help="Metric to plot on Y axis (default: adg_btc_w).",
+        default="cagr_fraction_strategy_equity",
+        help="Metric to plot on Y axis (default: cagr_fraction_strategy_equity).",
     )
     parser.add_argument(
         "--output",

@@ -37,14 +37,8 @@ def _replay(hsl, hedge_mode, monkeypatch):
                     "--hsl-cooldown-minutes", "10000", "--hsl-memory-ema-span-minutes", "1440"]
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
     config['bot']["portfolio"]['hedge_mode'] = hedge_mode
-    metrics = {
-        "adg_fraction_strategy_equity", "calmar_ratio_usd", "drawdown_max_fraction_strategy_equity",
-        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity", "recovery_p95_days_strategy_equity",
-        "hsl_signal_ema_worst_1pct_mean_fraction", "hsl_signal_ema_worst_1pct_mean_fraction_long",
-        "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long", "drawdown_max_fraction_strategy_equity_short",
-        "hsl_red_time_fraction", "entry_interval_p99_hours", "active_day_turnover_proxy_mean_ratio",
-        "equity_balance_gap_negative_mean_fraction_btc", "drawdown_max_fraction_btc",
-    }
+    from config.metrics import CORE_METRIC_CATALOG
+    metrics = set(CORE_METRIC_CATALOG)
     replay = SharedAccountReplay(config=deepcopy(config), hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=3,
         needed_metrics=metrics)

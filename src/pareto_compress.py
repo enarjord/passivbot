@@ -14,6 +14,7 @@ import numpy as np
 from pareto_core import detect_latest_pareto_dir
 from pareto_explorer import (
     ParetoCandidate,
+    _json_ready,
     _display_path,
     _format_limit_entry,
     _format_metric_value,
@@ -48,20 +49,6 @@ class CompressedMember:
     objectives: Dict[str, float]
     mean_utility: float
     min_distance_to_previous: Optional[float]
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Mapping):
-        return {str(k): _json_ready(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(v) for v in value]
-    return value
 
 
 def _parse_method(raw: str | None) -> str:
@@ -267,7 +254,7 @@ def compress_candidates(
     if not active_specs:
         raise ValueError("No objective metrics available for compression.")
     active_metrics = [spec.metric for spec in active_specs]
-    utilities, lows, highs = _normalize_objective_matrix(candidates, active_specs)
+    utilities, _lows, _highs = _normalize_objective_matrix(candidates, active_specs)
     effective_count = min(int(count), len(candidates))
 
     ideal_idx = _ideal_anchor_index(candidates, utilities)
@@ -324,8 +311,8 @@ def compress_candidates(
         {
             "metric": spec.metric,
             "goal": spec.goal,
-            "min": float(lows[idx]),
-            "max": float(highs[idx]),
+            "min": min(float(_resolve_candidate_metric_value(item, spec.metric)) for item in candidates),
+            "max": max(float(_resolve_candidate_metric_value(item, spec.metric)) for item in candidates),
         }
         for idx, spec in enumerate(active_specs)
     ]
@@ -380,7 +367,7 @@ def _write_outputs(output_dir: Path, pareto_dir: Path, members: Sequence[Compres
         if selection_path.is_dir():
             raise IsADirectoryError(f"Output path is a directory: {selection_path}")
         logging.info("Overwriting existing output file: %s", selection_path.name)
-    selection_path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True) + "\n")
+    selection_path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True, allow_nan=False) + "\n")
 
 
 def compress_from_args(args: argparse.Namespace) -> Dict[str, Any]:
@@ -500,7 +487,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     payload = compress_from_args(args)
     if getattr(args, "json_output", False):
-        print(json.dumps(_json_ready(payload), indent=2, sort_keys=True))
+        print(json.dumps(_json_ready(payload), indent=2, sort_keys=True, allow_nan=False))
     else:
         print(format_compression(payload))
     return 0

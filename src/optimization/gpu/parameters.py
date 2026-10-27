@@ -156,4 +156,13 @@ def prepare_candidate_parameters(config, markets, exchange):
     result = {f"{side}_{key}": value for side, values in params.items()
               for key, value in values.items() if key not in GLOBAL_RISK_PARAM_KEYS}
     result.update({key: float(backtest[key]) for key in GLOBAL_RISK_PARAM_KEYS})
+    # Reporting observes configured policies even when trading has zero slots.
+    # Keep this transport separate from the deliberately capacity-gated shader bit.
+    hsl = backtest["equity_hard_stop_loss"]
+    for index, side in enumerate(("long", "short")):
+        if hsl["mode"] == "coin":
+            policy = config["bot"][side]["hsl"]
+        else:
+            policy = hsl["portfolio"] if hsl["mode"] == "portfolio" else hsl["sides"][index]
+        result[f"_core_hsl_policy_enabled_{side}"] = float(bool(policy["enabled"]))
     return result

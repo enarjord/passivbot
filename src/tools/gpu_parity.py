@@ -25,7 +25,7 @@ from optimization.gpu.parity import MetricTolerance, compare_limits, compare_met
 from config.metrics import EXPOSURE_RMS_METRICS
 
 
-DEFAULT_METRICS = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day")
+DEFAULT_METRICS = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day")
 FIXTURE_DEFAULTS = {
     "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
@@ -39,9 +39,9 @@ STRESS_OPTIONS = ("hsl_drawdown_threshold_fraction", "hsl_drawdown_fraction_ema_
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
-    "adg_fraction_strategy_equity": MetricTolerance(1e-7, 1e-4),
+    "cagr_fraction_strategy_equity": MetricTolerance(1e-5, 1e-3),
     "drawdown_max_fraction_strategy_equity": MetricTolerance(1e-5, 1e-4),
-    "fills_per_day": MetricTolerance(1e-6, 1e-5),
+    "gross_turnover_ratio_per_day": MetricTolerance(1e-5, 1e-4),
     "backtest_completion_fraction": MetricTolerance(1e-6, 1e-6),
 }
 
@@ -439,19 +439,25 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     if runtime.get("skipped") or runtime["runtime_compiled_source_stamp"] != runtime["expected_source_fingerprint"]:
         raise RuntimeError("parity requires a real source-fingerprint-verified Rust extension")
     from backtest import build_backtest_payload, execute_backtest
-    from config.metrics import resolve_metric_value
+    from metrics_schema import decode_metric_value, MetricAggregationError
     from optimization.gpu.executor import BacktestRequest
 
     config, hlcvs, markets, btc, timestamps = inputs
     identity = _identity(config, (hlcvs, btc, timestamps), markets, exchange)
     payload = build_backtest_payload(
         hlcvs, markets, deepcopy(config), exchange, btc, timestamps,
-        metrics_only=not diagnostics, skip_btc_analysis=not any(name.endswith("_btc") or "_btc_" in name for name in metrics),
+        metrics_only=not diagnostics, metric_requests=list(metrics),
     )
     started = time.perf_counter()
     fills, equities, analysis = execute_backtest(payload, config)
     cpu_seconds = time.perf_counter() - started
-    cpu = {name: value for name in metrics if (value := resolve_metric_value(analysis, name)) is not None}
+    cpu = {}
+    for name in metrics:
+        try:
+            cpu[name] = decode_metric_value(analysis, name)
+        except MetricAggregationError:
+            pass  # Comparison reports this requested unavailable value explicitly.
+
     from optimization.gpu.native import NativeBacktestService
 
     with _native_dataset(inputs, exchange, metrics) as dataset:
@@ -463,8 +469,18 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     # Preparation belongs to this measured cold native request.
     preparation_seconds = None
     states = {"native_result": {"liquidated": result.liquidated}} if diagnostics else {}
-    report = compare_metrics(cpu, result.metrics, {name: policies.get(name) for name in metrics})
-    report["feasibility"] = compare_limits(cpu, result.metrics, checks)
+    gpu_payload = dict(result.metrics)
+    gpu_payload.update(result.metadata or {})
+    gpu = {}
+    for name in metrics:
+        try:
+            gpu[name] = decode_metric_value(gpu_payload, name)
+        except MetricAggregationError:
+            pass  # Unavailable observations cannot become a successful comparison.
+    report = compare_metrics(cpu, gpu, {name: policies.get(name) for name in metrics})
+    report["metric_status"] = {"cpu": analysis.get("metric_status", {}),
+                               "gpu": gpu_payload.get("metric_status", {})}
+    report["feasibility"] = compare_limits(cpu, gpu, checks)
     report["passed"] = report["passed"] and report["feasibility"]["passed"]
     statuses = {row["status"] for row in report["metrics"].values()}
     status = "passed" if report["passed"] else "mismatch"

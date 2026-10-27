@@ -22,7 +22,7 @@ def _dataset(manager):
     dataset = PreparedGpuDataset(
         config=config, markets={"A": {}, "B": {}},
         hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
-        candle_coins=["A", "B"], exchange="binance", metrics=["fills_per_day"],
+        candle_coins=["A", "B"], exchange="binance", metrics=["gross_turnover_ratio_per_day"],
         time_range=(2, 9),
     )
     return dataset, config, candles

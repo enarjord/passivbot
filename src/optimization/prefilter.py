@@ -13,11 +13,9 @@ from backtest_universe import (
     normalize_backtest_coin,
 )
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
-from config.metrics import CURRENCY_METRICS, metric_with_curve
-from config.scoring import default_objective_goal, from_engine_value
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 from config.shared_bot import require_grouped_bot_value
 from config.strategy import build_runtime_strategy_side, merge_runtime_bot_side
-from metrics_schema import KNOWN_ANALYSIS_METRICS, merge_suite_payload
 from optimization.evaluation_payload import build_evaluation_payload
 from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 
@@ -288,49 +286,17 @@ def build_prefilter_payload(
     if not math.isfinite(constraint) or constraint <= 0:
         raise ValueError("prefilter rejection requires a finite positive constraint")
     specs = base.scoring_specs
-    names = (
-        KNOWN_ANALYSIS_METRICS
-        | {
-            metric_with_curve(name, currency)
-            for name in CURRENCY_METRICS
-            for currency in ("usd", "btc")
-        }
-        | {spec.metric for spec in specs}
-        | {check["metric"] for check in base.limit_checks}
-    )
-    defaults = {
-        name: (
-            -constraint
-            if (
-                default_objective_goal(name) == "max"
-                or name in {"trade_win_fraction"}
-            )
-            else constraint
-        )
-        for name in names
-    }
-    raw = {spec.metric: from_engine_value(spec, constraint) for spec in specs}
-    defaults.update(raw)
+    # A prefilter rejection has no measured raw metric values.
     metrics = {
-        "objectives": raw,
-        "unpenalized_objectives": tuple(constraint for _ in specs),
-        "stats": {
-            name: {stat: value for stat in ("mean", "min", "max", "median", "std")}
-            for name, value in defaults.items()
-        },
+        "definition_version": CORE_METRIC_DEFINITION_VERSION, "fitness_status": "invalid",
+        "objectives": {}, "stats": {},
         "constraint_violation": constraint,
-        "evaluation_origin": "config_prefilter",
-        "backtest_performed": False,
+        "evaluation_origin": "config_prefilter", "backtest_performed": False,
         "prefilter": {"version": PREFILTER_VERSION, "findings": deepcopy(findings)},
     }
     if suite:
-        metrics["suite_metrics"] = merge_suite_payload(
-            metrics["stats"],
-            scenario_metrics={
-                label: {"stats": metrics["stats"]} for label in scenario_labels
-            },
-        )
-        metrics["suite_metrics"]["evaluation_origin"] = "config_prefilter"
+        metrics["suite_metrics"] = {"definition_version": CORE_METRIC_DEFINITION_VERSION, "metrics": {},
+                                    "evaluation_origin": "config_prefilter"}
     return build_evaluation_payload(
         tuple(constraint for _ in specs), constraint, metrics, vector
     )

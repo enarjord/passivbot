@@ -62,9 +62,9 @@ def main():
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
         exchange="binance", batch_size=args.candidates, factual_hsl=True,
-        needed_metrics={"adg_fraction_strategy_equity", "adg_fraction_strategy_equity_ew",
+        needed_metrics={"cagr_fraction_strategy_equity", "cagr_fraction_strategy_equity_ew",
                         "drawdown_max_fraction_strategy_equity", "pain_index_fraction_strategy_equity",
-                        "fills_gap_time_weighted_mean_hours",
+                        "fills_gap_max_days",
                         "position_held_time_weighted_mean_hours", "backtest_completion_fraction"},
     )
     runner = proxy.runners["long"]

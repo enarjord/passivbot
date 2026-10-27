@@ -285,7 +285,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"activation_span_fraction": 1.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]},
     }
     base["bot"]["long"]["enabled"] = True
     base["bot"]["short"]["enabled"] = False
@@ -307,7 +307,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
     universe_changed["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "SOL"]
     optimize_changed = {
         **base,
-        "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "sharpe_ratio_strategy_equity", "goal": "max"}]},
     }
     source_dir_changed = {
         **base,
@@ -338,11 +338,11 @@ def test_run_signature_changes_for_optimize_changes():
             "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]},
     }
     optimize_changed = {
         **base,
-        "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "sharpe_ratio_strategy_equity", "goal": "max"}]},
     }
 
     assert ib.make_run_signature(base) != ib.make_run_signature(optimize_changed)
@@ -391,7 +391,7 @@ def test_load_config_rejects_scenario_limits_before_loading_markets(
     config = {
         "backtest": {"exchanges": ["binance"]},
         "optimize": {
-            "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
+            "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}],
             "limits": [
                 {
                     "metric": "drawdown_max_fraction_strategy_equity",

@@ -43,9 +43,11 @@ kernel void loss_report_probe(constant float* params, device float* output,
     output[1] = h.panic_loss_drawdown_count;
     output[2] = h.hsl.action;
     finish_hsl_panic_loss(h);
+    observe_hsl_event(h, 975, -25, 0, true, 3, false);
+    observe_hsl_event(h, 800, -25, -400, true, 4, false);
     record_hsl_panic_fill(h, -40, 800);
     finish_hsl_panic_loss(h);
-    output[3] = h.panic_loss_drawdown_min;
+    output[3] = h.panic_loss_drawdown_sum / h.panic_loss_drawdown_count;
     output[4] = h.panic_loss_drawdown_max;
     output[5] = h.panic_loss_drawdown_sum;
     output[6] = h.panic_loss_drawdown_count;
@@ -60,6 +62,6 @@ kernel void loss_report_probe(constant float* params, device float* output,
     values = result.cpu().tolist()
     assert values[:2] == pytest.approx([.025, 1])
     assert values[2] == {"flat": 1, "green": 0, "censored": 3}[finish]
-    assert values[3:8] == pytest.approx([.025, .05, .075, 2, 65])
+    assert values[3:8] == pytest.approx([.0375, .05, .075, 2, 65])
     if finish == "censored":
         assert values[8:] == pytest.approx([.025, 25, 1, 0])

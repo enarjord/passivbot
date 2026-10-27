@@ -173,8 +173,8 @@ Good defaults:
   "reducer": {
     "default": "mean",
     "drawdown_max_fraction_strategy_equity": "max",
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity": "max",
-    "recovery_max_days_strategy_equity": "max",
+    "ulcer_index_fraction_strategy_equity": "max",
+    "peak_recovery_max_days_strategy_equity": "max",
     "position_held_max_days": "max"
   }
 }
@@ -194,7 +194,7 @@ reduction, and optionally set an objective-only `reducer`. For example:
   "optimize": {
     "objective_scenario": "base",
     "scoring": [
-      {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+      {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
       {
         "metric": "pain_index_fraction_strategy_equity",
         "goal": "min",
@@ -205,7 +205,7 @@ reduction, and optionally set an objective-only `reducer`. For example:
 }
 ```
 
-Here ADG uses `base`, while underwater percentage uses the configured suite reduction.
+Here CAGR uses `base`, while Pain Index uses the configured suite reduction.
 
 Limits choose their basis independently. This example applies a tighter drawdown threshold to the
 base scenario and a looser worst-scenario threshold across the whole suite:

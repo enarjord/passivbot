@@ -59,7 +59,8 @@ def reducer_mapping_from_aliases(
         mapping = {}
         for metric, value in raw_mapping.items():
             metric_path = f"{path}.{key}.{metric}"
-            reject_retired_metric(metric, path=metric_path)
+            if metric != "default":
+                reject_retired_metric(metric, path=metric_path)
             reducer = normalize_reducer(value, path=metric_path)
             if reducer is None:
                 raise ValueError(f"{metric_path} must be a reducer name, not null")

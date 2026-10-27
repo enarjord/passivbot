@@ -89,7 +89,7 @@ def test_actual_metal_hysteresis_matches_native_selection_and_counts(kind, topol
     fills, _, native = execute_backtest(payload, config)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
                                 timestamps=timestamps, exchange="binance", batch_size=1,
-                                needed_metrics={"fills_per_day"})
+                                needed_metrics={"gross_turnover_ratio_per_day"})
     if topology in ("long", "short"):
         runner = proxy.runners[topology]
         matrix = proxy._parameter_matrix([{}], topology)
@@ -99,10 +99,10 @@ def test_actual_metal_hysteresis_matches_native_selection_and_counts(kind, topol
         matrix = np.concatenate([proxy._parameter_matrix([{}], side)
                                  for side in ("long", "short")], axis=1)
     raw = runner.run(matrix)
-    assert raw["fill_count_long"].item() == native["fills_count_long"]
-    assert raw["fill_count"].item() - raw["fill_count_long"].item() == native["fills_count_short"]
+    assert raw["fill_count_long"].item() == sum(str(row[13]).endswith("long") for row in fills)
+    assert raw["fill_count"].item() - raw["fill_count_long"].item() == sum(str(row[13]).endswith("short") for row in fills)
     if profile == "unequal":
-        assert native["fills_count_" + high_side] == 0
+        assert sum(str(row[13]).endswith(high_side) for row in fills) == 0
     if len(fills):
         assert raw["first_fill_ts"].item() == int(fills[0][1]) - int(timestamps[0])
     if profile == "equal" or topology in ("fused", "oneway"):

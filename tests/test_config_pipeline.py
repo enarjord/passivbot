@@ -242,10 +242,10 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
-        validate_optimizer_metrics(config, ["hsl_restart_count"])
+        validate_optimizer_metrics(config, ["hsl_triggers_per_year"])
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
-            validate_optimizer_metrics(config, ["hsl_restart_count"])
+            validate_optimizer_metrics(config, ["hsl_triggers_per_year"])
 
 
 @pytest.mark.parametrize(
