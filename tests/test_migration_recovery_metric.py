@@ -139,20 +139,25 @@ def test_recovery_aliases_coalesce_identical_objectives_with_a_reported_choice()
 
 
 @pytest.mark.parametrize("metric", [
-    "strategy_eq_recovery_days_max_w", "usd_strategy_eq_recovery_days_max",
-    "btc_peak_recovery_days_strategy_eq", "peak_recovery_days_strategy_eq_long",
-    "peak_recovery_days_strategy_eq_short", "peak_recovery_hours_strategy_eq",
+    "peak_recovery_days_strategy_eq_long", "peak_recovery_days_strategy_eq_short",
+
     "strategy_eq_recovery_days_mean", "strategy_eq_recovery_days_p95",
-    "strategy_eq_recovery_day_max", "hard_stop_restarts_per_year_long",
+    "hard_stop_restarts_per_year_long",
 ])
-def test_other_retired_metrics_still_require_authored_formula_choices(metric):
+def test_recognized_unsupported_recovery_and_hsl_metrics_are_removed_only_in_best_effort(metric):
     source = released_v8_policy()
     source["optimize"]["limits"] = [
         {"metric": metric, "penalize_if": "greater_than", "value": 17.5},
     ]
     original = deepcopy(source)
     with pytest.raises(ValueError, match="requires --metric-replacement"):
-        migrate(source, best_effort=True)
+        migrate(source, memory_span_minutes=43200, acknowledge_metric_formula_change=True)
+    result = migrate(source, best_effort=True)
+    assert result.config["optimize"]["limits"] == []
+    assert any(change["path"] == "optimize.limits[0]"
+               and change["old"] == original["optimize"]["limits"][0]
+               and change["new"] is None and change.get("best_effort")
+               for change in result.changes)
     assert source == original
 
 

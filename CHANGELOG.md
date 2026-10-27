@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Best-effort v8 migration infers close growth, turnover, drawdown, holding-duration and
+  profit-contribution replacements, reporting unit, direction and reducer transformations.
+  Remove verified unsupported objectives, limits and stale reducer rules with full warnings;
+  preserve explicit replacements, strict conversion and errors for unknown or malformed policy.
+
 - Let best-effort v8 migration infer the portfolio recovery-day maximum's core replacement,
   preserving limit thresholds and reducers while reporting changed peak-tie and flat-equity
   semantics. Strict conversion and explicit metric choices retain priority.

@@ -675,7 +675,7 @@ def main(argv=None):
     parser.add_argument("--metric-replacement", action="append", default=[], metavar="OLD=NEW")
     parser.add_argument("--acknowledge-metric-formula-change", action="store_true")
     parser.add_argument("--best-effort", action="store_true",
-                        help="Infer replacement formulas and memory policy, logging every guess; review and backtest the result.")
+                        help="Infer close metric replacements and memory policy; remove unsupported objectives/limits with warnings. Review and backtest the result.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--report", type=Path)

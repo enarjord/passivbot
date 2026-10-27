@@ -195,7 +195,7 @@ def test_invalid_released_fee_inputs_fail_without_guessing_or_mutating(value, be
     ("mdg_strategy_eq_w", "cagr_fraction_strategy_equity"),
     ("adg_pnl_w", "cagr_fraction_strategy_equity"),
 ])
-def test_retired_formulas_require_explicit_choices_even_in_best_effort(
+def test_strict_retired_formulas_require_choices_and_explicit_choices_override_best_effort(
     metric, target, caplog,
 ):
     source = released()
@@ -208,8 +208,17 @@ def test_retired_formulas_require_explicit_choices_even_in_best_effort(
         migrate(source, memory_span_minutes=123.5)
     assert source == original
 
-    with pytest.raises(ValueError, match="metric-replacement"):
-        migrate(source, best_effort=True)
+    automatic = migrate(source, best_effort=True)
+    if metric == "volume_pct_per_day_avg_w":
+        assert automatic.config["optimize"]["scoring"][0]["metric"] == target
+        assert automatic.config["optimize"]["limits"][0]["metric"] == target
+    else:
+        assert automatic.config["optimize"]["scoring"] == []
+        assert automatic.config["optimize"]["limits"] == []
+        assert any(change["path"] == "optimize.limits[0]"
+                   and change["old"] == original["optimize"]["limits"][0]
+                   and change["new"] is None and change.get("best_effort")
+                   for change in automatic.changes)
     result = migrate(source, best_effort=True, metric_replacements={metric: target})
     assert result.config["optimize"]["scoring"] == [{"goal": "max", "metric": target}]
     assert result.config["optimize"]["limits"] == [

@@ -156,12 +156,12 @@ CAGR, CAGR EW and minute-sampled Pain Index do not preserve the old formulas or 
 thresholds. Turnover, HSL episode loss and other revised quantities also require fresh
 thresholds and backtests. See the [current metric definitions](metrics.md).
 
-Best-effort mode never chooses replacements for retired growth, `_w`, currency,
-turnover-proxy, realized-PnL or daily-worst underwater families. The former automatic
-EW and ordinary-statistic fallbacks are retired. An explicitly chosen replacement must
+Strict conversion requires these explicit choices. Best-effort conversion instead uses
+the bounded inference/removal policy below; it does not restore retired runtime aliases.
+An explicitly chosen replacement must
 be a current BASE selector; `_usd`, `_btc` and outer-statistic aliases are unsupported.
 A verified released outer suffix such as `_max` moves into the existing `reducer` field.
-Conflicting reducer choices fail, and identical objectives created by explicit choices
+Conflicting reducer choices fail, and identical objectives created by formula choices
 are consolidated with their old/new lists and counts recorded in the report.
 
 Only `cagr_fraction_strategy_equity_ew` retains exponential recency weighting. Its
@@ -201,8 +201,9 @@ retired search controls do not imply equivalent search evolution or reusable fit
 
 ## Opt-in best-effort migration
 
-Use `--best-effort` to report supported policy inferences. It can infer the recovery-day
-maximum replacement described below; other retired metrics still need explicit replacements:
+Use `--best-effort` to infer close metric replacements and remove verified retired
+objectives and limits that have no meaningful compact-core counterpart. Review the warnings
+and report: removing a limit removes that optimization constraint.
 
 ```sh
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
@@ -217,8 +218,13 @@ are emitted as choices are made, including before a later validation failure.
 
 | Missing choice or saved-result field | Best-effort policy |
 |---|---|
+| Strategy-equity ADG, including its rebased alias | Infer unsmoothed annual CAGR; infer CAGR EW for the legacy weighted ADG form |
+| `volume_pct_per_day_avg`, including its weighted form | Infer all-day, pre-fill-balance-normalized gross turnover; report changed sampling and any removed recency weighting |
+| `strategy_eq_underwater_pct_mean` | Infer minute-sampled Pain Index instead of mean daily worst drawdown |
 | `strategy_eq_recovery_days_max` or `peak_recovery_days_strategy_eq` | Infer `peak_recovery_max_days_strategy_equity`, preserving any outer reducer and limit direction/value; report the formula change |
-| Other retired metric selectors, including weighted, currency, per-side, hourly and non-maximum recovery variants | Require an explicit `--metric-replacement OLD=NEW` |
+| `position_held_hours_max` | Infer `position_held_max_days`; divide scalar and range bounds by 24 |
+| `long_short_profit_ratio` or `pnl_ratio_long_short` | Infer short net profit contribution with the complement transformations below |
+| Other verified retired metric selectors, including median growth, unsupported weighted/currency/per-side metrics and HSL restart counts | Remove the entire objective/limit and its stale named reducer rules; record the full original entry and path with `new: null` |
 | Retained metric selector crossing core definition version 1 | Report the changed definition and require fresh thresholds/results |
 | EW half-life absent or `null`, with CAGR EW explicitly selected | Resolve and report the native 180-day default |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
@@ -233,7 +239,9 @@ are emitted as choices are made, including before a later validation failure.
 | DEAP backend | Switch to pymoo, retain authored shared policy, approximate missing operator fields from old controls or canonical pymoo defaults |
 
 Explicit `--lookback-ema-span-minutes`, `--memory-span` and
-`--metric-replacement` choices take precedence. Authored EW half-lives and pymoo
+`--metric-replacement` choices take precedence over inference and removal. Explicit metric
+choices retain their authored bounds and goals; supply values appropriate to the chosen formula.
+Authored EW half-lives and pymoo
 shared settings are preserved. For DEAP, candidate-level `mutation_probability`
 initializes `pymoo.shared.mutation_probability`, and per-variable `mutation_indpb`
 initializes `mutation_probability_per_variable`; the old zero `mutation_indpb` sentinel
@@ -241,15 +249,41 @@ uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
 with best-effort mode. Best-effort mode supplies missing acknowledgment for retained
 metric definitions and explicit formula replacements, restart, gate-memory and search-algorithm
-changes. The recovery substitution remains an inferred choice in warnings and the report,
+changes. Inferred metric choices remain identified as guesses in warnings and the report,
 even with `--acknowledge-metric-formula-change`. The old recovery maximum measures waiting
 for a strictly higher equity observation; the current metric measures running-peak recovery
 episodes, ending when equity regains the peak. Peak ties recover and flat equity has zero
 recovery under the current formula. These decisions make no equivalence claim.
 Review limit thresholds, re-tune risk settings, run fresh backtests and start fresh optimizations.
 
+Inferred daily growth limits use the nominal annual bound
+`expm1(365.25 * log1p(daily_bound))`. This changes units; it does not restore the old
+smoothed or weighted growth formula, and nonlinear annualization does not commute with
+scenario averaging. Standard-deviation growth limits and bounds with no finite nominal
+conversion are removed with warnings.
+The canonical `penalize_if` mode selects the active scalar or range. Inactive bound fields
+are discarded with a warning during inferred numerical conversion, so an unused range
+cannot redirect or invalidate conversion of the actual scalar constraint.
+
+For long profit share `L`, the inferred short contribution is nominally `1 - L`.
+Scoring goals and scalar inequality directions reverse, bounds become `1 - bound`,
+and ranges become `[1 - high, 1 - low]`. Minimum/maximum reducers swap; mean/median
+retain their names. Standard deviation retains its original goal, bound and direction because
+`std(1 - L) = std(L)`. These choices resolve the original reducer aliases, active legacy suite
+policy and named-scenario selection before rewriting. Automatic limit directions that cannot
+be safely reversed are removed. The new quantity also includes fees and open-position PnL,
+requires positive combined net profit, and does not preserve the old zero-total fallback.
+
+If all objectives are removed, the output retains explicit `scoring: []` and reports that
+decision; it does not insert new objectives. Choose an objective before optimizing. An inferred
+limit-only quantity without an authored scoring goal is likewise removed from scoring with a
+warning. Legacy outer-statistic shorthand without a declared scoring goal is removed; use
+an objective object with an explicit goal to retain it. Unknown selector spellings and
+malformed policy still fail instead of being discarded.
+
 Unknown fields, conflicting aliases, malformed values, ambiguous enabled null
-restart policies, retired strategies/venues, other retired selectors lacking explicit replacements and
+restart policies, retired strategies/venues, unsupported selections outside objective/limit/reducer
+collections and
 rolling-window search bounds still require explicit correction. Normal config
 loading and migration without `--best-effort` remain strict. Referenced coin
 files are materialized in the output and remain unchanged on disk.
