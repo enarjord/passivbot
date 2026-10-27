@@ -158,6 +158,14 @@ satisfy a full evaluation or a different scenario subset. Request snapshots prev
 mutation while work is waiting for device admission. Future callbacks only enqueue
 notifications; canonical scoring runs on the CPU poller, outside GPU completion callbacks.
 
+`submit_ready()` advances already-admitted rows to the service without waiting for results
+or running scoring. Capacity limits may leave rows queued until service capacity is available.
+Before normally sealing an exhausted or full CPU preparation window, the optimizer calls
+this method so automatic request coalescing sees ready rows up to that capacity. First-candidate streaming
+and the CPU preparation/consumption cadence are unchanged. Failure and interruption cleanup
+only clear the readiness hint; they do not submit additional work. An explicitly fixed
+request-accumulation delay retains its existing scheduling policy.
+
 At interruption, stop session admission, close/drain the service, then poll completed work
 and flush the caller's stores. Partially completed candidates remain unfinished and may
 be rerun on GPU. Producer failures stop admission and preserve the original exception.

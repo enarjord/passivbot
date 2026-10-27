@@ -487,3 +487,70 @@ def test_preparing_hint_seals_full_cpu_windows_and_clears_after_failure(
             assert len(records) == 8 and full_polls
         assert any(hints) and hints[-1] == frozenset()
         assert services and all(service._preparing == frozenset() for service in services)
+
+
+@pytest.mark.parametrize("capacity", [2, 4])
+def test_normal_window_submits_ready_rows_before_sealing_with_backpressure(monkeypatch, tmp_path, capacity):
+    import optimization.backends.gpu_backend as backend
+    import optimization.gpu.native as native
+
+    guard_cpu(monkeypatch)
+    # Keep this preparation burst within the existing soft cadence without a
+    # wall-clock race. Every candidate still passes the ordinary planner.
+    monkeypatch.setattr(backend, "time", SimpleNamespace(
+        monotonic=time.monotonic, perf_counter=lambda: 0.0,
+    ))
+    def sampling(bounds, population_size):
+        return np.asarray([
+            [bound.low + (bound.high - bound.low) * (i + 1) / (population_size + 1)
+             for bound in bounds] for i in range(population_size)
+        ])
+    monkeypatch.setattr(backend, "_build_random_sampling", sampling)
+    batches, submitted, services = [], [], []
+    class WarmService(FakeService):
+        def __init__(self, **kwargs):
+            kwargs.update(max_pending=capacity, max_batch_delay=None)
+            super().__init__(**kwargs)
+            self.entered, self.release = Event(), Event()
+            self.sealed = False
+            services.append(self)
+        def submit(self, request):
+            future = super().submit(request)
+            submitted.append(request.request_id)
+            return future
+        def register_dataset(self, dataset_id, dataset):
+            super().register_dataset(dataset_id, dataset)
+            replay = self._replays[dataset_id]
+            evaluate = replay.evaluate
+            def blocked(candidates):
+                batches.append(tuple(row["long_entry_initial_qty_fraction"] for row in candidates))
+                self.entered.set()
+                assert self.release.wait(5), "normal window did not seal"
+                return evaluate(candidates)
+            replay.evaluate = blocked
+        def set_preparing(self, dataset_ids):
+            super().set_preparing(dataset_ids)
+            if not dataset_ids and not self.sealed and self._outstanding:
+                self.sealed = True
+                # Let the worker observe this seal before the following poll.
+                # The old ordering deterministically dispatched its first row.
+                assert self.entered.wait(5), "sealed prepared work did not dispatch"
+                self.release.set()
+    monkeypatch.setattr(native, "NativeBacktestService", WarmService)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"].update(population_size=4, iters=4)
+        base.config["optimize"]["gpu"].update(batch_size=4, tuning_mode="auto")
+        records, checkpoint = [], tmp_path / "checkpoint.pkl"
+        try:
+            execute(base, SimpleNamespace(record=records.append), checkpoint)
+        finally:
+            for service in services:
+                service.release.set()
+        assert len(batches[0]) == capacity
+        replayed = [value for batch in batches for value in batch]
+        recorded = [row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] for row in records]
+        assert len(replayed) == len(recorded) == len(set(submitted)) == 4
+        assert sorted(replayed) == sorted(recorded)
+        assert all(name.startswith("candidate:") for name in submitted)
+        assert load_checkpoint(checkpoint, base.config)["completed"] == 4

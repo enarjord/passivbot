@@ -233,8 +233,13 @@ class _Search:
                     initial = False
                     break
             if exhausted or len(self._pending) >= self.session.max_candidates:
-                # More preparation now needs a completion. Seal before the next
-                # blocking poll, including all-alias or partially cached windows.
+                # Publish already-prepared rows before sealing. Otherwise the
+                # worker can dispatch an earlier partial batch while this final
+                # CPU preparation burst is still queued only in the session.
+                with diagnostics.measure("poll"):
+                    self.session.submit_ready()
+                # Further preparation needs a completion, including all-alias
+                # or partially cached windows. No future work is promised here.
                 self.session.set_preparing(())
 
     def promote_screening(self):

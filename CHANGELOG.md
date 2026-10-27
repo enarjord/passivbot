@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Submit already-prepared GPU optimizer requests before sealing a CPU preparation window,
+  avoiding unnecessary partial batches with automatic request coalescing. Preserve bounded
+  admission, first-candidate streaming and explicit fixed-delay scheduling.
+
 - Assess genuine infinite metric values against finite limits in GPU parity diagnostics.
   Preserve undefined observations as unassessed and serialize infinite violations with explicit
   mathematical status.

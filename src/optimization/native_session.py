@@ -164,6 +164,22 @@ class NativeEvaluationSession:
             self._futures[future] = (candidate_id, request, reused)
             future.add_done_callback(self._notifications.put)
 
+    def submit_ready(self):
+        """Submit admitted rows without waiting, collecting results or scoring.
+
+        Service backpressure can leave rows queued for a later poll. Cached and
+        aliased candidates create no extra replay demand. Failure stops admission
+        and cancels waiting work with the same policy as ``poll``.
+        """
+        if self._failure is not None:
+            raise RuntimeError("CPU evaluation session failed") from self._failure
+        try:
+            self._pump()
+        except BaseException as failure:
+            self._failure = failure
+            self.stop_admission()
+            raise
+
     def _complete(self, complete):
         plan, _collector = self._active[complete.candidate_id]
         key = self._key(plan)
