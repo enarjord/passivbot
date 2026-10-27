@@ -74,7 +74,7 @@ def test_actual_cuda_side_slots_and_size_fallback(count):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_native_hsl_shared_state_is_bit_identical_to_private_state(
     monkeypatch, strategy, mode, sides
@@ -169,11 +169,11 @@ def test_seed_43_coin_hsl_fixture_matches_private_replay(
     )
     for side in ("long", "short"):
         config["bot"][side]["risk"].update(
-            n_positions=1 if sides == "both" or side == sides else 0,
+            max_positions=1 if sides == "both" or side == sides else 0,
             total_wallet_exposure_limit_ratio=2 if sides == "both" or side == sides else 0,
         )
         config["bot"][side]["hsl"].update(
-            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5
+            drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5
         )
     if shocks:
         candles[1500:, 0, :3] *= 0.7
@@ -182,7 +182,6 @@ def test_seed_43_coin_hsl_fixture_matches_private_replay(
         "cagr_fraction_strategy_equity",
         "drawdown_max_fraction_strategy_equity",
         "gross_turnover_ratio_per_day",
-        "hsl_triggers_per_year",
         "hsl_triggers_per_year",
         "hsl_red_time_fraction",
     }

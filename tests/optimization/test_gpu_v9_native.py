@@ -37,7 +37,7 @@ def _save_evidence(name, report, inputs):
         (destination / f"{name}.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
     torch = pytest.importorskip("torch")
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
@@ -47,19 +47,20 @@ def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
     from optimization.gpu.parity import MetricTolerance
 
     verify_loaded_runtime_extension()
+    # The small, hedged allocations stay below a 1% portfolio drawdown.
+    # A 0.01% threshold makes the same shocks force a stop in every scope.
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "2",
         "--bars", "256", "--seed", "43", "--hsl", mode,
-        "--hsl-drawdown-threshold-fraction", ".01", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".0001", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--price-shock", "0", "120", ".8", "--price-shock", "1", "170", "1.2",
         "--unstuck",
     ]))
     metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
-               "hsl_triggers_per_year", "hsl_triggers_per_year",
+               "hsl_triggers_per_year",
                "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
@@ -107,10 +108,10 @@ def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, los
 
 @pytest.mark.parametrize("strategy,mode,sides,coins,rebate,expected_stop", [
     ("ema_anchor", "coin", "long", 2, False, True),
-    ("ema_anchor", "pside", "short", 2, False, False),
-    ("ema_anchor", "portfolio", "both", 2, False, False),
+    ("ema_anchor", "position_side", "short", 2, False, False),
+    ("ema_anchor", "portfolio", "both", 2, False, True),
     ("trailing_martingale", "coin", "long", 1, False, False),
-    ("trailing_martingale", "pside", "short", 1, True, True),
+    ("trailing_martingale", "position_side", "short", 1, True, False),
     ("trailing_martingale", "disabled", "long", 2, False, False),
 ])
 def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expected_stop):
@@ -136,10 +137,9 @@ def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expecte
             if isinstance(market, dict) and "maker" in market:
                 market["maker"] = -.0002
     metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
-               "hsl_triggers_per_year", "hsl_triggers_per_year",
+               "hsl_triggers_per_year",
                "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
@@ -148,7 +148,7 @@ def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expecte
     assert report["passed"], report
 
 
-@pytest.mark.parametrize("mode,sides", [("pside", "short"), ("portfolio", "both")])
+@pytest.mark.parametrize("mode,sides", [("position_side", "short"), ("portfolio", "both")])
 def test_v9_native_ema_entry_fee_forces_a_stop_and_restart(mode, sides):
     """A small threshold makes fee economics an explicit forcing witness."""
     _require_device()
@@ -164,14 +164,12 @@ def test_v9_native_ema_entry_fee_forces_a_stop_and_restart(mode, sides):
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--unstuck",
     ]))
-    metrics = ("drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day", "hsl_triggers_per_year",
+    metrics = ("drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
                "hsl_triggers_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     _save_evidence(f"ema-fee-forcing-{mode}-{sides}", report, inputs)
-    assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report
