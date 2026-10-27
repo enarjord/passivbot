@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import math
 from collections.abc import Mapping
+from numbers import Real
 
 
 @dataclass(frozen=True)
@@ -92,19 +93,24 @@ def compare_metrics(
 def compare_limits(cpu, gpu, checks):
     """Apply canonical scalar/single-scenario limits, reporting feasibility flips.
 
-    These are diagnostic CPU calculations, not another backtest. Missing metrics
-    and suite-scoped checks remain explicitly unassessed rather than feasible.
+    These are diagnostic CPU calculations, not another backtest. Raw infinite
+    endpoints retain canonical ordering. Missing/invalid metrics, undefined
+    dispersion and suite-scoped checks remain explicitly unassessed.
     """
     from limit_utils import compute_limit_violation
+    from metrics_schema import encode_metric_values
+
+    def available(value):
+        return isinstance(value, Real) and not isinstance(value, bool) and not math.isnan(value)
 
     def surface(metrics):
         values = dict(metrics)
         for name, value in metrics.items():
             for reducer in ("mean", "min", "max", "median"):
-                values[f"{name}_{reducer}"] = value
-            # A singleton finite observation has zero dispersion. Non-finite
-            # source observations cannot become an apparently valid std metric.
-            values[f"{name}_std"] = 0.0 if math.isfinite(value) else math.nan
+                values[f"{name}_{reducer}"] = value if available(value) else math.nan
+            # Infinite singleton means/order statistics are defined, but their
+            # dispersion is unavailable. Missing/invalid inputs never become zero.
+            values[f"{name}_std"] = 0.0 if available(value) and math.isfinite(value) else math.nan
         return values
 
     references, observations = surface(cpu), surface(gpu)
@@ -118,28 +124,31 @@ def compare_limits(cpu, gpu, checks):
         if check.get("scenario") is not None:
             row["status"] = "suite_required"
             assessed = False
-        elif reference is None or observed is None or not (
-            math.isfinite(reference) and math.isfinite(observed)
-        ):
+        elif not available(reference) or not available(observed):
             row["status"] = "unavailable"
             assessed = False
         else:
             cpu_violation = compute_limit_violation(check, reference)
             gpu_violation = compute_limit_violation(check, observed)
-            cpu_penalty += cpu_violation
-            gpu_penalty += gpu_violation
-            row.update(
-                cpu_violation=_json_number(cpu_violation),
-                gpu_violation=_json_number(gpu_violation),
-                status="match" if (cpu_violation > 0) == (gpu_violation > 0) else "flip",
-            )
+            if any(math.isnan(value) or value < 0 for value in (cpu_violation, gpu_violation)):
+                # An invalid derived penalty (including zero times infinity) is
+                # unavailable, never a neutral feasible comparison.
+                row["status"] = "unavailable"
+                assessed = False
+            else:
+                cpu_penalty += cpu_violation
+                gpu_penalty += gpu_violation
+                row.update(encode_metric_values(
+                    dict(cpu_violation=cpu_violation, gpu_violation=gpu_violation)
+                ))
+                row["status"] = "match" if (cpu_violation > 0) == (gpu_violation > 0) else "flip"
         rows.append(row)
     return {
         "assessed": assessed,
         "passed": assessed and all(row["status"] == "match" for row in rows),
         "cpu_feasible": cpu_penalty == 0 if assessed else None,
         "gpu_feasible": gpu_penalty == 0 if assessed else None,
-        "cpu_violation": _json_number(cpu_penalty) if assessed else None,
-        "gpu_violation": _json_number(gpu_penalty) if assessed else None,
+        **(encode_metric_values(dict(cpu_violation=cpu_penalty, gpu_violation=gpu_penalty))
+           if assessed else dict(cpu_violation=None, gpu_violation=None)),
         "checks": rows,
     }

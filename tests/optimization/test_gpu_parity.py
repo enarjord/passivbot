@@ -112,3 +112,102 @@ def test_suite_limit_is_explicitly_unassessed_in_scalar_comparison():
     report = compare_limits({"fills_per_day": 1}, {"fills_per_day": 1}, [check])
     assert report["checks"][0]["status"] == "suite_required"
     assert report["cpu_feasible"] is None
+
+
+LIMIT_METRIC = "omega_ratio_strategy_equity"
+
+
+def _canonical_limit(mode, *, reducer="mean", weight=1.0):
+    from limit_utils import expand_limit_checks
+    entry = {"metric": LIMIT_METRIC, "penalize_if": mode, "reducer": reducer}
+    entry.update({"range": [0.5, 2.0]} if mode.endswith("range") else {"value": 1.0})
+    return expand_limit_checks([entry], {}, penalty_weight=weight)[0]
+
+
+@pytest.mark.parametrize("reducer", ["mean", "min", "max", "median"])
+@pytest.mark.parametrize("value,mode,feasible", [
+    (math.inf, "less_than", True),
+    (math.inf, "greater_than", False),
+    (-math.inf, "less_than", False),
+    (-math.inf, "greater_than", True),
+])
+def test_infinite_singleton_limits_use_raw_order_and_json_safe_violations(reducer, value, mode, feasible):
+    from metrics_schema import decode_metric_value
+    report = compare_limits({LIMIT_METRIC: value}, {LIMIT_METRIC: value},
+                            [_canonical_limit(mode, reducer=reducer)])
+    assert report["assessed"] and report["passed"]
+    assert report["cpu_feasible"] is report["gpu_feasible"] is feasible
+    assert report["checks"][0]["status"] == "match"
+    for result in (report, report["checks"][0]):
+        for name in ("cpu_violation", "gpu_violation"):
+            assert decode_metric_value(result, name) == (0.0 if feasible else math.inf)
+            if not feasible:
+                assert result[name] is None
+                assert result["metric_status"][name]["status"] == "positive_infinity"
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", [-math.inf, math.inf])
+@pytest.mark.parametrize("mode,feasible", [("inside_range", True), ("outside_range", False)])
+def test_infinite_limit_endpoints_obey_finite_ranges(value, mode, feasible):
+    report = compare_limits({LIMIT_METRIC: value}, {LIMIT_METRIC: value}, [_canonical_limit(mode)])
+    assert report["assessed"] and report["passed"]
+    assert report["cpu_feasible"] is report["gpu_feasible"] is feasible
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", [-math.inf, math.inf])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_lower_and_upper_limits_accumulate_zero_and_infinity_without_losing_feasibility(value, reverse):
+    from metrics_schema import decode_metric_value
+    checks = [_canonical_limit("less_than"), _canonical_limit("greater_than")]
+    report = compare_limits({LIMIT_METRIC: value}, {LIMIT_METRIC: value},
+                            list(reversed(checks)) if reverse else checks)
+    assert report["assessed"] and report["passed"]
+    assert report["cpu_feasible"] is report["gpu_feasible"] is False
+    assert decode_metric_value(report, "cpu_violation") == math.inf
+    assert decode_metric_value(report, "gpu_violation") == math.inf
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("cpu,gpu,mode,cpu_feasible,gpu_feasible", [
+    (math.inf, 0.0, "less_than", True, False),
+    (math.inf, -math.inf, "greater_than", False, True),
+    (1.0, -math.inf, "less_than", True, False),
+])
+def test_infinite_endpoints_can_flip_canonical_limit_feasibility(cpu, gpu, mode, cpu_feasible, gpu_feasible):
+    report = compare_limits({LIMIT_METRIC: cpu}, {LIMIT_METRIC: gpu}, [_canonical_limit(mode)])
+    assert report["assessed"] and not report["passed"]
+    assert report["cpu_feasible"] is cpu_feasible
+    assert report["gpu_feasible"] is gpu_feasible
+    assert report["checks"][0]["status"] == "flip"
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", [-math.inf, math.inf])
+def test_infinite_singleton_dispersion_stays_unavailable(value):
+    report = compare_limits({LIMIT_METRIC: value}, {LIMIT_METRIC: 1.0},
+                            [_canonical_limit("greater_than", reducer="std")])
+    assert not report["assessed"] and not report["passed"]
+    assert report["checks"][0]["status"] == "unavailable"
+    assert report["cpu_feasible"] is report["gpu_feasible"] is None
+
+
+@pytest.mark.parametrize("value", [None, math.nan, False, True])
+@pytest.mark.parametrize("reducer", ["mean", "std"])
+def test_unavailable_singleton_limits_never_gain_a_neutral_value(value, reducer):
+    report = compare_limits({LIMIT_METRIC: value}, {LIMIT_METRIC: 1.0},
+                            [_canonical_limit("greater_than", reducer=reducer)])
+    assert not report["assessed"] and not report["passed"]
+    assert report["checks"][0]["status"] == "unavailable"
+    assert report["cpu_feasible"] is report["gpu_feasible"] is None
+    json.dumps(report, allow_nan=False)
+
+
+def test_zero_weight_times_infinite_violation_is_unavailable_not_feasible():
+    report = compare_limits({LIMIT_METRIC: math.inf}, {LIMIT_METRIC: math.inf},
+                            [_canonical_limit("greater_than", weight=0.0)])
+    assert not report["assessed"] and not report["passed"]
+    assert report["checks"][0]["status"] == "unavailable"
+    assert report["cpu_feasible"] is report["gpu_feasible"] is None
+    json.dumps(report, allow_nan=False)

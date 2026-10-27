@@ -157,8 +157,10 @@ successful comparisons with mismatches.
 
 Canonical limit checks run independently of the numerical tolerance. Even a metric
 within tolerance can flip feasibility. Scalar/single-scenario reducers use the singleton
-observation; missing, invalid or undefined observations cannot become apparently feasible. Genuine infinities retain their mathematical statuses; undefined dispersion remains unassessed.
-Suite-scoped checks remain unassessed.
+observation. Genuine infinite endpoints are assessed against finite bounds in
+extended-real order; infinite violations use null plus an explicit `metric_status`.
+Missing, invalid or undefined observations, including NaN and infinite singleton
+dispersion, remain unassessed. Suite-scoped checks remain unassessed.
 
 Standard JSON goes to stdout; simulator chatter goes to stderr. `--compact` removes
 indentation and `--report PATH` also saves the report. Exit codes:

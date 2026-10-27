@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Assess genuine infinite metric values against finite limits in GPU parity diagnostics.
+  Preserve undefined observations as unassessed and serialize infinite violations with explicit
+  mathematical status.
+
 - Replace broad backtest/optimizer analysis with 24 versioned core metric quantities and
   requested-only bounded accumulation. Use a 365.25-day year, complete UTC daily returns for
   volatility/Sharpe/Sortino/Omega, minute path risk, unsmoothed endpoint CAGR and a single CAGR EW
