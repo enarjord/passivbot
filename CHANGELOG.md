@@ -10,6 +10,10 @@ since the latest release tag; these features may already be available when insta
   preserving limit thresholds and reducers while reporting changed peak-tie and flat-equity
   semantics. Strict conversion and explicit metric choices retain priority.
 
+- Show standard backtest metrics in an aligned terminal table with five significant digits
+  and percentage fractions. Omit inactive side/HSL rows only when explicitly disabled with no
+  observed activity; retain full-precision values, statuses and metadata in saved results.
+
 - Submit already-prepared GPU optimizer requests before sealing a CPU preparation window,
   avoiding unnecessary partial batches with automatic request coalescing. Preserve bounded
   admission, first-candidate streaming and explicit fixed-delay scheduling.

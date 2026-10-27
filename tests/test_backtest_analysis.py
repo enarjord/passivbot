@@ -440,7 +440,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
 
     assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
 
-def test_post_process_logs_and_exports_complete_analysis(
+def test_post_process_formats_console_without_filtering_or_rounding_exports(
     tmp_path, monkeypatch, caplog
 ):
     def _fake_build_backtest_frames(*args, **kwargs):
@@ -475,8 +475,8 @@ def test_post_process_logs_and_exports_complete_analysis(
             "coins": {"binance": ["BTC"]},
         },
         "bot": {
-            "long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}},
-            "short": {"risk": {"total_wallet_exposure_limit_ratio": 0.0}},
+            "long": {"enabled": True, "risk": {"total_wallet_exposure_limit_ratio": 1.0}},
+            "short": {"enabled": False, "risk": {"total_wallet_exposure_limit_ratio": 0.0}},
         },
         "live": {},
         "optimize": {
@@ -486,11 +486,16 @@ def test_post_process_logs_and_exports_complete_analysis(
     }
 
     analysis = _analysis({
-        "cagr_fraction_strategy_equity": 0.01,
+        "cagr_fraction_strategy_equity": 0.123456789,
         "omega_ratio_strategy_equity": 0.02,
         "loss_profit_ratio": 0.5,
-        "peak_recovery_max_days_strategy_equity": 12.0,
+        "peak_recovery_max_days_strategy_equity": 12.3456789,
+        "position_exposure_utilization_rms_ratio_short": 0.0,
+        "short_net_profit_contribution_fraction": 0.0,
+        "hsl_red_time_fraction": 0.0,
     })
+    analysis["metric_metadata"]["hsl_enabled"] = False
+    before = deepcopy(analysis)
     caplog.set_level(logging.INFO)
     bt.post_process(
         plot_context=bt.BacktestPlotContext(
@@ -517,6 +522,14 @@ def test_post_process_logs_and_exports_complete_analysis(
     )
 
     logged = caplog.text
+    assert "Backtest metrics" in logged
+    assert "Metric" in logged and "Value" in logged
+    assert "12.346%" in logged
+    assert "0.123456789" not in logged
+    assert "position_exposure_utilization_rms_ratio_short" not in logged
+    assert "short_net_profit_contribution_fraction" not in logged
+    assert "hsl_red_time_fraction" not in logged
+    assert analysis == before
     assert "Showing " not in logged
     assert "cagr_fraction_strategy_equity" in logged
     assert "omega_ratio_strategy_equity" in logged

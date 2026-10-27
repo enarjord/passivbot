@@ -116,7 +116,7 @@ from pure_funcs import (
     calc_hash,
     str2bool,
 )
-import pprint
+from backtest_display import format_backtest_metrics
 from copy import deepcopy
 from hlcv_preparation import (
     HLCV_PREPARATION_ALGORITHM_VERSION,
@@ -2939,7 +2939,12 @@ def post_process(
     fdf, bal_eq = build_backtest_frames(fills, equities_array)
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     label_prefix = f"[{label}] " if label else ""
-    logging.info("%s%s", label_prefix, pprint.pformat(analysis))
+    logging.info(
+        "%sBacktest metrics\n%s", label_prefix,
+        format_backtest_metrics(
+            analysis, config, fill_types=fdf["type"].unique() if "type" in fdf else (),
+        ),
+    )
     results_path = make_get_filepath(
         str(output_directory) + "/"
         if output_directory is not None
