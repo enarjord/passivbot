@@ -201,7 +201,8 @@ retired search controls do not imply equivalent search evolution or reusable fit
 
 ## Opt-in best-effort migration
 
-Use `--best-effort` to report supported policy inferences. Supply every retired metric's explicit replacement alongside it:
+Use `--best-effort` to report supported policy inferences. It can infer the recovery-day
+maximum replacement described below; other retired metrics still need explicit replacements:
 
 ```sh
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
@@ -216,7 +217,8 @@ are emitted as choices are made, including before a later validation failure.
 
 | Missing choice or saved-result field | Best-effort policy |
 |---|---|
-| Retired metric selector, including `_w` and former ordinary fallbacks | Require an explicit `--metric-replacement OLD=NEW`; never infer a formula substitute |
+| `strategy_eq_recovery_days_max` or `peak_recovery_days_strategy_eq` | Infer `peak_recovery_max_days_strategy_equity`, preserving any outer reducer and limit direction/value; report the formula change |
+| Other retired metric selectors, including weighted, currency, per-side, hourly and non-maximum recovery variants | Require an explicit `--metric-replacement OLD=NEW` |
 | Retained metric selector crossing core definition version 1 | Report the changed definition and require fresh thresholds/results |
 | EW half-life absent or `null`, with CAGR EW explicitly selected | Resolve and report the native 180-day default |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
@@ -239,11 +241,15 @@ uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
 with best-effort mode. Best-effort mode supplies missing acknowledgment for retained
 metric definitions and explicit formula replacements, restart, gate-memory and search-algorithm
-changes; it does not choose a replacement metric. These decisions make no equivalence claim.
+changes. The recovery substitution remains an inferred choice in warnings and the report,
+even with `--acknowledge-metric-formula-change`. The old recovery maximum measures waiting
+for a strictly higher equity observation; the current metric measures running-peak recovery
+episodes, ending when equity regains the peak. Peak ties recover and flat equity has zero
+recovery under the current formula. These decisions make no equivalence claim.
 Review limit thresholds, re-tune risk settings, run fresh backtests and start fresh optimizations.
 
 Unknown fields, conflicting aliases, malformed values, ambiguous enabled null
-restart policies, retired strategies/venues, retired selectors lacking explicit replacements and
+restart policies, retired strategies/venues, other retired selectors lacking explicit replacements and
 rolling-window search bounds still require explicit correction. Normal config
 loading and migration without `--best-effort` remain strict. Referenced coin
 files are materialized in the output and remain unchanged on disk.
