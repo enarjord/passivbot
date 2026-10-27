@@ -12,6 +12,11 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
     "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
+# Converter-only formula choices, not aliases for the current metric catalog.
+_BEST_EFFORT_RECOVERY_REPLACEMENTS = {
+    "strategy_eq_recovery_days_max": "peak_recovery_max_days_strategy_equity",
+    "peak_recovery_days_strategy_eq": "peak_recovery_max_days_strategy_equity",
+}
 _RELEASED_SHARED_FLAT_PATHS = {
     **RELEASED_V8_UNSTUCK_FLAT_PATHS,
     "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
@@ -86,7 +91,7 @@ def _released_fee_override(value, path):
 
 
 def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_effort=False):
-    """Require authored, acknowledged formula choices rather than metric aliases."""
+    """Convert acknowledged formulas, reporting narrowly supported opt-in guesses."""
     replacements = dict(replacements or {})
     used = set()
     ew_requested = False
@@ -117,6 +122,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                     outer_reducers[path] = stat
                     break
         explicit = name in replacements
+        inferred = False
         if explicit:
             new = replacements[name]
             used.add(name)
@@ -125,6 +131,17 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                 new = released_v8_metric_name(name)
             except ValueError:
                 new = None
+            if best_effort and new is not None:
+                # Match only verified unweighted portfolio-day maxima. The frozen
+                # vocabulary also accepts currency, side and other recovery variants;
+                # those do not authorize a formula or unit substitution here.
+                released_name = name
+                if path in outer_reducers:
+                    released_name = name.removesuffix("_" + outer_reducers[path])
+                replacement = _BEST_EFFORT_RECOVERY_REPLACEMENTS.get(released_name)
+                if replacement is not None:
+                    new = replacement
+                    inferred = True
             if new is None or metric_base_name(new) not in KNOWN_METRICS:
                 raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW; the compact core has no automatic formula conversion")
         if not explicit and new is not None:
@@ -136,7 +153,13 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         replacement_paths.add(path)
         ew_requested |= is_ew_metric(new)
         reason = "core definition version 1 metric formula boundary; re-evaluate objectives, limits and stored fitness"
-        if best_effort and not acknowledge:
+        if inferred:
+            reason = (
+                "inferred recovery formula substitution: strictly-higher waiting times become "
+                "running-peak recovery episodes; peak ties recover and flat equity has zero recovery; "
+                + reason
+            )
+        if inferred or (best_effort and not acknowledge):
             from .best_effort_v9 import record_guess
             record_guess(changes, path, name, new, reason)
         else:

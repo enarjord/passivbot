@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let best-effort v8 migration infer the portfolio recovery-day maximum's core replacement,
+  preserving limit thresholds and reducers while reporting changed peak-tie and flat-equity
+  semantics. Strict conversion and explicit metric choices retain priority.
+
 - Submit already-prepared GPU optimizer requests before sealing a CPU preparation window,
   avoiding unnecessary partial batches with automatic request coalescing. Preserve bounded
   admission, first-candidate streaming and explicit fixed-delay scheduling.
