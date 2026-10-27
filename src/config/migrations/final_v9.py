@@ -12,11 +12,6 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
     "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
-# Converter-only formula choices, not aliases for the current metric catalog.
-_BEST_EFFORT_RECOVERY_REPLACEMENTS = {
-    "strategy_eq_recovery_days_max": "peak_recovery_max_days_strategy_equity",
-    "peak_recovery_days_strategy_eq": "peak_recovery_max_days_strategy_equity",
-}
 _RELEASED_SHARED_FLAT_PATHS = {
     **RELEASED_V8_UNSTUCK_FLAT_PATHS,
     "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
@@ -97,6 +92,195 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
     ew_requested = False
     replacement_paths = set()
     outer_reducers = {}
+    inferences = {}
+    removals = {}
+    original_source = deepcopy(source)
+
+    def original_mapping(payload, path="backtest"):
+        from config.reducers import REDUCER_ALIASES, normalize_reducer
+        from .best_effort_metrics import legacy_metric_identity
+
+        values = []
+        for alias in REDUCER_ALIASES:
+            if alias not in payload:
+                continue
+            if not isinstance(payload[alias], dict):
+                raise ValueError(f"{path}.{alias} must be a mapping")
+            normalized = {}
+            for name, mode in payload[alias].items():
+                mode = normalize_reducer(mode, path=f"{path}.{alias}.{name}")
+                if mode is None:
+                    raise ValueError(f"{path}.{alias}.{name} must be a reducer name, not null")
+                identity = legacy_metric_identity(name) if name != "default" else name
+                if identity in normalized and normalized[identity] != mode:
+                    raise ValueError(f"{path}.{alias} has conflicting metric aliases for {name}")
+                normalized[identity] = mode
+            values.append(normalized)
+        if values and any(value != values[0] for value in values[1:]):
+            raise ValueError(f"{path} has conflicting reducer aliases")
+        return values[0] if values else {}
+
+
+    def original_reducer(entry, metric, kind):
+        from config.reducers import REDUCER_ALIASES, LIMIT_REDUCER_ALIASES, reducer_from_aliases
+        from config.limits import resolve_reducer_mode
+        from .best_effort_metrics import legacy_metric_identity
+
+        default_scenario = original_source.get("optimize", {}).get("objective_scenario") if kind == "scoring" else None
+        scenario = entry.get("scenario", default_scenario)
+        reducer, _ = reducer_from_aliases(entry, path=f"{kind} on {metric}", aliases=LIMIT_REDUCER_ALIASES if kind == "limits" else REDUCER_ALIASES)
+        if scenario is not None:
+            if not isinstance(scenario, str) or not scenario.strip():
+                raise ValueError(f"{kind} on {metric}: scenario must be a nonempty string or null")
+            if reducer is not None:
+                raise ValueError(f"{kind} on {metric}: cannot set both a named scenario and reducer")
+            return None
+        if reducer is not None:
+            return reducer
+
+        backtest = original_source.get("backtest", {})
+        modes = original_mapping(backtest)
+        suite = backtest.get("suite")
+        if isinstance(suite, dict) and (suite.get("enabled", False) or suite.get("scenarios", [])):
+            suite_modes = original_mapping(suite, "backtest.suite") if any(alias in suite for alias in REDUCER_ALIASES) else {"default": "mean"}
+            modes = {**modes, **suite_modes}
+        return resolve_reducer_mode(legacy_metric_identity(metric), modes)
+
+    def require_finite_bounds(entry, path):
+        from config.limits import _ensure_float
+
+        def inspect(value, current):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    inspect(child, f"{current}.{key}")
+            elif isinstance(value, (list, tuple)):
+                for index, child in enumerate(value):
+                    inspect(child, f"{current}[{index}]")
+            else:
+                try:
+                    number = _ensure_float(value)
+                except OverflowError as exc:
+                    raise ValueError(f"{current}: limit bounds must be finite") from exc
+                if number is not None and not math.isfinite(number):
+                    raise ValueError(f"{current}: limit bounds must be finite")
+
+        for field in ("value", "range"):
+            if field in entry:
+                inspect(entry[field], f"{path}.{field}")
+
+    def normalized_limit_policy(entry):
+        from config.limits import normalize_limit_entries
+
+        # Range normalization sorts endpoints; NaN can otherwise vanish through
+        # min/max depending on endpoint order. Inspect raw values before sorting.
+        require_finite_bounds(entry, "limit")
+        normalized = normalize_limit_entries([entry])[0]
+        for field, direction in (("value", "greater_than"), ("range", "outside_range")):
+            if field not in normalized:
+                continue
+            # The owner preserves inactive fields too. Validate each bound form;
+            # an inactive range must never redirect conversion of an active scalar.
+            if field == "value" and isinstance(normalized[field], (list, tuple)) and "range" in normalized:
+                probe = {**entry, "penalize_if": "outside_range", "range": normalized[field]}
+                normalized[field] = normalize_limit_entries([probe])[0]["range"]
+                continue
+            probe = {**entry, "penalize_if": direction}
+            normalized[field] = normalize_limit_entries([probe])[0][field]
+        return normalized
+
+    def validate_entry(entry, kind, path, metric):
+        """Let canonical policy owners inspect fields before retirement erases them."""
+        from config.authored import _closed_fields, _LIMIT_FIELDS
+        from config.reducers import LIMIT_REDUCER_ALIASES
+        from config.scoring import normalize_scoring_entries
+
+        probe = deepcopy(entry)
+        probe["metric"] = "loss_profit_ratio"
+        if kind == "scoring":
+            normalize_scoring_entries([probe])
+        else:
+            _closed_fields(probe, _LIMIT_FIELDS | set(LIMIT_REDUCER_ALIASES), path)
+            normalized = normalized_limit_policy(probe)
+            bounds = list(normalized.get("range", []))
+            if "value" in normalized:
+                value = normalized["value"]
+                bounds.extend(value if isinstance(value, (list, tuple)) else [value])
+            if any(not math.isfinite(bound) for bound in bounds):
+                raise ValueError(f"{path}: limit bounds must be finite")
+        original_reducer(entry, metric, kind)
+
+    def record_removal(path, original, reason):
+        from .best_effort_v9 import record_guess
+        record_guess(changes, path, original, None, reason + "; removed unsupported metric selection; review optimization objectives and constraints")
+
+    def apply_inference(entry, metric, selector_path, kind):
+        """Return a removal reason when the authored policy cannot be transformed."""
+        from config.reducers import REDUCER_ALIASES, LIMIT_REDUCER_ALIASES
+        from config.scoring import default_objective_goal
+        from .best_effort_metrics import transform_bound
+        from .best_effort_v9 import record_guess
+
+        choice = inferences.get(selector_path)
+        if choice is None:
+            return None
+        validate_entry(entry, kind, selector_path.removesuffix(".metric"), metric)
+        if kind == "scoring" and entry.get("goal") is None and default_objective_goal(entry["metric"]) is None:
+            return "inferred metric has no default scoring goal; author an explicit goal to retain this objective"
+        if choice.transform == "identity":
+            return None
+        reducer = original_reducer(entry, metric, kind)
+        before = deepcopy(entry)
+        transform = choice.transform
+        inactive_bound = None
+        if kind == "limits":
+            if transform == "annualize_daily" and reducer == "std":
+                return "daily-growth dispersion has no meaningful nominal annual CAGR limit conversion"
+            # Canonical normalization owns direction aliases and scalar/range forms.
+            normalized = normalized_limit_policy(entry)
+            if transform == "complement" and normalized["penalize_if"] == "auto":
+                return "automatic long-profit limit direction cannot be safely complemented"
+            if transform == "complement" and reducer == "std":
+                transform = "identity"  # std(1-x) == std(x).
+            range_active = normalized["penalize_if"] in {"inside_range", "outside_range"}
+            inactive_field = "value" if range_active else "range"
+            if inactive_field in normalized:
+                inactive_bound = (inactive_field, deepcopy(before.get(inactive_field, normalized[inactive_field])))
+                normalized.pop(inactive_field)
+            try:
+                if range_active:
+                    normalized["range"] = sorted(transform_bound(value, transform) for value in normalized["range"])
+                else:
+                    normalized["value"] = transform_bound(normalized["value"], transform)
+            except ValueError as exc:
+                return str(exc)
+            if transform == "complement":
+                normalized["penalize_if"] = {
+                    "less_than": "greater_than", "greater_than": "less_than",
+                    "less_than_or_equal": "greater_than_or_equal", "greater_than_or_equal": "less_than_or_equal",
+                }.get(normalized["penalize_if"], normalized["penalize_if"])
+            entry.clear()
+            entry.update(normalized)
+        elif transform == "complement" and reducer != "std":
+            entry["goal"] = {"min": "max", "max": "min"}[str(entry["goal"]).strip().lower()]
+        if choice.transform == "complement" and reducer is not None:
+            for alias in LIMIT_REDUCER_ALIASES if kind == "limits" else REDUCER_ALIASES:
+                entry.pop(alias, None)
+            entry["reducer"] = {"min": "max", "max": "min"}.get(reducer, reducer)
+        if inactive_bound is not None:
+            field, old = inactive_bound
+            reason = "discard inactive bound field during inferred metric conversion; penalize_if selects the active scalar or range constraint"
+            if field == "value" and "range" not in before:
+                reason = "preserve legacy range-as-value constraint in the canonical range field during inferred metric conversion"
+            record_guess(changes, selector_path.removesuffix(".metric") + "." + field, old, None,
+                         reason)
+        if entry != before or (kind == "limits" and choice.transform == "annualize_daily"):
+            reason = {
+                "complement": "complement long share to short contribution; reverse ordering and min/max reducers, while standard deviation is unchanged",
+                "hours_to_days": "convert hour limits to day limits using 1/24",
+                "annualize_daily": "nominally compound daily growth thresholds over 365.25 days; nonlinear scenario aggregation and changed growth formulas require fresh threshold evaluation",
+            }[choice.transform]
+            record_guess(changes, selector_path.removesuffix(".metric"), before, entry, reason)
+        return None
 
     def keep_outer_reducer(node, path, reducer):
         from config.reducers import reducer_from_aliases, LIMIT_REDUCER_ALIASES
@@ -131,16 +315,17 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                 new = released_v8_metric_name(name)
             except ValueError:
                 new = None
-            if best_effort and new is not None:
-                # Match only verified unweighted portfolio-day maxima. The frozen
-                # vocabulary also accepts currency, side and other recovery variants;
-                # those do not authorize a formula or unit substitution here.
-                released_name = name
-                if path in outer_reducers:
-                    released_name = name.removesuffix("_" + outer_reducers[path])
-                replacement = _BEST_EFFORT_RECOVERY_REPLACEMENTS.get(released_name)
-                if replacement is not None:
-                    new = replacement
+            if best_effort:
+                from .best_effort_metrics import infer_metric
+                choice = infer_metric(name)
+                if choice is not None:
+                    if choice.outer_reducer is not None:
+                        outer_reducers[path] = choice.outer_reducer
+                    if choice.target is None:
+                        removals[path] = choice.reason
+                        return None
+                    new = choice.target
+                    inferences[path] = choice
                     inferred = True
             if new is None or metric_base_name(new) not in KNOWN_METRICS:
                 raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW; the compact core has no automatic formula conversion")
@@ -155,8 +340,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         reason = "core definition version 1 metric formula boundary; re-evaluate objectives, limits and stored fitness"
         if inferred:
             reason = (
-                "inferred recovery formula substitution: strictly-higher waiting times become "
-                "running-peak recovery episodes; peak ties recover and flat equity has zero recovery; "
+                "inferred metric formula substitution: " + inferences[path].reason + "; "
                 + reason
             )
         if inferred or (best_effort and not acknowledge):
@@ -168,26 +352,65 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
     def visit(node, path=""):
         if isinstance(node, list):
-            scoring = path.split(".")[-1] == "scoring"
+            kind = path.split(".")[-1]
+            scoring = kind == "scoring"
             original = deepcopy(node) if scoring else None
             replacements_before = len(replacement_paths)
             converted = []
             for index, value in enumerate(node):
                 current = f"{path}[{index}]"
-                if isinstance(value, str) and path.split(".")[-1] == "scoring":
+                if isinstance(value, str) and scoring:
                     selected = convert(value, current)
-                    if current in outer_reducers:
+                    if selected is None:
+                        record_removal(current, value, removals[current])
+                        continue
+                    if current in outer_reducers and current in inferences:
+                        record_removal(current, value, "legacy outer-statistic shorthand has no declared scoring goal; use an objective object with an explicit goal")
+                        continue
+                    if current in outer_reducers or current in inferences:
                         from config.scoring import default_objective_goal
                         goal = default_objective_goal(selected)
                         if goal is None:
+                            if best_effort and current in inferences:
+                                record_removal(current, value, "inferred metric has no default scoring goal; author an explicit goal to retain this objective")
+                                continue
                             raise ValueError(f"{current}: use an explicit scoring object with a goal for {selected!r}")
-                        converted.append({"metric": selected, "goal": goal, "reducer": outer_reducers[current]})
+                        entry = {"metric": selected, "goal": goal}
+                        if current in outer_reducers:
+                            entry["reducer"] = outer_reducers[current]
+                        reason = apply_inference(entry, value, current, kind)
+                        if reason is not None:
+                            record_removal(current, value, reason)
+                            continue
+                        converted.append(entry)
                     else:
                         converted.append(selected)
+                elif kind in {"scoring", "limits"} and isinstance(value, dict) and "metric" in value:
+                    before = deepcopy(value)
+                    if best_effort and kind == "limits":
+                        require_finite_bounds(value, current)
+                    selector_path = current + ".metric"
+                    metric = value["metric"]
+                    selected = convert(metric, selector_path)
+                    if selector_path in outer_reducers:
+                        keep_outer_reducer(value, current, outer_reducers[selector_path])
+                    if selected is None:
+                        validate_entry(value, kind, current, metric)
+                        record_removal(current, before, removals[selector_path])
+                        continue
+                    value["metric"] = selected
+                    reason = apply_inference(value, metric, selector_path, kind)
+                    if reason is not None:
+                        record_removal(current, before, reason)
+                        continue
+                    converted.append(value)
                 else:
                     visit(value, current)
                     converted.append(value)
             node[:] = converted
+            if best_effort and scoring and original and not node:
+                from .best_effort_v9 import record_guess
+                record_guess(changes, path, original, [], "all unsupported objectives removed; retain explicit empty scoring without inserting replacement objectives")
             if scoring and len(replacement_paths) > replacements_before:
                 from config.scoring import normalize_scoring_entries
 
@@ -215,7 +438,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         if not isinstance(node, dict):
             return
         released_aggregate = path in {"backtest.aggregate", "backtest.suite.aggregate"}
-        metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"}
+        metric_map = released_aggregate or path.split(".")[-1] in {"reducer", "limits"} or path in {"backtest.stat", "backtest.scenario_stat", "backtest.suite.reducer", "backtest.suite.stat", "backtest.suite.scenario_stat"}
         for key in list(node):
             current = f"{path}.{key}" if path else key
             if ((key == "visible_metrics" and path.split(".")[-1] == "backtest")
@@ -230,16 +453,31 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                 for limit_name, bound in original_limits.items():
                     prefix = next((part for part in ("penalize_if_greater_than_", "penalize_if_lower_than_", "lower_bound_", "upper_bound_") if limit_name.startswith(part)), "")
                     limit_path = f"{current}.{limit_name}"
-                    selected = convert(limit_name.removeprefix(prefix), limit_path)
-                    entry = _legacy_limits_dict_to_entries({prefix + selected: bound})[0]
+                    metric = limit_name.removeprefix(prefix)
+                    if best_effort:
+                        require_finite_bounds({"value": bound}, limit_path)
+                    entry = _legacy_limits_dict_to_entries({limit_name: bound})[0]
+                    selected = convert(metric, limit_path)
                     if limit_path in outer_reducers:
                         keep_outer_reducer(entry, limit_path, outer_reducers[limit_path])
+                    if selected is None:
+                        validate_entry(entry, "limits", limit_path, metric)
+                        record_removal(limit_path, {limit_name: bound}, removals[limit_path])
+                        continue
+                    entry["metric"] = selected
+                    reason = apply_inference(entry, metric, limit_path, "limits")
+                    if reason is not None:
+                        record_removal(limit_path, {limit_name: bound}, reason)
+                        continue
                     converted_limits.append(entry)
                 node[key] = converted_limits
                 changes.append(dict(path=current, old=original_limits, new=deepcopy(converted_limits),
                                     reason="preserve released limit direction and outer reducer in explicit entries"))
             elif key == "metric" and not released_aggregate:
-                node[key] = convert(node[key], current)
+                selected = convert(node[key], current)
+                if selected is None:
+                    raise ValueError(f"{current}: unsupported metric outside objective/limit collections requires an explicit replacement")
+                node[key] = selected
                 if current in outer_reducers:
                     keep_outer_reducer(node, path, outer_reducers[current])
             elif metric_map and key != "default":
@@ -256,10 +494,27 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                     except ValueError:
                         # Released aggregate rules also accepted custom metrics.
                         # Only this vocabulary probe permits their passthrough.
-                        continue
-                renamed = prefix + convert(metric, current)
+                        from .best_effort_metrics import infer_metric
+                        if not best_effort or infer_metric(metric) is None:
+                            continue
+                selected = convert(metric, current)
+                from config.reducers import normalize_reducer
+                mode = normalize_reducer(node[key], path=current)
+                if mode is None:
+                    raise ValueError(f"{current} must be a reducer name, not null")
+                if selected is None:
+                    record_removal(current, {key: node.pop(key)}, removals[current])
+                    continue
+                renamed = prefix + selected
                 if current in outer_reducers and node[key] != outer_reducers[current]:
                     raise ValueError(f"{current}: released metric outer reducer conflicts with its reducer mapping; choose explicitly")
+                choice = inferences.get(current)
+                if choice is not None and choice.transform == "complement":
+                    new_mode = {"min": "max", "max": "min"}.get(mode, mode)
+                    if new_mode != mode:
+                        from .best_effort_v9 import record_guess
+                        record_guess(changes, current, node[key], new_mode, "complement long-share reducer ordering for short contribution")
+                        node[key] = new_mode
                 if renamed != key:
                     value = node.pop(key)
                     if renamed in node and node[renamed] != value:
@@ -267,6 +522,13 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                     node[renamed] = value
             else:
                 visit(node[key], current)
+    if best_effort:
+        # Check aliases before removing any rule could conceal their conflict.
+        raw_backtest = original_source.get("backtest", {})
+        if isinstance(raw_backtest, dict):
+            original_mapping(raw_backtest)
+            if isinstance(raw_backtest.get("suite"), dict):
+                original_mapping(raw_backtest["suite"], "backtest.suite")
     visit(source)
     if best_effort:
         from .best_effort_v9 import record_guess

@@ -188,8 +188,14 @@ def test_full_public_released_defaults_report_metric_and_memory_choices():
         migrate(source, memory_span_minutes=123.5)
     with pytest.raises(ValueError, match="metric-replacement"):
         migrate(source, memory_span_minutes=123.5, acknowledge_metric_formula_change=True)
-    with pytest.raises(ValueError, match="metric-replacement"):
-        migrate(source, best_effort=True)
+    automatic = migrate(source, best_effort=True)
+    assert source == before
+    assert {entry["metric"] for entry in automatic.config["optimize"]["scoring"]} >= {
+        "cagr_fraction_strategy_equity", "cagr_fraction_strategy_equity_ew",
+    }
+    assert any(change["old"] == {"goal": "max", "metric": "mdg_strategy_eq"}
+               and change["new"] is None and change.get("best_effort")
+               for change in automatic.changes)
     replacements = {
         "adg_strategy_eq": "cagr_fraction_strategy_equity",
         "adg_strategy_eq_w": "cagr_fraction_strategy_equity_ew",

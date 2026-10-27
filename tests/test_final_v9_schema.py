@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import math
 
 import pytest
 
@@ -537,21 +538,65 @@ def test_best_effort_rejects_invalid_authored_windows(days):
 @pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "cagr_fraction_strategy_equity_ew"),
                                    ("sharpe_ratio_w_usd", "sharpe_ratio_strategy_equity"),
                                    ("sortino_ratio_w_btc", "sortino_ratio_strategy_equity")])
-def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, new, caplog):
+def test_best_effort_metric_locations_infer_or_remove_and_log_choices(location, old, new, caplog):
     config = v8_config()
     if location == "scoring":
         config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
+        path, selection = "optimize.scoring[0]", config["optimize"]["scoring"][0]
     elif location == "limits":
-        config["optimize"]["limits"] = {"penalize_if_lower_than_" + old: 0.1}
+        key = "penalize_if_lower_than_" + old
+        config["optimize"]["limits"] = {key: 0.1}
+        path, selection = f"optimize.limits.{key}", {key: 0.1}
     else:
         config["backtest"]["reducer"] = {old: "mean"}
+        path, selection = f"backtest.reducer.{old}", {old: "mean"}
+    original = deepcopy(config)
     with pytest.raises(ValueError, match="metric-replacement"):
-        migrate(config, best_effort=True)
+        migrate(config, memory_span_minutes=123.5, acknowledge_metric_formula_change=True)
+    assert config == original
+
+    inferred = migrate(config, best_effort=True)
+    if old == "adg_strategy_eq_w":
+        if location == "scoring":
+            assert inferred.config["optimize"]["scoring"] == [{"metric": new, "goal": "max"}]
+        elif location == "limits":
+            assert inferred.config["optimize"]["limits"] == [{
+                "metric": new, "penalize_if": "less_than",
+                "value": pytest.approx(math.expm1(365.25 * math.log1p(0.1))),
+            }]
+            assert any(item["path"] == path and item.get("best_effort")
+                       and "365.25" in item["reason"] for item in inferred.changes)
+        else:
+            assert inferred.config["backtest"]["reducer"] == {new: "mean"}
+        metric_path = path + ".metric" if location == "scoring" else path
+        assert any(item["path"] == metric_path and item["old"] == old
+                   and item["new"] == new and item.get("best_effort")
+                   and "inferred" in item["reason"] for item in inferred.changes)
+        assert inferred.config["backtest"]["ew_half_life_days"] == 180.0
+        assert new in caplog.text
+    else:
+        if location in {"scoring", "limits"}:
+            assert inferred.config["optimize"][location] == []
+        else:
+            assert inferred.config["backtest"]["reducer"] == {}
+        assert any(item["path"] == path and item["old"] == selection
+                   and item["new"] is None and item.get("best_effort")
+                   and "removed unsupported metric selection" in item["reason"]
+                   for item in inferred.changes)
+    assert f"[best-effort] {path}" in caplog.text and old in caplog.text
+    assert config == original
+
+    caplog.clear()
     result = migrate(config, best_effort=True, metric_replacements={old: new})
     assert result.config["backtest"]["ew_half_life_days"] == 180.0
     assert any(item["old"] == old and item["new"] == new and item.get("best_effort")
                for item in result.changes)
     assert old in caplog.text and new in caplog.text
+    if location == "limits":
+        assert result.config["optimize"]["limits"] == [{
+            "metric": new, "penalize_if": "less_than", "value": 0.1,
+        }]
+    assert config == original
 
 
 def test_best_effort_explicit_choices_take_precedence():
