@@ -494,7 +494,7 @@ async def test_optimizer_producer_freezes_memberships_through_format_context_and
     from shared_arrays import SharedArrayManager
 
     config, data, files, allowed = prepared(tmp_path, kind, source_kind)
-    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     config["optimize"]["limits"] = []
     suite_config = {
         "scenarios": [

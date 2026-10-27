@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs, from_engine_value
-from config.metrics import canonicalize_metric_name, resolve_metric_value
-
-
-def _canonicalized_objective_map(objectives_map: Dict[str, Any]) -> Dict[str, Any]:
-    resolved: Dict[str, Any] = dict(objectives_map)
-    for key, value in objectives_map.items():
-        key_text = str(key)
-        if key_text.startswith("w_"):
-            continue
-        resolved.setdefault(canonicalize_metric_name(key_text), value)
-    return resolved
+from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs
+from config.metrics import resolve_metric_value, reject_retired_metric
+from metrics_schema import require_metric_definition, MetricAggregationError
 
 
 def detect_latest_pareto_dir(root: str | Path = "optimize_results") -> Optional[Path]:
@@ -39,32 +31,34 @@ def extract_objectives(
     """
     Extract raw objective values from a result entry.
     Ordered by scoring keys/specs if provided, otherwise by sorted named keys.
-    Legacy w_i engine-space payloads are converted back to raw values when scoring
-    metadata is available.
+    Stored values must use the current core definition and JSON-safe status encoding.
     """
     metrics_block = entry.get("metrics") or {}
-    objectives_map = metrics_block.get("objectives", metrics_block) or {}
-    specs = extract_objective_specs(scoring_keys or entry.get("optimize", {}).get("scoring", []))
+    require_metric_definition(metrics_block)
+    objectives_map = metrics_block.get("objectives")
+    if not isinstance(objectives_map, Mapping):
+        raise MetricAggregationError("missing current named raw objective mapping")
+    for name in objectives_map:
+        if name != "metric_status":
+            reject_retired_metric(name, path="stored objective")
+    specs = extract_objective_specs(
+        scoring_keys or entry.get("optimize", {}).get("scoring", [])
+    )
     if specs:
-        canonical_objectives_map = _canonicalized_objective_map(objectives_map)
         values: list[float] = []
         keys: list[str] = []
         for idx, spec in enumerate(specs):
             value = resolve_metric_value(objectives_map, spec.metric)
-            if value is None:
-                value = resolve_metric_value(canonical_objectives_map, spec.metric)
-            if value is None:
-                value = objectives_map.get(f"w_{idx}")
-                if value is not None:
-                    value = from_engine_value(spec, float(value))
             values.append(value)
             keys.append(spec.metric)
         return tuple(values), keys
 
-    keys = sorted(k for k in objectives_map if not str(k).startswith("w_"))
-    if not keys:
-        keys = sorted(k for k in objectives_map if str(k).startswith("w_"))
-    objectives = tuple(objectives_map.get(key) for key in keys)
+    keys = sorted(
+        k
+        for k in objectives_map
+        if not str(k).startswith("w_") and k != "metric_status"
+    )
+    objectives = tuple(resolve_metric_value(objectives_map, key) for key in keys)
     return objectives, keys
 
 
@@ -107,6 +101,9 @@ def crowding_distances(values: np.ndarray) -> np.ndarray:
     """
     if values.ndim != 2:
         return np.zeros(len(values))
+    if np.any(np.isnan(values)):
+        raise ValueError("undefined objective in crowding calculation")
+    values = (2.0 / np.pi) * np.arctan(values)
     n, m = values.shape
     if n == 0:
         return np.array([])
@@ -142,13 +139,8 @@ def prune_front_with_extremes(
         return []
     objs = [objectives_map[idx] for idx in front_hashes]
     arr = np.asarray(objs, dtype=float)
-    if not np.all(np.isfinite(arr)):
-        row, col = np.argwhere(~np.isfinite(arr))[0]
-        raise ValueError(
-            "Pareto objective matrix contains non-finite value "
-            f"for {front_hashes[int(row)]!r} at objective index {int(col)}: "
-            f"{arr[int(row), int(col)]!r}"
-        )
+    if np.any(np.isnan(arr)):
+        raise ValueError("undefined objective in Pareto front")
     required: set[str] = set()
     for dim in range(arr.shape[1]):
         min_idx = int(np.argmin(arr[:, dim]))

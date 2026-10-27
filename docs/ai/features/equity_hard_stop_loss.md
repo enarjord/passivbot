@@ -162,7 +162,8 @@ Live trials and merges need separate authorization.
 - `passivbot-rust/src/hsl_v9_continuity.rs`: retained facts, forward fold and correction rebuild.
 - `passivbot-rust/src/hsl_{history,snapshot,prices,support,intent}.rs`: factual support and envelopes.
 - `passivbot-rust/src/backtest_hsl_runtime.rs`: forward CPU integration.
-- `passivbot-rust/src/backtest_hsl_{analysis,report}.rs`: observational reporting.
+- `passivbot-rust/src/backtest_hsl_report.rs`: detailed observational reporting and core episode facts.
+- `passivbot-rust/src/backtest_core_metrics.rs`: causal selected performance observations.
 - `src/live/hsl_*`: capture, acquisition, admission and diagnostics.
 - `src/live/hsl_continuity.py`: bounded factual ownership and transactional initialization.
 - `src/config/hsl.py`, `src/config/risk_memory.py`: canonical validation.

@@ -26,11 +26,16 @@ from config.scoring import (
     default_scoring_weights,
     dominates_objectives,
     extract_objective_specs,
-    from_engine_value,
     objective_spec_by_metric,
 )
 from limit_utils import resolve_auto_limit_entries
-from metrics_schema import flatten_metric_stats
+from metrics_schema import (
+    copy_metric_value,
+    decode_metric_value,
+    encode_metric_values,
+    require_metric_definition,
+    flatten_metric_stats,
+)
 from pareto_core import detect_latest_pareto_dir
 
 
@@ -90,11 +95,23 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, np.generic):
-        return value.item()
+        return _json_ready(value.item())
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return _json_ready(value.tolist())
     if isinstance(value, dict):
-        return {str(k): _json_ready(v) for k, v in value.items()}
+        result, extended = {}, {}
+        for key, item in value.items():
+            name = str(key)
+            if isinstance(item, (float, np.floating)) and not math.isfinite(item):
+                extended[name] = float(item)
+            else:
+                result[name] = _json_ready(item)
+        encoded = encode_metric_values(extended)
+        statuses = encoded.pop("metric_status", {})
+        result.update(encoded)
+        if statuses:
+            result.setdefault("metric_status", {}).update(statuses)
+        return result
     if isinstance(value, (list, tuple)):
         return [_json_ready(v) for v in value]
     return value
@@ -298,16 +315,19 @@ def _parse_key_value_pairs(raw_pairs: Iterable[str], *, value_name: str) -> Dict
     return parsed
 
 
-def _resolve_candidate_metric_value(candidate: ParetoCandidate, metric: str) -> Optional[float]:
-    value = resolve_metric_value(candidate.objectives, metric)
+def _resolve_candidate_metric_value(
+    candidate: ParetoCandidate, metric: str
+) -> Optional[float]:
+    value = candidate.objectives.get(metric)
     if value is not None:
+        # This mapping contains already-decoded raw values, including infinities.
         return float(value)
     value = resolve_metric_value(candidate.aggregated_values, metric)
     if value is not None:
         return float(value)
     mean_key = f"{metric}_mean"
     value = resolve_metric_value(candidate.stats_flat, mean_key)
-    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+    if isinstance(value, (int, float)) and not math.isnan(float(value)):
         return float(value)
     return None
 
@@ -337,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  lexicographic Strict priority order (--priority metric_a,metric_b,...).\n"
             "  outranking   Simplified PROMETHEE-style net flow selector.\n\n"
             "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
-            "  -l 'adg_fraction_strategy_equity>0.0'\n"
+            "  -l 'cagr_fraction_strategy_equity>0.0'\n"
             "  -l 'drawdown_max_fraction_strategy_equity<=0.35'\n"
             "  --limits '[{\"metric\":\"drawdown_max_fraction_strategy_equity\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
             "Outputs:\n"
@@ -450,122 +470,69 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _extract_suite_metrics(
-    entry: Mapping[str, Any],
-    reducer_cfg: Mapping[str, Any] | None = None,
-    scenario_labels: Sequence[str] | None = None,
-) -> tuple[Dict[str, float], Dict[str, float]]:
-    aggregated_values: Dict[str, float] = {}
-    stats_flat: Dict[str, float] = {}
-    suite_metrics = entry.get("suite_metrics")
-    if not isinstance(suite_metrics, Mapping):
-        return stats_flat, aggregated_values
-    selected_labels = (
-        tuple(dict.fromkeys(str(label) for label in scenario_labels))
-        if scenario_labels is not None
-        else None
+def _extract_suite_metrics(entry, reducer_cfg=None, scenario_labels=None):
+    from metrics_schema import (
+        require_metric_definition,
+        decode_metric_value,
+        encode_metric_values,
+        raw_reduce,
+        MetricAggregationError,
     )
-    effective_reducer_cfg = (
+
+    suite = entry.get("suite_metrics")
+    if not isinstance(suite, Mapping):
+        return {}, {}
+    require_metric_definition(suite)
+    modes = (
         reducer_cfg
         if reducer_cfg is not None
-        else entry.get("backtest", {}).get(
-            "reducer", entry.get("backtest", {}).get("aggregate")
-        )
-        if isinstance(entry.get("backtest"), Mapping)
-        else None
+        else entry.get("backtest", {}).get("reducer", {})
     )
-
-    if "metrics" in suite_metrics:
-        if selected_labels is not None:
-            raw_scenario_labels = suite_metrics.get("scenario_labels")
-            if isinstance(raw_scenario_labels, list):
-                available_scenario_labels = {
-                    str(label) for label in raw_scenario_labels
-                }
-            else:
-                available_scenario_labels = set()
-                for payload in suite_metrics["metrics"].values():
-                    if not isinstance(payload, Mapping):
-                        continue
-                    scenarios = payload.get("scenarios")
-                    if isinstance(scenarios, Mapping):
-                        available_scenario_labels.update(str(label) for label in scenarios)
-            if any(
-                label not in available_scenario_labels for label in selected_labels
-            ):
-                return stats_flat, aggregated_values
-        for metric, payload in suite_metrics["metrics"].items():
-            if not isinstance(payload, Mapping):
-                continue
-            aggregated = payload.get("aggregated")
-            stats = payload.get("stats") or {}
-            if selected_labels is not None:
-                scenarios = payload.get("scenarios")
-                selected_values: list[float] = []
-                if isinstance(scenarios, Mapping):
-                    for label in selected_labels:
-                        value = scenarios.get(label)
-                        if isinstance(value, (int, float)) and math.isfinite(
-                            float(value)
-                        ):
-                            selected_values.append(float(value))
-                if selected_values:
-                    values = np.asarray(selected_values, dtype=float)
-                    stats = {
-                        "mean": float(np.mean(values)),
-                        "min": float(np.min(values)),
-                        "max": float(np.max(values)),
-                        "std": float(np.std(values)),
-                        "median": float(np.median(values)),
+    labels = tuple(scenario_labels) if scenario_labels is not None else None
+    stats, aggregates = {}, {}
+    for metric, payload in suite.get("metrics", {}).items():
+        fields = payload.get("stats", {})
+        mode = resolve_reducer_mode(metric, modes)
+        if reducer_cfg is not None or labels is not None:
+            scenarios = payload.get("scenarios", {})
+            selected = (
+                labels
+                if labels is not None
+                else tuple(suite.get("scenario_labels", ()))
+            )
+            try:
+                if not selected:
+                    raise MetricAggregationError("no scenario population available")
+                fields = encode_metric_values(
+                    {
+                        mode: raw_reduce(
+                            [
+                                decode_metric_value(scenarios, label)
+                                for label in selected
+                            ],
+                            mode,
+                        )
                     }
-                else:
-                    stats = {}
-                aggregated = None
-            if reducer_cfg is not None or selected_labels is not None:
-                aggregated = None
-                if isinstance(stats, Mapping) and stats:
-                    mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
-                    aggregated = stats.get(mode)
-            elif aggregated is None and isinstance(stats, Mapping):
-                mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
-                aggregated = stats.get(mode, stats.get("mean"))
-            if isinstance(aggregated, (int, float)) and math.isfinite(float(aggregated)):
-                aggregated_values[str(metric)] = float(aggregated)
-            if isinstance(stats, Mapping) and stats:
-                stats_flat.update(flatten_metric_stats({str(metric): dict(stats)}))
-        return stats_flat, aggregated_values
-
-    if selected_labels is not None:
-        return stats_flat, aggregated_values
-
-    aggregate = suite_metrics.get("aggregate") or {}
-    if isinstance(aggregate, Mapping):
-        stats = aggregate.get("stats") or {}
-        if isinstance(stats, Mapping):
-            stats_flat.update(flatten_metric_stats(dict(stats)))
-        aggregated = aggregate.get("aggregated") or {}
-        if reducer_cfg is not None:
-            if isinstance(stats, Mapping) and stats:
-                for metric, metric_stats in stats.items():
-                    if not isinstance(metric_stats, Mapping):
-                        continue
-                    mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
-                    value = metric_stats.get(mode)
-                    if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                        aggregated_values[str(metric)] = float(value)
-        elif isinstance(aggregated, Mapping):
-            for metric, value in aggregated.items():
-                if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                    aggregated_values[str(metric)] = float(value)
-        elif isinstance(stats, Mapping):
-            for metric, metric_stats in stats.items():
-                if not isinstance(metric_stats, Mapping):
-                    continue
-                mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
-                value = metric_stats.get(mode, metric_stats.get("mean"))
-                if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                    aggregated_values[str(metric)] = float(value)
-    return stats_flat, aggregated_values
+                )
+            except MetricAggregationError as error:
+                fields = {
+                    mode: None,
+                    "metric_status": {
+                        mode: {"status": error.status, "reason": str(error)}
+                    },
+                }
+        stats[metric] = fields
+        if reducer_cfg is None and labels is None and "aggregated" in payload:
+            try:
+                aggregates[metric] = decode_metric_value(payload, "aggregated")
+            except MetricAggregationError:
+                pass  # Unselected diagnostic remains represented by its stat status.
+        elif mode in fields:
+            try:
+                aggregates[metric] = decode_metric_value(fields, mode)
+            except MetricAggregationError:
+                pass  # A selected lookup below still rejects its explicit stat status.
+    return flatten_metric_stats(stats), encode_metric_values(aggregates)
 
 
 def _scenario_metric_values(
@@ -577,6 +544,7 @@ def _scenario_metric_values(
             f"Scenario {scenario!r} requires suite Pareto artifacts, but {source.name} "
             "has no suite_metrics payload."
         )
+    require_metric_definition(suite_metrics)
     metrics = suite_metrics.get("metrics")
     if not isinstance(metrics, Mapping):
         raise ValueError(
@@ -592,25 +560,40 @@ def _scenario_metric_values(
         scenarios = payload.get("scenarios")
         if not isinstance(scenarios, Mapping):
             continue
-        available_labels.update(str(label) for label in scenarios)
+        available_labels.update(
+            str(label) for label in scenarios if label != "metric_status"
+        )
         if scenario not in scenarios:
             continue
-        value = scenarios[scenario]
-        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-            raise ValueError(
-                f"Scenario metric {metric!r} for {scenario!r} in {source.name} "
-                f"is not a finite number: {value!r}"
-            )
-        values[str(metric)] = float(value)
+        copied = copy_metric_value(scenarios, scenario, output_name=str(metric))
+        statuses = copied.pop("metric_status", {})
+        values.update(copied)
+        if statuses:
+            values.setdefault("metric_status", {}).update(statuses)
 
     if not values:
-        available = ", ".join(sorted(available_labels)) if available_labels else "<none>"
+        available = (
+            ", ".join(sorted(available_labels)) if available_labels else "<none>"
+        )
         raise ValueError(
             f"Unknown or unavailable scenario {scenario!r} in {source.name}. "
             f"Available scenarios: {available}"
         )
     return values
 
+
+
+def _scenario_mean_values(values):
+    means = {}
+    for metric in values:
+        if metric == "metric_status":
+            continue
+        copied = copy_metric_value(values, metric, output_name=f"{metric}_mean")
+        statuses = copied.pop("metric_status", {})
+        means.update(copied)
+        if statuses:
+            means.setdefault("metric_status", {}).update(statuses)
+    return means
 
 def project_candidates_to_scenario(
     candidates: Sequence[ParetoCandidate],
@@ -628,11 +611,10 @@ def project_candidates_to_scenario(
         objectives: Dict[str, float] = {}
         missing: List[str] = []
         for metric in required_metrics:
-            value = resolve_metric_value(values, metric)
-            if value is None:
+            if metric not in values:
                 missing.append(metric)
             else:
-                objectives[metric] = float(value)
+                objectives[metric] = decode_metric_value(values, metric)
         if missing:
             raise ValueError(
                 f"Scenario {label!r} is missing scoring metric(s) {missing} "
@@ -643,7 +625,7 @@ def project_candidates_to_scenario(
                 path=candidate.path,
                 entry=candidate.entry,
                 objectives=objectives,
-                stats_flat={f"{metric}_mean": value for metric, value in values.items()},
+                stats_flat=_scenario_mean_values(values),
                 aggregated_values=values,
                 scenario=label,
             )
@@ -688,46 +670,32 @@ def build_objective_front(
     return front
 
 
-def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
-    scoring_specs = extract_objective_specs(entry)
-    metrics_block = entry.get("metrics") or {}
-    if not isinstance(metrics_block, Mapping):
-        metrics_block = {}
-    objective_payload = metrics_block.get("objectives") or {}
-    objectives: Dict[str, float] = {}
+def _extract_objectives(entry):
+    from metrics_schema import require_metric_definition
+    from config.metrics import metric_stat_key
 
-    if isinstance(objective_payload, Mapping):
-        for idx, spec in enumerate(scoring_specs):
-            value = resolve_metric_value(objective_payload, spec.metric)
-            if value is None:
-                legacy_key = f"w_{idx}"
-                if legacy_key in objective_payload:
-                    value = from_engine_value(spec, float(objective_payload[legacy_key]))
-            if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                objectives[spec.metric] = float(value)
-
-    if len(objectives) == len(scoring_specs):
-        return objectives
-
-    stats_flat: Dict[str, float] = {}
-    raw_stats = metrics_block.get("stats") or {}
-    if isinstance(raw_stats, Mapping):
-        stats_flat.update(flatten_metric_stats(dict(raw_stats)))
-    suite_stats_flat, aggregated_values = _extract_suite_metrics(entry)
-    stats_flat.update(suite_stats_flat)
-
-    for spec in scoring_specs:
-        if spec.metric in objectives:
-            continue
-        value = resolve_metric_value(aggregated_values, spec.metric)
-        if value is not None:
-            objectives[spec.metric] = float(value)
-            continue
-        metric_key = f"{spec.metric}_mean"
-        value = resolve_metric_value(stats_flat, metric_key)
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
-            objectives[spec.metric] = float(value)
-    return objectives
+    metrics = entry.get("metrics") or {}
+    require_metric_definition(metrics if metrics else entry.get("suite_metrics", {}))
+    specs = extract_objective_specs(entry)
+    raw = metrics.get("objectives", {})
+    flat = flatten_metric_stats(metrics.get("stats", {}))
+    suite_flat, aggregate = _extract_suite_metrics(entry)
+    flat.update(suite_flat)
+    result = {}
+    for spec in specs:
+        value = resolve_metric_value(raw, spec.metric)
+        if value is None:
+            value = resolve_metric_value(aggregate, spec.metric)
+        if value is None:
+            value = resolve_metric_value(
+                flat, metric_stat_key(spec.metric, spec.reducer or "mean")
+            )
+        if value is None:
+            raise ValueError(
+                f"selected objective {spec.metric!r} has no current raw value; re-evaluate"
+            )
+        result[spec.metric] = value
+    return result
 
 
 class NoParetoCandidatesError(ValueError):
@@ -852,11 +820,17 @@ def _normalize_objective_matrix(
     active_metrics = [spec.metric for spec in active_specs]
     raw = np.array(
         [
-            [float(_resolve_candidate_metric_value(candidate, metric)) for metric in active_metrics]
+            [
+                float(_resolve_candidate_metric_value(candidate, metric))
+                for metric in active_metrics
+            ]
             for candidate in candidates
         ],
         dtype=float,
     )
+    if np.any(np.isnan(raw)):
+        raise ValueError("undefined objective in candidate selection")
+    raw = (2.0 / np.pi) * np.arctan(raw)
     lows = raw.min(axis=0)
     highs = raw.max(axis=0)
     spans = highs - lows
@@ -876,8 +850,8 @@ def _normalize_objective_matrix(
 
 def _weights_for_metrics(metrics: Sequence[str], weight_map: Optional[Dict[str, float]]) -> np.ndarray:
     weights = np.array([float((weight_map or {}).get(metric, 1.0)) for metric in metrics], dtype=float)
-    if np.any(weights < 0):
-        raise ValueError("Weights must be non-negative.")
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+        raise ValueError("Weights must be finite and non-negative.")
     if float(weights.sum()) <= 0.0:
         raise ValueError("At least one weight must be positive.")
     return weights / weights.sum()
@@ -950,7 +924,10 @@ def _normalize_reference_targets(
     for idx, metric in enumerate(active_metrics):
         if metric not in targets:
             raise ValueError(f"Reference method requires target for {metric}")
-        raw_value = float(targets[metric])
+        target = float(targets[metric])
+        if math.isnan(target):
+            raise ValueError(f"Reference target for {metric!r} is undefined")
+        raw_value = (2.0 / math.pi) * math.atan(target)
         low = lows[idx]
         high = highs[idx]
         span = high - low
@@ -985,10 +962,7 @@ def _resolve_limit_value(
             basis.scenario,
             source=candidate.path,
         )
-        value = resolve_metric_value(scenario_values, metric)
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
-            return float(value)
-        return None
+        return resolve_metric_value(scenario_values, metric)
     explicit_suite_basis = (
         candidate.scenario is not None
         and "scenario" in entry
@@ -1011,7 +985,11 @@ def _resolve_limit_value(
             reducer_cfg=reducer_cfg,
             scenario_labels=scenario_labels,
         )
-    if candidate.scenario is not None and "reducer" in entry and not explicit_suite_basis:
+    if (
+        candidate.scenario is not None
+        and "reducer" in entry
+        and not explicit_suite_basis
+    ):
         requested_reducer = str(entry.get("reducer", "")).strip().lower()
         if requested_reducer != "mean":
             raise ValueError(
@@ -1021,11 +999,11 @@ def _resolve_limit_value(
     reducer = basis.reducer
     if "reducer" not in entry:
         value = resolve_metric_value(aggregated_values, metric)
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        if isinstance(value, (int, float)) and not math.isnan(float(value)):
             return float(value)
     key = f"{metric}_{reducer}"
     value = resolve_metric_value(stats_flat, key)
-    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+    if isinstance(value, (int, float)) and not math.isnan(float(value)):
         return float(value)
     if (
         "reducer" not in entry
@@ -1034,7 +1012,7 @@ def _resolve_limit_value(
         and not applies_current_scenario_set
     ):
         fallback = _resolve_candidate_metric_value(candidate, metric)
-        if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
+        if isinstance(fallback, (int, float)) and not math.isnan(float(fallback)):
             return float(fallback)
     return None
 
@@ -1786,17 +1764,27 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         scoring_specs,
         filtered_candidates,
         objectives_arg=getattr(args, "objectives", None),
-        priority_arg=getattr(args, "priority", None) if method == "lexicographic" else None,
-        target_map=_parse_key_value_pairs(getattr(args, "target", None) or [], value_name="target"),
+        priority_arg=(
+            getattr(args, "priority", None) if method == "lexicographic" else None
+        ),
+        target_map=_parse_key_value_pairs(
+            getattr(args, "target", None) or [], value_name="target"
+        ),
         method=method,
     )
-    weight_map = _parse_key_value_pairs(getattr(args, "weight", None) or [], value_name="weight")
+    weight_map = _parse_key_value_pairs(
+        getattr(args, "weight", None) or [], value_name="weight"
+    )
     weights = _weights_for_metrics([spec.metric for spec in active_specs], weight_map)
     if method in {"ideal", "reference", "utility", "outranking"}:
-        active_specs = [spec for spec, weight in zip(active_specs, weights) if weight > 0.0]
+        active_specs = [
+            spec for spec, weight in zip(active_specs, weights) if weight > 0.0
+        ]
     active_front = build_objective_front(filtered_candidates, active_specs)
     if not active_front:
-        raise ValueError("No Pareto candidates remained after rebuilding the active-objective front.")
+        raise ValueError(
+            "No Pareto candidates remained after rebuilding the active-objective front."
+        )
     # Exact reference targets need not be Pareto-optimal in the original goals.
     selection_pool = filtered_candidates if method == "reference" else active_front
     result = select_candidate(
@@ -1852,16 +1840,24 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
-        ranking_order = result.details.get("ranking_order") or [selection_pool.index(result.candidate)]
-        score_vector = result.details.get("score_vector") or [result.score] * len(selection_pool)
-        active_metrics = result.details.get("active_metrics") or list(result.objective_values)
+        ranking_order = result.details.get("ranking_order") or [
+            selection_pool.index(result.candidate)
+        ]
+        score_vector = result.details.get("score_vector") or [result.score] * len(
+            selection_pool
+        )
+        active_metrics = result.details.get("active_metrics") or list(
+            result.objective_values
+        )
         payload = {
             "pareto_dir": str(pareto_dir),
             "loaded_count": len(candidates),
             "retained_count": len(filtered_candidates),
             "active_front_count": len(active_front),
             "selection_count": len(selection_pool),
-            "normalization_scope": "post_limit_pool" if method == "reference" else "active_front",
+            "normalization_scope": (
+                "post_limit_pool" if method == "reference" else "active_front"
+            ),
             "applied_limits": _json_ready(active_limits),
             "method": result.method,
             "method_description": _method_explanation(result.method),
@@ -1900,7 +1896,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 "manifest": str(filtered_manifest),
                 "count": len(filtered_candidates),
             }
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
     else:
         output = format_selection_result(
             pareto_dir,
@@ -1916,7 +1912,9 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         )
         saved_lines: List[str] = []
         if selected_output is not None:
-            saved_lines.append(f"Saved selected member: {_display_path(selected_output)}")
+            saved_lines.append(
+                f"Saved selected member: {_display_path(selected_output)}"
+            )
         if filtered_output is not None and filtered_manifest is not None:
             saved_lines.append(
                 f"Saved filtered members: {len(filtered_candidates)} to "

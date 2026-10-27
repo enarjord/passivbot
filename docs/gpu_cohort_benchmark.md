@@ -19,9 +19,9 @@ before applying their conclusions to the current native optimizer.
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --report cohort.json
 passivbot tool gpu-cohort-benchmark --strategies ema_anchor --coins 2 --bars 512 \
   --candidates 3 --warm-runs 1 --widths 1 2 auto
-passivbot tool gpu-cohort-benchmark --adg-floor 0 --drawdown-ceiling 0.01
-passivbot tool gpu-cohort-benchmark --metrics recovery_p95_days_strategy_equity \
-  active_day_turnover_proxy_mean_ratio --limit fills_gap_p95_hours greater_than 0.05
+passivbot tool gpu-cohort-benchmark --cagr-floor 0 --drawdown-ceiling 0.01
+passivbot tool gpu-cohort-benchmark --metrics peak_recovery_max_days_strategy_equity \
+  gross_exposure_rms_ratio_strategy_equity --limit fills_gap_max_days greater_than 0.05
 ```
 
 Defaults use both strategies, four coins, both sides, 10,080 one-minute candles,
@@ -47,11 +47,11 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
   --hsl-memory-ema-span-minutes 1440.0 \
   --unstuck-memory-ema-span-minutes 1440.0 --loss-gate-memory-ema-span-minutes 1440.0 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
-  --objective adg_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
+  --objective cagr_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
   --objective hsl_red_time_fraction min \
-  --metrics hsl_red_duration_mean_minutes hsl_red_duration_max_minutes \
-  hsl_triggers_per_year hsl_restarts_per_year backtest_completion_fraction \
-  --limit adg_fraction_strategy_equity less_than 0 --limit drawdown_max_fraction_strategy_equity greater_than 0.005 \
+  --metrics hsl_panic_episode_loss_mean_fraction hsl_panic_episode_loss_max_fraction \
+  hsl_triggers_per_year backtest_completion_fraction \
+  --limit cagr_fraction_strategy_equity less_than 0 --limit drawdown_max_fraction_strategy_equity greater_than 0.005 \
   --limit hsl_red_time_fraction greater_than 0.5 \
   --limit backtest_completion_fraction less_than 0.99 --report hsl-cohort.json
 ```
@@ -71,11 +71,11 @@ production search.
 Missing or non-finite objectives leave ranking unassessed.
 
 `--metrics` adds requested GPU work to the three core metrics; it does not replace
-the selected ranking vector or fills/day comparisons. This enables measurements of opt-in
-histories/reductions and their resource cost. Repeat `--limit METRIC MODE VALUE` to
+the selected ranking vector or turnover comparisons. This enables measurements of selected
+observation work and their resource cost. Repeat `--limit METRIC MODE VALUE` to
 add canonical scalar diagnostic checks; modes are `less_than` and `greater_than`.
 Limit metrics are automatically requested from both simulators. The convenience
-`--adg-floor` and `--drawdown-ceiling` options remain available. These are measurement
+`--cagr-floor` and `--drawdown-ceiling` options remain available. These are measurement
 thresholds, not a production search configuration or optimizer policy.
 
 `--tolerances policy.json` uses the same explicit per-metric format as
@@ -84,7 +84,7 @@ the report; the policy file path is omitted. Added metrics have no tolerance unl
 one is provided or already has a provisional parity policy. Undefined policies remain
 `unassessed`; they never become matches. Strict numerical comparisons and canonical
 feasibility are separate, so an allowed error can still produce a limit flip.
-Ranking defaults to maximizing ADG and minimizing drawdown. Repeat
+Ranking defaults to maximizing CAGR and minimizing Ulcer Index. The maximum drawdown remains a diagnostic limit. Repeat
 `--objective METRIC min|max` to replace that vector explicitly. Objective metrics
 are automatically requested; aliases are canonicalized and conflicting directions
 are rejected. Adding `--metrics` or diagnostic limits alone does not change ranking.
@@ -93,8 +93,8 @@ For the fill-gap three-objective experiment:
 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto \
-  --objective adg_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
-  --objective fills_gap_p95_hours min
+  --objective cagr_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
+  --objective fills_gap_max_days min
 ```
 
 `ranking.objectives` and the recipe record the resolved directions. Fronts compare
@@ -102,7 +102,7 @@ raw metrics without constraint penalties or survivor selection. `gpu_best_candid
 identifies each GPU-selected axis extreme, with the first candidate selected on ties.
 `cpu_regret_at_gpu_best` measures its CPU disadvantage against the best CPU value
 on that axis. These axis diagnostics do not certify whole-search quality. The existing
-ADG regret/selection fields remain when maximizing ADG is an objective. Missing or
+ADG regret/selection fields remain when maximizing CAGR is an objective. Missing or
 non-finite values on any requested axis leave ranking unassessed.
 
 Native service results must retain the direct GPU metric keys and liquidation status
@@ -262,79 +262,3 @@ the float64 reduction result differs. The CUDA regression preserves those exact 
 inputs and bounds metric rounding. Material changes, missing metrics, changed
 liquidation, non-finite disagreements and errors outside the stated bound still fail
 with bounded per-metric diagnostics. This observation does not widen CPU parity gates.
-
-
-## Optional metric cohort measurements
-
-The integrated implementation also runs eleven requested metrics, including per-step
-recovery and weighted-volume captures. Reproduce the four strategy/seed cohorts with:
-
-```sh
-passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto --warm-runs 3 \
-  --adg-floor 0 --drawdown-ceiling 0.01 --metrics \
-  drawdown_daily_worst_1pct_mean_fraction_strategy_equity hsl_signal_ema_worst_1pct_mean_fraction \
-  fills_gap_p95_hours adg_fraction_strategy_equity recovery_mean_days_strategy_equity \
-  recovery_p95_days_strategy_equity recovery_worst_1pct_mean_days_strategy_equity \
-  active_day_turnover_proxy_mean_ratio --limit fills_gap_p95_hours greater_than 0.05 \
-  --limit recovery_p95_days_strategy_equity greater_than 0.05 \
-  --limit hsl_signal_ema_worst_1pct_mean_fraction greater_than 0.01 \
-  --report optional-cohort.json
-```
-
-Median warm cohort seconds on the same GPU/runtime:
-
-| Strategy | Seed | CPU serial | Direct GPU | Native width 16 | Automatic |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| EMA Anchor | 7 | 1.116 | 0.704 | 0.699 | 0.709 |
-| EMA Anchor | 43 | 1.122 | 0.702 | 0.713 | 0.719 |
-| Trailing Martingale | 7 | 8.986 | 2.531 | 2.539 | 2.547 |
-| Trailing Martingale | 43 | 9.203 | 2.515 | 2.525 | 2.533 |
-
-All native/direct comparisons satisfy the stated machine-scale policy. TM seed 43
-reports one six-unit weighted-ADG difference in each native mode, so those modes
-explicitly report nonexact agreement. Other cases are exact. Core CPU/GPU comparison
-rows and the ADG/drawdown ranking match the preceding refresh exactly. These five
-diagnostic limits produce no feasibility flips in the tested cohorts; that does not
-prove decisions near other thresholds or ranking with recovery/volume objectives.
-Automatic width still has zero eligible tuning samples.
-
-Added CPU/GPU metrics remain unassessed without explicit policies. EMA seed 7/43
-maximum fill-gap p95 errors are three/two minutes; maximum worst-one-percent mean
-recovery errors are about 93/58 minutes (CPU tail means about 3.38/5.55 days in those
-candidates). Maximum absolute weighted-volume errors are approximately 0.00012/0.00624
-for EMA and 0.319/0.153 for TM. These residuals need materiality assessment; they are
-not resolved by allowing tiny float64 GPU-reference rounding. HSL is disabled here,
-so its EMA tail is trivially zero and provides no HSL-controller or tail acceptance.
-
-Per-service Torch peak allocated memory is roughly 4.86 MiB with requested histories.
-A separate observer samples the whole benchmark process tree every 0.2 seconds and
-global GPU memory every second: sampled peak RSS is 1,040 MiB, and global GPU usage
-ranges from 344 to 1,029 MiB. Runtime/compiler and existing device use are included;
-these sampled whole-run values are not per-service bounds and can miss transients.
-The compiler cache is already warm, native runs still follow direct warmup, and this
-small fixed-cohort experiment does not close larger-suite resource, cold-native,
-default tuning or repeated-seed search-quality acceptance.
-
-### Fill-gap resolution experiment
-
-Repeat the optional eleven-metric recipe above with 512 fill-gap bins. The earlier
-numbers describe the 128-bin implementation. Before/after candidate and input
-identities match, as do every CPU value and all non-gap GPU values. Finer counts
-reduce EMA seed 7/43 maximum p95 errors from 3/2 minutes to 0/0.1 minute; TM remains
-unchanged. The [acceptance map](plans/gpu_optimizer_acceptance.md#fill-gap-resolution-and-optimizer-materiality)
-records the separate three-objective fronts and remaining limitations.
-
-Three warmed repetitions on the same RTX 3070 Ti Laptop GPU give these median
-sixteen-candidate cohort times, in seconds. Native setup is warmed by direct replay;
-this is neither a cold-native test nor a controlled speedup claim.
-
-| Strategy / seed | Direct, 128 → 512 bins | Native width 16, 128 → 512 | Native auto, 128 → 512 |
-| --- | ---: | ---: | ---: |
-| EMA / 7 | 0.7041 → 0.6974 | 0.6990 → 0.6938 | 0.7094 → 0.7068 |
-| EMA / 43 | 0.7023 → 0.6998 | 0.7133 → 0.6959 | 0.7185 → 0.7126 |
-| TM / 7 | 2.5312 → 2.5351 | 2.5387 → 2.5437 | 2.5466 → 2.5428 |
-| TM / 43 | 2.5146 → 2.5320 | 2.5251 → 2.5179 | 2.5333 → 2.5211 |
-
-The fixed count-buffer increase is 1.5 KiB per candidate. Entry-interval histograms
-retain 128 bins. Batch shape/queue delays and compiler-cache state still affect
-latency; this experiment establishes comparable warm cost for this workload only.

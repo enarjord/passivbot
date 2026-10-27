@@ -27,7 +27,7 @@ def loss_gate_proxy(
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["live"]["lookback_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
     config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
         config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
@@ -42,7 +42,7 @@ def loss_gate_proxy(
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=3,
-        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
+        needed_metrics={"cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"},
     )
     return proxy, inputs
 
@@ -66,6 +66,10 @@ def test_shared_gate_production_consumers_and_transport(
     from optimization.gpu.service import SharedAccountReplay
     from test_gpu_tm_loss_admission import fee_only_close_fixture
 
+    if interval != 1:
+        with pytest.raises(ValueError, match="1m"):
+            loss_gate_proxy(sides, memory_span=span, interval_minutes=interval)
+        return
     if strategy == "ema_anchor":
         proxy, inputs = loss_gate_proxy(
             sides, memory_span=span, unstuck=unstuck, max_loss_pct=fraction,
@@ -83,13 +87,13 @@ def test_shared_gate_production_consumers_and_transport(
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,
-            needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
+            needed_metrics={"cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"},
         )
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert len(fills) > 0
     assert runner.loss_gate_enabled is (fraction < 1.0)
-    assert runner.settings[-1].item() == float(fraction < 1.0)
+    assert runner.settings[16 if len(sides) == 2 else 14].item() == float(fraction < 1.0)
     assert runner.settings[5].item() == float(np.float32(min(fraction, 1.0)))
     if not unstuck:
         assert runner.dispatch_unstuck_enabled is False
@@ -204,7 +208,7 @@ def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_fraction_strategy_equity", "fills_per_day"}) as dataset:
+                         {"cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("finite-loss", dataset)
             pending = [service.submit(BacktestRequest(str(i), "finite-loss", values))

@@ -125,21 +125,36 @@ class Resources:
                     scope="process tree RSS; shared pages may be counted repeatedly; sampled peaks can miss transients")
 
 
+def project_metric_values(payload, metrics):
+    """Copy native facts into standard JSON without losing unavailable/infinite status."""
+    from config.metrics import CORE_METRIC_DEFINITION_VERSION
+    from metrics_schema import copy_metric_value, require_metric_definition
+
+    require_metric_definition(payload)
+    result = {"definition_version": CORE_METRIC_DEFINITION_VERSION}
+    for name in metrics:
+        copied = copy_metric_value(payload, name)
+        result[name] = copied[name]
+        if copied.get("metric_status"):
+            result.setdefault("metric_status", {}).update(copied["metric_status"])
+    return result
+
+
 def cpu_candidate(task):
     block_network()
     config, candles, markets, btc, timestamps, exchange, metrics = task
     from backtest import build_backtest_payload, execute_backtest
-    from config.metrics import resolve_metric_value
+    from config.metrics import metric_base_name
     started = time.perf_counter()
     payload = build_backtest_payload(candles, markets, deepcopy(config), exchange, btc, timestamps,
-                                     metrics_only=True, skip_btc_analysis=True)
+                                     metrics_only=True, metric_requests=sorted({metric_base_name(name) for name in metrics}))
     prepared = time.perf_counter()
     _fills, _equity, analysis = execute_backtest(payload, config)
     ended = time.perf_counter()
-    liquidation = next((analysis[key] for key in ("liquidated", "liquidated_usd") if key in analysis), None)
-    if not isinstance(liquidation, (bool, int)):
+    liquidation = analysis.get("liquidated")
+    if not isinstance(liquidation, bool):
         raise ValueError("CPU backtest omitted actual liquidation status")
-    return dict(metrics={name: resolve_metric_value(analysis, name) for name in metrics},
+    return dict(metrics=project_metric_values(analysis, metrics),
                 liquidated=bool(liquidation), preparation_seconds=prepared - started,
                 replay_seconds=ended - prepared, latency_seconds=ended - started)
 
@@ -270,7 +285,7 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
                 request_start = time.perf_counter()
                 result = service.submit(BacktestRequest(f'{round_index}:{i}', entry['id'], parameter)).result()
                 latencies.append(time.perf_counter() - request_start)
-                rows.append(dict(metrics=result.metrics, liquidated=result.liquidated))
+                rows.append(dict(metrics=project_metric_values({**result.metrics, **result.metadata}, metrics), liquidated=result.liquidated))
             return (rows, latencies)
         futures = [service.submit(BacktestRequest(f'{round_index}:{i}', entry['id'], p)) for i, p in enumerate(parameters)]
         from concurrent.futures import as_completed
@@ -278,7 +293,7 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
         rows, latencies = ([None] * len(futures), [])
         for future in as_completed(futures):
             result = future.result()
-            rows[by_future[future]] = dict(metrics=result.metrics, liquidated=result.liquidated)
+            rows[by_future[future]] = dict(metrics=project_metric_values({**result.metrics, **result.metadata}, metrics), liquidated=result.liquidated)
             latencies.append(time.perf_counter() - submitted)
         return (rows, latencies)
     setup_seconds = time.perf_counter() - prepared
@@ -374,8 +389,8 @@ def search_run(entry, arrays, args):
         set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']["portfolio"]['strategy_kind'],
             spec["key"], [spec["low"], spec["high"]]
             + ([spec["step"]] if spec["step"] is not None else []))
-    config["optimize"]["scoring"] = [dict(metric="adg_fraction_strategy_equity", goal="max"),
-                                        dict(metric="drawdown_max_fraction_strategy_equity", goal="min")]
+    config["optimize"]["scoring"] = [dict(metric="cagr_fraction_strategy_equity", goal="max"),
+                                        dict(metric="ulcer_index_fraction_strategy_equity", goal="min")]
     config["optimize"]["limits"] = []
     config["optimize"]["pymoo"]["algorithm"] = "nsga2"
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
@@ -441,19 +456,25 @@ def search_run(entry, arrays, args):
                 recorder.close()
         from .report import numerical_comparison
         reference_start = time.perf_counter()
-        names = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
+        names = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
         reference_rows, observed_rows = [], []
         for record_row in records:
             saved = record_row["result"]
             reference_rows.append(cpu_candidate((saved, arrays[0], entry["markets"], arrays[1], arrays[2],
                                                  exchange, names)))
-            observed_rows.append(dict(metrics={name: saved["metrics"]["stats"][name]["mean"] for name in names},
-                                      liquidated=saved["metrics"]["liquidated"]))
+            from metrics_schema import copy_metric_value
+            selected = {"definition_version": saved["metrics"]["definition_version"]}
+            for name in names:
+                copied = copy_metric_value(saved["metrics"]["stats"][name], "mean", output_name=name)
+                selected[name] = copied[name]
+                if copied.get("metric_status"):
+                    selected.setdefault("metric_status", {}).update(copied["metric_status"])
+            observed_rows.append(dict(metrics=selected, liquidated=saved["metrics"]["liquidated"]))
         verification = numerical_comparison(
             dict(status="completed", samples=[dict(results=reference_rows)]),
             dict(status="completed", samples=[dict(results=observed_rows)]), names,
-            {"adg_fraction_strategy_equity": dict(absolute=1e-7, relative=1e-4),
-             "drawdown_max_fraction_strategy_equity": dict(absolute=1e-5, relative=1e-4)})
+            {"cagr_fraction_strategy_equity": dict(absolute=1e-7, relative=1e-4),
+             "ulcer_index_fraction_strategy_equity": dict(absolute=1e-5, relative=1e-4)})
         verification["seconds_outside_search_timing"] = time.perf_counter() - reference_start
         return dict(engine="prepared_production_optimizer", backend=backend,
             samples=[dict(seconds=seconds, completed=len(records), results=records)],

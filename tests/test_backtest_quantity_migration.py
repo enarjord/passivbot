@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -11,10 +12,7 @@ from tools.migrate_config_v9 import migrate
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_released_setup_quantities_preserve_values_and_final_report_paths(kind):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [
-        row for row in source["optimize"]["scoring"] if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     source["backtest"].update(
         btc_collateral_cap=2.375, btc_collateral_ltv_cap=0.625,
         maker_fee_override="-0.000125", taker_fee_override=None,

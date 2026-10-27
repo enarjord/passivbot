@@ -1,15 +1,10 @@
-#[cfg(test)]
-#[path = "backtest_equity_reference.rs"]
-mod equity_reference;
-
-#[path = "backtest_hsl_analysis.rs"]
-mod hsl_analysis;
+#[path = "backtest_core_metrics.rs"]
+mod core_metric_observer;
 #[path = "backtest_hsl_report.rs"]
 mod hsl_report;
 #[path = "backtest_hsl_runtime.rs"]
 pub(crate) mod hsl_runtime;
 
-use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
 use crate::entries::{
     calc_min_entry_qty, effective_we_excess_allowance_fraction,
@@ -36,7 +31,6 @@ use crate::utils::{
     qty_to_cost, round_, round_dn, round_up,
 };
 use serde::Serialize;
-use std::cmp::Ordering;
 use std::collections::HashSet;
 
 // Orchestrator-only: legacy backtest order-generation path removed in this branch.
@@ -446,69 +440,6 @@ pub struct TradingEnabled {
     short: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct HardStopMetrics {
-    pub triggers: u32,
-    pub triggers_per_year: f64,
-    pub triggers_long: u32,
-    pub triggers_short: u32,
-    pub panic_loss_starting_balance_fraction: f64,
-    pub restarts: u32,
-    pub restarts_per_year: f64,
-    pub restarts_per_year_long: f64,
-    pub restarts_per_year_short: f64,
-    pub restarts_long: u32,
-    pub restarts_short: u32,
-    pub red_time_fraction: f64,
-    pub red_duration_mean_minutes: f64,
-    pub red_duration_max_minutes: f64,
-    pub trigger_signal_mean_fraction: f64,
-    pub panic_fill_loss_sum_usd: f64,
-    pub panic_fill_loss_max_usd: f64,
-    pub panic_episode_loss_min_fraction: f64,
-    pub panic_episode_loss_mean_fraction: f64,
-    pub panic_episode_loss_max_fraction: f64,
-    pub flatten_time_mean_minutes: f64,
-    pub restart_retrigger_fraction: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct StrategyEquityMetrics {
-    pub gain_multiplier_strategy_equity: f64,
-    pub adg_fraction_strategy_equity: f64,
-    pub adg_rolling_hmean_fraction_strategy_equity: f64,
-    pub adg_time_integrated_fraction_strategy_equity: f64,
-    pub positive_log_return_participation_score_strategy_equity: f64,
-    pub mdg_fraction_strategy_equity: f64,
-    pub sharpe_ratio_strategy_equity: f64,
-    pub sortino_ratio_strategy_equity: f64,
-    pub omega_ratio_strategy_equity: f64,
-    pub expected_shortfall_1pct_fraction_strategy_equity: f64,
-    pub calmar_ratio_strategy_equity: f64,
-    pub sterling_ratio_strategy_equity: f64,
-    pub drawdown_max_fraction_strategy_equity: f64,
-    pub hsl_signal_ema_max_fraction: f64,
-    pub drawdown_daily_worst_1pct_mean_fraction_strategy_equity: f64,
-    pub hsl_signal_ema_worst_1pct_mean_fraction: f64,
-    pub pain_index_fraction_strategy_equity: f64,
-    pub ulcer_index_fraction_strategy_equity: f64,
-    pub recovery_mean_days_strategy_equity: f64,
-    pub recovery_median_days_strategy_equity: f64,
-    pub recovery_p95_days_strategy_equity: f64,
-    pub recovery_p99_days_strategy_equity: f64,
-    pub recovery_worst_5pct_mean_days_strategy_equity: f64,
-    pub recovery_worst_1pct_mean_days_strategy_equity: f64,
-    pub recovery_max_days_strategy_equity: f64,
-    pub recovery_max_hours_strategy_equity: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct StrategyEquityMetricsBundle {
-    pub overall: StrategyEquityMetrics,
-    pub long: StrategyEquityMetrics,
-    pub short: StrategyEquityMetrics,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct OrderFillExecution {
     /// Forced delisting is a bar-close event; ordinary fills precede that close.
@@ -585,8 +516,6 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     did_fill_short: Vec<bool>,
     last_increase_fill_timestamp_long: Vec<Option<u64>>,
     last_increase_fill_timestamp_short: Vec<Option<u64>>,
-    pub total_wallet_exposures: Vec<f64>,
-    pub exposure_rms: crate::exposure_rms::ExposureRms,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
@@ -605,11 +534,17 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     hsl_report: hsl_report::Report,
     btc_collateral_initialized: bool,
     strategy_equity_series: Vec<f64>,
-    strategy_equity_series_pside: [Vec<f64>; 2],
-    strategy_equity_timestamps_ms_pside: [Vec<u64>; 2],
     liquidated: bool,
-    final_hard_stop_metrics: Option<HardStopMetrics>,
-    final_strategy_equity_metrics: Option<StrategyEquityMetricsBundle>,
+    core_request: Option<crate::core_metrics::MetricRequest>,
+    core_observer: Option<crate::core_metrics::CoreMetrics>,
+    core_window: Option<crate::core_metrics::EvaluationWindow>,
+    core_half_life_days: f64,
+    final_core_metrics: Option<crate::core_metrics::CoreMetricsResult>,
+    core_side_start: [f64; 2],
+    core_marks: Vec<f64>,
+    last_fill_index: Option<usize>,
+    last_raw_account_equity: Option<f64>,
+    core_actual_end_timestamp_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -785,19 +720,6 @@ impl OrchProfile {
     fn write_to_file(&self) {
         self.write_to_path("measurements/orch_profile_orchestrator.json");
     }
-}
-
-fn calc_entry_balance_pct(
-    params: &BotParams,
-    effective_n_positions: usize,
-    entry_initial_qty_fraction: f64,
-) -> f64 {
-    if effective_n_positions == 0 {
-        return 0.0;
-    }
-    let base_limit = params.total_wallet_exposure_limit_ratio / effective_n_positions as f64;
-    let allowance_multiplier = 1.0 + effective_we_excess_allowance_fraction(params, base_limit);
-    base_limit * entry_initial_qty_fraction * allowance_multiplier
 }
 
 fn configured_wallet_exposure_limit_ratio(params: &BotParams) -> f64 {
@@ -2053,8 +1975,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             did_fill_short: vec![false; n_coins],
             last_increase_fill_timestamp_long: vec![None; n_coins],
             last_increase_fill_timestamp_short: vec![None; n_coins],
-            total_wallet_exposures: Vec::with_capacity(n_timesteps),
-            exposure_rms: Default::default(),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
                 DebugOrderWriter::new_for_mode()
@@ -2110,11 +2030,17 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             ),
             btc_collateral_initialized,
             strategy_equity_series: Vec::new(),
-            strategy_equity_series_pside: [Vec::new(), Vec::new()],
-            strategy_equity_timestamps_ms_pside: [Vec::new(), Vec::new()],
             liquidated: false,
-            final_hard_stop_metrics: None,
-            final_strategy_equity_metrics: None,
+            core_request: None,
+            core_observer: None,
+            core_window: None,
+            core_half_life_days: crate::core_metrics::DEFAULT_EW_HALF_LIFE_DAYS,
+            final_core_metrics: None,
+            core_side_start: [0.0; 2],
+            core_marks: vec![f64::NAN; n_coins],
+            last_fill_index: None,
+            last_raw_account_equity: None,
+            core_actual_end_timestamp_ms: None,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -2196,6 +2122,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .max(self.first_timestamp_ms);
         for k in 1..(n_timesteps - 1) {
             self.current_step = k;
+            self.begin_core_metrics_if_due(k)?;
             self.validate_held_position_valuation(k)?;
             self.update_unilateralness(k)?;
             for idx in 0..self.n_coins {
@@ -2228,7 +2155,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             if self.equity_tracking_active
                 && self.balance.usd_total_balance.is_finite()
                 && (self.balance.usd_total_balance <= 0.0
-                    || (self.fills.last().is_some_and(|fill| fill.index == k)
+                    || ((self.last_fill_index == Some(k)
+                        || self.fills.last().is_some_and(|fill| fill.index == k))
                         && self.hsl_fill_is_terminal(k)))
             {
                 let at_fill_boundary = self.balance.usd_total_balance <= 0.0;
@@ -2245,7 +2173,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         k, self.balance.usd_total_balance
                     ));
                 }
-                self.record_hsl_analysis(k, at_fill_boundary);
+                self.record_core_observation(k, at_fill_boundary)?;
                 break;
             }
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
@@ -2262,12 +2190,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             if self.equity_tracking_active {
                 self.update_equities(k);
                 if self.check_and_apply_liquidation(k) {
-                    self.record_hsl_analysis(k, false);
+                    self.record_core_observation(k, false)?;
                     break;
                 }
-                self.record_hsl_analysis(k, false);
-                self.record_total_wallet_exposure();
             }
+            self.record_core_observation(k, false)?;
         }
         if let Some(mut writer) = self.debug_writer.take() {
             writer.finish();
@@ -2278,8 +2205,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         if let Some(profile) = self.orch_profile.take() {
             profile.write_to_file();
         }
-        self.final_hard_stop_metrics = Some(self.hard_stop_metrics());
-        self.final_strategy_equity_metrics = Some(self.strategy_equity_metrics_for_analysis());
+        if self.core_request.is_some() {
+            self.finish_core_metrics()?;
+        }
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
         Ok((fills, equities))
@@ -2291,8 +2219,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.backtest_params.starting_balance.max(0.0) * threshold
     }
 
-    fn check_and_apply_liquidation(&mut self, k: usize) -> bool {
-        let Some(&equity_usd) = self.equities.usd_total_equity.last() else {
+    fn check_and_apply_liquidation(&mut self, _k: usize) -> bool {
+        let Some(equity_usd) = self
+            .last_raw_account_equity
+            .or_else(|| self.equities.usd_total_equity.last().copied())
+        else {
             return false;
         };
         let floor_usd = self.liquidation_equity_floor_usd();
@@ -2309,13 +2240,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
         self.liquidated = true;
 
-        if let Some(last_usd_equity) = self.equities.usd_total_equity.last_mut() {
-            *last_usd_equity = floor_usd.max(0.0);
-        }
-        if let Some(last_btc_equity) = self.equities.btc_total_equity.last_mut() {
-            let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
-            *last_btc_equity = floor_usd.max(0.0) / btc_price;
-        }
         true
     }
 
@@ -2767,24 +2691,20 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         &mut self,
         pside: usize,
         idx: usize,
-        k: usize,
         net_pnl: f64,
+        pre_fill_balance: f64,
     ) {
         let key = self.hsl_report_key(pside, idx);
-        // Fills precede the bar's ordinary balance revaluation. Observe
-        // current collateral here without mutating trading balances.
-        let balance = if self.balance.use_btc_collateral {
-            self.balance.btc_cash_wallet * self.btc_usd_prices[k] + self.balance.usd_cash_wallet
-        } else {
-            self.balance.usd_total_balance
-        };
-        let equity =
-            balance + self.unrealized_pnl_pside(LONG, k) + self.unrealized_pnl_pside(SHORT, k);
-        self.hsl_report.panic_fill(key, net_pnl, equity);
+        // Share the fill's raw causal balance, before any trading wallet update.
+        self.hsl_report.panic_fill(key, net_pnl, pre_fill_balance);
     }
 
     fn update_equities(&mut self, k: usize) {
         let equity_usd = self.current_usd_equity_at(k);
+        self.last_raw_account_equity = Some(equity_usd);
+        if self.core_request.is_some() {
+            return;
+        }
         let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
         let equity_btc = equity_usd / btc_price;
 
@@ -2793,38 +2713,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.equities.usd_total_equity.push(equity_usd);
         self.equities.btc_total_equity.push(equity_btc);
         self.equities.timestamps_ms.push(timestamp_ms);
-    }
-
-    fn record_total_wallet_exposure(&mut self) {
-        // For analysis time series we record the net TWE (long + short, where short is negative).
-        let limits = [
-            self.bot_params_master.long.total_wallet_exposure_limit_ratio,
-            self.bot_params_master.short.total_wallet_exposure_limit_ratio,
-        ];
-        let mut exposure = [0.0; 2];
-        let mut position_moments = [0.0; 2];
-        for (side, positions) in [&self.positions.long, &self.positions.short]
-            .iter()
-            .enumerate()
-        {
-            for (idx, position) in positions.iter().enumerate() {
-                if position.size == 0.0 {
-                    continue;
-                }
-                let e =
-                    position.size.abs() * position.price * self.exchange_params_list[idx].c_mult
-                        / self.balance.usd_total_balance;
-                let wel = self
-                    .runtime_budget(idx, side)
-                    .effective_wallet_exposure_limit_ratio;
-                exposure[side] += e;
-                position_moments[side] +=
-                    crate::exposure_rms::position_moment(e, wel, limits[side]);
-            }
-        }
-        self.total_wallet_exposures.push(exposure[0] - exposure[1]);
-        self.exposure_rms
-            .record_moments(exposure, position_moments, limits);
     }
 
     fn compute_twe_components(&self) -> (f64, f64, f64) {
@@ -3008,6 +2896,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         exec: OrderFillExecution,
     ) -> Result<(), String> {
         self.hsl_before_fill(k, idx, exec)?;
+        let core_pre_fill_balance = self.core_raw_account_balance(k, exec.at_bar_close)?;
         let current_position = self.positions.long[idx];
         let mut new_psize = round_(
             current_position.size + close_fill.qty,
@@ -3038,8 +2927,16 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
         self.pnl_cumsum_running_net_pside[LONG] += pnl + fee_paid;
-        if matches!(close_fill.order_type, OrderType::ClosePanicLong) {
-            self.record_hard_stop_panic_close_loss(LONG, idx, k, pnl + fee_paid);
+        // Forced delisting shares the panic order label but is not an HSL execution.
+        if !exec.at_bar_close
+            && matches!(close_fill.order_type, OrderType::ClosePanicLong)
+        {
+            self.record_hard_stop_panic_close_loss(
+                LONG,
+                idx,
+                pnl + fee_paid,
+                core_pre_fill_balance,
+            );
         }
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
@@ -3064,6 +2961,18 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.positions.long[idx].size = new_psize;
         }
         let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
+        self.record_core_fill(
+            k,
+            idx,
+            LONG,
+            exec,
+            current_position.size,
+            new_psize,
+            adjusted_close_qty,
+            core_pre_fill_balance,
+            pnl + fee_paid,
+        )?;
+        if self.core_request.is_none() || !self.backtest_params.metrics_only {
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3096,6 +3005,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             twe_short,
             twe_net,
         });
+        }
         self.hsl_after_fill(k, idx, LONG, exec, pnl + fee_paid)?;
         Ok(())
     }
@@ -3108,6 +3018,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         exec: OrderFillExecution,
     ) -> Result<(), String> {
         self.hsl_before_fill(k, idx, exec)?;
+        let core_pre_fill_balance = self.core_raw_account_balance(k, exec.at_bar_close)?;
         let current_position = self.positions.short[idx];
         let mut new_psize = round_(
             current_position.size + order.qty,
@@ -3137,8 +3048,16 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
         self.pnl_cumsum_running_net_pside[SHORT] += pnl + fee_paid;
-        if matches!(order.order_type, OrderType::ClosePanicShort) {
-            self.record_hard_stop_panic_close_loss(SHORT, idx, k, pnl + fee_paid);
+        // Forced delisting shares the panic order label but is not an HSL execution.
+        if !exec.at_bar_close
+            && matches!(order.order_type, OrderType::ClosePanicShort)
+        {
+            self.record_hard_stop_panic_close_loss(
+                SHORT,
+                idx,
+                pnl + fee_paid,
+                core_pre_fill_balance,
+            );
         }
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
@@ -3163,6 +3082,18 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.positions.short[idx].size = new_psize;
         }
         let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
+        self.record_core_fill(
+            k,
+            idx,
+            SHORT,
+            exec,
+            current_position.size,
+            new_psize,
+            adjusted_close_qty,
+            core_pre_fill_balance,
+            pnl + fee_paid,
+        )?;
+        if self.core_request.is_none() || !self.backtest_params.metrics_only {
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3195,6 +3126,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             twe_short,
             twe_net,
         });
+        }
         self.hsl_after_fill(k, idx, SHORT, exec, pnl + fee_paid)?;
         Ok(())
     }
@@ -3207,6 +3139,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         exec: OrderFillExecution,
     ) -> Result<(), String> {
         self.hsl_before_fill(k, idx, exec)?;
+        let core_pre_fill_balance = self.core_raw_account_balance(k, exec.at_bar_close)?;
+        let position_size_before = self.positions.long[idx].size;
         // long entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_fraction;
@@ -3238,6 +3172,18 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         self.positions.long[idx].size = new_psize;
         self.positions.long[idx].price = new_pprice;
         let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
+        self.record_core_fill(
+            k,
+            idx,
+            LONG,
+            exec,
+            position_size_before,
+            new_psize,
+            order.qty,
+            core_pre_fill_balance,
+            fee_paid,
+        )?;
+        if self.core_request.is_none() || !self.backtest_params.metrics_only {
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3270,6 +3216,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             twe_short,
             twe_net,
         });
+        }
         self.hsl_after_fill(k, idx, LONG, exec, fee_paid)?;
         Ok(())
     }
@@ -3282,6 +3229,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         exec: OrderFillExecution,
     ) -> Result<(), String> {
         self.hsl_before_fill(k, idx, exec)?;
+        let core_pre_fill_balance = self.core_raw_account_balance(k, exec.at_bar_close)?;
+        let position_size_before = self.positions.short[idx].size;
         // short entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_fraction;
@@ -3311,6 +3260,18 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         );
         self.positions.short[idx].size = new_psize;
         self.positions.short[idx].price = new_pprice;
+        self.record_core_fill(
+            k,
+            idx,
+            SHORT,
+            exec,
+            position_size_before,
+            new_psize,
+            order.qty,
+            core_pre_fill_balance,
+            fee_paid,
+        )?;
+        if self.core_request.is_none() || !self.backtest_params.metrics_only {
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3343,6 +3304,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             twe_short,
             twe_net,
         });
+        }
         self.hsl_after_fill(k, idx, SHORT, exec, fee_paid)?;
         Ok(())
     }
@@ -4397,369 +4359,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
     }
 
-    pub fn initial_entry_balance_pct(&self) -> (f64, f64) {
-        let default_long_qty_fraction = self.bot_params_master.long.entry_initial_qty_fraction;
-        let default_short_qty_fraction = self.bot_params_master.short.entry_initial_qty_fraction;
-        let (long_qty_fraction, short_qty_fraction) = self
-            .strategy_params
-            .first()
-            .map(|params| {
-                (
-                    strategy_initial_qty_fraction(&params.long),
-                    strategy_initial_qty_fraction(&params.short),
-                )
-            })
-            .unwrap_or((default_long_qty_fraction, default_short_qty_fraction));
-        let long = calc_entry_balance_pct(
-            &self.bot_params_master.long,
-            self.effective_n_positions.long,
-            long_qty_fraction,
-        );
-        let short = calc_entry_balance_pct(
-            &self.bot_params_master.short,
-            self.effective_n_positions.short,
-            short_qty_fraction,
-        );
-        (long, short)
-    }
-
-    pub fn fill_activity_metrics_for_analysis(
-        &self,
-        fills: &[Fill],
-        equities: &Equities,
-    ) -> FillActivityMetrics {
-        let long_slots = if self.bot_params_master.long.n_positions > 0
-            && self.bot_params_master.long.total_wallet_exposure_limit_ratio > 0.0
-        {
-            self.bot_params_master.long.n_positions
-        } else {
-            0
-        };
-        let short_slots = if self.bot_params_master.short.n_positions > 0
-            && self.bot_params_master.short.total_wallet_exposure_limit_ratio > 0.0
-        {
-            self.bot_params_master.short.n_positions
-        } else {
-            0
-        };
-        calc_fill_activity_metrics(fills, &equities.timestamps_ms, long_slots, short_slots)
-    }
-
-    fn strategy_equity_metrics_from_series(
-        &self,
-        strategy_equity_series: &[f64],
-        drawdown_ema_samples: Option<&[f64]>,
-        strategy_equity_timestamps_ms: Option<&[u64]>,
-    ) -> StrategyEquityMetrics {
-        let sample_count = strategy_equity_series
-            .len()
-            .min(self.equities.timestamps_ms.len());
-        if sample_count < 2 {
-            return StrategyEquityMetrics::default();
-        }
-        let timestamps_offset = self.equities.timestamps_ms.len() - sample_count;
-        let series = &strategy_equity_series[strategy_equity_series.len() - sample_count..];
-        let timestamps = &self.equities.timestamps_ms[timestamps_offset..];
-        let daily_metric_timestamps = strategy_equity_timestamps_ms
-            .map(|values| {
-                assert_eq!(
-                    values.len(),
-                    strategy_equity_series.len(),
-                    "per-side strategy-equity timestamps must align with samples"
-                );
-                &values[values.len() - sample_count..]
-            })
-            .unwrap_or(timestamps);
-        let (drawdowns, pain_index_fraction_strategy_equity, ulcer_index_fraction_strategy_equity) =
-            calc_strategy_equity_drawdowns(series);
-        let drawdown_emas = drawdown_ema_samples.map(|samples| {
-            let ema_sample_count = sample_count.min(samples.len());
-            &samples[samples.len() - ema_sample_count..]
-        });
-
-        let compute_metrics = |series: &[f64],
-                               timestamps_ms: &[u64],
-                               daily_metric_timestamps_ms: &[u64],
-                               drawdowns: &[f64],
-                               drawdown_emas: Option<&[f64]>| {
-            let equity_metrics = analyze_equity_series(series, timestamps_ms);
-            let drawdown_max_fraction = drawdowns
-                .iter()
-                .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()));
-            let daily_worst_drawdowns =
-                daily_worst_positive_drawdowns(drawdowns, daily_metric_timestamps_ms, series.len());
-            let drawdown_daily_worst_1pct_mean_fraction =
-                mean_worst_1pct_abs(&daily_worst_drawdowns);
-            let hsl_signal_ema_max_fraction = drawdown_emas
-                .map(|values| {
-                    values
-                        .iter()
-                        .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()))
-                })
-                .unwrap_or(0.0);
-            let hsl_signal_ema_worst_1pct_mean_fraction =
-                drawdown_emas.map(mean_worst_1pct_abs).unwrap_or(0.0);
-            StrategyEquityMetrics {
-                gain_multiplier_strategy_equity: equity_metrics.gain_multiplier,
-                adg_fraction_strategy_equity: equity_metrics.adg_fraction,
-                adg_rolling_hmean_fraction_strategy_equity: equity_metrics
-                    .adg_rolling_hmean_fraction,
-                adg_time_integrated_fraction_strategy_equity: equity_metrics
-                    .adg_time_integrated_fraction,
-                positive_log_return_participation_score_strategy_equity: equity_metrics
-                    .positive_log_return_participation_score,
-                mdg_fraction_strategy_equity: equity_metrics.mdg_fraction,
-                sharpe_ratio_strategy_equity: equity_metrics.sharpe_ratio,
-                sortino_ratio_strategy_equity: equity_metrics.sortino_ratio,
-                omega_ratio_strategy_equity: equity_metrics.omega_ratio,
-                expected_shortfall_1pct_fraction_strategy_equity: equity_metrics
-                    .expected_shortfall_1pct_fraction,
-                calmar_ratio_strategy_equity: equity_metrics.adg_fraction
-                    / drawdown_max_fraction.max(1e-12),
-                sterling_ratio_strategy_equity: equity_metrics.adg_fraction
-                    / drawdown_daily_worst_1pct_mean_fraction.max(1e-12),
-                drawdown_max_fraction_strategy_equity: drawdown_max_fraction,
-                hsl_signal_ema_max_fraction,
-                drawdown_daily_worst_1pct_mean_fraction_strategy_equity:
-                    drawdown_daily_worst_1pct_mean_fraction,
-                hsl_signal_ema_worst_1pct_mean_fraction,
-                ..StrategyEquityMetrics::default()
-            }
-        };
-
-        let full = compute_metrics(
-            series,
-            timestamps,
-            daily_metric_timestamps,
-            &drawdowns,
-            drawdown_emas,
-        );
-        let recovery = calc_strategy_eq_recovery_days(series, timestamps);
-        let recovery_max_days_strategy_equity = recovery.max;
-        let recovery_max_hours_strategy_equity = recovery_max_days_strategy_equity * 24.0;
-        StrategyEquityMetrics {
-            recovery_mean_days_strategy_equity: recovery.mean,
-            recovery_median_days_strategy_equity: recovery.median,
-            recovery_p95_days_strategy_equity: recovery.p95,
-            recovery_p99_days_strategy_equity: recovery.p99,
-            recovery_worst_5pct_mean_days_strategy_equity: recovery.mean_worst_5pct,
-            recovery_worst_1pct_mean_days_strategy_equity: recovery.mean_worst_1pct,
-            recovery_max_days_strategy_equity: recovery.max,
-            recovery_max_hours_strategy_equity,
-            pain_index_fraction_strategy_equity,
-            ulcer_index_fraction_strategy_equity,
-            ..full
-        }
-    }
-
-    pub fn strategy_equity_metrics_for_analysis(&self) -> StrategyEquityMetricsBundle {
-        if self.equities.timestamps_ms.is_empty() {
-            if let Some(metrics) = self.final_strategy_equity_metrics {
-                return metrics;
-            }
-        }
-        self.hsl_strategy_metrics()
-    }
-
     pub fn strategy_equity_series_for_artifacts(&self) -> &[f64] {
         &self.strategy_equity_series
     }
 
-    pub fn hard_stop_metrics(&self) -> HardStopMetrics {
-        if self.equities.timestamps_ms.is_empty() {
-            if let Some(metrics) = self.final_hard_stop_metrics {
-                return metrics;
-            }
-        }
-        let minutes = match (
-            self.equities.timestamps_ms.first(),
-            self.equities.timestamps_ms.last(),
-        ) {
-            (Some(first), Some(last)) => (last.saturating_sub(*first) as f64 / 60_000.0).max(1.0),
-            _ => 0.0,
-        };
-        self.hsl_report
-            .metrics(self.backtest_params.starting_balance, minutes)
-    }
-}
-
-fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = values.to_vec();
-    let by_magnitude = |a: &f64, b: &f64| {
-        a.abs().partial_cmp(&b.abs()).unwrap_or_else(|| {
-            if a.is_nan() && b.is_nan() {
-                Ordering::Equal
-            } else if a.is_nan() {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            }
-        })
-    };
-    let cutoff_index = std::cmp::max(1, (sorted.len() as f64 * 0.01) as usize);
-    let worst_n = std::cmp::min(cutoff_index, sorted.len());
-    let split = sorted.len() - worst_n;
-    if sorted.iter().all(|x| x.is_finite()) {
-        // Select in linear time, then sort only the tail to preserve the exact
-        // ascending summation order of the full-sort reference (including ties).
-        sorted.select_nth_unstable_by(split, by_magnitude);
-        sorted[split..].sort_by(by_magnitude);
-    } else {
-        // Preserve the existing ordering/NaN contract for exceptional inputs.
-        sorted.sort_by(by_magnitude);
-    }
-    sorted[split..].iter().map(|x| x.abs()).sum::<f64>() / worst_n as f64
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct StrategyEqRecoveryDays {
-    mean: f64,
-    median: f64,
-    p95: f64,
-    p99: f64,
-    mean_worst_5pct: f64,
-    mean_worst_1pct: f64,
-    max: f64,
-}
-
-fn calc_strategy_eq_recovery_days(series: &[f64], timestamps_ms: &[u64]) -> StrategyEqRecoveryDays {
-    if series.is_empty() || timestamps_ms.is_empty() {
-        return StrategyEqRecoveryDays::default();
-    }
-    let n = series.len().min(timestamps_ms.len());
-    if n == 0 {
-        return StrategyEqRecoveryDays::default();
-    }
-
-    let final_ts = timestamps_ms[n - 1];
-    let mut durations_ms = vec![0_u64; n];
-    let mut pending: Vec<usize> = Vec::with_capacity(n);
-    for i in 0..n {
-        let value = series[i];
-        while let Some(&idx) = pending.last() {
-            if value > series[idx] {
-                durations_ms[idx] = timestamps_ms[i].saturating_sub(timestamps_ms[idx]);
-                pending.pop();
-            } else {
-                break;
-            }
-        }
-        pending.push(i);
-    }
-    for idx in pending {
-        durations_ms[idx] = final_ts.saturating_sub(timestamps_ms[idx]);
-    }
-    summarize_recovery_durations_days(&mut durations_ms)
-}
-
-fn summarize_recovery_durations_days(durations_ms: &mut [u64]) -> StrategyEqRecoveryDays {
-    if durations_ms.is_empty() {
-        return StrategyEqRecoveryDays::default();
-    }
-    durations_ms.sort_unstable();
-    let denom = 86_400_000.0;
-    let mean =
-        durations_ms.iter().map(|x| *x as f64).sum::<f64>() / (durations_ms.len() as f64 * denom);
-    let median = percentile_sorted_u64(durations_ms, 50.0) / denom;
-    StrategyEqRecoveryDays {
-        mean,
-        median,
-        p95: percentile_sorted_u64(durations_ms, 95.0) / denom,
-        p99: percentile_sorted_u64(durations_ms, 99.0) / denom,
-        mean_worst_5pct: mean_worst_pct_sorted_u64(durations_ms, 5.0) / denom,
-        mean_worst_1pct: mean_worst_pct_sorted_u64(durations_ms, 1.0) / denom,
-        max: durations_ms.last().copied().unwrap_or(0) as f64 / denom,
-    }
-}
-
-fn percentile_sorted_u64(sorted: &[u64], percentile: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    if sorted.len() == 1 {
-        return sorted[0] as f64;
-    }
-    let pct = percentile.clamp(0.0, 100.0);
-    let rank = (pct / 100.0) * (sorted.len() - 1) as f64;
-    let lower = rank.floor() as usize;
-    let upper = rank.ceil() as usize;
-    if lower == upper {
-        sorted[lower] as f64
-    } else {
-        let weight = rank - lower as f64;
-        sorted[lower] as f64 + (sorted[upper] as f64 - sorted[lower] as f64) * weight
-    }
-}
-
-fn mean_worst_pct_sorted_u64(sorted: &[u64], pct: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let clamped = pct.clamp(0.0, 100.0);
-    let cutoff_index = ((sorted.len() as f64) * clamped / 100.0).max(1.0) as usize;
-    let worst_n = cutoff_index.min(sorted.len());
-    sorted[sorted.len() - worst_n..]
-        .iter()
-        .map(|x| *x as f64)
-        .sum::<f64>()
-        / worst_n as f64
-}
-
-/// Full-resolution drawdowns and their first/second moments. Reuse the existing
-/// traversal and allocation; zeros at equity highs count in both denominators.
-fn calc_strategy_equity_drawdowns(values: &[f64]) -> (Vec<f64>, f64, f64) {
-    let mut drawdowns = Vec::with_capacity(values.len());
-    let mut running = f64::NEG_INFINITY;
-    let mut sum = 0.0;
-    let mut squared_sum = 0.0;
-    for &v in values {
-        running = running.max(v);
-        let denom = running.abs().max(1e-12);
-        let drawdown = (running - v) / denom;
-        drawdowns.push(drawdown);
-        sum += drawdown;
-        squared_sum += drawdown * drawdown;
-    }
-    let count = values.len().max(1) as f64;
-    (drawdowns, sum / count, (squared_sum / count).sqrt())
-}
-
-fn daily_worst_positive_drawdowns(
-    drawdowns: &[f64],
-    timestamps_ms: &[u64],
-    expected_len: usize,
-) -> Vec<f64> {
-    if drawdowns.is_empty() {
-        return Vec::new();
-    }
-
-    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == expected_len;
-    let mut daily_worst = Vec::new();
-    let mut current_day = if use_timestamps {
-        (timestamps_ms[0] / 86_400_000) as usize
-    } else {
-        0
-    };
-    let mut current_worst = drawdowns[0];
-    for (i, &drawdown) in drawdowns.iter().enumerate() {
-        let day = if use_timestamps {
-            (timestamps_ms[i] / 86_400_000) as usize
-        } else {
-            i / 1440
-        };
-        if day > current_day {
-            daily_worst.push(current_worst);
-            current_day = day;
-            current_worst = drawdown;
-        } else {
-            current_worst = current_worst.max(drawdown);
-        }
-    }
-    daily_worst.push(current_worst);
-    daily_worst
 }
 
 fn unstuck_spans(bot: &BotParams) -> [f64; 3] {
@@ -4927,7 +4530,7 @@ mod tests {
         }
     }
 
-    fn ordinary_ema_fixture_params(n: usize, interval: u64) -> BacktestParams {
+    pub(super) fn ordinary_ema_fixture_params(n: usize, interval: u64) -> BacktestParams {
         BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
@@ -4949,7 +4552,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
@@ -5490,7 +5092,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
@@ -5571,7 +5172,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -5640,7 +5240,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -5746,7 +5345,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -5833,7 +5431,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -5921,7 +5518,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6018,7 +5614,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6103,7 +5698,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6200,7 +5794,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6284,350 +5877,7 @@ mod tests {
     }
 
     #[test]
-    fn worst_percentile_selection_matches_full_sort_bit_for_bit() {
-        fn reference(values: &[f64]) -> f64 {
-            if values.is_empty() {
-                return 0.0;
-            }
-            let mut sorted = values.to_vec();
-            sorted.sort_by(|a, b| {
-                a.abs().partial_cmp(&b.abs()).unwrap_or_else(|| {
-                    if a.is_nan() && b.is_nan() {
-                        Ordering::Equal
-                    } else if a.is_nan() {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    }
-                })
-            });
-            let cutoff_index = std::cmp::max(1, (sorted.len() as f64 * 0.01) as usize);
-            let worst_n = std::cmp::min(cutoff_index, sorted.len());
-            sorted[sorted.len() - worst_n..]
-                .iter()
-                .map(|x| x.abs())
-                .sum::<f64>()
-                / worst_n as f64
-        }
-
-        let mut seed = 0x123456789abcdef_u64;
-        for n in [0, 1, 2, 99, 100, 101, 199, 200, 201, 10001] {
-            let values: Vec<f64> = (0..n)
-                .map(|i| {
-                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    let magnitude = ((seed >> 32) % 1000) as f64 / 37.0;
-                    if i % 2 == 0 {
-                        magnitude
-                    } else {
-                        -magnitude
-                    }
-                })
-                .collect();
-            for data in [
-                values.clone(),
-                vec![0.0; n],
-                vec![-1.0; n],
-                values.iter().map(|v| v * 1e200).collect(),
-                values.iter().map(|v| v * 1e-200).collect(),
-            ] {
-                assert_eq!(
-                    mean_worst_1pct_abs(&data).to_bits(),
-                    reference(&data).to_bits(),
-                    "n={n}"
-                );
-                let mut reversed = data.clone();
-                reversed.reverse();
-                assert_eq!(
-                    mean_worst_1pct_abs(&reversed).to_bits(),
-                    reference(&reversed).to_bits()
-                );
-            }
-        }
-        for data in [
-            vec![f64::NAN],
-            vec![0.0, f64::NAN, -1.0],
-            vec![f64::INFINITY, -f64::INFINITY, f64::NAN],
-        ] {
-            assert_eq!(
-                mean_worst_1pct_abs(&data).to_bits(),
-                reference(&data).to_bits()
-            );
-        }
-    }
-
-    #[test]
-    fn strategy_equity_drawdowns_are_positive_severity_samples() {
-        let mut series = vec![100.0; 198];
-        series.push(1.0);
-        series.push(50.0);
-
-        let (drawdowns, _, _) = calc_strategy_equity_drawdowns(&series);
-
-        assert!(drawdowns.iter().all(|x| *x >= 0.0));
-        assert!((drawdowns[198] - 0.99).abs() < 1e-12);
-        assert!((drawdowns[199] - 0.5).abs() < 1e-12);
-        assert!((mean_worst_1pct_abs(&drawdowns) - 0.745).abs() < 1e-12);
-    }
-
-    #[test]
-    fn daily_worst_positive_drawdowns_preserve_intraday_strategy_eq_stress() {
-        let series = vec![100.0, 50.0, 110.0, 109.0];
-        let timestamps = vec![0, 3_600_000, 86_400_000, 90_000_000];
-        let (drawdowns, _, _) = calc_strategy_equity_drawdowns(&series);
-        let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
-
-        assert_eq!(daily_worst.len(), 2);
-        assert!((daily_worst[0] - 0.5).abs() < 1e-12);
-        assert!((daily_worst[1] - (1.0 / 110.0)).abs() < 1e-12);
-        assert!((mean_worst_1pct_abs(&daily_worst) - 0.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn pain_and_ulcer_indices_use_all_samples_including_equity_highs() {
-        // Same day: drawdowns are 0, 50%, 0, 25%, 0, 10%.
-        let series = [100.0, 50.0, 120.0, 90.0, 120.0, 108.0];
-        let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&series);
-        assert!((pain - 0.85 / 6.0).abs() < 1e-12);
-        assert!((ulcer - (0.3225_f64 / 6.0).sqrt()).abs() < 1e-12);
-        assert!(ulcer >= pain);
-    }
-
-    #[test]
-    fn pain_and_ulcer_indices_reward_faster_intraday_recovery() {
-        let (_, short_pain, short_ulcer) =
-            calc_strategy_equity_drawdowns(&[100.0, 90.0, 100.0, 100.0]);
-        let (_, long_pain, long_ulcer) =
-            calc_strategy_equity_drawdowns(&[100.0, 90.0, 90.0, 100.0]);
-        assert!((short_pain - 0.025).abs() < 1e-12);
-        assert!((short_ulcer - 0.05).abs() < 1e-12);
-        assert!(long_pain > short_pain);
-        assert!(long_ulcer > short_ulcer);
-    }
-
-    #[test]
-    fn pain_and_ulcer_indices_handle_empty_flat_rising_and_negative_equity() {
-        for series in [
-            vec![],
-            vec![100.0],
-            vec![100.0; 3],
-            vec![100.0, 110.0, 120.0],
-        ] {
-            let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&series);
-            assert_eq!(pain, 0.0);
-            assert_eq!(ulcer, 0.0);
-        }
-        let (_, pain, ulcer) = calc_strategy_equity_drawdowns(&[100.0, -100.0]);
-        assert_eq!(pain, 1.0);
-        assert!((ulcer - 2.0_f64.sqrt()).abs() < 1e-12);
-    }
-
-    #[test]
-    fn strategy_eq_recovery_days_measure_time_to_strictly_exceed_each_sample() {
-        let day = 86_400_000;
-        let series = vec![100.0, 90.0, 95.0, 101.0, 100.0, 102.0];
-        let timestamps: Vec<u64> = (0..series.len()).map(|i| i as u64 * day).collect();
-
-        let recovery = calc_strategy_eq_recovery_days(&series, &timestamps);
-
-        assert!((recovery.mean - (8.0 / 6.0)).abs() < 1e-12);
-        assert!((recovery.median - 1.0).abs() < 1e-12);
-        assert!((recovery.p95 - 2.75).abs() < 1e-12);
-        assert!((recovery.p99 - 2.95).abs() < 1e-12);
-        assert!((recovery.mean_worst_5pct - 3.0).abs() < 1e-12);
-        assert!((recovery.mean_worst_1pct - 3.0).abs() < 1e-12);
-        assert!((recovery.max - 3.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn strategy_eq_recovery_days_keeps_equal_equity_unresolved_until_strictly_higher() {
-        let day = 86_400_000;
-        let series = vec![100.0, 100.0, 101.0];
-        let timestamps: Vec<u64> = (0..series.len()).map(|i| i as u64 * day).collect();
-
-        let recovery = calc_strategy_eq_recovery_days(&series, &timestamps);
-
-        assert!((recovery.mean - 1.0).abs() < 1e-12);
-        assert!((recovery.median - 1.0).abs() < 1e-12);
-        assert!((recovery.max - 2.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn hard_stop_side_metrics_use_runtime_series_shared_max_and_sample_timestamps() {
-        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.short.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
-        bp_pair.long.ema_span_0_minutes = 10.0;
-        bp_pair.long.ema_span_1_minutes = 20.0;
-        bp_pair.short.ema_span_0_minutes = 10.0;
-        bp_pair.short.ema_span_1_minutes = 20.0;
-        bp_pair.long.hsl_enabled = true;
-        bp_pair.short.hsl_enabled = true;
-
-        let hs = EquityHardStopLossConfig::default();
-
-        let backtest_params = BacktestParams {
-            side_activation: crate::types::SideActivation::uniform(true),
-            minimum_coin_age_days: [0.0; 2],
-            inception_timestamps_ms: vec![],
-            starting_balance: 100.0,
-            maker_fee_fraction: 0.0,
-            taker_fee_fraction: 0.0,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![3],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_target_ratio: 0.0,
-            max_usd_debt_to_wallet_value_ratio: None,
-            metrics_only: true,
-            ew_half_life_days: None,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
-            equity_floor_fraction: 0.05,
-            market_orders_allowed: false,
-            market_order_near_touch_fraction: 0.001,
-            market_order_slippage_fraction: 0.0,
-            limit_order_fill_buffer_fraction: 0.0,
-            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        bt.equities.timestamps_ms = vec![0, 60_000, 120_000, 180_000];
-        bt.strategy_equity_series_pside[LONG] = vec![100.0, 90.0, 90.0, 90.0];
-        bt.strategy_equity_timestamps_ms_pside[LONG] = vec![0, 60_000, 120_000, 180_000];
-        bt.hsl_report.signal_emas[1] = vec![0.0, 0.10, 0.10, 0.10];
-        bt.strategy_equity_series_pside[SHORT] = vec![100.0, 90.0, 100.0, 90.0];
-        bt.strategy_equity_timestamps_ms_pside[SHORT] = vec![0, 60_000, 120_000, 180_000];
-        bt.hsl_report.signal_emas[2] = vec![0.0, 0.01, 0.005, 0.02];
-
-        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
-        assert!((strategy_metrics.long.hsl_signal_ema_max_fraction - 0.10).abs() < 1e-12);
-        assert!((strategy_metrics.short.hsl_signal_ema_max_fraction - 0.02).abs() < 1e-12);
-        assert!(
-            (strategy_metrics
-                .long
-                .hsl_signal_ema_max_fraction
-                .max(strategy_metrics.short.hsl_signal_ema_max_fraction)
-                - 0.10)
-                .abs()
-                < 1e-12
-        );
-        assert!(
-            (strategy_metrics
-                .long
-                .hsl_signal_ema_worst_1pct_mean_fraction
-                .max(
-                    strategy_metrics
-                        .short
-                        .hsl_signal_ema_worst_1pct_mean_fraction
-                )
-                - 0.10)
-                .abs()
-                < 1e-12
-        );
-
-        // Reproduce a halted-controller tail-alignment edge over 200 days.
-        // The raw stresses of 90% late on day 0 and 80% early on day 1 are
-        // separate daily worst samples with their true controller timestamps.
-        // Tail-aligning the shortened series to account timestamps merges both
-        // into one day and changes the worst-1% mean from 85% to 50%.
-        let day_ms = 86_400_000_u64;
-        let mut actual_timestamps = Vec::with_capacity(600);
-        let mut series = Vec::with_capacity(600);
-        for day in 0..200_u64 {
-            actual_timestamps.extend([day * day_ms, day * day_ms + 60_000, day * day_ms + 120_000]);
-            let peak = 100.0 + day as f64;
-            let first_drawdown = if day == 1 { 0.8 } else { 0.1 };
-            let second_drawdown = if day == 0 { 0.9 } else { 0.1 };
-            series.extend([
-                peak,
-                peak * (1.0 - first_drawdown),
-                peak * (1.0 - second_drawdown),
-            ]);
-        }
-        bt.equities.timestamps_ms = actual_timestamps.clone();
-        bt.equities.timestamps_ms.push(200 * day_ms);
-
-        let actual =
-            bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
-        let legacy_tail_aligned = bt.strategy_equity_metrics_from_series(&series, None, None);
-
-        assert!(
-            (actual.drawdown_daily_worst_1pct_mean_fraction_strategy_equity - 0.85).abs() < 1e-9
-        );
-        assert!(
-            (legacy_tail_aligned.drawdown_daily_worst_1pct_mean_fraction_strategy_equity - 0.50)
-                .abs()
-                < 1e-9
-        );
-
-        bt.backtest_params.metrics_only = false;
-        let standalone =
-            bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
-        assert_eq!(
-            standalone.adg_fraction_strategy_equity,
-            actual.adg_fraction_strategy_equity
-        );
-        assert_eq!(
-            standalone.drawdown_max_fraction_strategy_equity,
-            actual.drawdown_max_fraction_strategy_equity
-        );
-        assert_eq!(
-            standalone.recovery_max_days_strategy_equity,
-            actual.recovery_max_days_strategy_equity
-        );
-        bt.backtest_params.metrics_only = true;
-
-        // Public overall EMA tails retain simultaneous signal observations.
-        // The two largest stresses occur on different sides and different bars:
-        // tail(max(long, short)) = 0.9, but max(tail(long), tail(short)) = 0.6.
-        bt.equities.timestamps_ms = (0..200).map(|k| k * 60_000).collect();
-        bt.strategy_equity_series = vec![100.0; 200];
-        for side in [LONG, SHORT] {
-            bt.strategy_equity_series_pside[side] = vec![100.0; 200];
-            bt.strategy_equity_timestamps_ms_pside[side] = bt.equities.timestamps_ms.clone();
-        }
-        bt.hsl_report.signal_emas = [vec![0.0; 200], vec![0.0; 200], vec![0.0; 200]];
-        bt.hsl_report.signal_emas[1][0] = 1.0;
-        bt.hsl_report.signal_emas[1][1] = 0.2;
-        bt.hsl_report.signal_emas[2][2] = 0.8;
-        bt.hsl_report.signal_emas[2][3] = 0.1;
-        for k in 0..200 {
-            bt.hsl_report.signal_emas[0][k] =
-                bt.hsl_report.signal_emas[1][k].max(bt.hsl_report.signal_emas[2][k]);
-        }
-        let observed = bt.hsl_strategy_metrics();
-        assert!((observed.overall.hsl_signal_ema_worst_1pct_mean_fraction - 0.9).abs() < 1e-12);
-        assert!((observed.long.hsl_signal_ema_worst_1pct_mean_fraction - 0.6).abs() < 1e-12);
-        assert!((observed.short.hsl_signal_ema_worst_1pct_mean_fraction - 0.45).abs() < 1e-12);
-    }
-
-    #[test]
-    fn equity_floor_fraction_clamps_equity_and_stops() {
+    fn equity_floor_fraction_preserves_factual_equity_and_stops() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -6657,7 +5907,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6686,8 +5935,9 @@ mod tests {
         bt.equities.usd_total_equity.push(-10.0);
         bt.equities.btc_total_equity.push(-0.001);
         assert!(bt.check_and_apply_liquidation(0));
-        assert!((bt.equities.usd_total_equity[0] - 50.0).abs() < 1e-12);
-        assert!((bt.equities.btc_total_equity[0] - 0.0025).abs() < 1e-12);
+        assert_eq!(bt.equities.usd_total_equity[0], -10.0);
+        assert!(bt.liquidated());
+        assert_eq!(bt.equities.btc_total_equity[0], -0.001);
     }
 
     #[test]
@@ -6722,7 +5972,6 @@ mod tests {
                 metrics_only: true,
                 ew_half_life_days: None,
                 hsl_detailed_report: false,
-                skip_btc_analysis: false,
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 dynamic_wel_by_tradability: true,
                 hedge_mode: true,
@@ -6754,8 +6003,8 @@ mod tests {
 
             assert!(bt.check_and_apply_liquidation(0));
             assert!(bt.liquidated());
-            assert!((bt.equities.usd_total_equity[0] - 50.0).abs() < 1e-12);
-            assert!((bt.equities.btc_total_equity[0] - 0.0025).abs() < 1e-12);
+            assert_eq!(bt.equities.usd_total_equity[0], 100.0);
+            assert_eq!(bt.equities.btc_total_equity[0], 0.005);
         }
     }
 
@@ -6795,7 +6044,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6872,7 +6120,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -6920,90 +6167,9 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert!(fills[0].usd_total_balance < 0.0);
         assert_eq!(equities.timestamps_ms, vec![60_000, 120_000]);
-        assert_eq!(equities.usd_total_equity, vec![100.0, 5.0]);
-        assert!((equities.btc_total_equity[1] - 0.00025).abs() < 1e-12);
-    }
-
-    #[test]
-    fn liquidation_floor_sample_is_reflected_in_hsl_metrics() {
-        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.ema_span_0_minutes = 10.0;
-        bp_pair.long.ema_span_1_minutes = 20.0;
-
-        let backtest_params = BacktestParams {
-            side_activation: crate::types::SideActivation::uniform(true),
-            minimum_coin_age_days: [0.0; 2],
-            inception_timestamps_ms: vec![],
-            starting_balance: 1000.0,
-            maker_fee_fraction: 0.0,
-            taker_fee_fraction: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![1],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_target_ratio: 0.0,
-            max_usd_debt_to_wallet_value_ratio: None,
-            metrics_only: true,
-            ew_half_life_days: None,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
-            equity_floor_fraction: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_fraction: 0.001,
-            market_order_slippage_fraction: 0.0005,
-            limit_order_fill_buffer_fraction: 0.0,
-            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            candle_interval_minutes: 1,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        bt.balance.usd_total_balance = 1000.0;
-
-        bt.equities.timestamps_ms.push(0);
-        bt.equities.usd_total_equity.push(1000.0);
-        bt.equities.btc_total_equity.push(0.05);
-        bt.record_hsl_analysis(0, false);
-
-        bt.equities.timestamps_ms.push(60_000);
-        bt.equities.usd_total_equity.push(40.0);
-        bt.equities.btc_total_equity.push(0.002);
-        assert!(bt.check_and_apply_liquidation(1));
-        bt.pnl_cumsum_running_net = -960.0;
-        bt.record_hsl_analysis(1, true);
-
-        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
-        assert!((bt.equities.usd_total_equity[1] - 50.0).abs() < 1e-12);
-        assert!(
-            (strategy_metrics
-                .overall
-                .drawdown_max_fraction_strategy_equity
-                - 0.96)
-                .abs()
-                < 1e-12
-        );
+        // Two contracts closed from 100 at execution price 1 realize -198.
+        assert_eq!(equities.usd_total_equity, vec![100.0, -98.0]);
+        assert!((equities.btc_total_equity[1] + 0.0049).abs() < 1e-12);
     }
 
     #[test]
@@ -7040,7 +6206,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7126,7 +6291,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7228,7 +6392,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7350,7 +6513,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7506,7 +6668,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7615,7 +6776,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7677,16 +6837,22 @@ mod tests {
             price: 100.0,
         };
         assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(4));
-        bt.record_total_wallet_exposure();
-        let mut analysis = crate::types::Analysis::default();
-        bt.exposure_rms.apply(&mut analysis);
-        assert!((analysis.wallet_exposure_rms_ratio_long - 0.5).abs() < 1e-12);
-        assert!(
-            (analysis.position_exposure_utilization_rms_ratio_long
-                - (0.25_f64 / (1.5 * 0.75)).sqrt())
-            .abs()
-                < 1e-12
-        );
+        // The preceding assertions test runtime budgets directly. Give this
+        // independent six-candle observer fixture an explicit short warmup.
+        bt.warmup_bars = 0;
+        let metric = crate::core_metrics::Metric::PositionUtilizationLong;
+        bt.configure_core_metrics(
+            crate::core_metrics::MetricRequest::from_metrics([metric]),
+            crate::core_metrics::DEFAULT_EW_HALF_LIFE_DAYS,
+        )
+        .unwrap();
+        bt.begin_core_metrics_if_due(2).unwrap();
+        bt.record_core_observation(2, false).unwrap();
+        bt.finish_core_metrics().unwrap();
+        let value = bt.core_metrics_result().unwrap().metrics[metric.definition().name]
+            .value
+            .unwrap();
+        assert!((value - (0.25_f64 / (1.5 * 0.75)).sqrt()).abs() < 1e-12);
     }
 
     #[test]
@@ -7738,7 +6904,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
@@ -7818,7 +6983,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
@@ -7901,7 +7065,6 @@ mod tests {
             metrics_only: true,
             ew_half_life_days: None,
             hsl_detailed_report: false,
-            skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,

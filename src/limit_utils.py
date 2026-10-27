@@ -5,14 +5,11 @@ from difflib import get_close_matches
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.limits import resolve_limit_basis
-from config.metrics import (
-    ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, CURRENCY_METRIC_VARIANTS, canonical_metric_name,
-)
+from config.metrics import KNOWN_METRICS, canonical_metric_name, metric_base_name, metric_stat_key
+
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
-_KNOWN_LIMIT_METRICS = (
-    set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRICS) | set(CURRENCY_METRIC_VARIANTS)
-)
+_KNOWN_LIMIT_METRICS = KNOWN_METRICS
 
 
 def resolve_auto_limit_entries(
@@ -36,7 +33,7 @@ def resolve_auto_limit_entries(
             _validate_limit_metric(canonical_metric, raw_entry)
             weight = weights.get(canonical_metric)
             if weight is None:
-                continue
+                raise ValueError(f"limit metric {canonical_metric!r} requires an explicit penalty direction")
             entry["penalize_if"] = "less_than" if weight < 0 else "greater_than"
         resolved.append(entry)
     return resolved
@@ -135,8 +132,10 @@ def _validate_limit_metric(metric: str, raw_entry: Dict[str, Any]) -> None:
 
 
 def compute_limit_violation(check: Dict[str, Any], value: Optional[float]) -> float:
-    if value is None:
-        return 0.0
+    import math
+    from metrics_schema import MetricAggregationError
+    if value is None or isinstance(value, bool) or math.isnan(value):
+        raise MetricAggregationError("selected optimizer limit metric unavailable")
     weight = check.get("penalty_weight", 1.0)
     mode = check["mode"]
     if mode == "greater_than":
@@ -201,7 +200,7 @@ def _build_single_bound_check(
     if numeric_bound is None:
         return None
     basis = resolve_limit_basis(entry, reducer_cfg=reducer_cfg)
-    metric_key = f"{metric}_{basis.reducer}"
+    metric_key = metric_stat_key(metric, basis.reducer)
     return {
         "metric": metric,
         "metric_key": metric_key,
@@ -232,7 +231,7 @@ def _build_range_check(
     if low > high:
         low, high = high, low
     basis = resolve_limit_basis(entry, reducer_cfg=reducer_cfg)
-    metric_key = f"{metric}_{basis.reducer}"
+    metric_key = metric_stat_key(metric, basis.reducer)
     return {
         "metric": metric,
         "metric_key": metric_key,

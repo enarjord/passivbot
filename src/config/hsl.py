@@ -526,51 +526,24 @@ def _side_has_enabled_policy(config, side, markets_by_exchange):
 
 
 def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
-    """Validate only objectives/limits consuming this effective scenario's results."""
+    """Validate selected core HSL quantities against effective controller policy."""
     engine(config)
-    from .metrics import (
-        canonical_metric_name,
-        canonicalize_metric_name,
-        split_metric_stat_suffix,
-    )
+    from .metrics import reject_retired_metric
 
     for metric in metrics:
-        name = canonicalize_metric_name(metric)
-        name = name.removesuffix("_usd").removesuffix("_btc")
-        name, _ = split_metric_stat_suffix(canonical_metric_name(name))
-        if name.startswith(("hard_stop_time_in_yellow", "hard_stop_time_in_orange")):
-            raise ValueError(
-                f"{metric} is removed for HSL; choose a supported objective/limit"
+        reject_retired_metric(metric, path="optimizer metric")
+        if not metric.startswith("hsl_"):
+            continue
+        enabled = (
+            config["bot"]["portfolio"]["hsl"]["enabled"]
+            if _mode(config) == "portfolio"
+            else any(
+                _side_has_enabled_policy(config, side, markets_by_exchange)
+                for side in ("long", "short")
             )
-        signal = (
-            name.startswith("hsl_")
-            or name.startswith("hsl_signal_ema_max_fraction")
-            or name.startswith("hsl_signal_ema_worst_1pct_mean_fraction")
         )
-        side_signal = signal and name.endswith(("_long", "_short"))
-        if _mode(config) == "portfolio" and side_signal:
-            raise ValueError(
-                f"{metric} has no side controller in portfolio HSL; use the portfolio metric"
-            )
-        if side_signal and not _side_has_enabled_policy(
-            config, name.rsplit("_", 1)[1], markets_by_exchange
-        ):
-            raise ValueError(
-                f"{metric} has no enabled side controller in this HSL scenario"
-            )
-        if signal and not side_signal:
-            enabled = (
-                config["bot"]["portfolio"]["hsl"]["enabled"]
-                if _mode(config) == "portfolio"
-                else any(
-                    _side_has_enabled_policy(config, side, markets_by_exchange)
-                    for side in ("long", "short")
-                )
-            )
-            if not enabled:
-                raise ValueError(
-                    f"{metric} has no enabled controller in this HSL scenario"
-                )
+        if not enabled:
+            raise ValueError(f"{metric} has no enabled controller in this HSL scenario")
 
 
 def native_hsl_policy(policy):

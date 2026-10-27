@@ -106,7 +106,7 @@
                 "number",
                 "null"
               ],
-              "default": null,
+              "default": 180.0,
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -6912,43 +6912,11 @@
               "default": [
                 {
                   "goal": "max",
-                  "metric": "adg_fraction_strategy_equity"
-                },
-                {
-                  "goal": "max",
-                  "metric": "mdg_fraction_strategy_equity"
-                },
-                {
-                  "goal": "max",
-                  "metric": "sortino_ratio_strategy_equity"
-                },
-                {
-                  "goal": "max",
-                  "metric": "active_day_turnover_proxy_mean_ratio"
-                },
-                {
-                  "goal": "max",
-                  "metric": "sharpe_ratio_strategy_equity"
+                  "metric": "cagr_fraction_strategy_equity"
                 },
                 {
                   "goal": "min",
-                  "metric": "recovery_max_days_strategy_equity"
-                },
-                {
-                  "goal": "min",
-                  "metric": "position_held_max_days"
-                },
-                {
-                  "goal": "min",
-                  "metric": "drawdown_max_fraction_strategy_equity"
-                },
-                {
-                  "goal": "min",
-                  "metric": "loss_profit_ratio"
-                },
-                {
-                  "goal": "min",
-                  "metric": "pain_index_fraction_strategy_equity"
+                  "metric": "ulcer_index_fraction_strategy_equity"
                 }
               ],
               "x-passivbot-consumers": [

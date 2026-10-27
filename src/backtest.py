@@ -75,7 +75,6 @@ from config.risk_memory import (
     normalize_memory_ema_span_minutes,
 )
 from metrics_schema import attach_result_metrics, build_standalone_metrics
-from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
 from config.shared_bot import flatten_shared_bot_side
@@ -114,7 +113,6 @@ from utils import (
 )
 from pure_funcs import (
     ts_to_date,
-    sort_dict_keys,
     calc_hash,
     str2bool,
 )
@@ -239,7 +237,6 @@ def parse_disabled_plot_groups(value) -> set[str]:
     return disabled
 
 
-ANALYSIS_SHARED_PREFIXES = ("hsl_",)
 
 # Fallback stubs for test environments without full extension symbols
 if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
@@ -981,7 +978,7 @@ def build_backtest_payload(
     *,
     coin_indices: list[int] | None = None,
     metrics_only: bool = False,
-    skip_btc_analysis: bool = False,
+    metric_requests: Sequence[str] | None = None,
     runtime_config: dict | None = None,
     execution_settings: BacktestExecutionSettings | None = None,
     selection=None,
@@ -1019,7 +1016,17 @@ def build_backtest_payload(
         metrics_only=metrics_only,
     )
     backtest_params = dict(backtest_params)
-    backtest_params["skip_btc_analysis"] = bool(skip_btc_analysis)
+    if metric_requests is None and metrics_only:
+        from config.scoring import extract_objective_specs
+        from config.limits import normalize_limit_entries
+        metric_requests = [spec.metric for spec in extract_objective_specs(config)]
+        metric_requests.extend(entry["metric"] for entry in normalize_limit_entries(
+            config.get("optimize", {}).get("limits", [])) if entry.get("enabled", True))
+    if metric_requests is not None:
+        from config.metrics import metric_base_name, validate_core_metric_requests
+        requests = sorted({metric_base_name(name) for name in metric_requests})
+        validate_core_metric_requests(config, requests)
+        backtest_params["metric_requests"] = requests
     coins_order = backtest_params.get("coins", [])
     effective_mss = _effective_backtest_market_settings(
         runtime_config,
@@ -1300,21 +1307,10 @@ def execute_backtest(payload: BacktestPayload, config: dict):
         payload.exchange_params,
         payload.backtest_params,
     )
-    if len(backtest_result) == 5:
-        (
-            fills,
-            equities_array,
-            analysis_usd,
-            analysis_btc,
-            hard_stop_plot_data,
-        ) = backtest_result
-    elif len(backtest_result) == 4:
-        fills, equities_array, analysis_usd, analysis_btc = backtest_result
-        hard_stop_plot_data = {}
-    else:
-        raise ValueError(
-            f"run_backtest_bundle returned {len(backtest_result)} values; expected 4 or 5"
-        )
+    if len(backtest_result) != 4:
+        raise ValueError("run_backtest_bundle must return the versioned four-value core result")
+    fills, equities_array, analysis_core, hard_stop_plot_data = backtest_result
+    analysis = decode_core_analysis(analysis_core)
 
     rust_profile = {}
     if isinstance(hard_stop_plot_data, dict):
@@ -1326,20 +1322,10 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
     payload.hard_stop_plot_data.pop("_rust_profile", None)
     if payload.backtest_params.get("metrics_only", False):
-        payload.hard_stop_plot_data = {
-            key: value
-            for key, value in payload.hard_stop_plot_data.items()
-            if key == "hsl"
-        }
-        analysis = expand_analysis(
-            analysis_usd, analysis_btc, None, equities_array, config
-        )
+        payload.hard_stop_plot_data = {}
         return None, None, analysis
 
     equities_array = np.asarray(equities_array)
-    analysis = expand_analysis(
-        analysis_usd, analysis_btc, fills, equities_array, config
-    )
     if bool(analysis.get("liquidated", False)):
         final_equity_usd = (
             float(equities_array[-1, 1]) if equities_array.size else float("nan")
@@ -1355,33 +1341,6 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             ),
         )
     return fills, equities_array, analysis
-
-
-def calc_backtest_completion_fraction(equities_array, config: dict) -> float | None:
-    backtest_cfg = config.get("backtest", {}) if isinstance(config, dict) else {}
-    if not isinstance(backtest_cfg, dict):
-        return None
-    start_date = backtest_cfg.get("start_date")
-    end_date = backtest_cfg.get("end_date")
-    if start_date is None or end_date is None:
-        return None
-    equities = np.asarray(equities_array)
-    if equities.ndim != 2 or equities.shape[0] == 0 or equities.shape[1] == 0:
-        return None
-    requested_start_ts = int(date_to_ts(str(start_date)))
-    requested_end_ts = int(date_to_ts(format_end_date(str(end_date))))
-    requested_span = requested_end_ts - requested_start_ts
-    if requested_span <= 0:
-        return 1.0
-    first_equity_ts = int(equities[0, 0])
-    last_equity_ts = int(equities[-1, 0])
-    if last_equity_ts < first_equity_ts:
-        return 0.0
-    candle_interval_minutes = int(backtest_cfg.get("candle_interval_minutes", 1) or 1)
-    final_covered_ts = last_equity_ts + max(1, candle_interval_minutes) * 60_000
-    covered_end_ts = min(requested_end_ts, final_covered_ts)
-    covered_span = max(0, covered_end_ts - requested_start_ts)
-    return float(np.clip(covered_span / requested_span, 0.0, 1.0))
 
 
 def subset_backtest_payload(
@@ -1484,202 +1443,44 @@ def subset_backtest_payload(
     )
 
 
-def process_forager_fills(
-    fills,
-    coins,
-    hlcvs,
-    equities_array,
-    balance_sample_divider: int = 60,
-):
-    fdf = pd.DataFrame(
-        fills,
-        columns=[
-            "index",
-            "timestamp",
-            "coin",
-            "pnl",
-            "fee_paid",
-            "usd_total_balance",
-            "btc_cash_wallet",
-            "usd_cash_wallet",
-            "btc_price",
-            "qty",
-            "price",
-            "psize",
-            "pprice",
-            "type",
-            "liquidity",
-            "wallet_exposure",
-            "twe_long",
-            "twe_short",
-            "twe_net",
-        ],
+def build_backtest_frames(fills, equities_array):
+    """Build factual exports; display downsampling never changes saved equity."""
+    columns = [
+        "index", "timestamp", "coin", "pnl", "fee_paid", "usd_total_balance",
+        "btc_cash_wallet", "usd_cash_wallet", "btc_price", "qty", "price",
+        "psize", "pprice", "type", "liquidity", "wallet_exposure",
+        "twe_long", "twe_short", "twe_net",
+    ]
+    fdf = pd.DataFrame(fills, columns=columns)
+    fdf["timestamp"] = pd.to_datetime(fdf["timestamp"].astype(np.int64), unit="ms")
+    fdf["index"] = fdf["index"].astype(int)
+    fdf["minute"] = fdf["index"]
+    numeric = [name for name in columns if name not in {"index", "timestamp", "coin", "type", "liquidity"}]
+    fdf[numeric] = fdf[numeric].apply(pd.to_numeric, errors="raise")
+    fdf["btc_total_balance"] = np.where(
+        fdf["btc_price"] > 0.0, fdf["usd_total_balance"] / fdf["btc_price"], np.nan
     )
-    if not fdf.empty:
-        fdf["timestamp"] = pd.to_datetime(fdf["timestamp"].astype(np.int64), unit="ms")
-        fdf["index"] = fdf["index"].astype(int)
-        fdf["minute"] = fdf["index"].astype(int)
-        numeric_cols = [
-            "pnl",
-            "fee_paid",
-            "usd_total_balance",
-            "btc_cash_wallet",
-            "usd_cash_wallet",
-            "btc_price",
-            "qty",
-            "price",
-            "psize",
-            "pprice",
-            "wallet_exposure",
-            "twe_long",
-            "twe_short",
-            "twe_net",
-        ]
-        fdf[numeric_cols] = fdf[numeric_cols].apply(pd.to_numeric, errors="coerce")
-        fdf["btc_total_balance"] = np.where(
-            fdf["btc_price"] > 0.0,
-            fdf["usd_total_balance"] / fdf["btc_price"],
-            np.nan,
-        )
+    equities = np.asarray(equities_array, dtype=np.float64)
+    if equities.ndim != 2 or equities.shape[1] != 4:
+        raise ValueError("Native equity export must contain timestamp, USD, BTC and strategy equity")
+    index = pd.to_datetime(equities[:, 0].astype(np.int64), unit="ms")
+    if not index.is_unique or not index.is_monotonic_increasing:
+        raise ValueError("Native equity clocks must be unique and increasing")
+    frame = pd.DataFrame(
+        equities[:, 1:], index=index,
+        columns=["usd_total_equity", "btc_total_equity", "strategy_equity"],
+    )
+    cash_columns = ["usd_cash_wallet", "usd_total_balance", "btc_cash_wallet", "btc_total_balance"]
+    if fdf.empty:
+        for name in cash_columns:
+            frame[name] = np.nan
     else:
-        fdf["minute"] = pd.Series(dtype=int)
-        fdf["btc_total_balance"] = pd.Series(dtype=float)
-    analysis_appendix = {}
-
-    pnls = {}
-    for pside in ["long", "short"]:
-        fdfc = fdf[fdf.type.str.contains(pside)]
-        profit = fdfc[fdfc.pnl > 0.0].pnl.sum()
-        loss = fdfc[fdfc.pnl < 0.0].pnl.sum()
-        if len(fdfc) == 0:
-            pnls[pside] = 0.0
-            analysis_appendix[f"loss_profit_ratio_{pside}"] = 1.0
-            continue
-        pnls[pside] = profit + loss
-        analysis_appendix[f"loss_profit_ratio_{pside}"] = (
-            abs(loss / profit) if profit != 0.0 else 1.0
-        )
-    pnl_sum = pnls["long"] + pnls["short"]
-    analysis_appendix["long_pnl_to_total_pnl_ratio"] = (
-        pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
-    )
-    sample_divider = max(1, int(balance_sample_divider))
-    if not fdf.empty:
-        timestamps_ns = fdf["timestamp"].astype("int64")
-        bucket = (timestamps_ns // (sample_divider * 60_000 * 1_000_000)) * (
-            sample_divider * 60_000 * 1_000_000
-        )
-        usd_cash_series = (
-            fdf.groupby(bucket)["usd_cash_wallet"].last().rename("usd_cash_wallet")
-        )
-        usd_total_balance_series = (
-            fdf.groupby(bucket)["usd_total_balance"].last().rename("usd_total_balance")
-        )
-        btc_cash_series = (
-            fdf.groupby(bucket)["btc_cash_wallet"].last().rename("btc_cash_wallet")
-        )
-        btc_total_balance_series = (
-            fdf.groupby(bucket)["btc_total_balance"].last().rename("btc_total_balance")
-        )
-        # convert to datetime index for easier alignment
-        usd_cash_series.index = pd.to_datetime(usd_cash_series.index, unit="ns")
-        usd_total_balance_series.index = pd.to_datetime(
-            usd_total_balance_series.index, unit="ns"
-        )
-        btc_cash_series.index = pd.to_datetime(btc_cash_series.index, unit="ns")
-        btc_total_balance_series.index = pd.to_datetime(
-            btc_total_balance_series.index, unit="ns"
-        )
-    else:
-        empty_dtidx = pd.DatetimeIndex([])
-        usd_cash_series = pd.Series(
-            dtype=float, name="usd_cash_wallet", index=empty_dtidx
-        )
-        usd_total_balance_series = pd.Series(
-            dtype=float, name="usd_total_balance", index=empty_dtidx
-        )
-        btc_cash_series = pd.Series(
-            dtype=float, name="btc_cash_wallet", index=empty_dtidx
-        )
-        btc_total_balance_series = pd.Series(
-            dtype=float, name="btc_total_balance", index=empty_dtidx
-        )
-    equities_array = np.asarray(equities_array)
-    equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
-    edf = pd.Series(
-        equities_array[:, 1],
-        index=equities_index,
-        name="usd_total_equity",
-    )
-    ebdf = pd.Series(
-        equities_array[:, 2],
-        index=equities_index,
-        name="btc_total_equity",
-    )
-    if equities_array.shape[1] > 3:
-        strategy_eq_series = pd.Series(
-            equities_array[:, 3],
-            index=equities_index,
-            name="strategy_equity",
-        )
-    else:
-        strategy_eq_series = pd.Series(
-            dtype=float, name="strategy_equity", index=equities_index
-        )
-    bal_eq = pd.concat(
-        [
-            usd_cash_series,
-            usd_total_balance_series,
-            edf,
-            strategy_eq_series,
-            btc_cash_series,
-            btc_total_balance_series,
-            ebdf,
-        ],
-        axis=1,
-        join="outer",
-    )
-    if bal_eq.empty:
-        bal_eq = pd.DataFrame(
-            columns=[
-                "usd_cash_wallet",
-                "usd_total_balance",
-                "usd_total_equity",
-                "strategy_equity",
-                "btc_cash_wallet",
-                "btc_total_balance",
-                "btc_total_equity",
-            ]
-        )
-    else:
-        bal_eq = bal_eq.sort_index()
-        bal_eq = bal_eq[~bal_eq.index.duplicated(keep="first")]
-        bal_eq = (
-            bal_eq.reindex(
-                columns=[
-                    "usd_cash_wallet",
-                    "usd_total_balance",
-                    "usd_total_equity",
-                    "strategy_equity",
-                    "btc_cash_wallet",
-                    "btc_total_balance",
-                    "btc_total_equity",
-                ]
-            )
-            .ffill()
-            .bfill()
-        )
-        if sample_divider > 1 and not bal_eq.empty:
-            if isinstance(bal_eq.index, pd.DatetimeIndex):
-                try:
-                    bal_eq = bal_eq.resample(f"{sample_divider}min").last()
-                except ValueError:
-                    bal_eq = bal_eq.iloc[::sample_divider]
-            else:
-                bal_eq = bal_eq.iloc[::sample_divider]
-            bal_eq = bal_eq.dropna(how="all").ffill().bfill()
-    bal_eq = bal_eq.round(4).astype(np.float32)
-    return fdf, sort_dict_keys(analysis_appendix), bal_eq
+        # Carry only observed fill balances forward, never a future fill backwards.
+        cash = fdf.set_index("timestamp")[cash_columns]
+        cash = cash.loc[~cash.index.duplicated(keep="last")].sort_index()
+        cash = cash.reindex(cash.index.union(index)).ffill().reindex(index)
+        frame = frame.join(cash)
+    return fdf, frame
 
 
 def compare_dicts(dict1, dict2, path=""):
@@ -2752,15 +2553,13 @@ def prep_backtest_args(
     metrics_only: bool = False,
 ):
     from config.hsl import engine
-    from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
+    from config.ew import validate_ew_half_life_days
     from config.policy import effective_minimum_cost_filters
     from config.universe import always_include_matches, approval_allows_coin, require_side_universe_sources
 
     ew_half_life_days = validate_ew_half_life_days(
         config.get("backtest", {}).get("ew_half_life_days")
     )
-    if ew_half_life_days is not None:
-        validate_ew_candle_interval(config.get("backtest", {}).get("candle_interval_minutes", 1))
     engine(config)
 
     if not is_runtime_compiled:
@@ -2945,7 +2744,6 @@ def prep_backtest_args(
             "hsl_detailed_report": require_config_value(
                 config, "backtest.hsl_detailed_report"
             ),
-            "skip_btc_analysis": False,
             "side_activation": activation,
             "minimum_coin_age_days": age_days,
             "inception_timestamps_ms": inception_facts,
@@ -2977,117 +2775,51 @@ def prep_backtest_args(
     return bot_params_list, strategy_params_list, exchange_params, backtest_params
 
 
-def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
-    analysis_usd = dict(analysis_usd)
-    analysis_btc = dict(analysis_btc)
-    ew_metadata = {}
-    for analysis in (analysis_usd, analysis_btc):
-        metadata = analysis.pop("_ew_metadata", None)
-        if metadata is not None:
-            if not isinstance(metadata, dict):
-                raise ValueError("Rust EW metadata must be a mapping")
-            ew_metadata.update(metadata)
-    keys = ["adg_fraction", "mdg_fraction", "gain_multiplier"]
-    for pside in ["long", "short"]:
-        twel = float(
-            flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
-                "total_wallet_exposure_limit_ratio", 0.0
-            )
-            or 0.0
-        )
-        for key in keys:
-            if key in analysis_usd:
-                analysis_usd[f"{key}_per_twel_ratio_{pside}"] = (
-                    (analysis_usd[key] / twel if twel > 0.0 else 0.0)
-                    if analysis_usd[key] is not None
-                    else None
-                )
-            if key in analysis_btc:
-                analysis_btc[f"{key}_per_twel_ratio_{pside}"] = (
-                    (analysis_btc[key] / twel if twel > 0.0 else 0.0)
-                    if analysis_btc[key] is not None
-                    else None
-                )
+def decode_core_analysis(analysis):
+    """Validate native transport and attach display dates from its actual clocks."""
+    from collections.abc import Mapping
+    from config.metrics import CORE_METRIC_DEFINITION_VERSION, KNOWN_METRICS
 
-    result = {}
-    if ew_metadata:
-        result["ew_metadata"] = ew_metadata
-
-    def _scalar_values_match(usd_val, btc_val) -> bool:
-        if usd_val is None or btc_val is None:
-            return False
-        if isinstance(usd_val, numbers.Integral) and isinstance(
-            btc_val, numbers.Integral
-        ):
-            return usd_val == btc_val
-        if isinstance(usd_val, bool) and isinstance(btc_val, bool):
-            return usd_val == btc_val
-        try:
-            return bool(np.isclose(usd_val, btc_val, equal_nan=True))
-        except Exception:
-            return usd_val == btc_val
-
-    def _is_shared_key(key: str, usd_val, btc_val) -> bool:
-        if key in ANALYSIS_SHARED_KEYS:
-            return True
-        if key.startswith(ANALYSIS_SHARED_PREFIXES):
-            return True
-        if isinstance(usd_val, (bool, numbers.Integral)) and isinstance(
-            btc_val, (bool, numbers.Integral)
-        ):
-            return usd_val == btc_val
-        return False
-
-    for key in sorted(set(analysis_usd) | set(analysis_btc)):
-        usd_val = analysis_usd.get(key)
-        btc_val = analysis_btc.get(key)
-        if not _is_shared_key(key, usd_val, btc_val):
-            continue
-        if usd_val is not None:
-            result[key] = usd_val
-            if btc_val is not None and not _scalar_values_match(usd_val, btc_val):
-                logging.debug(
-                    "shared metric %s differs across denominations: usd=%s btc=%s",
-                    key,
-                    usd_val,
-                    btc_val,
-                )
-        elif btc_val is not None:
-            result[key] = btc_val
-        analysis_usd.pop(key, None)
-        analysis_btc.pop(key, None)
-
-    from config.metrics import metric_with_curve
-
-    def _add_metrics(metrics: dict, suffix: str):
-        for key, value in metrics.items():
-            normalized_key = metric_with_curve(key, suffix)
-            result[normalized_key] = value
-
-    _add_metrics(analysis_usd, "usd")
-    _add_metrics(analysis_btc, "btc")
-    completion_ratio = calc_backtest_completion_fraction(equities_array, config)
-    if completion_ratio is not None:
-        result["backtest_completion_fraction"] = completion_ratio
-
-    # Dates use the authoritative equity clocks and stay outside numeric aggregation.
-    timestamps = (
-        np.asarray(equities_array) if equities_array is not None else np.empty((0, 1))
-    )
-    result["effective_start_date"] = (
-        datetime.fromtimestamp(int(timestamps[0, 0]) / 1000, timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-        if len(timestamps)
-        else None
-    )
-    result["effective_end_date"] = (
-        datetime.fromtimestamp(int(timestamps[-1, 0]) / 1000, timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-        if len(timestamps)
-        else None
-    )
+    if not isinstance(analysis, Mapping):
+        raise ValueError("Rust core analysis must be a mapping")
+    result = dict(analysis)
+    metadata = result.get("metric_metadata")
+    if (not isinstance(metadata, Mapping)
+            or isinstance(metadata.get("definition_version"), bool)
+            or metadata.get("definition_version") != CORE_METRIC_DEFINITION_VERSION):
+        raise ValueError("Rust core metric definition mismatch; rebuild and re-evaluate")
+    tail_censored = metadata.get("peak_recovery_tail_censored")
+    if tail_censored is not None and not isinstance(tail_censored, bool):
+        raise ValueError("Rust recovery-tail censoring metadata must be boolean or null")
+    statuses = result.get("metric_status", {})
+    if not isinstance(statuses, Mapping):
+        raise ValueError("Rust metric_status must be a mapping")
+    support_keys = {"metric_metadata", "metric_status", "liquidated"}
+    unknown = set(result) - KNOWN_METRICS - support_keys
+    if unknown:
+        raise ValueError(f"Unknown native core analysis fields: {sorted(unknown)}")
+    if set(statuses) - (set(result) & KNOWN_METRICS):
+        raise ValueError("Rust metric statuses refer to absent or unknown quantities")
+    for name in set(result) & KNOWN_METRICS:
+        value = result[name]
+        if value is None:
+            status = statuses.get(name)
+            if not isinstance(status, Mapping) or status.get("status") not in {
+                "positive_infinity", "negative_infinity", "undefined", "invalid"
+            }:
+                raise ValueError(f"Rust core metric {name!r} has no explicit unavailable/infinite status")
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"Rust core metric {name!r} has an invalid finite value")
+        elif name in statuses:
+            raise ValueError(f"Rust core metric {name!r} has conflicting value and status")
+    if not isinstance(result.get("liquidated"), bool):
+        raise ValueError("Rust core analysis must declare liquidation status")
+    for clock, field in (("start_timestamp_ms", "effective_start_date"),
+                         ("actual_end_timestamp_ms", "effective_end_date")):
+        timestamp = metadata.get(clock)
+        if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp < 0:
+            raise ValueError(f"Rust core metadata has an invalid {clock}")
+        result[field] = datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
     return result
 
 
@@ -3193,8 +2925,6 @@ def post_process(
     from hsl_reporting import hsl_report
 
     hsl_report = hsl_report(plot_context.hard_stop_plot_data if plot_context else None)
-    if hsl_report is None:
-        raise ValueError("hsl backtest results require their native HSL report")
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
     equities_array = np.asarray(equities_array)
@@ -3206,16 +2936,7 @@ def post_process(
     except (TypeError, ValueError):
         balance_sample_divider = 60
     balance_sample_divider = max(1, balance_sample_divider)
-    fdf, analysis_py, bal_eq = process_forager_fills(
-        fills,
-        require_config_value(config, f"backtest.coins.{exchange}"),
-        hlcvs,
-        equities_array,
-        balance_sample_divider=balance_sample_divider,
-    )
-    for k in analysis_py:
-        if k not in analysis:
-            analysis[k] = analysis_py[k]
+    fdf, bal_eq = build_backtest_frames(fills, equities_array)
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     label_prefix = f"[{label}] " if label else ""
     logging.info("%s%s", label_prefix, pprint.pformat(analysis))
@@ -3225,7 +2946,7 @@ def post_process(
         else oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(
-        analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True
+        analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True, allow_nan=False
     )
     if hsl_report is not None:
         with open(f"{results_path}hsl_report.json", "w", encoding="utf-8") as output:
@@ -3257,9 +2978,12 @@ def post_process(
     dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
+    plot_bal_eq = bal_eq
+    if balance_sample_divider > 1 and not bal_eq.empty:
+        plot_bal_eq = bal_eq.resample(f"{balance_sample_divider}min").last()
     if "balance" not in disabled_plot_groups:
         balance_figs = create_forager_balance_figures(
-            bal_eq,
+            plot_bal_eq,
             include_logy=True,
             autoplot=False,
             return_figures=True,
@@ -3271,15 +2995,15 @@ def post_process(
     if "pnl" not in disabled_plot_groups:
         pnl_figs = create_forager_pnl_figure(
             fdf,
-            bal_eq,
+            plot_bal_eq,
             balance_sample_divider=balance_sample_divider,
             autoplot=False,
             return_figures=True,
         )
         save_figures(pnl_figs, results_path)
-    if "hard_stop" not in disabled_plot_groups:
+    if "hard_stop" not in disabled_plot_groups and hsl_report is not None:
         hard_stop_figs = create_forager_hard_stop_drawdown_figure(
-            bal_eq,
+            plot_bal_eq,
             config,
             hard_stop_plot_data=(
                 plot_context.hard_stop_plot_data if plot_context else None

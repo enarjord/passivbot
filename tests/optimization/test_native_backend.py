@@ -49,8 +49,8 @@ def inputs(manager, *, n_obj=2):
         }
         for side in ("long", "short")
     }
-    metrics = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day", "active_day_turnover_proxy_mean_ratio"]
-    config["optimize"]["scoring"] = [dict(metric=name, goal="max") for name in metrics[:n_obj]]
+    metrics = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity", "sharpe_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
+    config["optimize"]["scoring"] = [dict(metric=name, goal="min" if name == "ulcer_index_fraction_strategy_equity" else "max") for name in metrics[:n_obj]]
     config["optimize"]["limits"] = [dict(metric="drawdown_max_fraction_strategy_equity", penalize_if="greater_than", value=0.2)]
     config["optimize"]["gpu"].update(batch_size=1, checkpoint_interval_seconds=0)
     coins = deepcopy(config["backtest"]["coins"])
@@ -78,7 +78,8 @@ class FakeService(GpuBacktestService):
                 raise self.failure
             self.rows.extend(deepcopy(candidates))
             return [ReplayResult(metrics={name: 0.1 + row["long_entry_initial_qty_fraction"]
-                                         for name in dataset.metrics}, liquidated=False)
+                                         for name in dataset.metrics}, liquidated=False,
+                                 metadata={"metric_status": {}, "metric_metadata": {"definition_version": 1}})
                     for row in candidates]
         super().register_dataset(dataset_id, SimpleNamespace(evaluate=evaluate))
 
@@ -201,7 +202,11 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         assert state["phase"] == "idle" and state["population"] is None
         assert state["completed"] == len(records)
         assert state["algorithm"].pop.get("F").shape == (4, n_obj)
-        assert state["algorithm"].pop.get("G").shape == (4, int(constrained))
+        # Selected metric availability constrains every search, including a
+        # configuration without numeric limits.
+        constraints = state["algorithm"].pop.get("G")
+        assert constraints.shape == (4, 1)
+        assert np.all(constraints <= 0)
         done = len(FakeService.rows)
         execute(base, recorder, checkpoint, resume=True)
         assert len(FakeService.rows) == done and len(records) == 8

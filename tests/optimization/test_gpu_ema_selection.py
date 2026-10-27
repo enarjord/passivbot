@@ -19,27 +19,22 @@ def test_native_ema_current_ranking_matches_cpu(mode, sides):
     for side in ("long", "short"):
         active = sides in (side, "both")
         inputs[0]["bot"][side]["risk"].update(
-            n_positions=1 if active else 0,
+            max_positions=1 if active else 0,
             total_wallet_exposure_limit_ratio=2 if active else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
-            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        inputs[0]["bot"]["hsl"].update(
-            drawdown_threshold_fraction=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+        inputs[0]["bot"]["portfolio"]["hsl"].update(
+            drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
-    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
-               "hsl_triggers_per_year", "hsl_restarts_per_year", "hsl_red_time_fraction")
+    metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
+               "hsl_triggers_per_year", "hsl_triggers_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
-    if mode == "disabled" and sides == "long":
-        # Original and corrected kernels give identical assessed metrics here:
-        # 8.88e-7 ADG error, identical fills and no HSL events. Accept this bounded
-        # fixture discrepancy without widening the parity tool's default gates.
-        policies["adg_fraction_strategy_equity"] = MetricTolerance(1e-6, 1e-4)
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     if mode != "disabled":
         assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0

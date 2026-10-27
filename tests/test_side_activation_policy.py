@@ -4,6 +4,7 @@ from copy import deepcopy
 from itertools import product
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config.activation import side_activation, side_enabled, validate_side_activation
 from config.load import prepare_config
@@ -273,7 +274,7 @@ def test_released_v8_materializes_true_both_and_preserves_zero_capacity_search(k
     from config.migrations.released_v8 import get_released_v8_defaults
     from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
 
-    raw = get_released_v8_defaults(strategy_kind=kind)
+    raw = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     raw["bot"].pop("short")
     raw["optimize"]["bounds"]["short"]["risk"]["n_positions"] = [1, 3]
     raw["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0.0, 1.5]

@@ -91,58 +91,56 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
     used = set()
     ew_requested = False
     replacement_paths = set()
+    outer_reducers = {}
+
+    def keep_outer_reducer(node, path, reducer):
+        from config.reducers import reducer_from_aliases, LIMIT_REDUCER_ALIASES
+        existing, present = reducer_from_aliases(node, path=path, aliases=LIMIT_REDUCER_ALIASES)
+        if present and existing != reducer:
+            raise ValueError(f"{path}: released metric outer reducer {reducer!r} conflicts with authored reducer {existing!r}; choose explicitly")
+        node["reducer"] = reducer
+        changes.append(dict(path=f"{path}.reducer", old=existing if present else None,
+                            new=reducer, reason="preserve released metric outer statistic in the reducer field"))
 
     def convert(name, path):
+        from config.metrics import canonicalize_metric_name, reject_retired_metric, metric_base_name, KNOWN_METRICS
         from config.ew import is_ew_metric
-        from config.metrics import canonicalize_metric_name
-        from .released_v8_metrics import (
-            released_v8_metric_name, released_v8_ew_replacement, released_v8_ordinary_fallback,
-        )
-
+        from .released_v8_metrics import released_v8_metric_name, RELEASED_V8_METRIC_NAMES, RELEASED_V8_STAT_SUFFIXES
         nonlocal ew_requested
-        name = name.strip() if isinstance(name, str) else name
-        if not _is_retired_metric(name):
-            new = released_v8_metric_name(name)
-            if new != name:
-                changes.append(dict(path=path, old=name, new=new,
-                                    reason="released-v8 metric naming; value and formula unchanged"))
-            return new
-        inferred = name not in replacements and best_effort
-        ordinary_fallback = None
-        if inferred:
-            if name.startswith("strategy_eq_underwater_pct_") and name != "strategy_eq_underwater_pct_mean":
-                raise ValueError(f"{path}: no inferred replacement for {name!r}; supply --metric-replacement explicitly")
-            candidate = ("pain_index_fraction_strategy_equity" if name == "strategy_eq_underwater_pct_mean"
-                         else released_v8_ew_replacement(name))
-            if candidate is None:
-                ordinary_fallback = released_v8_ordinary_fallback(name)
-                if ordinary_fallback is None:
-                    raise ValueError(f"{path}: no supported _ew replacement or known ordinary fallback for {name!r}; supply --metric-replacement explicitly")
-                candidate = ordinary_fallback[0]
-        elif name not in replacements:
-            raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW and an explicit formula choice")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{path}: metric selector must be a nonempty string")
+        name = name.strip()
+        if name not in RELEASED_V8_METRIC_NAMES:
+            for stat in RELEASED_V8_STAT_SUFFIXES:
+                marker = "_" + stat
+                if name.endswith(marker) and (name[:-len(marker)] in RELEASED_V8_METRIC_NAMES or _is_retired_metric(name[:-len(marker)])):
+                    outer_reducers[path] = stat
+                    break
+        explicit = name in replacements
+        if explicit:
+            new = replacements[name]
+            used.add(name)
+        else:
+            try:
+                new = released_v8_metric_name(name)
+            except ValueError:
+                new = None
+            if new is None or metric_base_name(new) not in KNOWN_METRICS:
+                raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW; the compact core has no automatic formula conversion")
+        if not explicit and new is not None:
+            new = metric_base_name(new)
+        reject_retired_metric(new, path=path)
         if not acknowledge and not best_effort:
-            raise ValueError(f"{path}: metric formula replacement requires --acknowledge-metric-formula-change")
-        new = candidate if inferred else replacements[name]
-        if not isinstance(new, str) or not new or _is_retired_metric(new):
-            raise ValueError(f"replacement for {name!r} must name a supported non-retired metric")
+            raise ValueError(f"{path}: core definition version 1 requires --acknowledge-metric-formula-change and re-evaluation of thresholds/results")
         new = canonicalize_metric_name(new)
-        used.add(name)
         replacement_paths.add(path)
         ew_requested |= is_ew_metric(new)
-        if inferred or (best_effort and not acknowledge):
+        reason = "core definition version 1 metric formula boundary; re-evaluate objectives, limits and stored fitness"
+        if best_effort and not acknowledge:
             from .best_effort_v9 import record_guess
-
-            record_guess(changes, path, name, new,
-                         (f"use full-window ordinary {ordinary_fallback[1]}; drop the retired equal average of full-history and up to nine shorter suffix estimators; recency weighting changes and formulas are not equivalent; re-evaluate objectives and limits"
-                          if ordinary_fallback is not None else
-                          "adopt minute-sampled Pain Index; daily-worst underwater mean is not equivalent"
-                          if inferred and candidate == "pain_index_fraction_strategy_equity" else
-                          "adopt exponential recency formula; retired _w formula is not equivalent"
-                          if inferred else "accept explicit replacement formula under best-effort consent"))
+            record_guess(changes, path, name, new, reason)
         else:
-            changes.append(dict(path=path, old=name, new=new,
-                                reason="acknowledged explicit metric formula replacement"))
+            changes.append(dict(path=path, old=name, new=new, reason=reason))
         return new
 
     def visit(node, path=""):
@@ -154,7 +152,15 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             for index, value in enumerate(node):
                 current = f"{path}[{index}]"
                 if isinstance(value, str) and path.split(".")[-1] == "scoring":
-                    converted.append(convert(value, current))
+                    selected = convert(value, current)
+                    if current in outer_reducers:
+                        from config.scoring import default_objective_goal
+                        goal = default_objective_goal(selected)
+                        if goal is None:
+                            raise ValueError(f"{current}: use an explicit scoring object with a goal for {selected!r}")
+                        converted.append({"metric": selected, "goal": goal, "reducer": outer_reducers[current]})
+                    else:
+                        converted.append(selected)
                 else:
                     visit(value, current)
                     converted.append(value)
@@ -194,8 +200,25 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                 changes.append(dict(path=current, old=node.pop(key), new=None,
                                     reason="removed terminal-only metric visibility setting; backtests display their complete analysis"))
                 continue
-            if key == "metric" and not released_aggregate:
+            if str(key).split(".")[-1] == "limits" and isinstance(node[key], dict):
+                from config.limits import _legacy_limits_dict_to_entries
+                original_limits = deepcopy(node[key])
+                converted_limits = []
+                for limit_name, bound in original_limits.items():
+                    prefix = next((part for part in ("penalize_if_greater_than_", "penalize_if_lower_than_", "lower_bound_", "upper_bound_") if limit_name.startswith(part)), "")
+                    limit_path = f"{current}.{limit_name}"
+                    selected = convert(limit_name.removeprefix(prefix), limit_path)
+                    entry = _legacy_limits_dict_to_entries({prefix + selected: bound})[0]
+                    if limit_path in outer_reducers:
+                        keep_outer_reducer(entry, limit_path, outer_reducers[limit_path])
+                    converted_limits.append(entry)
+                node[key] = converted_limits
+                changes.append(dict(path=current, old=original_limits, new=deepcopy(converted_limits),
+                                    reason="preserve released limit direction and outer reducer in explicit entries"))
+            elif key == "metric" and not released_aggregate:
                 node[key] = convert(node[key], current)
+                if current in outer_reducers:
+                    keep_outer_reducer(node, path, outer_reducers[current])
             elif metric_map and key != "default":
                 prefix = "" if released_aggregate else next((
                     prefix for prefix in ("penalize_if_greater_than_", "penalize_if_lower_than_",
@@ -212,6 +235,8 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                         # Only this vocabulary probe permits their passthrough.
                         continue
                 renamed = prefix + convert(metric, current)
+                if current in outer_reducers and node[key] != outer_reducers[current]:
+                    raise ValueError(f"{current}: released metric outer reducer conflicts with its reducer mapping; choose explicitly")
                 if renamed != key:
                     value = node.pop(key)
                     if renamed in node and node[renamed] != value:
@@ -225,9 +250,10 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
         backtest = source.setdefault("backtest", {})
         if ew_requested and backtest.get("ew_half_life_days") is None:
-            record_guess(changes, "backtest.ew_half_life_days", None, 180.0,
-                         "enable inferred _ew analysis with a 180-day half-life; re-evaluate objectives and limits")
-            backtest["ew_half_life_days"] = 180.0
+            from config.metrics import DEFAULT_EW_HALF_LIFE_DAYS
+            record_guess(changes, "backtest.ew_half_life_days", None, DEFAULT_EW_HALF_LIFE_DAYS,
+                         "resolve the native default CAGR EW half-life; re-evaluate objectives and limits")
+            backtest["ew_half_life_days"] = DEFAULT_EW_HALF_LIFE_DAYS
     unused = set(replacements) - used
     if unused:
         raise ValueError(f"unused metric replacements: {', '.join(sorted(unused))}")

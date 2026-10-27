@@ -105,9 +105,6 @@ def test_bootstrap_count_device_bytes_are_included_in_admission(sides, coins):
     pytest.importorskip("torch")
     from optimization.gpu.mps_kernel import _MulticoinReplayRunner
     runner = SimpleNamespace(_hsl_history_bytes_per_candidate=lambda: 0,
-        _temporal_replay_enabled=lambda: False, raw_strategy_risk_enabled=False,
-        raw_strategy_growth_enabled=False, recovery_distribution_enabled=False,
-        _hsl_ema_tail_samples_enabled=lambda: False, _exact_entry_intervals_enabled=lambda: False,
-        replay_sides=sides, n_coins=coins)
+        _temporal_replay_enabled=lambda: False, replay_sides=sides, n_coins=coins)
     # Every candidate also uploads one int32 end-step word.
     assert _MulticoinReplayRunner._history_bytes_per_candidate(runner) == 4 + 40 * sides * coins

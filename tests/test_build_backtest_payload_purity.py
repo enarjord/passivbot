@@ -527,26 +527,14 @@ def test_build_backtest_payload_propagates_metrics_only_flag():
     assert payload.backtest_params["metrics_only"] is True
 
 
-def test_build_backtest_payload_propagates_skip_btc_analysis_hint():
+def test_build_backtest_payload_rejects_removed_denomination_hint():
     start_ts = 1609459200000
-    n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     mss = _base_mss(start_ts)
-    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
-
-    payload = build_backtest_payload(
-        hlcvs,
-        mss,
-        config,
-        "binance",
-        btc,
-        timestamps,
-        metrics_only=True,
-        skip_btc_analysis=True,
-    )
-
-    assert payload.backtest_params["metrics_only"] is True
-    assert payload.backtest_params["skip_btc_analysis"] is True
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(60, start_ts)
+    with pytest.raises(TypeError, match="skip_btc_analysis"):
+        build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps,
+                               metrics_only=True, skip_btc_analysis=True)
 
 
 def test_hlcvs_valid_window_rejects_nonfinite_price_inside_valid_window():

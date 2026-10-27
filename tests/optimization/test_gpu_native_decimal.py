@@ -59,7 +59,7 @@ def test_native_decimal_boundaries_match_rust_without_cpu_substitution(
     expected_size = abs(sum(float(fill[9]) for fill in fills))
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
-        needed_metrics={"adg_fraction_strategy_equity"}, factual_hsl=True)
+        needed_metrics={"cagr_fraction_strategy_equity"}, factual_hsl=True)
     runner = proxy.runners[side]
     assert runner.organillo_enabled is eligibility
     assert len(runner.organillo_buffers) == (2 if eligibility else 0)

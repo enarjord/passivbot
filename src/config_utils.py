@@ -42,7 +42,6 @@ from config.limits import (
     parse_limits_string,
 )
 from config.log_output import log_config_message
-from config.metrics import CURRENCY_METRICS, SHARED_METRICS
 from config.risk_memory import (
     normalize_memory_ema_span_minutes,
     normalize_risk_bootstrap_max_lookback_minutes,
@@ -1470,7 +1469,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "CSV",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer scoring metrics, for example daily_realized_pnl_mean_fraction,loss_profit_ratio.",
+        "help": "Optimizer scoring metrics, for example cagr_fraction_strategy_equity,ulcer_index_fraction_strategy_equity.",
     },
     "optimize.objective_scenario": {
         "visible": ["--objective-scenario"],
@@ -1734,8 +1733,12 @@ CLI_HELP_OVERRIDES = {
         "coin_sources, and overrides."
     ),
     "backtest.balance_sample_divider": (
-        "Minutes per saved balance/equity sample. 1 keeps per-minute series; "
-        "higher values thin balance_and_equity.csv.gz and related plots."
+        "Plot-only minutes per balance/equity sample. Higher values thin plots; "
+        "balance_and_equity.csv.gz retains full-precision values at every native observation."
+    ),
+    "backtest.ew_half_life_days": (
+        "CAGR EW half-life in positive finite days. Default 180; null resolves to "
+        "the native default. One value applies across the campaign; scenario overrides are rejected."
     ),
     "backtest.btc_collateral_target_ratio": (
         "Target BTC collateral value divided by total wallet value (USD cash "
@@ -2309,7 +2312,7 @@ def add_arguments_recursively(
                 type_ = comma_separated_values_float
             if "limits" in full_name:
                 type_ = str
-                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_max_fraction 0.3333"'
+                appendix = 'Example: [{"metric":"loss_profit_ratio","penalize_if":">","value":0.5}]'
             elif any(
                 [
                     x in full_name
@@ -2320,7 +2323,7 @@ def add_arguments_recursively(
                 appendix = "item1,item2,item3,..."
             elif "scoring" in full_name:
                 type_ = comma_separated_values
-                appendix = "Examples: adg_fraction,sharpe_ratio; mdg_fraction,sortino_ratio; ..."
+                appendix = "Examples: cagr_fraction_strategy_equity,ulcer_index_fraction_strategy_equity; sharpe_ratio_strategy_equity,omega_ratio_strategy_equity"
             elif full_name in {
                 "optimize.gpu.batch_size",
                 "optimize.gpu.max_dispatch_candidate_bars",

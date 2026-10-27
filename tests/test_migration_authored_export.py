@@ -5,6 +5,7 @@ import json
 
 import jsonschema
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.json_schema import generate_schema
@@ -19,7 +20,7 @@ def test_released_migration_exports_policy_without_internal_source_context(
     tmp_path, strategy_kind, interface
 ):
     # Start from frozen public-v8 defaults, with one declared local coin pin.
-    source = get_released_v8_defaults(strategy_kind=strategy_kind)
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=strategy_kind))
     source_dir = tmp_path / "inputs"
     source_dir.mkdir()
     coin_path = source_dir / "coin.json"

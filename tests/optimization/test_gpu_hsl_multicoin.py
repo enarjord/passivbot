@@ -90,7 +90,7 @@ def make_proxy(
         timestamps=timestamps,
         exchange="binance",
         batch_size=3,
-        needed_metrics={"adg_fraction_usd"},
+        needed_metrics={"cagr_fraction_strategy_equity"},
         prepared_data_cache=prepared_data_cache,
         interrupt_check=interrupt_check,
         factual_hsl=factual_hsl,
@@ -112,7 +112,7 @@ def test_multicoin_hsl_service_dispatch(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides)
     rows = proxy.evaluate([{}])
     assert len(rows) == 1
-    assert np.isfinite(rows[0]["adg_fraction_usd"])
+    assert np.isfinite(rows[0]["cagr_fraction_strategy_equity"])
     runners = (
         [proxy.fused_runner] if proxy.fused_runner else list(proxy.runners.values())
     )
@@ -186,7 +186,7 @@ def test_multicoin_temporal_replay_and_scratch_batches(mode):
     runner, actual = raw(chunks, candidates)
     compare(expected, actual)
     assert float(actual["fill_count"].sum()) > 0
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
+    runner.hsl_scratch_budget_bytes = runner._history_batch_bytes(2)
     _, split = raw(chunks, candidates, profile=True)
     compare(actual, split)
     assert runner.last_profile["candidate_batch_count"] == 2
@@ -212,7 +212,7 @@ def test_multicoin_candidates_do_not_share_history(strategy, mode):
         {k: v.flip(0) if isinstance(v, torch.Tensor) else v for k, v in first.items()},
         reordered,
     )
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate()
+    runner.hsl_scratch_budget_bytes = runner._history_batch_bytes(1)
     _, split = raw(p, candidates)
     compare(first, split)
 
@@ -265,7 +265,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     p = make_proxy("coin", strategy, sides=sides, chunk=chunk)
     candidates = [{}, {}, {}]
     runner, _ = raw(p, candidates)
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
+    runner.hsl_scratch_budget_bytes = runner._history_batch_bytes(2)
     ends = np.array([runner.n, runner.n // 2, runner.n // 4], dtype=np.int32)
     runner, _ = raw(p, candidates, end_steps=ends, profile=True)
     steps = int((np.clip(ends, 1, runner.n - 1) - 1).sum())

@@ -5,6 +5,7 @@ from pathlib import Path
 import runpy
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 
 # This vocabulary is stdlib-only: these regressions can run before a native
@@ -117,12 +118,7 @@ def test_full_v8_flat_bounds_and_dotted_fixed_selector_migrate_without_mutation(
     from config.migrations.released_v8 import get_released_v8_defaults
     from tools.migrate_config_v9 import migrate
 
-    config = get_released_v8_defaults(strategy_kind=kind)
-    config["optimize"]["scoring"] = [
-        row for row in config["optimize"]["scoring"]
-        if not row["metric"].endswith("_w")
-        and not row["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    config = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     config["optimize"]["bounds"] = {"long_entry_double_down_factor": [1.125, 2.375]}
     config["optimize"]["fixed_params"] = ["bot.long.entry_double_down_factor"]
     config["backtest"]["scenarios"] = [{"label": "fractional", "overrides": {
@@ -147,12 +143,7 @@ def test_full_v8_flat_bounds_and_dotted_fixed_selector_migrate_without_mutation(
 def _released_flat_bound_source(kind, missing_spans=("ema_span_0", "ema_span_1")):
     from config.migrations.released_v8 import get_released_v8_defaults
 
-    config = get_released_v8_defaults(strategy_kind=kind)
-    config["optimize"]["scoring"] = [
-        row for row in config["optimize"]["scoring"]
-        if not row["metric"].endswith("_w")
-        and not row["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    config = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     for side in ("long", "short"):
         for span in missing_spans:
             config["bot"][side]["unstuck"].pop(span)

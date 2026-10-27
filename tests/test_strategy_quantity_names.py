@@ -5,6 +5,7 @@ import json
 
 import passivbot_rust as pbr
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import get_template_config, prepare_config
 from config.authoring import compact_config, resolved_config
@@ -102,8 +103,7 @@ def test_new_strategy_quantities_roundtrip_with_unchanged_native_values(kind, ol
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_v8_strategy_quantities_keep_sources_bounds_files_and_final_targets(tmp_path, kind):
-    config = get_released_v8_defaults(strategy_kind=kind)
-    config["optimize"]["scoring"] = [m for m in config["optimize"]["scoring"] if not m["metric"].endswith("_w") and not m["metric"].startswith("strategy_eq_underwater_pct_")]
+    config = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     fields = [row for row in FIELDS if row[0] == kind]
     file_patch = {"bot": {"long": {"strategy": {kind: {}}}}}
     selectors = []

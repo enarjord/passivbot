@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -14,9 +15,7 @@ from optimization.warmup import _apply_config_overrides
 
 
 def released(kind):
-    c=get_released_v8_defaults(strategy_kind=kind)
-    c['optimize']['scoring']=[x for x in c['optimize']['scoring']
-        if not x['metric'].endswith('_w') and not x['metric'].startswith('strategy_eq_underwater_pct_')]
+    c = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     return c
 
 

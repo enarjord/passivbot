@@ -222,7 +222,6 @@ def source_kernel():
 def test_disabled_hsl_specialization_requires_explicit_shader_guard(source_kernel):
     """Only guarded multicoin sources may opt into the compact HSL state."""
     _with_hsl_disabled = source_kernel._with_hsl_disabled
-    _with_hsl_features = source_kernel._with_hsl_features
 
     guarded = (
         "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED\n"
@@ -232,15 +231,6 @@ def test_disabled_hsl_specialization_requires_explicit_shader_guard(source_kerne
     compact = _with_hsl_disabled(guarded, True)
     assert compact == ("#define PASSIVBOT_HSL_DISABLED 1\n" + guarded)
     assert "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0" not in compact
-    assert (
-        _with_hsl_features(
-            compact,
-            ema_tail_enabled=False,
-            raw_drawdown_enabled=False,
-            raw_tail_enabled=False,
-        )
-        == compact
-    )
     with pytest.raises(RuntimeError, match="disabled-HSL feature guard"):
         _with_hsl_disabled("kernel void unguarded() {}", True)
 
@@ -379,7 +369,7 @@ def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
             runner.max_dispatch_candidate_bars = 2 * 31
     candidates = [{}, {f"{side}_total_wallet_exposure_limit_ratio": 0.5 for side in replay.sides}, {}]
     expected = [replay.evaluate([candidate])[0] for candidate in candidates]
-    assert expected[0]["fills_per_day"] > 0
+    assert expected[0]["gross_turnover_ratio_per_day"] > 0
     with GpuBacktestService(batch_size=2, max_pending=3) as service:
         service.register_dataset("one-coin", replay)
         for repeat in range(2):
@@ -786,8 +776,8 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": "base"},
-        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max", "scenario": "base"},
+        {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
     ]
     config["optimize"]["limits"] = [
         {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
@@ -879,8 +869,8 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     }
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config["optimize"]["scoring"] = [
-        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
-        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+        {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
     scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}
@@ -1104,10 +1094,8 @@ def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, 
                 "settings",
             )
         },
-        btc_prices_enabled=False,
-        equity_balance_diff_enabled=False,
-        entry_interval_enabled=False,
-        recovery_distribution_enabled=False,
+        core_metric_mask=0,
+        organillo_buffers=(),
         max_dispatch_candidate_bars=None,
         hsl_capacity=0,
     )))
@@ -1118,15 +1106,14 @@ def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, 
     kernel.max_threads_per_threadgroup = 1024
     kernel.thread_execution_width = 32
     library = SimpleNamespace(**{runner.replay_kernel_name: kernel})
-    buffers = [object() for _ in range(12)]
+    buffers = [object() for _ in range(7)]
     buffers[2] = torch.tensor([batch_size, 10, 2, 1, 0, 0, 0, 0], dtype=torch.int32)
     buffers[3] = torch.full((batch_size,), 9, dtype=torch.int32)
     runner._dispatch(
-        library, *buffers,
-        hsl_ema_tail_samples=None, batch_size=batch_size
+        library, *buffers, batch_size=batch_size
     )
     assert len(calls) == 1
-    assert len(calls[0][0]) == 18 + int(fused)
+    assert len(calls[0][0]) == 17 + int(fused)
     expected = {"threads": (batch_size, 1, 1)}
     if device == "cuda" and not fused:
         expected["group_size"] = (32, 1, 1)

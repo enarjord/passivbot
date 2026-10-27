@@ -179,11 +179,11 @@ def test_seed_43_coin_hsl_fixture_matches_private_replay(
         candles[1500:, 0, :3] *= 0.7
         candles[1800:, 1, :3] *= 1.3
     metrics = {
-        "adg_fraction_strategy_equity",
+        "cagr_fraction_strategy_equity",
         "drawdown_max_fraction_strategy_equity",
-        "fills_per_day",
+        "gross_turnover_ratio_per_day",
         "hsl_triggers_per_year",
-        "hsl_restarts_per_year",
+        "hsl_triggers_per_year",
         "hsl_red_time_fraction",
     }
     proxy = SharedAccountReplay(

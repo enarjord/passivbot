@@ -5,6 +5,7 @@ import json
 
 import passivbot_rust as pbr
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import get_template_config, prepare_config
 from config.authoring import compact_config, resolved_config
@@ -108,8 +109,7 @@ def test_strategy_log_range_roundtrips_preserve_native_ids_and_values(kind, nati
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_released_strategy_log_ranges_convert_root_bounds_files_and_reports(tmp_path, kind):
-    config = get_released_v8_defaults(strategy_kind=kind)
-    config["optimize"]["scoring"] = [m for m in config["optimize"]["scoring"] if not m["metric"].endswith("_w") and not m["metric"].startswith("strategy_eq_underwater_pct_")]
+    config = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     fields = [row for row in FIELDS if row[0] == kind]
     patch = {"bot": {"long": {"strategy": {kind: {}}}}}
     selectors = []
@@ -200,8 +200,7 @@ def test_trusted_shared_matching_native_weights_remain_detached():
 
 @pytest.mark.parametrize("layout", ["flattened", "nested"])
 def test_released_forager_log_range_preserves_bounds_selectors_scenarios_and_final_reports(layout):
-    config = get_released_v8_defaults()
-    config["optimize"]["scoring"] = [m for m in config["optimize"]["scoring"] if not m["metric"].endswith("_w") and not m["metric"].startswith("strategy_eq_underwater_pct_")]
+    config = without_metric_selection(get_released_v8_defaults())
     weights = {"volume": 0.2, "ema_readiness": 0.3, "volatility": 0.4, "unilateralness": 0.1}
     config["bot"]["long"]["forager"].update(score_weights=weights, volatility_ema_span_1m=37.375)
     bounds = config["optimize"]["bounds"]["long"]["forager"]

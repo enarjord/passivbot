@@ -25,7 +25,7 @@ DISPATCH_BUDGET = 500_000_000
 # Identical float32 replay summaries can differ in the last float64 reduction
 # bits across batch shapes. This does not admit a float32 ULP of replay drift.
 MAX_FLOAT64_REDUCTION_ULPS = 8
-DEFAULT_OBJECTIVES = {"adg_fraction_strategy_equity": "max", "drawdown_max_fraction_strategy_equity": "min"}
+DEFAULT_OBJECTIVES = {"cagr_fraction_strategy_equity": "max", "ulcer_index_fraction_strategy_equity": "min"}
 
 
 def build_parser():
@@ -42,13 +42,13 @@ def build_parser():
     parser.add_argument("--hsl", choices=("disabled", "coin", "position_side", "portfolio"), default="disabled")
     gpu_parity.add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true")
-    parser.add_argument("--adg-floor", type=float)
+    parser.add_argument("--cagr-floor", type=float)
     parser.add_argument("--drawdown-ceiling", type=float)
     parser.add_argument("--metrics", nargs="+", default=[],
-                        help="Additional GPU metrics; ADG, drawdown and fills/day remain included")
+                        help="Additional GPU metrics; CAGR, drawdown and turnover/day remain included")
     parser.add_argument("--objective", dest="objectives", action="append", nargs=2, default=[],
                         metavar=("METRIC", "DIRECTION"),
-                        help="Repeat to replace the default ADG/max, drawdown/min ranking; DIRECTION is min or max")
+                        help="Repeat to replace the default CAGR/max, Ulcer/min ranking; DIRECTION is min or max")
     parser.add_argument("--tolerances", help="JSON per-metric comparison policies, as in gpu-parity")
     parser.add_argument("--limit", dest="limits", action="append", nargs=3, default=[],
                         metavar=("METRIC", "MODE", "VALUE"),
@@ -87,7 +87,7 @@ def validate_args(parser, args):
     args.seeds = list(dict.fromkeys(args.seeds))
     if len(args.seeds) > 8:
         parser.error("at most eight fixture seeds are allowed")
-    for value in (args.adg_floor, args.drawdown_ceiling):
+    for value in (args.cagr_floor, args.drawdown_ceiling):
         if value is not None and not math.isfinite(value):
             parser.error("diagnostic limit values must be finite")
 
@@ -172,9 +172,9 @@ def _ranking(cpu, gpu, objectives=None):
                   cpu_front=cpu_front, gpu_front=gpu_front, front_members_match=cpu_front == gpu_front,
                   pair_order_disagreements=flips, pairs=len(cpu) * (len(cpu) - 1) // 2,
                   gpu_best_candidates=best, cpu_regret_at_gpu_best=regret)
-    if objectives.get("adg_fraction_strategy_equity") == "max":
-        result.update(gpu_max_adg_candidate=best["adg_fraction_strategy_equity"],
-                      cpu_adg_regret_of_gpu_max=regret["adg_fraction_strategy_equity"])
+    if objectives.get("cagr_fraction_strategy_equity") == "max":
+        result.update(gpu_max_cagr_candidate=best["cagr_fraction_strategy_equity"],
+                      cpu_cagr_regret_of_gpu_max=regret["cagr_fraction_strategy_equity"])
     return result
 
 
@@ -182,11 +182,11 @@ def _checks(args):
     from limit_utils import expand_limit_checks
 
     entries = list(args.limits)
-    for metric, mode, bound in (("adg_fraction_strategy_equity", "less_than", args.adg_floor),
+    for metric, mode, bound in (("cagr_fraction_strategy_equity", "less_than", args.cagr_floor),
                                 ("drawdown_max_fraction_strategy_equity", "greater_than", args.drawdown_ceiling)):
         if bound is not None:
             entries.append(dict(metric=metric, penalize_if=mode, value=bound))
-    return expand_limit_checks(entries, {"adg_fraction_strategy_equity": -1.0, "drawdown_max_fraction_strategy_equity": 1.0},
+    return expand_limit_checks(entries, {"cagr_fraction_strategy_equity": -1.0, "drawdown_max_fraction_strategy_equity": 1.0},
                                penalty_weight=1.0)
 
 
@@ -269,6 +269,22 @@ def _metric_rounding(reference, observed):
     return rounding
 
 
+def _decoded_metrics(metrics, names, metadata=None):
+    """Decode extended-real statuses without substituting unavailable values."""
+    from metrics_schema import decode_metric_value, MetricAggregationError
+
+    payload = dict(metrics)
+    payload.update(metadata or {})
+    result = {}
+    for name in names:
+        try:
+            result[name] = decode_metric_value(payload, name)
+        except MetricAggregationError:
+            # Diagnostic comparison reports the missing value as incomplete.
+            pass
+    return result
+
+
 def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
     import numpy as np
     from optimization.gpu.executor import BacktestRequest
@@ -299,8 +315,14 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
                 observed = time.perf_counter()
                 if row.request_id != request_id or row.dataset_id != "cohort":
                     raise RuntimeError("native result identity differs from submitted request")
-                differences_allowed = _metric_rounding(reference[index].metrics, row.metrics)
-                if differences_allowed is None or row.liquidated != reference[index].liquidated:
+                expected = reference[index]
+                expected_values = _decoded_metrics(expected.metrics, expected.metrics, expected.metadata)
+                actual_values = _decoded_metrics(row.metrics, row.metrics, row.metadata)
+                differences_allowed = _metric_rounding(expected_values, actual_values)
+                statuses_match = ((expected.metadata or {}).get("metric_status", {})
+                                  == (row.metadata or {}).get("metric_status", {}))
+                if (differences_allowed is None or not statuses_match
+                        or row.liquidated != expected.liquidated):
                     expected = reference[index]
                     names = sorted(set(expected.metrics) | set(row.metrics))
                     differences = [(name, expected.metrics.get(name), row.metrics.get(name))
@@ -341,7 +363,6 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
 
 def _measure(torch, args, strategy, seed):
     from backtest import build_backtest_payload, execute_backtest
-    from config.metrics import resolve_metric_value, split_metric_curve
     from optimization.gpu.service import SharedAccountReplay
 
     inputs, configs, parameters = _cohort(args, strategy, seed)
@@ -353,10 +374,9 @@ def _measure(torch, args, strategy, seed):
         for candidate in configs:
             payload = build_backtest_payload(candles, markets, candidate, "binance", btc, timestamps,
                                              metrics_only=True,
-                                             skip_btc_analysis=not any(split_metric_curve(name)[1] == "btc" for name in args.metrics))
+                                             metric_requests=list(args.metrics))
             _, _, analysis = execute_backtest(payload, candidate)
-            rows.append({name: value for name in args.metrics
-                         if (value := resolve_metric_value(analysis, name)) is not None})
+            rows.append(_decoded_metrics(analysis, args.metrics))
         cpu_samples.append(time.perf_counter() - started)
         cpu = rows
     started = time.perf_counter()
@@ -379,7 +399,7 @@ def _measure(torch, args, strategy, seed):
     with gpu_parity._native_dataset(inputs, "binance", args.metrics) as dataset:
         native = [_native_runs(torch, dataset, parameters, reference, width, args.warm_runs)
                   for width in args.widths]
-    gpu = [dict(row.metrics) for row in reference]
+    gpu = [_decoded_metrics(row.metrics, args.metrics, row.metadata) for row in reference]
     policies = {name: args.policies.get(name) for name in args.metrics}
     comparisons = [compare_metrics(left, right, policies)
                    for left, right in zip(cpu, gpu, strict=True)]
@@ -392,7 +412,7 @@ def _measure(torch, args, strategy, seed):
                 direct_gpu_prepare_seconds=prepare_seconds,
                 direct_gpu=_timing_summary(direct_samples, len(parameters)), native=native,
                 cpu_gpu_comparisons=comparisons, ranking=_ranking(cpu, gpu, args.objectives),
-                diagnostic_limits=dict(adg_floor=args.adg_floor, drawdown_ceiling=args.drawdown_ceiling,
+                diagnostic_limits=dict(cagr_floor=args.cagr_floor, drawdown_ceiling=args.drawdown_ceiling,
                                        limits=args.limits, comparisons=limits))
 
 

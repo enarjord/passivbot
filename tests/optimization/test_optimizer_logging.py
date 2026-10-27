@@ -7,7 +7,7 @@ from pareto_store import ParetoStore
 def entry(index):
     return {
         "bot": {"long": {"param": index}, "short": {}},
-        "metrics": {"objectives": {"metric1": index, "metric2": 101 - index},
+        "metrics": {"definition_version": 1, "objectives": {"pain_index_fraction_strategy_equity": index, "ulcer_index_fraction_strategy_equity": 101 - index},
                     "constraint_violation": 0.0},
     }
 
@@ -17,7 +17,7 @@ def test_pareto_reports_every_accepted_member_without_throttling_persistence(tmp
     now = [0.0]
     monkeypatch.setattr("pareto_store.time.monotonic", lambda: now[0])
     store = ParetoStore(str(tmp_path))
-    store.scoring_keys = ["metric1", "metric2"]
+    store.scoring_keys = ["pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
     for index in range(100):
         assert store.add_entry(entry(index))
     assert len(caplog.records) == 200
@@ -25,7 +25,7 @@ def test_pareto_reports_every_accepted_member_without_throttling_persistence(tmp
     assert len(list((tmp_path / "pareto").glob("*.json"))) == 100
     assert len(store.get_front()) == 100
     assert "eval=100 front=100 feasible=100 changes=+1/-0" in caplog.text
-    assert "metric1=[0,99] metric2=[2*,101]" in caplog.records[-1].getMessage()
+    assert "pain_index_fraction_strategy_equity=[0,99] ulcer_index_fraction_strategy_equity=[2*,101]" in caplog.records[-1].getMessage()
     assert all(len(record.getMessage()) <= 240 for record in caplog.records)
     store.flush_now()
     assert len(caplog.records) == 200
@@ -35,7 +35,7 @@ def test_pareto_flush_is_quiet_and_debug_keeps_detail(tmp_path, monkeypatch, cap
     caplog.set_level(logging.DEBUG)
     monkeypatch.setattr("pareto_store.time.monotonic", lambda: 0.0)
     store = ParetoStore(str(tmp_path))
-    store.scoring_keys = ["metric1", "metric2"]
+    store.scoring_keys = ["pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
     store.add_entry(entry(0))
     store.add_entry(entry(1))
     duplicate = entry(1)
@@ -47,7 +47,7 @@ def test_pareto_flush_is_quiet_and_debug_keeps_detail(tmp_path, monkeypatch, cap
     debug = [record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG]
     assert len(info) == 4
     assert "eval=2 front=2" in info[-2]
-    assert any("metric1:" in message for message in debug)
+    assert any("pain_index_fraction_strategy_equity:" in message for message in debug)
     assert any("Dropping candidate" in message for message in debug)
 
 
@@ -84,7 +84,7 @@ def test_resumed_pareto_summaries_exclude_reconstructed_history(tmp_path, caplog
     caplog.clear()
     options = dict(
         results_dir=str(tmp_path), sig_digits=6, flush_interval=60,
-        scoring_keys=["metric1", "metric2"], compress=False, write_all_results=False,
+        scoring_keys=["pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"], compress=False, write_all_results=False,
     )
     original = ResultRecorder(**options)
     for index in range(5):
@@ -117,23 +117,23 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     from config.scoring import ObjectiveSpec
 
     caplog.set_level(logging.INFO)
-    specs = [ObjectiveSpec("adg_fraction_strategy_equity", "max"), ObjectiveSpec("sharpe_ratio_strategy_equity", "max")]
+    specs = [ObjectiveSpec("cagr_fraction_strategy_equity", "max"), ObjectiveSpec("sharpe_ratio_strategy_equity", "max")]
     specs += [ObjectiveSpec(name, "min") for name in (
-        "pain_index_fraction_strategy_equity", "recovery_max_days_strategy_equity",
-        "drawdown_max_fraction_strategy_equity", "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
+        "pain_index_fraction_strategy_equity", "peak_recovery_max_days_strategy_equity",
+        "drawdown_max_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity",
         "position_held_time_weighted_mean_hours",
     )]
     def candidate(index, values, violation=0):
         result = entry(index)
         result["optimize"] = {"scoring": [spec.to_config() for spec in specs]}
-        result["metrics"] = {"objectives": dict(zip((s.metric for s in specs), values)),
+        result["metrics"] = {"definition_version": 1, "objectives": dict(zip((s.metric for s in specs), values)),
                              "constraint_violation": violation}
         return result
     store = ParetoStore(str(tmp_path))
     assert store.add_entry(candidate(0, [1, 4, 1, 1, 1, 1, 1]))
     caplog.clear()
     assert store.add_entry(candidate(1, [3, 2, 2, 2, 2, 2, 2]))
-    assert "adg_fraction_strategy_equity=[1,3*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[1,3*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
     for spec in specs[2:]:
         assert f"{spec.metric}=[1,2]" in caplog.text
     assert "+5 metrics" not in caplog.text
@@ -149,14 +149,14 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     assert resumed.progress_snapshot()["pareto_added"] == 0
     assert resumed.progress_snapshot()["last_pareto_age"] == "unknown"
     assert resumed.add_entry(candidate(3, [4, 2, 2, 2, 2, 2, 2]))
-    assert "adg_fraction_strategy_equity=[1,4*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[1,4*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
     assert "changes=+1/-1" in caplog.text
 
 
 def test_pareto_labels_infeasible_then_feasible_front(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     store = ParetoStore(str(tmp_path))
-    store.scoring_keys = ["metric1", "metric2"]
+    store.scoring_keys = ["pain_index_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
     first = entry(0)
     first["metrics"]["constraint_violation"] = 1
     assert store.add_entry(first)
@@ -164,7 +164,7 @@ def test_pareto_labels_infeasible_then_feasible_front(tmp_path, caplog):
     caplog.clear()
     assert store.add_entry(entry(1))
     assert "best_scope=feasible_front" in caplog.text
-    assert "metric1=[1*,1] metric2=[100*,100]" in caplog.text
+    assert "pain_index_fraction_strategy_equity=[1*,1] ulcer_index_fraction_strategy_equity=[100*,100]" in caplog.text
 
 
 def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
@@ -174,32 +174,32 @@ def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
     def candidate(index, gain_multiplier, drawdown, underwater):
         result = entry(index)
         result["optimize"] = {"scoring": [
-            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
             {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             {"metric": "pain_index_fraction_strategy_equity", "goal": "min"},
         ]}
         result["metrics"]["objectives"] = {
-            "adg_fraction_strategy_equity": gain_multiplier, "drawdown_max_fraction_strategy_equity": drawdown,
+            "cagr_fraction_strategy_equity": gain_multiplier, "drawdown_max_fraction_strategy_equity": drawdown,
             "pain_index_fraction_strategy_equity": underwater,
         }
         return result
 
     assert store.add_entry(candidate(0, 1, 2, 1))
-    assert "adg_fraction_strategy_equity=[1,1*]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[1,1*]" in caplog.text
     assert "drawdown_max_fraction_strategy_equity=[2*,2]" in caplog.text
     caplog.clear()
     assert store.add_entry(candidate(1, 2, 3, 3))
-    assert "adg_fraction_strategy_equity=[1,2*]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[1,2*]" in caplog.text
     assert "drawdown_max_fraction_strategy_equity=[2,3]" in caplog.text
     caplog.clear()
     assert store.add_entry(candidate(2, .5, 1, 4))
-    assert "adg_fraction_strategy_equity=[0.5,2]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[0.5,2]" in caplog.text
     assert "drawdown_max_fraction_strategy_equity=[1*,3]" in caplog.text
     caplog.clear()
     # This point widens the worse drawdown endpoint but improves no best.
     assert store.add_entry(candidate(3, 1.5, 4, 2))
     assert "quality=unchanged_tradeoff" in caplog.text
-    assert "adg_fraction_strategy_equity=[0.5,2]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[0.5,2]" in caplog.text
     assert "drawdown_max_fraction_strategy_equity=[1,4]" in caplog.text
     assert "pain_index_fraction_strategy_equity=[1,4]" in caplog.text
     assert not any("*" in record.getMessage() for record in caplog.records)
@@ -210,7 +210,7 @@ def test_pareto_range_scope_excludes_infeasible_outliers(tmp_path, caplog):
 
     caplog.set_level(logging.INFO)
     store = ParetoStore(str(tmp_path))
-    store.scoring_specs = [ObjectiveSpec("adg_fraction_strategy_equity", "max"),
+    store.scoring_specs = [ObjectiveSpec("cagr_fraction_strategy_equity", "max"),
                            ObjectiveSpec("drawdown_max_fraction_strategy_equity", "min")]
     store.scoring_keys = [spec.metric for spec in store.scoring_specs]
     # Exercise scope selection directly with infeasible outliers at both ends.
@@ -219,7 +219,7 @@ def test_pareto_range_scope_excludes_infeasible_outliers(tmp_path, caplog):
     store._violations = {"first": 0, "second": 0, "infeasible": 1}
     store._log_front_state(added=1, removed=0)
     assert "best_scope=feasible_front" in caplog.text
-    assert "adg_fraction_strategy_equity=[2,3*]" in caplog.text
+    assert "cagr_fraction_strategy_equity=[2,3*]" in caplog.text
     assert "drawdown_max_fraction_strategy_equity=[2*,3]" in caplog.text
     assert "999" not in caplog.text
     assert "[-1" not in caplog.text
@@ -302,5 +302,5 @@ def test_pareto_rejects_retired_weighted_objective_without_substitution(tmp_path
     candidate = entry(0)
     candidate["optimize"] = {"scoring": [{"metric": "adg_strategy_eq_w", "goal": "max"}]}
     candidate["metrics"]["objectives"] = {"adg_strategy_eq_w": 1.0}
-    with pytest.raises(ValueError, match="legacy weighted metric.*retired"):
+    with pytest.raises(ValueError, match="retired core metric"):
         ParetoStore(str(tmp_path)).add_entry(candidate)

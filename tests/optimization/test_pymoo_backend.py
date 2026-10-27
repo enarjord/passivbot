@@ -14,7 +14,7 @@ from tools.pareto_dash import load_pareto_dataframe
 def _checkpoint_config():
     from optimization.evaluation_contract import CONTRACT_CACHE_KEY, CONTRACT_VERSION
     return {"backtest": {}, "bot": {}, "optimize": {"objective_scenario": None}, CONTRACT_CACHE_KEY: {
-        "version": CONTRACT_VERSION, "implementation": {"test": "source-bound-fixture"},
+        "version": CONTRACT_VERSION, "core_metric_definition_version": 1, "implementation": {"test": "source-bound-fixture"},
     }}
 
 
@@ -77,14 +77,18 @@ class FakeEvaluator:
     def evaluate(self, vector, overrides_list):
         x0 = float(vector[0])
         x1 = float(vector[1])
-        objectives = [-x0]
-        if len(self.config["optimize"]["scoring"]) > 1:
-            objectives.append(x1)
+        from config.scoring import extract_objective_specs, to_engine_value
+        objectives = [to_engine_value(spec, value) for spec, value in zip(
+            extract_objective_specs(self.config), [x0, x1]
+        )]
         return (
             tuple(objectives),
             0.0,
             {
-                "objectives": {f"w_{idx}": value for idx, value in enumerate(objectives)},
+                "definition_version": 1,
+                "objectives": {
+                    name: value for name, value in zip(self.config["optimize"]["scoring"], [x0, x1])
+                },
                 "constraint_violation": 0.0,
             },
         )
@@ -451,7 +455,7 @@ def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
 
 def test_run_backend_records_entries(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
     recorder = FakeRecorder()
 
     result = pymoo_backend.run_backend(
@@ -462,7 +466,7 @@ def test_run_backend_records_entries(monkeypatch):
                 "iters": 12,
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction", "drawdown_max_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
@@ -498,7 +502,7 @@ def test_run_backend_records_entries(monkeypatch):
 
 def test_run_backend_supports_single_objective(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
-    evaluator = FakeEvaluator(["adg_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity"])
     recorder = FakeRecorder()
 
     result = pymoo_backend.run_backend(
@@ -509,7 +513,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
                 "iters": 8,
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
@@ -537,7 +541,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
 
     assert result["pool_terminated"] is False
     assert recorder.entries
-    assert list(recorder.entries[0]["metrics"]["objectives"]) == ["w_0"]
+    assert list(recorder.entries[0]["metrics"]["objectives"]) == ["cagr_fraction_strategy_equity"]
 
 
 def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
@@ -556,7 +560,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
         return None
 
     monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
     recorder = FakeRecorder()
 
     result = pymoo_backend.run_backend(
@@ -569,7 +573,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
                 "seed": 123,
                 "max_pending_starting_evals_per_cpu": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction", "drawdown_max_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga2",
                     "shared": {
@@ -626,7 +630,7 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
         return None
 
     monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
 
     config = {
             "optimize": {
@@ -636,7 +640,7 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
                 "seed": 99,
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction", "drawdown_max_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
@@ -655,7 +659,7 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
     config.setdefault("bot", {})
     config["optimize"].update(backend="pymoo", population_size=4, iters=20, seed=99, n_cpus=1,
                               round_to_n_significant_digits=4,
-                              scoring=["adg_fraction", "drawdown_max_fraction"], objective_scenario=None)
+                              scoring=["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"], objective_scenario=None)
     pymoo_backend.save_checkpoint(str(checkpoint_path), stale_algorithm, config)
     result = pymoo_backend.run_backend(
         config=config,
@@ -692,7 +696,7 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
 
 def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
     recorder = FakeRecorder()
     runner = pymoo_backend.PymooAsyncRecordingRunner(
         evaluator=evaluator,
@@ -730,12 +734,12 @@ def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
 
 def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
     recorder = ResultRecorder(
         results_dir=str(tmp_path),
         sig_digits=4,
         flush_interval=60,
-        scoring_keys=["adg_fraction", "drawdown_max_fraction"],
+        scoring_keys=["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
         compress=False,
         write_all_results=True,
         bounds=evaluator.bounds,
@@ -749,7 +753,7 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
                 "iters": 12,
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction", "drawdown_max_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga3",
                     "shared": {
@@ -787,13 +791,13 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
 
 def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypatch, tmp_path):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
-    evaluator = FakeEvaluator(["adg_fraction", "drawdown_max_fraction"])
+    evaluator = FakeEvaluator(["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"])
     evaluator.optimization_shape = object()
     recorder = ResultRecorder(
         results_dir=str(tmp_path),
         sig_digits=4,
         flush_interval=60,
-        scoring_keys=["adg_fraction", "drawdown_max_fraction"],
+        scoring_keys=["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
         compress=False,
         write_all_results=False,
         bounds=evaluator.bounds,
@@ -808,7 +812,7 @@ def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypat
                 "iters": 1,
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
-                "scoring": ["adg_fraction", "drawdown_max_fraction"],
+                "scoring": ["cagr_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
                 "pymoo": {
                     "algorithm": "nsga2",
                     "shared": {

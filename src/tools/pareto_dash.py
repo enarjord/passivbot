@@ -28,9 +28,10 @@ from config.limits import normalize_limit_entries
 from config.scoring import (
     default_scoring_weights,
     extract_objective_specs,
-    from_engine_value,
 )
 from limit_utils import resolve_auto_limit_entries
+from config.metrics import STAT_SUFFIXES, reject_retired_metric
+from metrics_schema import copy_metric_value, require_metric_definition
 from json_utils import json_dumps_streamlined
 
 
@@ -63,27 +64,40 @@ def _flatten_numeric(source: dict, prefix: str = "") -> Dict[str, float]:
     return flattened
 
 
-def _flatten_stats_block(stats: Dict[str, Dict[str, float]], prefix: str = "") -> Dict[str, float]:
-    flattened: Dict[str, float] = {}
-    if not isinstance(stats, dict):
-        return flattened
-    for metric, payload in stats.items():
-        if not isinstance(payload, dict):
-            continue
-        for field, value in payload.items():
-            if value is None:
-                continue
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
-                continue
-            if not np.isfinite(numeric):
-                continue
-            key = f"{metric}_{field}"
-            if prefix:
-                key = f"{prefix}{key}"
-            flattened[key] = numeric
+def _project_value(payload, key, column, statuses):
+    """Finite chart coordinate plus separately preserved source status metadata."""
+    copied = copy_metric_value(payload, key, output_name=column)
+    status = copied.get("metric_status", {}).get(column)
+    if status is not None:
+        statuses[column] = status
+    return np.nan if copied[column] is None else copied[column]
+
+
+def _flatten_stats_block(stats, prefix="", *, statuses=None):
+    statuses = {} if statuses is None else statuses
+    flattened = {}
+    for metric, fields in stats.items():
+        reject_retired_metric(metric, path="dashboard statistic")
+        for field in STAT_SUFFIXES:
+            if field in fields:
+                column = f"{prefix}{metric}_{field}"
+                flattened[column] = _project_value(fields, field, column, statuses)
     return flattened
+
+
+def _extract_single_metrics(entry, statuses):
+    block = entry.get("metrics", {})
+    if block.get("fitness_status") == "invalid":
+        return {}
+    stats = block.get("stats", {})
+    if not stats:
+        return {}
+    require_metric_definition(block)
+    values = _flatten_stats_block(stats, statuses=statuses)
+    for metric, fields in stats.items():
+        if "mean" in fields:
+            values[metric] = _project_value(fields, "mean", metric, statuses)
+    return values
 
 
 def _ensure_float(value: Optional[float]) -> Optional[float]:
@@ -98,102 +112,72 @@ def _ensure_float(value: Optional[float]) -> Optional[float]:
     return None
 
 
-def _extract_suite_metrics(
-    entry: dict,
-) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], List[str]]:
-    suite_metrics = entry.get("suite_metrics")
-    metrics: Dict[str, float] = {}
-    scenario_values: Dict[str, Dict[str, float]] = {}
-    scenario_labels: List[str] = []
-    if not isinstance(suite_metrics, dict):
-        return metrics, scenario_values, scenario_labels
-
-    if "metrics" in suite_metrics:
-        for metric, payload in suite_metrics["metrics"].items():
-            aggregated = _ensure_float(payload.get("aggregated"))
-            if aggregated is not None:
-                metrics[metric] = aggregated
-            stats = payload.get("stats") or {}
-            for field, value in stats.items():
-                numeric = _ensure_float(value)
-                if numeric is not None:
-                    metrics[f"{metric}_{field}"] = numeric
-            for scenario, value in (payload.get("scenarios") or {}).items():
-                numeric = _ensure_float(value)
-                if numeric is None:
-                    continue
-                scenario_values.setdefault(scenario, {})[metric] = numeric
-        labels = suite_metrics.get("scenario_labels")
-        if isinstance(labels, list):
-            scenario_labels = labels
-        else:
-            scenario_labels = list(scenario_values.keys())
-        return metrics, scenario_values, scenario_labels
-
-    aggregate = suite_metrics.get("aggregate", {})
-    aggregated = aggregate.get("aggregated", {}) or {}
-    stats = aggregate.get("stats", {}) or {}
-    for metric, value in aggregated.items():
-        numeric = _ensure_float(value)
-        if numeric is not None:
-            metrics[metric] = numeric
-    metrics.update(_flatten_stats_block(stats))
-    labels = suite_metrics.get("scenarios")
-    if isinstance(labels, list):
-        scenario_labels = labels
-    return metrics, scenario_values, scenario_labels
+def _extract_suite_metrics(entry, *, statuses=None):
+    statuses = {} if statuses is None else statuses
+    suite = entry.get("suite_metrics")
+    metrics, scenarios, labels = {}, {}, []
+    if entry.get("metrics", {}).get("fitness_status") == "invalid":
+        return metrics, scenarios, labels
+    if not isinstance(suite, dict):
+        return metrics, scenarios, labels
+    require_metric_definition(suite)
+    if not isinstance(suite.get("metrics"), dict):
+        raise ValueError("current dashboard suite requires named metric rows")
+    for metric, payload in suite["metrics"].items():
+        reject_retired_metric(metric, path="dashboard suite metric")
+        if "aggregated" in payload:
+            metrics[metric] = _project_value(payload, "aggregated", metric, statuses)
+        metrics.update(
+            _flatten_stats_block({metric: payload.get("stats", {})}, statuses=statuses)
+        )
+        source = payload.get("scenarios", {})
+        for scenario in source:
+            if scenario == "metric_status":
+                continue
+            column = f"{scenario}__{metric}"
+            scenarios.setdefault(scenario, {})[metric] = _project_value(
+                source, scenario, column, statuses
+            )
+    labels = suite.get("scenario_labels", list(scenarios))
+    return metrics, scenarios, labels
 
 
 OBJECTIVE_PREFIX = "objective."
 
 
-def _resolve_objective_columns(entry: dict, objective_keys: Iterable[str]) -> List[Tuple[str, str, str]]:
-    objective_keys_set = {str(key) for key in objective_keys}
-    scoring_specs = extract_objective_specs(entry)
-    resolved: List[Tuple[str, str, str]] = []
-    seen: set[str] = set()
-
-    for idx, spec in enumerate(scoring_specs):
-        metric_name = spec.metric
-        if metric_name in objective_keys_set:
-            resolved.append((metric_name, f"{OBJECTIVE_PREFIX}{metric_name}", metric_name))
-            seen.add(metric_name)
-            continue
-        key = f"w_{idx}"
-        if key not in objective_keys_set:
-            continue
-        resolved.append((key, f"{OBJECTIVE_PREFIX}{metric_name}", metric_name))
-        seen.add(key)
-
-    for key in sorted(objective_keys_set):
-        if key in seen:
-            continue
-        resolved.append((key, f"{OBJECTIVE_PREFIX}{key}", key))
-    return resolved
-
-
-def _extract_objectives(entry: dict) -> Tuple[Dict[str, float], Dict[str, str], List[str]]:
-    metrics_block = entry.get("metrics") or {}
-    objectives = metrics_block.get("objectives") or {}
-    flattened: Dict[str, float] = {}
-    display_labels: Dict[str, str] = {}
-    scoring_columns: List[str] = []
-    scoring_specs = extract_objective_specs(entry)
-    spec_map = {f"w_{idx}": spec for idx, spec in enumerate(scoring_specs)}
-    for key, column, label in _resolve_objective_columns(entry, objectives.keys()):
-        value = objectives.get(key)
-        if value is not None and key in spec_map:
-            value = from_engine_value(spec_map[key], float(value))
-        numeric = _ensure_float(value)
-        if numeric is not None:
-            flattened[column] = numeric
-            display_labels[column] = label
-            scoring_columns.append(column)
-    if not flattened and isinstance(metrics_block.get("stats"), dict):
-        flattened.update(_flatten_stats_block(metrics_block["stats"]))
-        display_labels.update({column: column for column in flattened})
-        scoring_columns.extend(flattened.keys())
-    return flattened, display_labels, scoring_columns
+def _extract_objectives(entry, *, statuses=None):
+    statuses = {} if statuses is None else statuses
+    block = entry.get("metrics", {})
+    invalid = block.get("fitness_status") == "invalid"
+    objectives = block.get("objectives", {} if invalid else None)
+    if objectives is None:
+        return {}, {}, []
+    require_metric_definition(block)
+    if not isinstance(objectives, dict):
+        raise ValueError("current dashboard requires named raw objectives")
+    names = [name for name in objectives if name != "metric_status"]
+    for name in names:
+        reject_retired_metric(name, path="dashboard objective")
+    specs = extract_objective_specs(entry)
+    ordered = [spec.metric for spec in specs] if specs else sorted(names)
+    values, labels = {}, {}
+    for name in ordered:
+        column = f"{OBJECTIVE_PREFIX}{name}"
+        if invalid:
+            values[column] = np.nan
+            statuses[column] = {
+                "status": "invalid",
+                "reason": (
+                    "no measured objective (config_prefilter)"
+                    if block.get("evaluation_origin") == "config_prefilter"
+                    else block.get("error")
+                    or "no measured objective (invalid evaluation)"
+                ),
+            }
+        else:
+            values[column] = _project_value(objectives, name, column, statuses)
+        labels[column] = name
+    return values, labels, list(values)
 
 
 @dataclass
@@ -215,7 +199,10 @@ def _metric_label(run_data: RunData, metric: Optional[str]) -> Optional[str]:
 
 
 def _metric_options(run_data: RunData, metrics: Iterable[str]) -> List[Dict[str, str]]:
-    return [{"label": _metric_label(run_data, metric), "value": metric} for metric in metrics]
+    return [
+        {"label": _metric_label(run_data, metric), "value": metric}
+        for metric in metrics
+    ]
 
 
 def _plot_metric_labels(run_data: RunData, metrics: Iterable[Optional[str]]) -> Dict[str, str]:
@@ -236,6 +223,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
     param_cols: set[str] = set()
     raw_configs: Dict[str, dict] = {}
     display_labels: Dict[str, str] = {}
+    source_statuses = {}
 
     for path in sorted(glob(os.path.join(pareto_dir, "*.json"))):
         with open(path) as f:
@@ -243,9 +231,18 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         config_id = os.path.basename(path)
         raw_configs[config_id] = entry
         base = {"_id": config_id}
-        suite_values, scenario_values, scenario_labels = _extract_suite_metrics(entry)
+        statuses = {}
+        suite_values, scenario_values, scenario_labels = _extract_suite_metrics(
+            entry, statuses=statuses
+        )
+        if not suite_values:
+            suite_values = _extract_single_metrics(entry, statuses)
         suite_aggregated_metric_names = _suite_aggregated_metric_names(entry)
-        objective_values, objective_labels, objective_cols = _extract_objectives(entry)
+        objective_values, objective_labels, objective_cols = _extract_objectives(
+            entry, statuses=statuses
+        )
+        if statuses:
+            source_statuses[config_id] = statuses
         params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
         row.update(objective_values)
@@ -269,10 +266,21 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
             limits_cfg = entry.get("optimize", {}).get("limits", {})
             default_limits = _limits_to_exprs(limits_cfg)
     if not rows:
-        return RunData(pd.DataFrame(), {}, scoring_metrics, default_limits, [], [], {}, display_labels)
+        return RunData(
+            pd.DataFrame(),
+            {},
+            scoring_metrics,
+            default_limits,
+            [],
+            [],
+            {},
+            display_labels,
+        )
     df = pd.DataFrame(rows)
-    df = df.dropna(axis=1, how="all")
-    scenario_metrics = {name: sorted(metrics) for name, metrics in scenario_metric_map.items()}
+    df.attrs["metric_status"] = source_statuses
+    scenario_metrics = {
+        name: sorted(metrics) for name, metrics in scenario_metric_map.items()
+    }
     return RunData(
         df,
         scenario_metrics,
@@ -290,16 +298,19 @@ def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
     if not os.path.exists(history_path):
         return pd.DataFrame()
     rows: List[Dict[str, float]] = []
+    source_statuses = {}
     for idx, record in enumerate(load_results(history_path)):
-        suite_metrics, scenario_values, _ = _extract_suite_metrics(record)
-        metrics_block = record.get("metrics") or {}
+        statuses = {}
+        suite_metrics, scenario_values, _ = _extract_suite_metrics(
+            record, statuses=statuses
+        )
         row = {"iteration": idx}
         row.update(suite_metrics)
         if not suite_metrics:
-            stats = metrics_block.get("stats")
-            if isinstance(stats, dict):
-                row.update(_flatten_stats_block(stats))
-        objective_values, _, _ = _extract_objectives(record)
+            row.update(_extract_single_metrics(record, statuses))
+        objective_values, _, _ = _extract_objectives(record, statuses=statuses)
+        if statuses:
+            source_statuses[idx] = statuses
         row.update(objective_values)
         for scenario, metric_values in scenario_values.items():
             for metric, value in metric_values.items():
@@ -308,33 +319,11 @@ def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
+    df.attrs["metric_status"] = source_statuses
     if len(df) > max_points:
         step = max(len(df) // max_points, 1)
         df = df.iloc[::step]
     return df
-
-
-def _select_closest_to_ideal(df: pd.DataFrame, metrics: List[str]) -> Optional[pd.Series]:
-    if not metrics:
-        return None
-    subset = df[metrics].copy()
-    normed = pd.DataFrame(index=subset.index)
-    for col in metrics:
-        col_min = subset[col].min()
-        col_max = subset[col].max()
-        if not np.isfinite(col_min) or not np.isfinite(col_max):
-            normed[col] = np.nan
-            continue
-        if col_max > col_min:
-            normed[col] = (subset[col] - col_min) / (col_max - col_min)
-        else:
-            normed[col] = 0.0
-    normed = normed.dropna()
-    if normed.empty:
-        return None
-    distances = np.sqrt(((normed - 1.0) ** 2).sum(axis=1))
-    best_idx = distances.idxmin()
-    return df.loc[best_idx]
 
 
 LIMIT_PATTERNS = [
@@ -414,52 +403,67 @@ def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
     return metrics
 
 
+def _raw_column(df, key):
+    """Restore extended-real endpoints for filters, retaining NaN for unavailable facts."""
+    values = df[key].copy()
+    identity = (
+        df["_id"]
+        if "_id" in df
+        else df.get("iteration", pd.Series(df.index, index=df.index))
+    )
+    all_statuses = df.attrs.get("metric_status", {})
+    for index, source_id in identity.items():
+        tag = all_statuses.get(source_id, {}).get(key, {}).get("status")
+        if tag == "positive_infinity":
+            values.loc[index] = np.inf
+        elif tag == "negative_infinity":
+            values.loc[index] = -np.inf
+    return values
+
+
 def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
     if not exprs:
         return pd.Series(True, index=df.index)
     mask = pd.Series(True, index=df.index)
     for line in str(exprs).splitlines():
-        line = line.strip()
-        if not line:
+        if not line.strip():
             continue
-        raw_terms = [term.strip() for term in _split_limit_terms(line) if term.strip()]
-        parsed_terms = [_parse_limit_term(term) for term in raw_terms]
-        if (
-            not raw_terms
-            or any(parsed is None for parsed in parsed_terms)
-            or any(parsed[0] not in df.columns for parsed in parsed_terms)
-        ):
-            continue
+        terms = [_parse_limit_term(term.strip()) for term in _split_limit_terms(line)]
+        if not terms or any(term is None for term in terms):
+            raise ValueError(f"invalid dashboard filter: {line!r}")
         line_mask = pd.Series(False, index=df.index)
-        for key, op, val in parsed_terms:
-            line_mask |= op(df[key], val)
+        for key, op, val in terms:
+            if key not in df:
+                raise ValueError(f"dashboard filter metric {key!r} was not stored")
+            raw = _raw_column(df, key)
+            line_mask |= raw.notna() & op(raw, val)
         mask &= line_mask
     return mask
 
 
 def _suite_aggregated_metric_names(entry: dict) -> set[str]:
-    suite_metrics = entry.get("suite_metrics")
-    if not isinstance(suite_metrics, dict):
+    suite = entry.get("suite_metrics")
+    if not isinstance(suite, dict):
         return set()
-    metrics = suite_metrics.get("metrics")
-    if isinstance(metrics, dict):
-        return {
-            str(metric)
-            for metric, payload in metrics.items()
-            if isinstance(payload, dict)
-            and _ensure_float(payload.get("aggregated")) is not None
-        }
-    aggregate = suite_metrics.get("aggregate")
-    if not isinstance(aggregate, dict):
-        return set()
-    aggregated = aggregate.get("aggregated")
-    if not isinstance(aggregated, dict):
-        return set()
+    require_metric_definition(suite)
     return {
-        str(metric)
-        for metric, value in aggregated.items()
-        if _ensure_float(value) is not None
+        name
+        for name, fields in suite.get("metrics", {}).items()
+        if "aggregated" in fields
     }
+
+
+def _projection_notice(df):
+    count = sum(len(fields) for fields in df.attrs.get("metric_status", {}).values())
+    return (
+        (
+            f"{count} metric values carry explicit statuses. Unavailable and infinite values "
+            "have no chart coordinates or finite dashboard ranking; limit filters retain "
+            "genuine infinities and reject unavailable values."
+        )
+        if count
+        else ""
+    )
 
 
 def _looks_like_stat_column(
@@ -476,13 +480,10 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
     if isinstance(limits_cfg, str):
         exprs.append(limits_cfg)
         return exprs
-    try:
-        normalized = resolve_auto_limit_entries(
-            normalize_limit_entries(limits_cfg),
-            default_scoring_weights(),
-        )
-    except Exception:
-        return exprs
+    normalized = resolve_auto_limit_entries(
+        normalize_limit_entries(limits_cfg),
+        default_scoring_weights(),
+    )
     for entry in normalized:
         if not bool(entry.get("enabled", True)):
             continue
@@ -550,6 +551,13 @@ def compute_weighted_score(df: pd.DataFrame, weights: Dict[str, float]) -> pd.Se
     if df.empty or not weights:
         return pd.Series(0.0, index=df.index)
 
+    active = [name for name, weight in weights.items() if weight != 0]
+    missing = set(active) - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"dashboard scoring metrics were not stored: {sorted(missing)}"
+        )
+    finite = np.isfinite(df[active]).all(axis=1)
     score = pd.Series(0.0, index=df.index)
     total_weight = 0.0
 
@@ -568,10 +576,12 @@ def compute_weighted_score(df: pd.DataFrame, weights: Dict[str, float]) -> pd.Se
 
     if total_weight > 0:
         score = score / total_weight  # Normalize by total weight
-    return score
+    return score.where(finite)
 
 
-def compute_pareto_frontier(df: pd.DataFrame, metrics: List[str], maximize: bool = True) -> pd.Series:
+def compute_pareto_frontier(
+    df: pd.DataFrame, metrics: List[str], maximize: bool = True
+) -> pd.Series:
     """Compute which points are on the Pareto frontier.
 
     Returns a boolean Series indicating frontier membership.
@@ -581,13 +591,15 @@ def compute_pareto_frontier(df: pd.DataFrame, metrics: List[str], maximize: bool
         return pd.Series(False, index=df.index)
 
     # Get values for the metrics
-    available = [m for m in metrics if m in df.columns]
-    if not available:
-        return pd.Series(False, index=df.index)
+    missing = set(metrics) - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"dashboard frontier metrics were not stored: {sorted(missing)}"
+        )
 
-    values = df[available].values
+    values = df[metrics].values
     n = len(df)
-    is_frontier = np.ones(n, dtype=bool)
+    is_frontier = np.isfinite(values).all(axis=1)
 
     for i in range(n):
         if not is_frontier[i]:
@@ -696,7 +708,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                             dcc.Dropdown(
                                 id="run-selection",
                                 options=[
-                                    {"label": os.path.basename(r), "value": r} for r in run_dirs
+                                    {"label": os.path.basename(r), "value": r}
+                                    for r in run_dirs
                                 ],
                                 value=run_dirs[-1],
                                 clearable=False,
@@ -763,8 +776,12 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                     dbc.Label("Custom Expressions"),
                     dbc.Textarea(
                         id="limit-expressions",
-                        placeholder="One per line, e.g.:\nprofit_sum >= 0\ndrawdown_max <= 0.5",
-                        style={"height": "80px", "fontFamily": "monospace", "fontSize": "11px"},
+                        placeholder="One per line, e.g.:\ncagr_fraction_strategy_equity >= 0\ndrawdown_max_fraction_strategy_equity <= 0.5",
+                        style={
+                            "height": "80px",
+                            "fontFamily": "monospace",
+                            "fontSize": "11px",
+                        },
                     ),
                     dbc.Button(
                         "Clear Filters",
@@ -788,7 +805,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                     ),
                     dbc.Checklist(
                         id="highlight-frontier",
-                        options=[{"label": "Highlight frontier points", "value": "highlight"}],
+                        options=[
+                            {"label": "Highlight frontier points", "value": "highlight"}
+                        ],
                         value=["highlight"],
                         switch=True,
                     ),
@@ -1387,11 +1406,14 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         df = run_data.dataframe
         if df.empty:
             return "No configs loaded"
-        mask = _apply_limits(df, limit_exprs)
+        try:
+            mask = _apply_limits(df, limit_exprs)
+        except ValueError as error:
+            return str(error)
         n_pass = mask.sum()
         n_total = len(df)
         pct = (n_pass / n_total * 100) if n_total > 0 else 0
-        return f"{n_pass} / {n_total} configs pass filters ({pct:.1f}%)"
+        return f"{n_pass} / {n_total} configs pass filters ({pct:.1f}%). {_projection_notice(df)}"
 
     @app.callback(
         Output("limit-expressions", "value", allow_duplicate=True),
@@ -1963,10 +1985,10 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         if trigger_id == "preset-conservative":
             # Low risk: prioritize low drawdown, longer holding allowed
             expressions = []
-            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
-                expressions.append("daily_realized_pnl_mean_fraction >= 0")
-            if "drawdown_max" in run_data.aggregated_metrics:
-                expressions.append("drawdown_max <= 0.3")
+            if "cagr_fraction_strategy_equity" in run_data.aggregated_metrics:
+                expressions.append("cagr_fraction_strategy_equity >= 0")
+            if "drawdown_max_fraction_strategy_equity" in run_data.aggregated_metrics:
+                expressions.append("drawdown_max_fraction_strategy_equity <= 0.3")
             if "loss_profit_ratio" in run_data.aggregated_metrics:
                 expressions.append("loss_profit_ratio <= 0.5")
             return "\n".join(expressions)
@@ -1974,17 +1996,17 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         elif trigger_id == "preset-balanced":
             # Balanced: moderate constraints
             expressions = []
-            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
-                expressions.append("daily_realized_pnl_mean_fraction >= 0")
-            if "drawdown_max" in run_data.aggregated_metrics:
-                expressions.append("drawdown_max <= 0.5")
+            if "cagr_fraction_strategy_equity" in run_data.aggregated_metrics:
+                expressions.append("cagr_fraction_strategy_equity >= 0")
+            if "drawdown_max_fraction_strategy_equity" in run_data.aggregated_metrics:
+                expressions.append("drawdown_max_fraction_strategy_equity <= 0.5")
             return "\n".join(expressions)
 
         elif trigger_id == "preset-aggressive":
             # Aggressive: prioritize profit, allow higher risk
             expressions = []
-            if "daily_realized_pnl_mean_fraction" in run_data.aggregated_metrics:
-                expressions.append("daily_realized_pnl_mean_fraction >= 0.001")
+            if "cagr_fraction_strategy_equity" in run_data.aggregated_metrics:
+                expressions.append("cagr_fraction_strategy_equity >= 0.10")
             return "\n".join(expressions)
 
         return no_update

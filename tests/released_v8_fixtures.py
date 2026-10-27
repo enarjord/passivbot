@@ -3,20 +3,22 @@
 from config.migrations.released_v8 import get_released_v8_defaults
 
 
-def released_v8_policy():
-    """Use the released trailing-martingale template with retained metric formulas.
-
-    Most policy tests do not concern metric formula migration. Authoring only
-    the released nonweighted metrics keeps those tests independent of the
-    separate required choices for retired weighted and daily-worst underwater metrics.
-    Full-template migration has its own unmodified-input regression coverage.
-    """
-    config = get_released_v8_defaults(strategy_kind="trailing_martingale")
-    config["optimize"]["scoring"] = [
-        objective for objective in config["optimize"]["scoring"]
-        if not objective["metric"].endswith("_w") and not objective["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+def without_metric_selection(config):
+    """Keep nonmetric policy regressions independent of formula replacement choices."""
+    config["optimize"]["scoring"] = []
+    config["optimize"]["limits"] = []
+    config["backtest"]["reducer"] = {"default": "mean"}
     return config
+
+
+def released_v8_policy():
+    """Use released trading policy with no optimizer metric selection.
+
+    Every selected v8 formula now crosses an explicit semantic boundary. Policy
+    tests choose no metrics; formula migration tests author their own selections.
+    Full-template regressions retain the unmodified public metric selections below.
+    """
+    return without_metric_selection(get_released_v8_defaults(strategy_kind="trailing_martingale"))
 
 
 # Exact public metric selections from configs/examples at released-v8 commit

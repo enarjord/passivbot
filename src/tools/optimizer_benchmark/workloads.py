@@ -9,8 +9,8 @@ import random
 
 from .catalogue import declared_gpu_support, select_cases
 
-VERSION = 2
-CORE_METRICS = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction"]
+VERSION = 3
+CORE_METRICS = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day", "backtest_completion_fraction"]
 
 
 def _is_distance_sensitivity(key):
@@ -264,7 +264,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             if any(f.startswith("hsl") for f in case.features):
                 metrics += ["hsl_triggers_per_year", "hsl_red_time_fraction"]
             if "equity_metrics" in case.features:
-                metrics += ["adg_fraction_strategy_equity", "fills_gap_p95_hours", "recovery_p95_days_strategy_equity"]
+                metrics += ["cagr_fraction_strategy_equity", "fills_gap_max_days", "peak_recovery_max_days_strategy_equity"]
             entry = dict(case=case.record(), seed=seed, metrics=metrics, configs=population,
                          vectors=vectors, bounds=bounds, markets=markets, exchange="binance",
                          data_sha256=array_digest(candles, btc, timestamps),

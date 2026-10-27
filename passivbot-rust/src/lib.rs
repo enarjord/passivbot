@@ -1,15 +1,14 @@
 mod age_admission;
-mod analysis;
 mod backtest;
 mod closes;
 mod coin_selection;
 mod config_prefilter;
 mod core_metrics;
+mod core_metrics_gpu;
 mod constants;
 mod dynamic;
 mod entries;
 mod entry_cooldown;
-mod ew;
 mod exposure_rms;
 mod gpu;
 mod hsl_decay;
@@ -136,10 +135,6 @@ fn mps_trailing_martingale_multicoin_source_py() -> &'static str {
     gpu::mps_trailing_martingale_multicoin_source()
 }
 
-#[pyfunction]
-fn mps_strategy_eq_recovery_distribution_source_py() -> &'static str {
-    gpu::mps_strategy_eq_recovery_distribution_source()
-}
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -160,7 +155,9 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
-    m.add_function(wrap_pyfunction!(calculate_ew_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(get_core_metric_catalog, m)?)?;
+    m.add_function(wrap_pyfunction!(get_core_gpu_observation_catalog, m)?)?;
+    m.add_function(wrap_pyfunction!(core_metrics_from_gpu_observations, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate_grids, m)?)?;
     m.add_class::<hsl_v9_live::HslV9Replay>()?;
@@ -184,10 +181,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         mps_trailing_martingale_multicoin_source_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        mps_strategy_eq_recovery_distribution_source_py,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(utils::gpu_decimal_metadata_py, m)?)?;

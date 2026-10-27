@@ -108,7 +108,11 @@ def test_nullable_fields_retain_declared_numeric_types(path, numeric_type):
     field = get_field_registry().find(tuple(path.split(".")))
     assert field.numeric_type is numeric_type
     assert field.nullable
-    assert field.default is None
+    if path == "backtest.ew_half_life_days":
+        from config.metrics import DEFAULT_EW_HALF_LIFE_DAYS
+        assert field.default == DEFAULT_EW_HALF_LIFE_DAYS
+    else:
+        assert field.default is None
 
 
 def test_registry_defaults_are_isolated_and_optional_authority_is_absent():

@@ -95,7 +95,6 @@ def compare_limits(cpu, gpu, checks):
     These are diagnostic CPU calculations, not another backtest. Missing metrics
     and suite-scoped checks remain explicitly unassessed rather than feasible.
     """
-    from config.metrics import resolve_metric_value
     from limit_utils import compute_limit_violation
 
     def surface(metrics):
@@ -113,8 +112,8 @@ def compare_limits(cpu, gpu, checks):
     cpu_penalty = gpu_penalty = 0.0
     assessed = True
     for check in checks:
-        reference = resolve_metric_value(references, check["metric_key"])
-        observed = resolve_metric_value(observations, check["metric_key"])
+        reference = references.get(check["metric_key"])
+        observed = observations.get(check["metric_key"])
         row = {"metric": check["metric"], "mode": check["mode"]}
         if check.get("scenario") is not None:
             row["status"] = "suite_required"

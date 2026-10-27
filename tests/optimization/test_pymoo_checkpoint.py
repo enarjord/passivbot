@@ -20,11 +20,12 @@ def _config():
     config = {
         "backtest": {}, "bot": {"long": {}, "short": {}},
         "optimize": {"backend": "pymoo", "bounds": {"long_n_positions": [1, 1, 1]},
-                     "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
+                     "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}],
                      "objective_scenario": None},
     }
     config[CONTRACT_CACHE_KEY] = {
         "version": CONTRACT_VERSION,
+        "core_metric_definition_version": 1,
         "implementation": {"source": "fixture-source", "runtime": "fixture-runtime"},
         "prepared_data": {"sha256": "fixture-data"},
     }

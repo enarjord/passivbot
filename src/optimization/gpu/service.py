@@ -14,7 +14,6 @@ from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
-from config.metrics import EXPOSURE_RMS_METRICS
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.parameters import (
     _single_coin_exposure_params, _position_exposure_enforcer_params,
@@ -26,17 +25,9 @@ from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
-from optimization.gpu.metric_registry import (
-    BTC_INTRADAY_RISK_METRICS,
-    EXPONENTIAL_EQUITY_METRICS,
-    EXPONENTIAL_BTC_EQUITY_METRICS,
-    RAW_STRATEGY_EQUITY_METRICS,
-    RAW_STRATEGY_DRAWDOWN_CONSUMERS,
-    ENTRY_INTERVAL_METRICS,
-    EQUITY_BALANCE_DIFF_METRICS,
-    HARD_STOP_PROXY_METRICS,
-    HARD_STOP_LIFECYCLE_METRICS,
-)
+from optimization.gpu.metric_registry import UTILIZATION_METRICS, requested_metric_features
+from optimization.gpu.core_metrics import metric_mask, finalize_observations
+
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
     FORAGER_HYSTERESIS_ABI,
@@ -88,80 +79,6 @@ from config.access import get_optional_config_value
 
 def _noop_interrupt_check():
     return None
-
-
-CORE_OUTPUT_KEYS = {
-    *EXPOSURE_RMS_METRICS,
-    "entry_interval_native_metrics",
-    "hsl_drawdown_ema_max_portfolio",
-    "hsl_drawdown_ema_mean_worst_1pct_portfolio",
-    "raw_strategy_day_max_dd",
-    "raw_strategy_day_dd_sum",
-    "raw_strategy_day_dd_squared_sum",
-    "raw_strategy_day_sample_count",
-    "raw_strategy_day_end_eq",
-    "raw_strategy_day_min_eq",
-    "btc_day_end_eq",
-    "btc_day_min_eq",
-    "btc_day_max_dd",
-    "equity_balance_gap_negative_max_fraction",
-    "equity_balance_gap_negative_mean_fraction",
-    "equity_balance_gap_positive_max_fraction",
-    "equity_balance_gap_positive_mean_fraction",
-    "equity_balance_gap_negative_max_fraction_btc",
-    "equity_balance_gap_negative_mean_fraction_btc",
-    "equity_balance_gap_positive_max_fraction_btc",
-    "equity_balance_gap_positive_mean_fraction_btc",
-    "day_end_eq",
-    "day_min_eq",
-    "day_max_dd",
-    "day_volume",
-    "day_has_fill",
-    "day_net_pnl",
-    "day_last_fill_balance",
-    "day_fill_count",
-    "fill_count",
-    "fill_count_entry",
-    "fill_count_long",
-    "fills_active_days_count",
-    "coin_fill_counts",
-    "pnl_recovery_max_ms",
-    "day_min_balance",
-    "max_dd",
-    "held_max_ms",
-    "held_sum_ms",
-    "held_sum_squared_hours",
-    "gap_sum_squared_hours",
-    "held_count",
-    "position_unchanged_max_ms",
-    "gap_hist",
-    "gap_max_ms",
-    "first_fill_ts",
-    "last_fill_ts",
-    "recovery_max_ms",
-    "account_recovery_max_ms",
-    "last_high_ts",
-    "first_eq_ts",
-    "last_eq_ts",
-    "first_eq_step",
-    "last_eq_step",
-    "liq_step",
-    "profit_sum",
-    "loss_sum",
-    "profit_sum_long",
-    "loss_sum_long",
-    "profit_sum_short",
-    "loss_sum_short",
-    "initial_entry_balance_fraction",
-    "initial_entry_balance_fraction_long",
-    "initial_entry_balance_fraction_short",
-    "entry_interval_sum_steps",
-    "entry_interval_count",
-    "entry_interval_max_steps",
-    "entry_interval_hist",
-    "absolute_net_wallet_exposure_max_ratio",
-    "absolute_net_wallet_exposure_mean_ratio",
-}
 
 
 _GPU_PROFILE_TIMING_KEYS = (
@@ -253,36 +170,13 @@ def _update_gpu_dispatch_progress(
 
 def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
     runners = tuple(runners)
-    return {
-        "btc_analysis": bool(getattr(proxy, "btc_analysis_enabled", False)),
-        "btc_intraday_risk": bool(getattr(proxy, "btc_risk_enabled", False)),
-        "equity_balance_diff": bool(
-            getattr(proxy, "equity_balance_diff_enabled", False)
-        ),
-        "entry_interval": bool(getattr(proxy, "entry_interval_enabled", False)),
-        "strategy_eq_recovery_distribution": any(
-            bool(getattr(runner, "recovery_distribution_enabled", False))
-            for runner in runners
-        ),
-        "hsl_ema_tail": any(
-            bool(getattr(runner, "hsl_ema_tail_enabled", False)) for runner in runners
-        ),
-        "hsl_raw_drawdown": any(
-            bool(getattr(runner, "hsl_raw_drawdown_enabled", False))
-            for runner in runners
-        ),
-        "hsl_raw_tail": any(
-            bool(getattr(runner, "hsl_raw_tail_enabled", False)) for runner in runners
-        ),
-        "hsl_diagnostics": any(
-            bool(getattr(runner, "hsl_diagnostics_enabled", False))
-            for runner in runners
-        ),
-        "coin_fill_counts": any(
-            bool(getattr(runner, "collect_coin_fill_counts", False))
-            for runner in runners
-        ),
-    }
+    requested = requested_metric_features(getattr(proxy, "needed_metrics", ()))
+    features = {name: True for name in sorted(requested)}
+    features["native_core_observations"] = any(bool(getattr(runner, "core_metric_mask", 0))
+                                                for runner in runners)
+    features["coin_fill_counts"] = any(bool(getattr(runner, "collect_coin_fill_counts", False))
+                                         for runner in runners)
+    return features
 
 
 def _new_gpu_proxy_profile(
@@ -488,34 +382,42 @@ def _add_gpu_runner_profile(
 def _add_gpu_terminal_profile(
     profile: dict,
     output: dict,
+    rows: list[dict],
     *,
     interval_ms: int,
+    origin_timestamp_ms: int,
     effective_start_step: int = 0,
     effective_end_step: int,
 ) -> None:
     """Estimate work after irreversible single-coin candidate termination."""
 
     alive = output.get("alive")
-    last_eq_ts = output.get("last_eq_ts")
-    if alive is None or last_eq_ts is None:
+    if alive is None:
         return
     alive_values = alive.detach().cpu().numpy().astype(bool, copy=False)
     terminal = ~alive_values
     terminal_count = int(terminal.sum())
     if terminal_count == 0:
         return
-    last_eq_values = np.asarray(last_eq_ts.detach().cpu().numpy(), dtype=np.float64)
-    terminal_last_eq = last_eq_values[terminal]
-    finite = np.isfinite(terminal_last_eq)
+    if len(rows) != len(alive_values):
+        raise RuntimeError("GPU terminal profile changed candidate count")
+    # Core finalization has already checked exact integer steps and reconstructed
+    # Unix clocks. Never scale a float32 timestamp from the diagnostic scalars.
+    last_steps = []
+    for row, is_terminal in zip(rows, terminal):
+        if not is_terminal:
+            continue
+        timestamp = row["metric_metadata"]["actual_end_timestamp_ms"]
+        offset = timestamp - int(origin_timestamp_ms)
+        if offset < 0 or offset % int(interval_ms):
+            raise RuntimeError("GPU terminal profile received an invalid core clock")
+        last_steps.append(offset // int(interval_ms))
+    terminal_last_eq = np.asarray(last_steps, dtype=np.int64)
     estimated_steps = np.ones(terminal_count, dtype=np.int64)
-    if np.any(finite):
-        estimated_steps[finite] = np.rint(
-            terminal_last_eq[finite] / max(1, int(interval_ms))
-        ).astype(np.int64) - int(effective_start_step)
+    estimated_steps[:] = terminal_last_eq - int(effective_start_step)
     effective_step_count = max(1, int(effective_end_step) - int(effective_start_step))
     estimated_steps = np.clip(estimated_steps, 1, max(1, effective_step_count - 2))
     profile["terminal_candidate_count"] += terminal_count
-    profile["terminal_without_equity_count"] += int((~finite).sum())
     profile["estimated_post_terminal_candidate_bars"] += int(
         np.maximum(effective_step_count - 2 - estimated_steps, 0).sum()
     ) * int(profile.get("side_count", 1))
@@ -553,83 +455,6 @@ def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
         else None
     )
     return profile
-
-
-DIRECTIONAL_HSL_OUTPUT_KEYS = {
-    "hsl_long_enabled",
-    "hsl_short_enabled",
-    "hsl_triggers_long",
-    "hsl_triggers_short",
-    "hsl_restarts_long",
-    "hsl_restarts_short",
-    "hsl_tier_samples_total",
-    "hsl_tier_samples_red",
-    "hsl_duration_sum_steps",
-    "hsl_duration_max_steps",
-    "hsl_duration_count",
-    "hsl_trigger_drawdown_sum",
-    "hsl_trigger_drawdown_count",
-    "hsl_flatten_time_sum_steps",
-    "hsl_flatten_time_count",
-    "hsl_restart_retrigger_count",
-    "hsl_halt_to_restart_equity_loss",
-    "hsl_panic_close_loss_sum",
-    "hsl_panic_close_loss_max",
-    "hsl_panic_loss_drawdown_min",
-    "hsl_panic_loss_drawdown_sum",
-    "hsl_panic_loss_drawdown_max",
-    "hsl_panic_loss_drawdown_count",
-    "hsl_drawdown_ema_max_long",
-    "hsl_drawdown_ema_max_short",
-    "hsl_strategy_eq_recovery_max_ms_long",
-    "hsl_strategy_eq_recovery_max_ms_short",
-    "hsl_drawdown_ema_mean_worst_1pct_long",
-    "hsl_drawdown_ema_mean_worst_1pct_short",
-    "hsl_drawdown_raw_max_long",
-    "hsl_drawdown_raw_max_short",
-    "hsl_drawdown_raw_mean_worst_1pct_long",
-    "hsl_drawdown_raw_mean_worst_1pct_short",
-}
-
-
-def _metric_uses_btc_analysis(metric) -> bool:
-    name = str(metric or "").strip().lower()
-    return name.endswith("_btc") or "_btc_" in name
-
-
-def _btc_daily_price_context(
-    btc_prices, timestamps, *, expected_count: int, expected_days: int
-) -> dict[str, np.ndarray]:
-    """Reduce the canonical BTC/USD series onto the proxy's UTC-day grid."""
-
-    btc = np.asarray(btc_prices, dtype=np.float64).reshape(-1)
-    ts = np.asarray(timestamps, dtype=np.int64).reshape(-1)
-    if len(btc) != int(expected_count) or len(ts) != int(expected_count):
-        raise ValueError(
-            "MPS BTC analysis requires BTC prices and timestamps matching the "
-            f"prepared candles: btc={len(btc)}, timestamps={len(ts)}, "
-            f"candles={expected_count}"
-        )
-    if len(btc) == 0 or np.any(~np.isfinite(btc)) or np.any(btc <= 0.0):
-        raise ValueError(
-            "MPS BTC analysis requires finite positive BTC/USD prices for every candle"
-        )
-    day_idx = ((ts // 86_400_000) - (ts[0] // 86_400_000)).astype(np.int64)
-    if np.any(day_idx < 0) or int(day_idx[-1]) + 1 != int(expected_days):
-        raise ValueError(
-            "MPS BTC analysis day grid disagrees with the prepared proxy timeline"
-        )
-    day_end = np.full(int(expected_days), np.nan, dtype=np.float64)
-    for day in range(int(expected_days)):
-        values = btc[day_idx == day]
-        if len(values) == 0:
-            raise ValueError(
-                f"MPS BTC analysis is missing prepared prices for UTC day {day}"
-            )
-        day_end[day] = values[-1]
-    return {
-        "btc_day_end_price": day_end,
-    }
 
 
 # One MPS thread simulates one candidate across every candle stream. Long-running
@@ -700,7 +525,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee_fraction",
     )
     contract = {
-        "version": 10,
+        "version": 11,
+        "core_metric_definition_version": 1,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
         "side_activation_abi": 1,
@@ -809,8 +635,6 @@ def _candle_interval_minutes(backtest_params: dict) -> int:
     return int(interval)
 
 
-
-
 def _mps_multicoin_dispatch_plan(
     strategy_kind: str,
     requested_batch_size: int,
@@ -880,166 +704,6 @@ def _log_mps_dispatch_cap(
     )
 
 
-_ACCOUNT_EQUITY_RECOVERY_METRICS = {
-    "peak_recovery_max_days_usd",
-    "peak_recovery_max_hours_usd",
-}
-
-_HSL_EMA_TAIL_METRICS = {
-    "hsl_signal_ema_worst_1pct_mean_fraction",
-    "hsl_signal_ema_worst_1pct_mean_fraction_long",
-    "hsl_signal_ema_worst_1pct_mean_fraction_short",
-}
-_HSL_EMA_DRAWDOWN_METRICS = {
-    "hsl_signal_ema_max_fraction",
-    "hsl_signal_ema_max_fraction_long",
-    "hsl_signal_ema_max_fraction_short",
-}
-_HSL_RAW_DRAWDOWN_METRICS = {
-    "drawdown_max_fraction_strategy_equity_long",
-    "drawdown_max_fraction_strategy_equity_short",
-}
-_HSL_RAW_TAIL_METRICS = {
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long",
-    "drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short",
-}
-_HSL_STRATEGY_EQ_RECOVERY_METRICS = {
-    "recovery_max_hours_strategy_equity_long",
-    "recovery_max_hours_strategy_equity_short",
-    "recovery_max_days_strategy_equity_long",
-    "recovery_max_days_strategy_equity_short",
-}
-
-
-def _hsl_diagnostics_needed(needed_metrics) -> bool:
-    """Return whether the requested proxy surface needs HSL-only telemetry."""
-    return bool(
-        set(needed_metrics)
-        & (
-            set(HARD_STOP_PROXY_METRICS)
-            | _HSL_EMA_DRAWDOWN_METRICS
-            | _HSL_EMA_TAIL_METRICS
-            | _HSL_RAW_DRAWDOWN_METRICS
-            | _HSL_RAW_TAIL_METRICS
-            | _HSL_STRATEGY_EQ_RECOVERY_METRICS
-        )
-    )
-
-
-_STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
-    "recovery_mean_days_strategy_equity",
-    "recovery_median_days_strategy_equity",
-    "recovery_p95_days_strategy_equity",
-    "recovery_p99_days_strategy_equity",
-    "recovery_worst_5pct_mean_days_strategy_equity",
-    "recovery_worst_1pct_mean_days_strategy_equity",
-}
-
-
-def mps_requested_metric_features(
-    needed_metrics, *, strategy_kind: str
-) -> frozenset[str]:
-    """Name opt-in MPS metric paths required by a proxy metric surface."""
-
-    metrics = set(needed_metrics)
-    features = {
-        "btc_analysis": any(_metric_uses_btc_analysis(metric) for metric in metrics),
-        "btc_intraday_risk": bool(metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS)),
-        "exponential_equity": bool(metrics & EXPONENTIAL_EQUITY_METRICS),
-        "equity_balance_diff": bool(metrics & EQUITY_BALANCE_DIFF_METRICS),
-        "entry_interval": bool(
-            str(strategy_kind).strip().lower() == "trailing_martingale"
-            and metrics & ENTRY_INTERVAL_METRICS
-        ),
-        "strategy_eq_recovery_distribution": bool(
-            metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
-        ),
-        "raw_strategy_risk": bool(metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS),
-        "raw_strategy_growth": bool(metrics & RAW_STRATEGY_EQUITY_METRICS),
-        "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
-        "hsl_raw_drawdown": bool(
-            metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
-        ),
-        "hsl_raw_tail": bool(metrics & _HSL_RAW_TAIL_METRICS),
-        "hsl_diagnostics": _hsl_diagnostics_needed(metrics),
-        "coin_fill_counts": bool(
-            metrics & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
-        ),
-    }
-    return frozenset(name for name, enabled in features.items() if enabled)
-
-
-def _reduce_exponential_output(output, run, data, needed_metrics):
-    if not set(needed_metrics) & EXPONENTIAL_EQUITY_METRICS:
-        return {}, None
-    from optimization.gpu.exponential_equity import exponential_equity_metrics
-    return exponential_equity_metrics(output, run, data, needed_metrics, relative_timestamps=True)
-
-
-def _exponential_metadata_row(metadata, index):
-    def scalar(value):
-        if isinstance(value, dict):
-            return {key: scalar(item) for key, item in value.items()}
-        if hasattr(value, "detach"):
-            value = value.detach().cpu()
-            return value.item() if value.ndim == 0 else value[index].item()
-        return value
-    result = scalar(metadata)
-    for key in ("first_return_end_ms", "last_return_end_ms"):
-        if result[key] < 0:
-            result[key] = None
-    statuses = ("available", "insufficient_observations", "nonpositive_equity", "liquidated")
-    for curve in result["curves"].values():
-        curve["status"] = statuses[curve["status"]]
-    return result
-
-
-def _exponential_metadata_to_host(metadata):
-    if isinstance(metadata, dict):
-        return {key: _exponential_metadata_to_host(value) for key, value in metadata.items()}
-    if hasattr(metadata, "detach"):
-        return metadata.detach().cpu()
-    return metadata
-
-
-def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
-    """Run the opt-in recovery postprocessor before proxy outputs leave MPS."""
-
-    if not set(needed_metrics) & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS:
-        return None
-    if "strategy_eq_recovery_distribution" in output:
-        from optimization.gpu.mps_kernel import MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS, torch
-
-        if {"strategy_eq_recovery_samples", "strategy_eq_recovery_sample_interval_days"} & output.keys():
-            raise RuntimeError("Ambiguous GPU recovery output")
-        stats = output["strategy_eq_recovery_distribution"]
-        bounds = output.get("last_eq_ts")
-        if (not isinstance(stats, torch.Tensor) or not isinstance(bounds, torch.Tensor)
-            or stats.device.type not in {"cuda", "mps"} or stats.device != bounds.device
-            or stats.dtype != torch.float32 or stats.ndim != 2
-            or bounds.shape != (stats.shape[0],)
-            or stats.shape[1] != MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS):
-            raise RuntimeError("Invalid compact GPU recovery output")
-        return stats
-    required = {
-        "strategy_eq_recovery_samples",
-        "strategy_eq_recovery_sample_interval_days",
-    }
-    if missing := required.difference(output):
-        raise RuntimeError(
-            "MPS strategy-equity recovery sampling output is missing: "
-            + ", ".join(sorted(missing))
-        )
-    from optimization.gpu.mps_kernel import (
-        strategy_eq_recovery_distribution_from_samples,
-    )
-
-    return strategy_eq_recovery_distribution_from_samples(
-        output["strategy_eq_recovery_samples"],
-        sample_interval_days=output["strategy_eq_recovery_sample_interval_days"],
-    )
-
-
 def _hsl_lookback_bars(backtest_params, *, hsl_enabled):
     if not hsl_enabled:
         # Inactive hsl policies consume no history. Keep 0/all inert.
@@ -1047,8 +711,6 @@ def _hsl_lookback_bars(backtest_params, *, hsl_enabled):
     # A constant-sized inert binding preserves the existing kernel argument
     # shape. V9 HSL owns no historical window or factual replay capacity.
     return 1
-
-
 
 
 def _multicoin_exposure_eligible_coins(
@@ -1062,55 +724,6 @@ def _multicoin_exposure_eligible_coins(
         fixed_coin_wels = per_side_coin_overrides[side][:, wallet_exposure_column]
         eligible |= ~np.isfinite(fixed_coin_wels) | (fixed_coin_wels != 0.0)
     return eligible
-
-
-def _candidate_wallet_exposure_limit_ratio_outputs(
-    candidates: list[dict],
-    base_limits: dict[str, float],
-    *,
-    torch,
-) -> dict:
-    """Expose each candidate's configured side TWEL to proxy metric reducers."""
-
-    outputs = {}
-    for side in ("long", "short"):
-        if side not in base_limits:
-            raise ValueError(f"GPU candidate TWEL context is missing {side}")
-        key = f"{side}_total_wallet_exposure_limit_ratio"
-        values = np.asarray(
-            [float(candidate.get(key, base_limits[side])) for candidate in candidates],
-            dtype=np.float64,
-        )
-        outputs[f"candidate_total_wallet_exposure_limit_ratio_{side}"] = torch.from_numpy(
-            values
-        )
-    return outputs
-
-
-def _candidate_position_slot_outputs(
-    candidates: list[dict],
-    base_n_positions: dict[str, float],
-    base_limits: dict[str, float],
-    *,
-    torch,
-) -> dict:
-    """Expose Rust analysis' configured active position-slot denominators."""
-
-    outputs = {}
-    for side in ("long", "short"):
-        if side not in base_n_positions or side not in base_limits:
-            raise ValueError(f"GPU candidate position-slot context is missing {side}")
-        n_positions_key = f"{side}_n_positions"
-        limit_key = f"{side}_total_wallet_exposure_limit_ratio"
-        values = []
-        for candidate in candidates:
-            n_positions = float(candidate.get(n_positions_key, base_n_positions[side]))
-            limit = float(candidate.get(limit_key, base_limits[side]))
-            values.append(n_positions if n_positions > 0.0 and limit > 0.0 else 0.0)
-        outputs[f"position_slots_{side}"] = torch.from_numpy(
-            np.asarray(values, dtype=np.float64)
-        )
-    return outputs
 
 
 def _require_supported_multicoin_valid_tails(
@@ -1305,64 +918,6 @@ def _require_exact_safe_proxy_candles(
                 )
 
 
-
-
-def _nan_min(left, right):
-    """Elementwise minimum which preserves the finite operand when only one exists."""
-
-    left_finite = left.isfinite()
-    right_finite = right.isfinite()
-    return left.where(
-        left_finite & ~right_finite,
-        right.where(right_finite & ~left_finite, left.minimum(right)),
-    )
-
-
-def _nan_max(left, right):
-    """Elementwise maximum which preserves the finite operand when only one exists."""
-
-    left_finite = left.isfinite()
-    right_finite = right.isfinite()
-    return left.where(
-        left_finite & ~right_finite,
-        right.where(right_finite & ~left_finite, left.maximum(right)),
-    )
-
-
-def _directional_entry_initial_metrics(side: str, initial_entry_balance_fraction):
-    """Expand one directional Metal value into the shared two-side surface."""
-
-    if side not in {"long", "short"}:
-        raise ValueError(f"expected long or short entry metric side, got {side!r}")
-    zeros = initial_entry_balance_fraction.new_zeros(initial_entry_balance_fraction.shape)
-    return {
-        "initial_entry_balance_fraction_long": initial_entry_balance_fraction if side == "long" else zeros,
-        "initial_entry_balance_fraction_short": initial_entry_balance_fraction if side == "short" else zeros,
-    }
-
-
-def _directional_gross_pnl_outputs(side: str, profit_sum, loss_sum):
-    """Expand one directional gross-PnL pair into the shared two-side surface."""
-
-    if side not in {"long", "short"}:
-        raise ValueError(f"expected long or short gross PnL side, got {side!r}")
-    other_side = "short" if side == "long" else "long"
-    return {
-        f"profit_sum_{side}": profit_sum,
-        f"loss_sum_{side}": loss_sum,
-        f"profit_sum_{other_side}": profit_sum.new_zeros(profit_sum.shape),
-        f"loss_sum_{other_side}": loss_sum.new_zeros(loss_sum.shape),
-    }
-
-
-
-
-
-
-
-
-
-
 def _candidate_parameter_matrix(
     candidates: list[dict],
     param_keys,
@@ -1413,11 +968,7 @@ def _candidate_parameter_matrix(
     return matrix
 
 
-
-
 # Compatibility name retained for downstream imports from the EMA foundation PR.
-
-
 
 
 def _prepared_multicoin_data(
@@ -1525,21 +1076,13 @@ class SharedAccountReplay:
             ) from exc
         gpu_device(torch)
 
-        from optimization.gpu.metrics import (
-            BTC_INTRADAY_RISK_METRICS,
-            ENTRY_INTERVAL_METRICS,
-            EQUITY_BALANCE_DIFF_METRICS,
-            compute_objectives,
-            validate_gpu_metric_names,
-        )
+        from optimization.gpu.metrics import validate_gpu_metric_names
 
         self.needed_metrics = set(validate_gpu_metric_names(
             needed_metrics, native_replay=factual_hsl, device=gpu_device(torch),
         ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
-        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
-            raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -1550,14 +1093,8 @@ class SharedAccountReplay:
         )
 
         self._torch = torch
-        self._compute_objectives = compute_objectives
-        self.btc_analysis_enabled = any(
-            _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
-        )
-        self.btc_risk_enabled = bool(self.needed_metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS))
-        self.equity_balance_diff_enabled = bool(
-            self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
-        )
+        self.core_metric_mask = metric_mask(self.needed_metrics | {"backtest_completion_fraction"})
+        self.core_ew_half_life_days = half_life
         btc_values = np.ascontiguousarray(np.asarray(btc, dtype=np.float64).reshape(-1))
         self.batch_size = max(1, int(batch_size))
         self.max_dispatch_candidate_bars = int(max_dispatch_candidate_bars)
@@ -1586,10 +1123,6 @@ class SharedAccountReplay:
                 "MPS multicoin proxy supports ema_anchor or "
                 f"trailing_martingale, got {self.strategy_kind!r}"
             )
-        self.entry_interval_enabled = bool(
-            self.strategy_kind == "trailing_martingale"
-            and self.needed_metrics & ENTRY_INTERVAL_METRICS
-        )
         self.native_factual_hsl = bool(factual_hsl)
         self.param_keys = (
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
@@ -1648,7 +1181,7 @@ class SharedAccountReplay:
             timestamps,
             selection=selection,
             metrics_only=True,
-            skip_btc_analysis=not self.btc_analysis_enabled,
+            metric_requests=sorted(self.needed_metrics),
         )
         if not (
             len(payload.bot_params_list)
@@ -1736,6 +1269,10 @@ class SharedAccountReplay:
         }
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         base_parameters = prepare_candidate_parameters(config, mss, exchange)
+        self.core_hsl_policy_enabled = {
+            side: bool(base_parameters[f"_core_hsl_policy_enabled_{side}"])
+            for side in self.sides
+        }
         self.base_params = {
             side: {key: base_parameters[key if key in GLOBAL_RISK_PARAM_KEYS else f"{side}_{key}"]
                    for key in self.param_keys}
@@ -1762,7 +1299,6 @@ class SharedAccountReplay:
             backtest_params=backtest_params,
             exchange_params=payload.exchange_params,
             base_params=self.base_params,
-            btc_prices=btc_values if self.btc_analysis_enabled else None,
         )
 
         self.checkpoint_contract.update(checkpoint_runtime(torch))
@@ -1782,6 +1318,11 @@ class SharedAccountReplay:
             )
             per_side_coin_overrides[side] = overrides
             per_side_override_contracts[side] = contract
+        self.core_hsl_policy_pins = {
+            side: [patch.get("bot", {}).get(side, {}).get("hsl", {}).get("enabled")
+                   for patch in per_side_override_contracts[side]["exact_overrides"]]
+            for side in self.sides
+        }
         if len(self.sides) == 1:
             self.coin_override_contract = per_side_override_contracts[self.sides[0]]
         else:
@@ -1923,16 +1464,6 @@ class SharedAccountReplay:
             "strategy_kind": self.strategy_kind,
             "ew_half_life_days": config["backtest"].get("ew_half_life_days"),
         }
-        if self.btc_analysis_enabled:
-            self.metrics_data.update(
-                _btc_daily_price_context(
-                    btc_values,
-                    timestamps,
-                    expected_count=self.data["n"],
-                    expected_days=self.data["n_days"],
-                )
-            )
-            self.metrics_data["btc_prices"] = btc_values
         self.runners = {}
         self.fused_runner = None
         self._runner_specs = {}
@@ -1951,10 +1482,7 @@ class SharedAccountReplay:
             "loss_gate_max_drawdown_fraction": float(
                 backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
             ),
-            "collect_coin_fill_counts": bool(
-                self.needed_metrics
-                & {"fills_active_symbols_count", "fills_top_symbol_fraction"}
-            ),
+            "collect_coin_fill_counts": False,
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
             ),
@@ -1967,30 +1495,7 @@ class SharedAccountReplay:
             "market_order_near_touch_fraction": float(
                 backtest_params.get("market_order_near_touch_fraction", 0.001)
             ),
-            "hsl_ema_tail_enabled": bool(self.needed_metrics & _HSL_EMA_TAIL_METRICS),
-            "hsl_raw_drawdown_enabled": bool(
-                self.needed_metrics
-                & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
-            ),
-            "hsl_raw_tail_enabled": bool(self.needed_metrics & _HSL_RAW_TAIL_METRICS),
-            "recovery_distribution_enabled": bool(
-                self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
-            ),
-            "raw_strategy_risk_enabled": bool(
-                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
-            ),
-            "raw_strategy_growth_enabled": bool(
-                self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS
-            ),
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
-            "btc_prices": (
-                btc_values
-                if self.btc_risk_enabled or self.equity_balance_diff_enabled
-                else None
-            ),
-            "btc_risk_enabled": self.btc_risk_enabled,
-            "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
-            "entry_interval_enabled": self.entry_interval_enabled,
         }
         if selection is not None:
             self.checkpoint_contract["organillo"] = selection.identity
@@ -1998,12 +1503,9 @@ class SharedAccountReplay:
         # Realized consumers have independent request-owned memory spans.
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
-        common_runner_kwargs["exposure_rms_enabled"] = bool(
-            self.needed_metrics & EXPOSURE_RMS_METRICS
-        )
-        common_runner_kwargs["compact_recovery_output"] = bool(
-            factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
-        )
+        common_runner_kwargs["exposure_rms_enabled"] = bool(self.needed_metrics & UTILIZATION_METRICS)
+        common_runner_kwargs["core_metric_mask"] = self.core_metric_mask
+        common_runner_kwargs["core_ew_half_life_days"] = self.core_ew_half_life_days
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(
                 backtest_params, hsl_enabled=bool(hsl_enabled_sides)
@@ -2198,6 +1700,22 @@ class SharedAccountReplay:
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         return self._evaluate(candidates, include_status=False)
 
+    def _core_hsl_configured_enablement(self, candidates):
+        result = []
+        for candidate in candidates:
+            enabled = False
+            for side in self.sides:
+                raw = candidate.get(f"_core_hsl_policy_enabled_{side}",
+                                    candidate.get(f"{side}_hsl_enabled",
+                                                  self.core_hsl_policy_enabled[side]))
+                if self.hsl_signal_mode == "coin":
+                    enabled |= any(bool(raw if pin is None else pin)
+                                   for pin in self.core_hsl_policy_pins[side])
+                else:
+                    enabled |= bool(raw)
+            result.append(enabled)
+        return result
+
     def evaluate_results(self, candidates: list[dict]):
         """Preserve actual simulator terminal status for authoritative consumers."""
         return self._evaluate(candidates, include_status=True)
@@ -2254,209 +1772,47 @@ class SharedAccountReplay:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
-            ew_metadata = None
             if fused_runner is not None:
-                fused_parameters = np.concatenate(
-                    (parameter_matrices["long"], parameter_matrices["short"]),
-                    axis=1,
-                )
-                raw_output = fused_runner.run(
-                    fused_parameters,
-                    profile=self.profile_enabled,
-                )
-                if profile is not None:
-                    _add_gpu_runner_profile(
-                        profile,
-                        fused_runner,
-                        side_count=len(self.sides),
-                    )
-                interrupt_check()
-                stage_started = time.perf_counter() if self.profile_enabled else 0.0
-                recovery_distribution = _mps_strategy_eq_recovery_distribution(
-                    raw_output, self.needed_metrics
-                )
-                ew_metrics, ew_metadata = _reduce_exponential_output(
-                    raw_output, self.run, self.metrics_data, self.needed_metrics
-                )
-                raw_output.update(ew_metrics)
-                if profile is not None:
-                    synchronize()
-                    profile["timings_seconds"]["metric_reduction"] += (
-                        time.perf_counter() - stage_started
-                    )
-                    stage_started = time.perf_counter()
-                output = {
-                    key: value.cpu()
-                    for key, value in raw_output.items()
-                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
-                }
-                if recovery_distribution is not None:
-                    recovery_distribution = recovery_distribution.cpu()
-                if profile is not None:
-                    profile["timings_seconds"]["device_to_host"] += (
-                        time.perf_counter() - stage_started
-                    )
+                parameters = np.concatenate((parameter_matrices["long"], parameter_matrices["short"]), axis=1)
+                runner = fused_runner
             else:
-                raw_side_outputs = {}
-                for side in self.sides:
-                    raw_side_outputs[side] = self.runners[side].run(
-                        parameter_matrices[side],
-                        profile=self.profile_enabled,
-                    )
-                    if profile is not None:
-                        _add_gpu_runner_profile(profile, self.runners[side])
-                    interrupt_check()
-                stage_started = time.perf_counter() if self.profile_enabled else 0.0
-                recovery_distribution = (
-                    _mps_strategy_eq_recovery_distribution(
-                        raw_side_outputs[self.sides[0]], self.needed_metrics
-                    )
-                    if len(self.sides) == 1
-                    else None
-                )
-                if len(self.sides) == 1:
-                    ew_metrics, ew_metadata = _reduce_exponential_output(
-                        raw_side_outputs[self.sides[0]], self.run, self.metrics_data, self.needed_metrics
-                    )
-                    raw_side_outputs[self.sides[0]].update(ew_metrics)
-                if profile is not None:
-                    synchronize()
-                    profile["timings_seconds"]["metric_reduction"] += (
-                        time.perf_counter() - stage_started
-                    )
-                    stage_started = time.perf_counter()
-                side_outputs = {
-                    side: {
-                        key: value.cpu()
-                        for key, value in raw_side_outputs[side].items()
-                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
-                    }
-                    for side in self.sides
-                }
-                if recovery_distribution is not None:
-                    recovery_distribution = recovery_distribution.cpu()
-                if profile is not None:
-                    profile["timings_seconds"]["device_to_host"] += (
-                        time.perf_counter() - stage_started
-                    )
-            stage_started = time.perf_counter() if self.profile_enabled else 0.0
-            stage_device_to_host_before = (
-                profile["timings_seconds"]["device_to_host"]
-                if profile is not None
-                else 0.0
-            )
-            stage_runner_seconds_before = (
-                _gpu_profile_runner_seconds(profile["timings_seconds"])
-                if profile is not None
-                else 0.0
-            )
-            if fused_runner is None and len(self.sides) == 1:
-                side = self.sides[0]
-                output = side_outputs[side]
-                output.update(
-                    _directional_gross_pnl_outputs(
-                        side, output["profit_sum"], output["loss_sum"]
-                    )
-                )
-                output.update(
-                    _directional_entry_initial_metrics(
-                        side, output["initial_entry_balance_fraction"]
-                    )
-                )
-            if recovery_distribution is not None:
-                output["strategy_eq_recovery_distribution"] = recovery_distribution
-            if self.needed_metrics & HARD_STOP_LIFECYCLE_METRICS:
-                output["hsl_unified_scope"] = torch.from_numpy(
-                    parameter_matrices[self.sides[0]][
-                        :, self.param_keys.index("hsl_signal_mode")
-                    ] == 0
-                )
-            timestamp_origin = float(self.metrics_data["ts0"])
-            for key in (
-                "first_fill_ts",
-                "last_fill_ts",
-                "last_high_ts",
-                "first_eq_ts",
-                "last_eq_ts",
-            ):
-                values = output[key].to(torch.float64)
-                output[key] = torch.where(
-                    torch.isfinite(values), values + timestamp_origin, values
-                )
-            if any("_per_twel_ratio_" in name for name in self.needed_metrics):
-                output.update(
-                    _candidate_wallet_exposure_limit_ratio_outputs(
-                        chunk,
-                        self.base_total_wallet_exposure_limit_ratios,
-                        torch=torch,
-                    )
-                )
-            if any("_per_position_slot" in name for name in self.needed_metrics):
-                output.update(
-                    _candidate_position_slot_outputs(
-                        chunk,
-                        self.base_n_positions,
-                        self.base_total_wallet_exposure_limit_ratios,
-                        torch=torch,
-                    )
-                )
-            if (
-                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
-                and "raw_strategy_day_max_dd" not in output
-            ):
-                raise RuntimeError("GPU raw strategy-risk summary is missing")
-            if self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS and not {
-                "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"
-            }.issubset(output):
-                raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
-            if (getattr(self, "native_factual_hsl", False)
-                    and any(name.startswith("hsl_signal_ema_max_fraction") for name in self.needed_metrics)
-                    and "hsl_drawdown_ema_max_portfolio" not in output):
-                raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
-            if (getattr(self, "native_factual_hsl", False)
-                    and self.strategy_kind == "trailing_martingale"
-                    and self.needed_metrics & ENTRY_INTERVAL_METRICS
-                    and "entry_interval_native_metrics" not in output):
-                raise RuntimeError("native entry intervals require compact exact metrics")
-            if (
-                "hsl_signal_ema_worst_1pct_mean_fraction" in self.needed_metrics
-                and (fused_runner is not None or len(self.sides) == 1)
-                and "hsl_drawdown_ema_mean_worst_1pct_portfolio" not in output
-            ):
-                raise RuntimeError("GPU portfolio HSL EMA-tail summary is missing")
-            objectives = self._compute_objectives(
-                output, self.run, self.metrics_data, needed=self.needed_metrics
+                if len(self.sides) != 1:
+                    raise RuntimeError("Core GPU metrics require shared-account fused replay for both sides")
+                runner = self.runners[self.sides[0]]
+                parameters = parameter_matrices[self.sides[0]]
+            raw_output = runner.run(parameters, profile=self.profile_enabled)
+            if profile is not None:
+                _add_gpu_runner_profile(profile, runner, side_count=len(self.sides))
+            interrupt_check()
+            stage_started = time.perf_counter() if profile is not None else 0.0
+            try:
+                packet = raw_output["core_observations"]
+            except KeyError as error:
+                raise RuntimeError("GPU replay omitted requested versioned core observations") from error
+            rows = finalize_observations(
+                packet, sorted(self.needed_metrics), origin_timestamp_ms=int(self.metrics_data["ts0"]),
+                observation_interval_ms=int(self.run.interval_ms),
+                intended_end_timestamp_ms=int(self.metrics_data["ts0"]) + (int(self.metrics_data["n"]) - 1) * int(self.run.interval_ms),
+                ew_half_life_days=self.core_ew_half_life_days,
+                hsl_effective_policy_enabled=self._core_hsl_configured_enablement(chunk),
             )
             if profile is not None:
-                profile["timings_seconds"][
-                    "metric_reduction"
-                ] += _gpu_profile_unattributed_seconds(
-                    profile["timings_seconds"],
-                    time.perf_counter() - stage_started,
-                    device_to_host_before=stage_device_to_host_before,
-                    runner_seconds_before=stage_runner_seconds_before,
+                _add_gpu_terminal_profile(
+                    profile, raw_output, rows,
+                    interval_ms=int(self.run.interval_ms),
+                    origin_timestamp_ms=int(self.metrics_data["ts0"]),
+                    effective_start_step=int(runner.requested_start_idx),
+                    effective_end_step=int(self.metrics_data["n"]) - 1,
                 )
+                profile["timings_seconds"]["metric_reduction"] += time.perf_counter() - stage_started
                 stage_started = time.perf_counter()
-            arrays = {
-                name: value.detach().cpu().numpy() for name, value in objectives.items()
-            }
-            rows = [
-                {name: float(values[index]) for name, values in arrays.items()}
-                for index in range(len(chunk))
-            ]
             if include_status:
                 from optimization.gpu.executor import ReplayResult
-                liquidated = (output["liq_step"] >= 0).tolist()
-                # Transfer the compact sidecar once per cohort, rather than
-                # copying every candidate's batched metadata for each row.
-                if ew_metadata is not None:
-                    ew_metadata = _exponential_metadata_to_host(ew_metadata)
-                results.extend(
-                    ReplayResult(row, bool(flag),
-                                 {"ew": _exponential_metadata_row(ew_metadata, index)}
-                                 if ew_metadata is not None else None)
-                    for index, (row, flag) in enumerate(zip(rows, liquidated))
-                )
+                for row in rows:
+                    row = dict(row)
+                    flag = row.pop("liquidated")
+                    metadata = {key: row.pop(key) for key in ("metric_status", "metric_metadata") if key in row}
+                    results.append(ReplayResult(row, flag, metadata))
             else:
                 results.extend(rows)
             if profile is not None:
@@ -2477,3 +1833,7 @@ class SharedAccountReplay:
 
 
 # Compatibility alias retained for callers and tests from the EMA-only slices.
+
+
+def mps_requested_metric_features(needed_metrics, *, strategy_kind):
+    return requested_metric_features(needed_metrics)

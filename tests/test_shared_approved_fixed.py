@@ -82,7 +82,7 @@ async def test_actual_main_prepares_fixed_policy_before_single_evaluator_replay(
     config["optimize"].update(
         bounds={"long": {"risk": {"max_positions": [1, 3]}}},
         limits=[],
-        scoring=[{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
+        scoring=[{"metric": "cagr_fraction_strategy_equity", "goal": "max"}],
         fixed_runtime_overrides=fixed,
     )
     config["backtest"].update(

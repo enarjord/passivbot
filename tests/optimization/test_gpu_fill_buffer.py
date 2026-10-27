@@ -76,7 +76,7 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
                           starting_balance=1000.0, limit_order_fill_buffer_fraction=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'max_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
@@ -122,10 +122,10 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
     for buffer in [0.0, 0.0015]:
         cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = proxy_cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-                          exchange='bybit', batch_size=1, needed_metrics={'fills_per_day'})
+                          exchange='bybit', batch_size=1, needed_metrics={'gross_turnover_ratio_per_day'})
         result = proxy.evaluate([{}])[0]
         fills, _, exact = run_backtest(candles, mss, cfg, 'bybit', btc, ts)
-        assert result['fills_per_day'] == pytest.approx(exact['fills_per_day'], rel=1e-5)
+        assert result['gross_turnover_ratio_per_day'] == pytest.approx(exact['gross_turnover_ratio_per_day'], rel=1e-5)
         if buffer and not market_orders:
             assert len(fills) == 0
         else:
@@ -158,15 +158,15 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
     for buffer in [0.0, 0.0015]:
         cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-                    exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_fraction_usd'})
+                    exchange='bybit', batch_size=1, needed_metrics={'gross_turnover_ratio_per_day', 'cagr_fraction_strategy_equity'})
         result = proxy.evaluate([{}])[0]
         fills, _, exact = run_backtest(candles, mss, cfg, 'bybit', btc, ts)
         assert len(fills) == 2 * coin_count
         close_fills = [f for f in fills if 'close' in str(f[13])]
         assert len(close_fills) == coin_count
         assert all(int(f[0]) == (21 if buffer else 11) for f in close_fills)
-        assert result['fills_per_day'] == pytest.approx(exact['fills_per_day'], rel=1e-5)
-        assert result['adg_fraction_usd'] == pytest.approx(exact['adg_fraction_usd'], abs=1e-5, rel=1e-3)
+        assert result['gross_turnover_ratio_per_day'] == pytest.approx(exact['gross_turnover_ratio_per_day'], rel=1e-5)
+        assert result['cagr_fraction_strategy_equity'] == pytest.approx(exact['cagr_fraction_strategy_equity'], abs=1e-5, rel=1e-3)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -196,7 +196,7 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
         )
         proxy = SharedAccountReplay(
             config=effective, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-            exchange="bybit", batch_size=8, needed_metrics={"fills_per_day"},
+            exchange="bybit", batch_size=8, needed_metrics={"gross_turnover_ratio_per_day"},
             prepared_data_cache=cache, interrupt_check=interrupt_check,
         )
         proxies.append(proxy)
@@ -207,8 +207,8 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
 
     results = [proxy.evaluate([{}, {}]) for proxy in proxies]
     assert results[1] == results[2]
-    assert all(row["fills_per_day"] > 0.0 for row in results[0])
-    assert all(row["fills_per_day"] == 0.0 for row in results[1])
+    assert all(row["gross_turnover_ratio_per_day"] > 0.0 for row in results[0])
+    assert all(row["gross_turnover_ratio_per_day"] == 0.0 for row in results[1])
     assert cfg["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
 
 
@@ -250,10 +250,10 @@ def test_gpu_large_buffer_with_representable_prices_matches_rust(side, coin_coun
     for buffer in [0.0, 0.999, np.nextafter(1.0, 0.0)]:
         cfg["backtest"]["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-                    exchange="bybit", batch_size=1, needed_metrics={"fills_per_day"})
+                    exchange="bybit", batch_size=1, needed_metrics={"gross_turnover_ratio_per_day"})
         result = proxy.evaluate([{}])[0]
         fills, _, exact = run_backtest(candles, mss, cfg, "bybit", btc, ts)
-        assert result["fills_per_day"] == pytest.approx(exact["fills_per_day"], rel=1e-5)
+        assert result["gross_turnover_ratio_per_day"] == pytest.approx(exact["gross_turnover_ratio_per_day"], rel=1e-5)
         assert (len(fills) == 0) == (buffer > 0.0)
 
 

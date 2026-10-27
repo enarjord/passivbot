@@ -102,7 +102,7 @@ def test_actual_gpu_activation_matches_native_both_strategies_and_side_flips(mon
     fills, _, native = execute_backtest(payload, config)
     if topology == 'directional':
         proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
-            timestamps=timestamps, exchange=args.exchange, batch_size=1, needed_metrics={'fills_per_day'})
+            timestamps=timestamps, exchange=args.exchange, batch_size=1, needed_metrics={'gross_turnover_ratio_per_day'})
         runner = proxy.runners[active_side]
         matrix = proxy._parameter_matrix([{}], active_side)
     else:
@@ -112,14 +112,14 @@ def test_actual_gpu_activation_matches_native_both_strategies_and_side_flips(mon
         for side in ('long', 'short'):
             baseline['bot'][side]['enabled'] = True
         proxy = SharedAccountReplay(config=baseline, hlcvs=candles, mss=markets, btc=btc,
-            timestamps=timestamps, exchange=args.exchange, batch_size=1, needed_metrics={'fills_per_day'})
+            timestamps=timestamps, exchange=args.exchange, batch_size=1, needed_metrics={'gross_turnover_ratio_per_day'})
         cls, options = proxy._runner_specs['fused']
         options = {**options, 'side_activation': payload.backtest_params['side_activation']}
         runner = cls(proxy.run, proxy.data, **options)
         matrix = np.concatenate([proxy._parameter_matrix([{}], side) for side in ('long', 'short')], axis=1)
     raw = runner.run(matrix)
-    assert raw['fill_count_long'].item() == native['fills_count_long']
-    assert raw['fill_count'].item() - raw['fill_count_long'].item() == native['fills_count_short']
+    assert raw['fill_count_long'].item() == sum(str(row[13]).endswith('long') for row in fills)
+    assert raw['fill_count'].item() - raw['fill_count_long'].item() == sum(str(row[13]).endswith('short') for row in fills)
     entries = [row for row in fills if str(row[13]).startswith('entry_')]
     assert entries and all(str(row[13]).endswith('_' + active_side) for row in entries)
     assert raw['first_fill_ts'].item() == int(fills[0][1]) - int(timestamps[0])
@@ -132,5 +132,5 @@ def test_actual_offline_cli_backtest_gpu_smoke(tmp_path, kind):
         pytest.skip('local Metal or CUDA device unavailable')
     from passivbot_cli.main import main
     assert main(['tool', 'gpu-parity', '--fixture', kind, '--sides', 'both', '--coins', '2',
-                 '--bars', '64', '--seed', '2026', '--metrics', 'fills_per_day',
+                 '--bars', '64', '--seed', '2026', '--metrics', 'gross_turnover_ratio_per_day',
                  '--report', str(tmp_path / 'parity.json'), '--compact']) == 0

@@ -52,7 +52,11 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
     metrics = row["metrics"]
     assert metrics["completed"] and not metrics["liquidated"]
     assert metrics["observed_end_ms"] == int(prepared["candle_timestamps_ms"][-2]) + 60000
-    assert metrics["sample_count"] == len(result[1]) + 1
+    metadata = result[2]["metric_metadata"]
+    assert metadata["definition_version"] == metrics["native_equity_definition_version"] == 1
+    assert metrics["sample_count"] == len(result[1]) == metadata["equity_observation_count"]
+    assert result[1][0, 0] == metadata["start_timestamp_ms"] == prepared["candle_timestamps_ms"][2]
+    assert result[1][0, 1] == params["starting_balance"]
     assert metrics["final_equity"] == result[1][-1, 1]
     assert metrics["net_return_fraction"] == pytest.approx(result[1][-1, 1] / params["starting_balance"] - 1)
     assert metrics["net_realized_pnl"] == pytest.approx(math.fsum(float(fill[3]) + float(fill[4]) for fill in result[0]))
@@ -60,3 +64,32 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
     assert metrics["gross_exposure_max_ratio"] > 0
     assert metrics["exposure_denominator_value"] == params["starting_balance"]
     assert "adg_fraction_strategy_equity" not in metrics
+
+
+    # Independent ordinary-account reconstruction uses native executed fills and
+    # prepared causal close prices, without any strategy-equity/HSL signal curve.
+    positions, balances, exposures, accounts = {}, params["starting_balance"], [0.0], [params["starting_balance"]]
+    cursor = 0
+    coin_index = {coin: index for index, coin in enumerate(params["coins"])}
+    for timestamp, *_ in result[1][1:]:
+        bar = int((timestamp - params["first_timestamp_ms"]) // 60000) - 1
+        while cursor < len(result[0]) and int(result[0][cursor][0]) <= bar:
+            fill = result[0][cursor]
+            key = (fill[2], str(fill[13]).rsplit("_", 1)[-1])
+            positions[key] = (float(fill[11]), float(fill[12]))
+            balances += float(fill[3]) + float(fill[4])
+            cursor += 1
+        upnl, notional = [], []
+        for (coin, _), (size, entry_price) in positions.items():
+            mark = float(args[0][bar, coin_index[coin], 2])
+            multiplier = markets[coin]["c_mult"]
+            upnl.append(size * (mark - entry_price) * multiplier)
+            notional.append(abs(size) * mark * multiplier)
+        accounts.append(balances + math.fsum(upnl))
+        exposures.append(math.fsum(notional) / params["starting_balance"])
+    assert cursor == len(result[0])
+    np.testing.assert_allclose(result[1][:, 1], accounts, rtol=1e-12, atol=1e-10)
+    assert metrics["gross_exposure_max_ratio"] == pytest.approx(max(exposures))
+    assert metrics["gross_exposure_terminal_ratio"] == pytest.approx(exposures[-1])
+    assert metrics["gross_exposure_mean_ratio"] == pytest.approx(math.fsum(exposures[:-1]) / (len(exposures) - 1))
+    assert metrics["exposed_time_fraction"] == pytest.approx(sum(value > 0 for value in exposures[:-1]) / (len(exposures) - 1))

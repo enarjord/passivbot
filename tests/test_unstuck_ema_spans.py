@@ -5,6 +5,7 @@ import json
 import logging
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config.schema import get_expanded_config_prototype
 
@@ -24,7 +25,7 @@ from released_v8_fixtures import released_v8_policy
 
 
 def legacy_config(kind="trailing_martingale"):
-    c = get_released_v8_defaults(strategy_kind=kind)
+    c = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     nonweighted = released_v8_policy()
     c["optimize"]["scoring"] = nonweighted["optimize"]["scoring"]
     # Keep released authoring spellings independent of the current template.

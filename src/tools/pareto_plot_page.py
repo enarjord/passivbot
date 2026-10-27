@@ -23,7 +23,7 @@ select{max-width:100%;width:100%}.axis{flex:1;min-width:220px}.axis .goal{margin
 <div class="axis" id="z-controls"><label for="axis-z">Z metric</label><select id="axis-z"></select><select class="goal" id="goal-z" aria-label="Z ideal direction"></select></div>
 </section><div class="workspace"><section class="chart"><div class="summary" id="summary" role="status"></div><div id="plot"></div><div id="ideal"></div>
 <p class="note">★ The chosen member is closest to the ideal after scaling each selected axis to the visible range, with equal weight per axis. ◇ The theoretical ideal combines the best visible value on each axis; it need not be a real candidate. Both update with limits. Ties choose the first saved member. 2D axes point toward a lower-left ideal. Axis ranges stay fixed while filtering so movement is visible. Hover for values; use the toolbar to reset or export PNG.</p>
-<p class="note">Saved objectives may include penalties. Other metrics use saved aggregates or means; statistics are listed separately. This is a projection of saved members, not a recomputed Pareto front.</p><div id="error" role="alert" hidden></div></section>
+<p class="note">Saved objectives are raw values before penalties. Other metrics use saved aggregates or means; statistics are listed separately. Infinite and unavailable observations retain explicit export statuses and have no plot coordinates. This is a projection of saved members, not a recomputed Pareto front.</p><div id="error" role="alert" hidden></div></section>
 <aside><h2>Limits</h2><p class="muted">Inclusive floors and ceilings. Enabled limits stay active when you switch axes. Missing values fail an enabled limit.</p>
 <div class="add-filter"><select id="filter-metric" aria-label="Additional limit metric"></select><button id="add-filter">Add</button></div>
 <button id="reset-limits">Reset all limits</button><div id="limits"></div>
@@ -34,14 +34,19 @@ SCRIPT = r'''
 "use strict";
 const finite = value => typeof value === "number" && Number.isFinite(value);
 function computeView(dataset, axes, goals, limits) {
+    const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
     const columns = new Map(dataset.metrics.map(metric => [metric.key, metric.values]));
+    const limitValue = (key, row) => {
+        const metric = metrics.get(key), status = metric.statuses?.[row]?.status;
+        return status === "positive_infinity" ? Infinity : status === "negative_infinity" ? -Infinity : metric.values[row];
+    };
     const active = limits.filter(limit => limit.enabled);
     const indices = [];
     let filtered = 0, missing = 0;
     for (let row = 0; row < dataset.names.length; row++) {
         if (!active.every(limit => {
-            const value = columns.get(limit.key)[row];
-            return finite(value) && (limit.mode === "floor" ? value >= limit.value : value <= limit.value);
+            const value = limitValue(limit.key, row);
+            return typeof value === "number" && !Number.isNaN(value) && (limit.mode === "floor" ? value >= limit.value : value <= limit.value);
         })) { filtered++; continue; }
         if (!axes.every(key => finite(columns.get(key)[row]))) { missing++; continue; }
         indices.push(row);

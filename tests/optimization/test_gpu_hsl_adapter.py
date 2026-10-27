@@ -78,6 +78,7 @@ kernel void v9_entry_red_time_probe(
 
 _ENTRY_PROBE = r"""
 kernel void v9_pending_entry_probe(
+    constant int* market_execution_ticks,
     constant float* params, constant float* settings, constant float* bars,
     constant int* ticks, constant int* touch_min_qty_relation,
     constant float* overrides, constant int& preceding_close,
@@ -125,13 +126,13 @@ kernel void v9_pending_entry_probe(
     TrailingMartingaleMulticoinSideConfig config = {};
     config.coin_hsl_mode = side.hsl.signal_mode == HSL_SIGNAL_COIN;
     float hsl_equity = initial_balance;
-    bool filled = process_tm_multicoin_side_fills(side, config, account, fills,
+    bool filled = process_tm_multicoin_side_fills(market_execution_ticks, side, config, account, fills,
         bars, ticks, ticks, ticks, ticks, touch_min_qty_relation, settings, overrides, output,
         0, 0, 2, false, true, false, false, 1.0f, false, 0.0f, 0.0f,
         false, hsl_equity);
 #else
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
-    bool filled = process_ema_multicoin_side_fills(side, account, fills,
+    bool filled = process_ema_multicoin_side_fills(market_execution_ticks, side, account, fills,
         bars, ticks, settings, overrides, output, 0, 0, 2, false, true,
         false, 0.0f, false, 400.0f);
 #endif
@@ -191,9 +192,9 @@ kernel void v9_aggregated_realized_clock_probe(device float* output,
     int k = 0;
     // V9_REALIZED_COMPLETED_CLOCK
     output[0] = account.loss_gate_memory.drawdown;
-    float day_count=0, count=0, entries=0, longs=0, peak=0, peak_k=0, recovery=0;
-    record_realized_net(-10.0f, account, day_count, count, entries, longs,
-        peak, peak_k, recovery, 1.0f, false, true);
+    float count=0, entries=0, longs=0;
+    record_realized_net(-10.0f, account, count, entries, longs,
+        1.0f, false, true);
     output[1] = account.loss_gate_memory.drawdown;
     k = 1;
     // V9_REALIZED_COMPLETED_CLOCK
@@ -214,9 +215,6 @@ def _native_source(root, strategy):
         "// PASSIVBOT_MULTICOIN_COMMON": ["mps_decimal_rounding.metal", "mps_multicoin_common.metal"],
         "// PASSIVBOT_ADAPTIVE_TIMING": ["mps_adaptive_timing.metal"],
         "// PASSIVBOT_UNSTUCK_EMA_COMMON": ["mps_unstuck_ema_common.metal"],
-        "// PASSIVBOT_BTC_RISK_COMMON": ["mps_btc_risk_common.metal"],
-        "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON": ["mps_equity_balance_diff_common.metal"],
-        "// PASSIVBOT_ENTRY_INTERVAL_COMMON": ["mps_entry_interval_common.metal"],
     }
     for marker, paths in replacements.items():
         assert source.count(marker) == 1
@@ -393,7 +391,8 @@ def test_pending_native_entry_checks_current_scope_permission(native_entry_progr
                             dtype=torch.float32, device=device)
     output = torch.full((4,), float("nan"), dtype=torch.float32, device=device)
     relation = torch.zeros((2, 2), dtype=torch.int8 if device == "cuda" else torch.int32, device=device)
-    library.v9_pending_entry_probe(params, settings, bars, ticks, relation, overrides,
+    execution_ticks = bars[:, 2].to(torch.int32).contiguous()
+    library.v9_pending_entry_probe(execution_ticks, params, settings, bars, ticks, relation, overrides,
                                    int(preceding_close), output, threads=1)
     np.testing.assert_array_equal(output.cpu().numpy(),
                                   [1, int(preceding_close), int(preceding_close), 400])

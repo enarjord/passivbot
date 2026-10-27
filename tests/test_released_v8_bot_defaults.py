@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config.migrations.released_v8 import (
     get_released_v8_defaults, materialize_released_v8_bot_defaults,
@@ -12,9 +13,7 @@ from config.migrations.v9 import migrate_v8_to_v9
 
 
 def released(kind="trailing_martingale"):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [row for row in source["optimize"]["scoring"]
-                                      if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     return source
 
 

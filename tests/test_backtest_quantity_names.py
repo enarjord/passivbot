@@ -114,8 +114,8 @@ def test_native_leveraged_collateral_target_is_not_clipped_or_rescaled():
     assert len(fills) == 0
     # Initialization buys 23.75 BTC at 100, financed by -1375 USD.
     # The separate debt ceiling applies to top-ups, preserving initial allocation.
-    assert equities[:, 1] == pytest.approx([1000.0, 2187.5, 3375.0])
-    assert equities[:, 3] == pytest.approx([1000.0] * 3)
+    assert equities[:, 1] == pytest.approx([1000.0, 1000.0, 2187.5, 3375.0])
+    assert equities[:, 3] == pytest.approx([1000.0] * 4)
 
 
 def test_native_topup_limit_divides_usd_debt_by_wallet_value():

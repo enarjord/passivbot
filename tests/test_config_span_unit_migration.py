@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -14,9 +15,7 @@ from tools.migrate_config_v9 import migrate
 
 
 def released_source(kind):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [item for item in source["optimize"]["scoring"]
-                                      if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     return source
 
 

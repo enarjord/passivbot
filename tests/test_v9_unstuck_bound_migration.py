@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -11,8 +12,7 @@ from config.optimize_bounds import flatten_optimize_bounds
 
 
 def _released_config(kind="trailing_martingale"):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [entry for entry in source["optimize"]["scoring"] if not entry["metric"].endswith("_w") and not entry["metric"].startswith("strategy_eq_underwater_pct_")]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     for side in ("long", "short"):
         for key in ("ema_span_0", "ema_span_1"):
             source["bot"][side]["unstuck"].pop(key)

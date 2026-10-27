@@ -2,55 +2,6 @@
 import numpy as np
 from optimization.gpu.model import adaptive_params
 
-def _runner_context(strategy, sides, *, chunked=False,
-                    raw_growth=False, raw_risk=False, btc_risk=False, hsl_tail=False, shock=False,
-                    factual_hsl=True, count=1513):
-    from test_gpu_mps import _multicoin_exposure_fixture
-    from optimization.gpu.mps_kernel import (
-        MpsEmaAnchorMulticoinRunner, MpsEmaAnchorMulticoinFusedRunner,
-        MpsTrailingMartingaleMulticoinRunner, MpsTrailingMartingaleMulticoinFusedRunner,
-    )
-    closes = np.tile([100., 120.], (count, 1))
-    if shock:
-        closes[100:700, 0] *= .7
-        closes[200:800, 1] *= 1.3
-    _, row, run, data = _multicoin_exposure_fixture(
-        strategy, "long" if sides == "both" else sides,
-        count=count, requested_start_index=31, return_context=True, closes=closes,
-    )
-    cls = {
-        ("ema_anchor", False): MpsEmaAnchorMulticoinRunner,
-        ("ema_anchor", True): MpsEmaAnchorMulticoinFusedRunner,
-        ("trailing_martingale", False): MpsTrailingMartingaleMulticoinRunner,
-        ("trailing_martingale", True): MpsTrailingMartingaleMulticoinFusedRunner,
-    }[strategy, sides == "both"]
-    if shock:
-        from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy == "ema_anchor" else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-        for key, value in {"hsl_enabled": 1, "hsl_signal_mode": 2,
-                           "hsl_drawdown_threshold_fraction": .01, "hsl_drawdown_fraction_ema_span_minutes": 2.5,
-                           "hsl_cooldown_ms_lo": 300000, "hsl_cooldown_ms_hi": 0,
-                           "hsl_memory_ema_span_minutes": 1440}.items():
-            row[keys.index(key)] = value
-    kwargs = dict(recovery_distribution_enabled=True,
-                  hsl_ema_tail_enabled=hsl_tail,
-                  factual_hsl=factual_hsl,
-                  raw_strategy_growth_enabled=raw_growth, raw_strategy_risk_enabled=raw_risk,
-                  btc_risk_enabled=btc_risk,
-                  btc_prices=np.full(count, 30000.0) if btc_risk else None)
-    if shock:
-        kwargs["pnl_lookback_bars"] = 1440
-    if sides != "both":
-        kwargs["side"] = sides
-    if chunked:
-        assert strategy == "trailing_martingale" and sides != "both"
-        kwargs["max_dispatch_candidate_bars"] = 47 * 2 * 3
-    params = np.asarray([row] * 3, dtype=np.float64)
-    if sides == "both":
-        params = np.concatenate((params, params), axis=1)
-    return cls(run, data, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}), params
-
-
 def _base_parameter_values() -> dict[str, float]:
     return {
         **adaptive_params({}),
@@ -137,7 +88,7 @@ def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
         "--fixture", strategy, "--sides", "long", "--coins", str(coins),
         "--bars", str(multicoin_bars), "--seed", str(seed)]))
     config, candles, markets, btc, timestamps = inputs
-    metrics = {"adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day"}
+    metrics = {"cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day"}
     replay = SharedAccountReplay(config=config, hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=dispatch_batch_size,
         needed_metrics=metrics, factual_hsl=True)

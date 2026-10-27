@@ -46,42 +46,6 @@ inline float bootstrap_market_ema(
     return observed ? numerator / denominator : 0.0f;
 }
 
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
-// Compact moments preserve every observed mark, including zero drawdowns.
-// Daily partitioning limits float32 accumulation error; it does not resample.
-struct RawStrategyRiskState {
-    float peak;
-    float daily_worst;
-    float drawdown_sum;
-    float squared_sum;
-    float sample_count;
-};
-
-inline void update_raw_strategy_risk(float equity, thread RawStrategyRiskState& state) {
-    state.peak = fmax(state.peak, equity);
-    const float drawdown = (state.peak - equity) / fmax(fabs(state.peak), 1.0e-12f);
-    state.daily_worst = fmax(state.daily_worst, drawdown);
-    state.drawdown_sum += drawdown;
-    state.squared_sum += drawdown * drawdown;
-    state.sample_count += 1.0f;
-}
-
-inline void reset_raw_strategy_risk_day(thread RawStrategyRiskState& state) {
-    state.daily_worst = 0.0f;
-    state.drawdown_sum = 0.0f;
-    state.squared_sum = 0.0f;
-    state.sample_count = 0.0f;
-}
-
-inline void write_raw_strategy_risk_day(
-    thread const RawStrategyRiskState& state, device float* daily, int offset
-) {
-    daily[offset] = state.daily_worst;
-    daily[offset + 1] = state.drawdown_sum;
-    daily[offset + 2] = state.squared_sum;
-    daily[offset + 3] = state.sample_count;
-}
-#endif
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -306,6 +270,9 @@ struct JointPortfolioAccount {
     RealizedDecayMemory loss_gate_memory;
     int realized_decay_interval_minutes;
     bool realized_decay_valid;
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    CoreGpuState core;
+#endif
 };
 
 inline JointPortfolioAccount init_joint_portfolio_account(
@@ -323,6 +290,9 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.unstuck_memory.enabled = account.loss_gate_memory.enabled = false;
     account.realized_decay_interval_minutes = 1;
     account.realized_decay_valid = true;
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    account.core = init_core_gpu(starting_balance, 0);
+#endif
     return account;
 }
 
@@ -398,40 +368,25 @@ inline void record_joint_portfolio_fill(
 inline void record_realized_net(
     float net_pnl,
     thread JointPortfolioAccount& account,
-    thread float& day_fill_count,
     thread float& fill_count,
     thread float& fill_count_entry,
     thread float& fill_count_long,
-    thread float& pnl_recovery_peak,
-    thread float& pnl_recovery_peak_k,
-    thread float& pnl_recovery_max_min,
     float fill_k,
     bool is_entry,
     bool is_long
 ) {
+#if PASSIVBOT_CORE_REQUEST_MASK != 0
+    account.core.pre_fill_balance = account.balance;
+    core_record_fill(account.core, int(fill_k), net_pnl, is_long);
+#endif
     advance_joint_realized_memory(account, int(fill_k));
     record_joint_portfolio_fill(account, net_pnl, is_long);
-    day_fill_count += 1.0f;
     fill_count += 1.0f;
     if (is_entry) fill_count_entry += 1.0f;
     if (is_long) fill_count_long += 1.0f;
-    if (account.realized_pnl_total > pnl_recovery_peak) {
-        if (pnl_recovery_peak_k >= 0.0f) {
-            pnl_recovery_max_min = fmax(
-                pnl_recovery_max_min, fill_k - pnl_recovery_peak_k
-            );
-        }
-        pnl_recovery_peak = account.realized_pnl_total;
-        pnl_recovery_peak_k = fill_k;
-    }
+
 }
 
-inline void record_gross_pnl(
-    float pnl, thread float& profit_sum, thread float& loss_sum
-) {
-    if (pnl > 0.0f) profit_sum += pnl;
-    else loss_sum += fabs(pnl);
-}
 
 // Backtest WEL denominator mode is fixed for a compiled proxy instance.
 #ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY
@@ -626,15 +581,10 @@ inline bool held_positions_have_missing_prices(
 #endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
 struct ExposureRmsState {
-    float sum[7];
-    float correction[7];
-    uint samples;
     float base_wel[2 * MAX_COINS];
 };
 inline ExposureRmsState init_exposure_rms() {
     ExposureRmsState state;
-    state.samples = 0;
-    for (int i = 0; i < 7; ++i) { state.sum[i] = 0.0f; state.correction[i] = 0.0f; }
     for (int i = 0; i < 2 * MAX_COINS; ++i) state.base_wel[i] = 0.0f;
     return state;
 }
@@ -660,33 +610,7 @@ inline float exposure_rms_position_moment(float e, float wel, float limit) {
     return finite_positive(e) && finite_positive(wel) && finite_positive(limit)
         ? e * (e / wel) / limit : NAN;
 }
-inline float exposure_rms_ratio(float exposure, float limit) {
-    if (exposure == 0.0f) return 0.0f;
-    return finite_positive(exposure) && finite_positive(limit) ? exposure / limit : NAN;
-}
-inline void record_exposure_rms(thread ExposureRmsState& state,
-    float long_exposure, float short_exposure, float long_moment, float short_moment,
-    float long_limit, float short_limit
-) {
-    const float long_ratio = exposure_rms_ratio(long_exposure, long_limit);
-    const float short_ratio = exposure_rms_ratio(short_exposure, short_limit);
-    const float gross = long_exposure + short_exposure;
-    const float values[7] = {long_exposure * long_exposure, short_exposure * short_exposure,
-        gross * gross, long_ratio * long_ratio, short_ratio * short_ratio,
-        long_moment, short_moment};
-    ++state.samples;
-    for (int i = 0; i < 7; ++i) {
-        // Compensated sums prevent long float32 histories losing small samples.
-        const float y = values[i] - state.correction[i];
-        const float next = state.sum[i] + y;
-        state.correction[i] = (next - state.sum[i]) - y;
-        state.sum[i] = next;
-    }
-}
-inline void finish_exposure_rms(thread const ExposureRmsState& state,
-    device float* scalars, int offset
-) {
-    for (int i = 0; i < 7; ++i)
-        scalars[offset + i] = state.samples > 0 ? sqrt(state.sum[i] / float(state.samples)) : NAN;
-}
+
+
+
 #endif

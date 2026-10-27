@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 from jsonschema import Draft202012Validator
 
 from config import prepare_config
@@ -204,9 +205,7 @@ def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changing_defaults(kind, scope):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [row for row in source["optimize"]["scoring"]
-                                      if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     source["optimize"]["bounds"] = {}
     source["live"]["hsl_signal_mode"] = {"portfolio": "unified", "position_side": "pside"}.get(scope, scope)
     if scope == "portfolio":

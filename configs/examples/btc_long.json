@@ -26,13 +26,7 @@
         "ohlcv_source_dir": null,
         "organillo_csv": null,
         "organillo_sha256": null,
-        "reducer": {
-            "default": "mean",
-            "drawdown_worst_hsl": "max",
-            "drawdown_worst_mean_1pct_hsl": "max",
-            "peak_recovery_hours_hsl": "max",
-            "position_held_max_hours": "max"
-        },
+        "reducer": {"default": "mean"},
         "scenarios": [],
         "start_date": "2020-01-15",
         "starting_balance": 100000,
@@ -326,23 +320,7 @@
             "tuning_mode": "auto"
         },
         "iters": 300000,
-        "limits": [
-            {
-                "metric": "drawdown_max_fraction_btc",
-                "penalize_if": "greater_than",
-                "value": 0.5
-            },
-            {
-                "metric": "peak_recovery_max_hours_btc",
-                "penalize_if": "greater_than",
-                "value": 672
-            },
-            {
-                "metric": "loss_profit_ratio",
-                "penalize_if": "greater_than",
-                "value": 0.35
-            }
-        ],
+        "limits": [{"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.5}, {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 1.0}],
         "n_cpus": 6,
         "objective_scenario": null,
         "pareto_max_size": 1000,
@@ -372,11 +350,7 @@
             }
         },
         "round_to_n_significant_digits": 4,
-        "scoring": [
-            {"goal": "max", "metric": "adg_fraction_btc"},
-            {"goal": "max", "metric": "mdg_fraction_btc"},
-            {"goal": "max", "metric": "sharpe_ratio_btc"}
-        ],
+        "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}, {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"}],
         "seed": null,
         "write_all_results": false
     }

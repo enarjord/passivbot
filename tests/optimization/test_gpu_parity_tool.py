@@ -209,7 +209,7 @@ def test_prepared_inputs_preserve_wrapped_config_and_clear_gene_bounds(tmp_path)
 def test_prepared_inputs_extract_saved_result_metadata_without_changing_source(tmp_path):
     paths, config, _markets, candles = _prepared_fixture_files(tmp_path)
     config.update(
-        analysis={"fills_per_day": 1.0}, metrics={"fills_per_day": 1.0},
+        analysis={"gross_turnover_ratio_per_day": 1.0}, metrics={"gross_turnover_ratio_per_day": 1.0},
         suite_metrics={"scenario_labels": ["base"]}, optimizer_anchor={"index": 0},
         optimizer_evaluation_contract={"version": 5},
     )
@@ -239,7 +239,7 @@ def test_prepared_snapshot_extraction_preserves_strict_policy_validation(
     if envelope == "wrapper":
         config = {"config": config}
     elif envelope == "result":
-        config["metrics"] = {"fills_per_day": 1.0}
+        config["metrics"] = {"gross_turnover_ratio_per_day": 1.0}
     paths[0].write_text(json.dumps(config))
     with pytest.raises(ValueError, match=message):
         gpu_parity.prepared_inputs(_prepared_options(paths))
@@ -490,7 +490,7 @@ def test_main_rejects_boolean_policy_before_simulation(monkeypatch, capsys, tmp_
         pytest.fail("invalid numeric policy must not start a comparison")
     monkeypatch.setattr(gpu_parity, "run_comparison", simulation_forbidden)
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"fills_per_day": {"absolute": True, "relative": False}}))
+    policy.write_text(json.dumps({"gross_turnover_ratio_per_day": {"absolute": True, "relative": False}}))
     assert gpu_parity.main(["--fixture", "ema_anchor", "--tolerances", str(policy)]) == 2
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "input_failed"
@@ -520,15 +520,15 @@ def test_main_uses_prepared_reducer_and_preserves_stdout_when_save_fails(monkeyp
 
     def inputs(options):
         prepared = original(options)
-        prepared[0]["backtest"]["reducer"]["fills_per_day"] = "std"
+        prepared[0]["backtest"]["reducer"]["gross_turnover_ratio_per_day"] = "std"
         prepared[0]["optimize"]["limits"] = [
-            {"metric": "fills_per_day", "penalize_if": "greater_than", "value": 0}
+            {"metric": "gross_turnover_ratio_per_day", "penalize_if": "greater_than", "value": 0}
         ]
         return prepared
 
     def comparison(_inputs, _exchange, _metrics, _policies, checks, **_kwargs):
-        assert checks[0]["metric_key"] == "fills_per_day_std"
-        feasibility = compare_limits({"fills_per_day": 100}, {"fills_per_day": 100}, checks)
+        assert checks[0]["metric_key"] == "gross_turnover_ratio_per_day_std"
+        feasibility = compare_limits({"gross_turnover_ratio_per_day": 100}, {"gross_turnover_ratio_per_day": 100}, checks)
         assert feasibility["cpu_feasible"] is True
         return {"passed": feasibility["passed"], "feasibility": feasibility}
 
@@ -569,19 +569,19 @@ def test_real_cuda_multicoin_filter_preserves_funded_cpu_and_gpu_runs(
     options = args("--fixture", strategy, "--sides", sides)
     inputs = gpu_parity.fixture_inputs(options)
     baseline = gpu_parity.run_comparison(
-        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+        inputs, "binance", ["gross_turnover_ratio_per_day"], gpu_parity.DEFAULT_TOLERANCES
     )
     inputs[0]["backtest"]["filter_by_min_effective_cost"] = True
     filtered = gpu_parity.run_comparison(
-        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+        inputs, "binance", ["gross_turnover_ratio_per_day"], gpu_parity.DEFAULT_TOLERANCES
     )
     # Both engines independently consider these markets affordable. Filtering
     # must not introduce the old all-zero screen; other known simulator gaps
     # remain visible rather than widening the tool's CPU/GPU tolerance here.
     for engine in ("cpu", "gpu"):
-        assert baseline["metrics"]["fills_per_day"][engine] > 0
-        assert filtered["metrics"]["fills_per_day"][engine] == pytest.approx(
-            baseline["metrics"]["fills_per_day"][engine], rel=1e-7
+        assert baseline["metrics"]["gross_turnover_ratio_per_day"][engine] > 0
+        assert filtered["metrics"]["gross_turnover_ratio_per_day"][engine] == pytest.approx(
+            baseline["metrics"]["gross_turnover_ratio_per_day"][engine], rel=1e-7
         )
 
 
@@ -609,9 +609,9 @@ def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
     for coin in config["backtest"]["coins"]["binance"]:
         markets[coin].update(min_cost=5.0, maker=0.0, taker=0.0)
     report = gpu_parity.run_comparison(
-        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+        inputs, "binance", ["gross_turnover_ratio_per_day"], gpu_parity.DEFAULT_TOLERANCES
     )
-    metric = report["metrics"]["fills_per_day"]
+    metric = report["metrics"]["gross_turnover_ratio_per_day"]
     assert (metric["cpu"] > 0) is funded
     if initial_qty_fraction == float(np.nextafter(0.01, 0.0)):
         # This input and exactly 0.01 have identical float32 payloads. CPU
@@ -640,7 +640,7 @@ def test_real_cuda_passive_recursive_ladders_recover_cpu_metrics(
     # fills and ~95% of ADG. Keep the stricter diagnostic policy unchanged and
     # separately guard the recovered trajectory to 0.1%; minor tick/float32
     # differences still appear in the report and need case-specific assessment.
-    for name in ("adg_fraction_strategy_equity", "fills_per_day"):
+    for name in ("cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"):
         metric = report["metrics"][name]
         assert metric["cpu"] > 0
         assert metric["gpu"] == pytest.approx(metric["cpu"], rel=1e-3)

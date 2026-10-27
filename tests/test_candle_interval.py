@@ -90,8 +90,8 @@ def test_backtest_with_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
-    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 5
     config['bot']["portfolio"]['hedge_mode'] = False
 
     n_minutes = 60
@@ -143,35 +143,18 @@ def test_backtest_with_candle_interval():
     fills, equities_array, analysis = execute_backtest(payload, config)
     assert equities_array.shape[1] == 4
     assert equities_array.shape[0] <= n_minutes // 5
-    assert np.isfinite(analysis["position_episodes_per_day"])
     assert analysis["liquidated"] is False
-    assert "win_rate_w" not in analysis
-    for key in [
-        "trade_win_fraction",
-        "trade_loss_max_fraction",
-        "trade_loss_mean_fraction",
-        "trade_loss_median_fraction",
-        "adg_to_paper_loss_max_ratio_usd",
-        "adg_to_paper_loss_mean_ratio_usd",
-        "adg_to_absolute_net_exposure_max_ratio_usd",
-        "adg_to_absolute_net_exposure_mean_ratio_usd",
-        "peak_recovery_max_days_realized_pnl",
-        "peak_recovery_max_days_usd",
-        "position_held_max_days",
-        "position_unchanged_max_days",
-        "high_exposure_max_days_long",
-        "recovery_max_days_strategy_equity",
-        "pain_index_fraction_strategy_equity",
-        "ulcer_index_fraction_strategy_equity",
-        "fills_count",
-        "fills_per_day",
-        "fills_gap_max_days",
-        "fills_gap_time_weighted_mean_hours",
-        "position_held_time_weighted_mean_hours",
-        "fills_per_day_per_position_slot",
-    ]:
-        assert key in analysis
-        assert np.isfinite(analysis[key])
+    assert analysis["metric_metadata"]["observation_interval_ms"] == 300_000
+    for metric in ("cagr_fraction_strategy_equity", "backtest_completion_fraction",
+                   "gross_turnover_ratio_per_day", "fills_gap_max_days",
+                   "position_held_max_days", "position_held_time_weighted_mean_hours"):
+        assert np.isfinite(analysis[metric])
+    for metric in ("drawdown_max_fraction_strategy_equity", "pain_index_fraction_strategy_equity",
+                   "ulcer_index_fraction_strategy_equity"):
+        assert analysis[metric] is None
+        assert analysis["metric_status"][metric]["status"] == "invalid"
+    assert "fills_per_day" not in analysis
+    assert "adg_fraction_usd" not in analysis
 
 
 def test_backtest_allows_hsl_ema_span_below_candle_interval():

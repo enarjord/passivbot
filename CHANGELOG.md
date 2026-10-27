@@ -6,6 +6,18 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Replace broad backtest/optimizer analysis with 24 versioned core metric quantities and
+  requested-only bounded accumulation. Use a 365.25-day year, complete UTC daily returns for
+  volatility/Sharpe/Sortino/Omega, minute path risk, unsmoothed endpoint CAGR and a single CAGR EW
+  with a 180-day default half-life. No risk-free or benchmark subtraction is applied.
+  Include balance-normalized daily turnover, HSL execution-episode loss maximum/mean and RED
+  time, gross strategy exposure, fee-inclusive realized loss/profit and signed short profit
+  contribution. Retire redundant metric families/variants; preserve both penalty directions.
+  Raw statuses and definition versions guard scoring, limits and saved fitness; re-evaluate
+  prior objectives and thresholds. Keep unavailable selected metrics infeasible even without
+  numeric limits. Preserve factual full-precision equity exports and causal BTC quotes at
+  pre-fill and early-terminal boundaries, with plot downsampling separate from saved observations.
+
 - Remove `backtest.visible_metrics` and its console-only metric filtering. Backtests display
   their emitted analysis directly; explicit released-v8 conversion drops the retired presentation
   field, and current configs reject it.

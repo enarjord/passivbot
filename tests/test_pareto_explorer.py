@@ -31,21 +31,22 @@ def _write_candidate(
     extra_stats: dict[str, float] | None = None,
 ) -> None:
     stats = {
-        "metric_a": _metric_stats(objectives["metric_a"]),
-        "metric_b": _metric_stats(objectives["metric_b"]),
-        "metric_c": _metric_stats(objectives["metric_c"]),
+        "cagr_fraction_strategy_equity": _metric_stats(objectives["cagr_fraction_strategy_equity"]),
+        "omega_ratio_strategy_equity": _metric_stats(objectives["omega_ratio_strategy_equity"]),
+        "sortino_ratio_strategy_equity": _metric_stats(objectives["sortino_ratio_strategy_equity"]),
     }
     for metric, value in (extra_stats or {}).items():
         stats[metric] = _metric_stats(value)
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "metric_a", "goal": "max"},
-                {"metric": "metric_b", "goal": "max"},
-                {"metric": "metric_c", "goal": "max"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+                {"metric": "omega_ratio_strategy_equity", "goal": "max"},
+                {"metric": "sortino_ratio_strategy_equity", "goal": "max"},
             ]
         },
         "metrics": {
+            "definition_version": 1,
             "objectives": objectives,
             "stats": stats,
         },
@@ -68,29 +69,30 @@ def _write_suite_candidate(
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
-                {"metric": "recovery_max_hours_strategy_equity", "goal": "min"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+                {"metric": "peak_recovery_max_days_strategy_equity", "goal": "min"},
                 {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "backtest": {
-            "aggregate": {
+            "reducer": {
                 "default": "mean",
-                "recovery_max_hours_strategy_equity": "mean",
+                "peak_recovery_max_days_strategy_equity": "mean",
                 "drawdown_max_fraction_strategy_equity": "max",
             }
         },
         "suite_metrics": {
+            "definition_version": 1,
             "aggregate": {
                 "stats": {
-                    "adg_fraction_strategy_equity": {
+                    "cagr_fraction_strategy_equity": {
                         "mean": adg_fraction_mean,
                         "min": adg_fraction_min,
                         "max": max(adg_fraction_mean, adg_fraction_min),
                         "std": 0.0,
                         "median": adg_fraction_mean,
                     },
-                    "recovery_max_hours_strategy_equity": {
+                    "peak_recovery_max_days_strategy_equity": {
                         "mean": recovery_mean,
                         "min": recovery_mean,
                         "max": recovery_max,
@@ -106,12 +108,17 @@ def _write_suite_candidate(
                     },
                 },
                 "aggregated": {
-                    "adg_fraction_strategy_equity": adg_fraction_mean,
-                    "recovery_max_hours_strategy_equity": recovery_mean,
+                    "cagr_fraction_strategy_equity": adg_fraction_mean,
+                    "peak_recovery_max_days_strategy_equity": recovery_mean,
                     "drawdown_max_fraction_strategy_equity": drawdown_max,
                 },
             }
         },
+    }
+    aggregate = payload["suite_metrics"].pop("aggregate")
+    payload["suite_metrics"]["metrics"] = {
+        metric: {"stats": fields, "aggregated": aggregate["aggregated"][metric], "scenarios": {}}
+        for metric, fields in aggregate["stats"].items()
     }
     with open(path / f"{name}.json", "w") as f:
         json.dump(payload, f, indent=2)
@@ -128,23 +135,24 @@ def _write_fill_suite_candidate(
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
-                {"metric": "fills_gap_p99_hours", "goal": "min"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+                {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "suite_metrics": {
+            "definition_version": 1,
             "metrics": {
-                "adg_fraction_strategy_equity": {
+                "cagr_fraction_strategy_equity": {
                     "stats": _metric_stats(adg_fraction),
                     "aggregated": adg_fraction,
                     "scenarios": {},
                 },
-                "fills_gap_p95_hours": {
+                "pain_index_fraction_strategy_equity": {
                     "stats": _metric_stats(p95_gap),
                     "aggregated": p95_gap,
                     "scenarios": {},
                 },
-                "fills_gap_p99_hours": {
+                "ulcer_index_fraction_strategy_equity": {
                     "stats": _metric_stats(p99_gap),
                     "aggregated": p99_gap,
                     "scenarios": {},
@@ -164,8 +172,8 @@ def _write_scenario_candidate(
     scenarios: dict[str, dict[str, float]],
 ) -> None:
     scoring = [
-        {"metric": "metric_a", "goal": "max"},
-        {"metric": "metric_b", "goal": "min"},
+        {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+        {"metric": "omega_ratio_strategy_equity", "goal": "min"},
     ]
     metric_names = set(aggregate)
     for values in scenarios.values():
@@ -184,8 +192,9 @@ def _write_scenario_candidate(
         }
     payload = {
         "optimize": {"scoring": scoring},
-        "metrics": {"objectives": aggregate},
+        "metrics": {"definition_version": 1, "objectives": aggregate},
         "suite_metrics": {
+            "definition_version": 1,
             "metrics": suite_metrics,
             "scenario_labels": list(scenarios),
         },
@@ -200,20 +209,20 @@ def scenario_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir.mkdir(parents=True)
     values = {
         "a": {
-            "bull": {"metric_a": 0.9, "metric_b": 0.4, "sharpe_ratio_strategy_equity": 1.2},
-            "bear": {"metric_a": 0.2, "metric_b": 0.8, "sharpe_ratio_strategy_equity": 0.2},
+            "bull": {"cagr_fraction_strategy_equity": 0.9, "omega_ratio_strategy_equity": 0.4, "sharpe_ratio_strategy_equity": 1.2},
+            "bear": {"cagr_fraction_strategy_equity": 0.2, "omega_ratio_strategy_equity": 0.8, "sharpe_ratio_strategy_equity": 0.2},
         },
         "b": {
-            "bull": {"metric_a": 0.8, "metric_b": 0.3, "sharpe_ratio_strategy_equity": 1.0},
-            "bear": {"metric_a": 0.8, "metric_b": 0.5, "sharpe_ratio_strategy_equity": 1.5},
+            "bull": {"cagr_fraction_strategy_equity": 0.8, "omega_ratio_strategy_equity": 0.3, "sharpe_ratio_strategy_equity": 1.0},
+            "bear": {"cagr_fraction_strategy_equity": 0.8, "omega_ratio_strategy_equity": 0.5, "sharpe_ratio_strategy_equity": 1.5},
         },
         "c_dominated": {
-            "bull": {"metric_a": 0.7, "metric_b": 0.5, "sharpe_ratio_strategy_equity": 0.8},
-            "bear": {"metric_a": 0.6, "metric_b": 0.7, "sharpe_ratio_strategy_equity": 0.7},
+            "bull": {"cagr_fraction_strategy_equity": 0.7, "omega_ratio_strategy_equity": 0.5, "sharpe_ratio_strategy_equity": 0.8},
+            "bear": {"cagr_fraction_strategy_equity": 0.6, "omega_ratio_strategy_equity": 0.7, "sharpe_ratio_strategy_equity": 0.7},
         },
         "d": {
-            "bull": {"metric_a": 0.5, "metric_b": 0.1, "sharpe_ratio_strategy_equity": 0.5},
-            "bear": {"metric_a": 0.9, "metric_b": 0.9, "sharpe_ratio_strategy_equity": 1.1},
+            "bull": {"cagr_fraction_strategy_equity": 0.5, "omega_ratio_strategy_equity": 0.1, "sharpe_ratio_strategy_equity": 0.5},
+            "bear": {"cagr_fraction_strategy_equity": 0.9, "omega_ratio_strategy_equity": 0.9, "sharpe_ratio_strategy_equity": 1.1},
         },
     }
     for name, scenario_values in values.items():
@@ -221,8 +230,8 @@ def scenario_pareto_dir(tmp_path: Path) -> Path:
             pareto_dir,
             name,
             aggregate={
-                "metric_a": 0.5,
-                "metric_b": 0.5,
+                "cagr_fraction_strategy_equity": 0.5,
+                "omega_ratio_strategy_equity": 0.5,
                 "sharpe_ratio_strategy_equity": 0.5,
             },
             scenarios={
@@ -240,22 +249,22 @@ def sample_pareto_dir(tmp_path: Path) -> Path:
     _write_candidate(
         pareto_dir,
         "a_extreme",
-        {"metric_a": 1.0, "metric_b": 0.0, "metric_c": 0.0},
+        {"cagr_fraction_strategy_equity": 1.0, "omega_ratio_strategy_equity": 0.0, "sortino_ratio_strategy_equity": 0.0},
     )
     _write_candidate(
         pareto_dir,
         "b_extreme",
-        {"metric_a": 0.0, "metric_b": 1.0, "metric_c": 0.0},
+        {"cagr_fraction_strategy_equity": 0.0, "omega_ratio_strategy_equity": 1.0, "sortino_ratio_strategy_equity": 0.0},
     )
     _write_candidate(
         pareto_dir,
         "c_extreme",
-        {"metric_a": 0.0, "metric_b": 0.0, "metric_c": 1.0},
+        {"cagr_fraction_strategy_equity": 0.0, "omega_ratio_strategy_equity": 0.0, "sortino_ratio_strategy_equity": 1.0},
     )
     _write_candidate(
         pareto_dir,
         "balanced",
-        {"metric_a": 0.65, "metric_b": 0.65, "metric_c": 0.65},
+        {"cagr_fraction_strategy_equity": 0.65, "omega_ratio_strategy_equity": 0.65, "sortino_ratio_strategy_equity": 0.65},
     )
     return pareto_dir
 
@@ -264,12 +273,12 @@ def test_load_candidates_accepts_run_or_pareto_dir(sample_pareto_dir: Path):
     pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
     assert pareto_dir == sample_pareto_dir.resolve()
     assert len(candidates) == 4
-    assert [spec.metric for spec in specs] == ["metric_a", "metric_b", "metric_c"]
+    assert [spec.metric for spec in specs] == ["cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
 
     run_dir, candidates_from_run, specs_from_run = load_candidates(sample_pareto_dir.parent)
     assert run_dir == sample_pareto_dir.resolve()
     assert len(candidates_from_run) == 4
-    assert [spec.metric for spec in specs_from_run] == ["metric_a", "metric_b", "metric_c"]
+    assert [spec.metric for spec in specs_from_run] == ["cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
 
 
 def test_load_candidates_ignores_non_candidate_json_artifacts(sample_pareto_dir: Path):
@@ -288,7 +297,7 @@ def test_load_candidates_ignores_non_candidate_json_artifacts(sample_pareto_dir:
         "balanced.json",
         "c_extreme.json",
     ]
-    assert [spec.metric for spec in specs] == ["metric_a", "metric_b", "metric_c"]
+    assert [spec.metric for spec in specs] == ["cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
 
 
 def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
@@ -296,7 +305,7 @@ def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
     filtered, limits = filter_candidates(
         candidates,
         limits_payload=None,
-        limit_entries=["metric_a>0.6"],
+        limit_entries=["cagr_fraction_strategy_equity>0.6"],
     )
     assert len(limits) == 1
     assert sorted(candidate.path.stem for candidate in filtered) == ["a_extreme", "balanced"]
@@ -304,7 +313,7 @@ def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
 
 def test_filter_candidates_raises_when_limit_metric_is_missing(sample_pareto_dir: Path):
     _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
-    with pytest.raises(ValueError, match="Limit metric 'missing_metric' could not be resolved"):
+    with pytest.raises(ValueError, match="unknown or retired.*missing_metric"):
         filter_candidates(
             candidates,
             limits_payload=None,
@@ -341,8 +350,8 @@ def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_pa
         candidates,
         limits_payload=None,
         limit_entries=[
-            "adg_fraction_strategy_equity>0.0",
-            "recovery_max_hours_strategy_equity<5000",
+            "cagr_fraction_strategy_equity>0.0",
+            "peak_recovery_max_days_strategy_equity<5000",
             "drawdown_max_fraction_strategy_equity<0.8",
         ],
     )
@@ -370,8 +379,8 @@ def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_
         candidates,
         limits_payload=None,
         limit_entries=[
-            "adg_fraction_strategy_equity>0.0 stat=min",
-            "recovery_max_hours_strategy_equity<5000 stat=max",
+            "cagr_fraction_strategy_equity>0.0 stat=min",
+            "peak_recovery_max_days_strategy_equity<5000 stat=max",
             "drawdown_max_fraction_strategy_equity<0.8 stat=max",
         ],
     )
@@ -391,7 +400,7 @@ def test_select_candidate_reference_prefers_target_match(sample_pareto_dir: Path
         candidates,
         specs,
         method="reference",
-        target_pairs=["metric_b=1.0", "metric_a=0.0", "metric_c=0.0"],
+        target_pairs=["omega_ratio_strategy_equity=1.0", "cagr_fraction_strategy_equity=0.0", "sortino_ratio_strategy_equity=0.0"],
     )
     assert result.candidate.path.stem == "b_extreme"
 
@@ -408,7 +417,7 @@ def test_select_candidate_utility_respects_weights(sample_pareto_dir: Path):
         candidates,
         specs,
         method="utility",
-        weight_pairs=["metric_b=5", "metric_a=1", "metric_c=1"],
+        weight_pairs=["omega_ratio_strategy_equity=10", "cagr_fraction_strategy_equity=1", "sortino_ratio_strategy_equity=1"],
     )
     assert result.candidate.path.stem == "b_extreme"
 
@@ -419,7 +428,7 @@ def test_select_candidate_lexicographic_respects_priority(sample_pareto_dir: Pat
         candidates,
         specs,
         method="lexicographic",
-        priority_arg="metric_c,metric_b,metric_a",
+        priority_arg="sortino_ratio_strategy_equity,omega_ratio_strategy_equity,cagr_fraction_strategy_equity",
     )
     assert result.candidate.path.stem == "c_extreme"
 
@@ -465,7 +474,7 @@ def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
 
     assert [candidate.path.stem for candidate in bull_front] == ["a", "b", "d"]
     assert [candidate.path.stem for candidate in bear_front] == ["b", "d"]
-    assert bull_front[0].objectives == {"metric_a": 0.9, "metric_b": 0.4}
+    assert bull_front[0].objectives == {"cagr_fraction_strategy_equity": 0.9, "omega_ratio_strategy_equity": 0.4}
 
 
 def test_scenario_front_keeps_first_exact_objective_vector(scenario_pareto_dir: Path):
@@ -499,11 +508,11 @@ def test_scenario_projection_fails_when_scoring_metric_is_missing(
 ):
     candidate_path = scenario_pareto_dir / "a.json"
     payload = json.loads(candidate_path.read_text())
-    del payload["suite_metrics"]["metrics"]["metric_b"]["scenarios"]["bull"]
+    del payload["suite_metrics"]["metrics"]["omega_ratio_strategy_equity"]["scenarios"]["bull"]
     candidate_path.write_text(json.dumps(payload))
     _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
 
-    with pytest.raises(ValueError, match="missing scoring metric.*metric_b"):
+    with pytest.raises(ValueError, match="missing scoring metric.*omega_ratio_strategy_equity"):
         project_candidates_to_scenario(candidates, specs, "bull")
 
 
@@ -516,7 +525,7 @@ def test_scenario_limit_uses_scalar_and_rejects_non_mean_reducer(
     filtered, _limits = filter_candidates(
         projected,
         limits_payload=None,
-        limit_entries=["metric_a>0.75"],
+        limit_entries=["cagr_fraction_strategy_equity>0.75"],
     )
     assert [candidate.path.stem for candidate in filtered] == ["a", "b"]
 
@@ -524,7 +533,7 @@ def test_scenario_limit_uses_scalar_and_rejects_non_mean_reducer(
         filter_candidates(
             projected,
             limits_payload=None,
-            limit_entries=["metric_a>0.75 stat=max"],
+            limit_entries=["cagr_fraction_strategy_equity>0.75 stat=max"],
         )
 
 
@@ -536,7 +545,7 @@ def test_limit_entry_can_select_scenario_without_projecting_candidates(
     filtered, limits = filter_candidates(
         candidates,
         limits_payload=None,
-        limit_entries=["metric_a>0.75 scenario=bull"],
+        limit_entries=["cagr_fraction_strategy_equity>0.75 scenario=bull"],
     )
 
     assert [candidate.path.stem for candidate in filtered] == ["a", "b"]
@@ -573,31 +582,24 @@ def test_ordinary_filter_uses_stored_legacy_suite_aggregate(tmp_path: Path):
     payload = {
         "optimize": {
             "scoring": [
-                {"metric": "metric_a", "goal": "max"},
-                {"metric": "metric_b", "goal": "min"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+                {"metric": "omega_ratio_strategy_equity", "goal": "min"},
             ]
         },
         "backtest": {"aggregate": {"default": "max"}},
         "suite_metrics": {
+            "definition_version": 1,
             "aggregate": {
                 "aggregated": {
-                    "metric_a": 0.8,
-                    "metric_b": 0.4,
+                    "cagr_fraction_strategy_equity": 0.8,
+                    "omega_ratio_strategy_equity": 0.4,
                 }
             }
         },
     }
     (pareto_dir / "candidate.json").write_text(json.dumps(payload), encoding="utf-8")
-    _pareto_dir, candidates, _specs = load_candidates(pareto_dir)
-
-    filtered, _limits = filter_candidates(
-        candidates,
-        limits_payload=None,
-        limit_entries=["metric_b<0.5"],
-    )
-
-    assert [candidate.path.name for candidate in filtered] == ["candidate.json"]
-
+    with pytest.raises(ValueError, match="required metric|definition|suite|no current raw value"):
+        load_candidates(pareto_dir)
 
 def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
     scenario_pareto_dir: Path,
@@ -608,7 +610,7 @@ def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
     filtered, limits = filter_candidates(
         projected,
         limits_payload=None,
-        limit_entries=["metric_a<0.6 scenario=null"],
+        limit_entries=["cagr_fraction_strategy_equity<0.6 scenario=null"],
     )
 
     assert [candidate.path.stem for candidate in filtered] == [
@@ -623,7 +625,7 @@ def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
     filtered_max, max_limits = filter_candidates(
         projected,
         limits_payload=None,
-        limit_entries=["metric_a<0.6 scenario=null stat=max"],
+        limit_entries=["cagr_fraction_strategy_equity<0.6 scenario=null stat=max"],
     )
 
     assert [candidate.path.stem for candidate in filtered_max] == [
@@ -723,8 +725,8 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
     newer = root / newer_run / "pareto"
     older.mkdir(parents=True)
     newer.mkdir(parents=True)
-    _write_candidate(older, "older_balanced", {"metric_a": 0.6, "metric_b": 0.6, "metric_c": 0.6})
-    _write_candidate(newer, "newer_balanced", {"metric_a": 0.65, "metric_b": 0.65, "metric_c": 0.65})
+    _write_candidate(older, "older_balanced", {"cagr_fraction_strategy_equity": 0.6, "omega_ratio_strategy_equity": 0.6, "sortino_ratio_strategy_equity": 0.6})
+    _write_candidate(newer, "newer_balanced", {"cagr_fraction_strategy_equity": 0.65, "omega_ratio_strategy_equity": 0.65, "sortino_ratio_strategy_equity": 0.65})
     os.utime(older.resolve(), (1000, 1000))
     os.utime(newer.resolve(), (2000, 2000))
     monkeypatch.chdir(tmp_path)
@@ -759,7 +761,7 @@ def test_run_from_args_json_output(sample_pareto_dir: Path, capsys):
         limit_entries=[],
         limits_payload=None,
         objectives=None,
-        weight=["metric_b=5", "metric_a=1", "metric_c=1"],
+        weight=["omega_ratio_strategy_equity=10", "cagr_fraction_strategy_equity=1", "sortino_ratio_strategy_equity=1"],
         target=None,
         priority=None,
         show_top=2,
@@ -772,8 +774,8 @@ def test_run_from_args_json_output(sample_pareto_dir: Path, capsys):
     assert payload["selected"]["file"] == "b_extreme.json"
     assert len(payload["top_candidates"]) == 2
     assert payload["top_candidates"][0]["file"] == "b_extreme.json"
-    assert payload["selected"]["details"]["utility_contributions"]["metric_b"] > 0
-    assert payload["selected"]["details"]["ideal_point"]["metric_b"] == pytest.approx(1.0)
+    assert payload["selected"]["details"]["utility_contributions"]["omega_ratio_strategy_equity"] > 0
+    assert payload["selected"]["details"]["ideal_point"]["omega_ratio_strategy_equity"] == pytest.approx(1.0)
     assert "ranking_order" not in payload["selected"]["details"]
     assert "score_vector" not in payload["selected"]["details"]
     assert result.candidate.path.stem == "b_extreme"
@@ -791,7 +793,7 @@ def test_run_from_args_saves_selected_member_exactly(
             "--method",
             "utility",
             "--weight",
-            "metric_b=5",
+            "omega_ratio_strategy_equity=10",
             "--save-selected",
             str(output),
         ]
@@ -843,7 +845,7 @@ def test_run_from_args_saves_post_limit_members_and_manifest(
 ):
     output = tmp_path / "filtered"
     args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-l", "metric_a>0.6", "-f", str(output)]
+        [str(sample_pareto_dir), "-l", "cagr_fraction_strategy_equity>0.6", "-f", str(output)]
     )
 
     result = run_from_args(args)
@@ -861,7 +863,7 @@ def test_run_from_args_saves_post_limit_members_and_manifest(
     assert manifest["retained_count"] == 2
     assert manifest["selected_member"] == "balanced.json"
     assert manifest["members"] == ["a_extreme.json", "balanced.json"]
-    assert manifest["applied_limits"][0]["metric"] == "metric_a"
+    assert manifest["applied_limits"][0]["metric"] == "cagr_fraction_strategy_equity"
     assert "Saved filtered members: 2" in capsys.readouterr().out
 
 
@@ -875,7 +877,7 @@ def test_saved_outputs_are_reported_in_json(
         [
             str(sample_pareto_dir),
             "-l",
-            "metric_a>0.6",
+            "cagr_fraction_strategy_equity>0.6",
             "-f",
             str(filtered),
             "--json",
@@ -992,7 +994,7 @@ def test_no_output_is_written_when_limits_reject_every_candidate(
         [
             str(sample_pareto_dir),
             "-l",
-            "metric_a>2",
+            "cagr_fraction_strategy_equity>2",
             "-s",
             str(selected),
         ]
@@ -1020,8 +1022,8 @@ def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_di
         candidates,
         specs,
         method="utility",
-        objectives_arg="sharpe_ratio_strategy_equity,metric_a,metric_b",
-        weight_pairs=["sharpe_ratio_strategy_equity=5", "metric_a=1", "metric_b=1"],
+        objectives_arg="sharpe_ratio_strategy_equity,cagr_fraction_strategy_equity,omega_ratio_strategy_equity",
+        weight_pairs=["sharpe_ratio_strategy_equity=5", "cagr_fraction_strategy_equity=1", "omega_ratio_strategy_equity=1"],
     )
     assert result.candidate.path.stem == "balanced"
     assert "sharpe_ratio_strategy_equity" in result.objective_values
@@ -1051,11 +1053,11 @@ def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp
         candidates,
         specs,
         method="ideal",
-        objectives_arg="adg_fraction_strategy_equity,fills_gap_p95_hours",
+        objectives_arg="cagr_fraction_strategy_equity,pain_index_fraction_strategy_equity",
     )
 
     assert result.candidate.path.stem == "low_p95_gap"
-    assert result.objective_values["fills_gap_p95_hours"] == pytest.approx(12.0)
+    assert result.objective_values["pain_index_fraction_strategy_equity"] == pytest.approx(12.0)
 
 
 def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Path, capsys):
@@ -1075,8 +1077,8 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
         method="utility",
         limit_entries=[],
         limits_payload=None,
-        objectives="sharpe_ratio_strategy_equity,metric_a,metric_b",
-        weight=["sharpe_ratio_strategy_equity=5", "metric_a=1", "metric_b=1"],
+        objectives="sharpe_ratio_strategy_equity,cagr_fraction_strategy_equity,omega_ratio_strategy_equity",
+        weight=["sharpe_ratio_strategy_equity=5", "cagr_fraction_strategy_equity=1", "omega_ratio_strategy_equity=1"],
         target=None,
         priority=None,
         show_top=1,
@@ -1111,5 +1113,60 @@ def test_run_from_args_ideal_uses_distance_label_and_omits_hash(sample_pareto_di
 
 def test_build_parser_accepts_short_objectives_alias():
     parser = build_parser()
-    args = parser.parse_args(["-o", "metric_a,metric_b"])
-    assert args.objectives == "metric_a,metric_b"
+    args = parser.parse_args(["-o", "cagr_fraction_strategy_equity,omega_ratio_strategy_equity"])
+    assert args.objectives == "cagr_fraction_strategy_equity,omega_ratio_strategy_equity"
+
+
+def test_scenario_selected_metrics_ignore_unrelated_undefined_quantity(tmp_path):
+    cagr = "cagr_fraction_strategy_equity"
+    short = "short_net_profit_contribution_fraction"
+    payload = {
+        "optimize": {"scoring": [cagr]},
+        "metrics": {"definition_version": 1, "objectives": {cagr: 0.4}},
+        "suite_metrics": {
+            "definition_version": 1,
+            "scenario_labels": ["base"],
+            "metrics": {
+                cagr: {
+                    "aggregated": 0.4,
+                    "stats": {"mean": 0.4},
+                    "scenarios": {"base": 0.4},
+                },
+                short: {
+                    "aggregated": None,
+                    "metric_status": {"aggregated": {"status": "undefined"}},
+                    "stats": {
+                        "mean": None,
+                        "metric_status": {"mean": {"status": "undefined"}},
+                    },
+                    "scenarios": {
+                        "base": None,
+                        "metric_status": {
+                            "base": {
+                                "status": "undefined",
+                                "reason": "no positive combined profit",
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    }
+    (tmp_path / "candidate.json").write_text(json.dumps(payload))
+    _, candidates, specs = load_candidates(tmp_path)
+    projected = project_candidates_to_scenario(candidates, specs, "base")
+    assert projected[0].objectives == {cagr: 0.4}
+    assert projected[0].aggregated_values[short] is None
+    assert (
+        projected[0].aggregated_values["metric_status"][short]["status"] == "undefined"
+    )
+    kept, _ = filter_candidates(
+        candidates, limits_payload=None, limit_entries=[f"{cagr}>0.1 scenario=base"]
+    )
+    assert len(kept) == 1
+    with pytest.raises(ValueError, match="unavailable"):
+        filter_candidates(
+            candidates,
+            limits_payload=None,
+            limit_entries=[f"{short}>0.1 scenario=base"],
+        )

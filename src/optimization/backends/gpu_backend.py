@@ -18,7 +18,6 @@ from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
 from config.gpu import resolve_gpu_screening, resolve_gpu_sizing
-from config.prefilter import prefilter_enabled
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -39,7 +38,7 @@ from optimization.fine_tune_anchors import get_anchor_plan
 class NativeSearchProblem(Problem):
     def __init__(self, base):
         super().__init__(n_var=len(base.bounds), n_obj=len(base.scoring_specs),
-                         n_ieq_constr=int(bool(base.limit_checks) or prefilter_enabled(base.config["optimize"].get("prefilter"))),
+                         n_ieq_constr=1,  # Metric availability always constrains feasibility.
                          xl=np.asarray([bound.low for bound in base.bounds]),
                          xu=np.asarray([bound.high for bound in base.bounds]))
 

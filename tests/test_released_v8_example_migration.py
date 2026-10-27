@@ -6,6 +6,7 @@ import json
 import pytest
 from jsonschema import Draft202012Validator
 
+from released_v8_fixtures import without_metric_selection
 from config import prepare_config
 from config.json_schema import generate_schema
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -14,11 +15,7 @@ from tools.migrate_config_v9 import main, migrate
 
 
 def released(kind="trailing_martingale"):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [
-        item for item in source["optimize"]["scoring"] if not item["metric"].endswith("_w") and not item["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
-    return source
+    return without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
 
 
 def discarded(result, path, value):
@@ -194,11 +191,11 @@ def test_invalid_released_fee_inputs_fail_without_guessing_or_mutating(value, be
 
 
 @pytest.mark.parametrize("metric,target", [
-    ("volume_pct_per_day_avg_w", "active_day_turnover_proxy_mean_ratio"),
-    ("mdg_strategy_eq_w", "mdg_fraction_strategy_equity"),
-    ("adg_pnl_w", "daily_realized_pnl_mean_fraction"),
+    ("volume_pct_per_day_avg_w", "gross_turnover_ratio_per_day"),
+    ("mdg_strategy_eq_w", "cagr_fraction_strategy_equity"),
+    ("adg_pnl_w", "cagr_fraction_strategy_equity"),
 ])
-def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_changes(
+def test_retired_formulas_require_explicit_choices_even_in_best_effort(
     metric, target, caplog,
 ):
     source = released()
@@ -211,7 +208,9 @@ def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_
         migrate(source, memory_span_minutes=123.5)
     assert source == original
 
-    result = migrate(source, best_effort=True)
+    with pytest.raises(ValueError, match="metric-replacement"):
+        migrate(source, best_effort=True)
+    result = migrate(source, best_effort=True, metric_replacements={metric: target})
     assert result.config["optimize"]["scoring"] == [{"goal": "max", "metric": target}]
     assert result.config["optimize"]["limits"] == [
         {"metric": target, "penalize_if": "greater_than", "value": 0.125},
@@ -220,9 +219,8 @@ def test_known_ordinary_fallbacks_require_strict_choices_and_report_best_effort_
                   if item["path"] == "optimize.scoring[0].metric")
     assert choice["old"] == metric and choice["new"] == target
     assert choice["best_effort"] is True
-    assert "full-window ordinary" in choice["reason"]
-    assert "recency weighting changes" in choice["reason"]
-    assert "formulas are not equivalent" in choice["reason"]
+    assert "definition version 1" in choice["reason"]
+    assert "re-evaluate objectives, limits and stored fitness" in choice["reason"]
     assert metric in caplog.text and target in caplog.text
     assert source == original
 

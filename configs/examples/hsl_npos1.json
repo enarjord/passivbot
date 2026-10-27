@@ -445,62 +445,7 @@
             "tuning_mode": "auto"
         },
         "iters": 500000,
-        "limits": [
-            {
-                "enabled": false,
-                "metric": "drawdown_max_fraction_strategy_equity",
-                "penalize_if": "greater_than",
-                "value": 0.8
-            },
-            {
-                "enabled": false,
-                "metric": "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
-                "penalize_if": "greater_than",
-                "value": 0.6
-            },
-            {
-                "enabled": false,
-                "metric": "loss_profit_ratio",
-                "penalize_if": "greater_than",
-                "value": 0.85
-            },
-            {
-                "enabled": true,
-                "metric": "backtest_completion_fraction",
-                "penalize_if": "less_than",
-                "value": 0.99
-            },
-            {
-                "enabled": false,
-                "metric": "adg_fraction_strategy_equity",
-                "penalize_if": "less_than",
-                "value": 0
-            },
-            {
-                "enabled": false,
-                "metric": "high_exposure_max_hours_long",
-                "penalize_if": "greater_than",
-                "value": 2160
-            },
-            {
-                "enabled": false,
-                "metric": "position_held_max_hours",
-                "penalize_if": "greater_than",
-                "value": 2160
-            },
-            {
-                "enabled": false,
-                "metric": "recovery_max_hours_strategy_equity",
-                "penalize_if": "greater_than",
-                "value": 2160
-            },
-            {
-                "enabled": true,
-                "metric": "hsl_restarts_per_year",
-                "penalize_if": "less_than",
-                "value": 0.1
-            }
-        ],
+        "limits": [{"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": "greater_than", "value": 0.5}, {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 1.0}],
         "n_cpus": 6,
         "objective_scenario": null,
         "pareto_max_size": 1000,
@@ -530,14 +475,7 @@
             }
         },
         "round_to_n_significant_digits": 3,
-        "scoring": [
-            {"goal": "max", "metric": "adg_fraction_strategy_equity"},
-            {"goal": "max", "metric": "mdg_fraction_strategy_equity"},
-            {"goal": "min", "metric": "recovery_max_hours_strategy_equity"},
-            {"goal": "min", "metric": "position_held_max_hours"},
-            {"goal": "min", "metric": "drawdown_max_fraction_strategy_equity"},
-            {"goal": "min", "metric": "drawdown_daily_worst_1pct_mean_fraction_strategy_equity"}
-        ],
+        "scoring": [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}, {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"}],
         "seed": null,
         "write_all_results": true
     }

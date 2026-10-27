@@ -301,12 +301,12 @@ def test_multiple_venues_combine_check_maxima_before_scenario_selection(
     assert all(row["scenario"] == "joint" for row in findings)
 
 
-def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
+def test_rejected_suite_metrics_never_fabricate_backtest_observations():
     from pareto_store import _suite_metrics_to_stats
     from pareto_explorer import _extract_suite_metrics
 
     base = SimpleNamespace(
-        scoring_specs=extract_objective_specs(["adg_fraction_strategy_equity"]), limit_checks=[]
+        scoring_specs=extract_objective_specs(["cagr_fraction_strategy_equity"]), limit_checks=[]
     )
     payload = build_prefilter_payload(
         base, [1], 25, [], suite=True, scenario_labels=("base", "stress")
@@ -317,8 +317,11 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
         _extract_suite_metrics(entry, {"default": "min"}),
         _extract_suite_metrics(entry, {"default": "mean"}, scenario_labels=["stress"]),
     ):
-        assert flat["adg_fraction_strategy_equity_mean"] == -25
-        assert values["drawdown_max_fraction_strategy_equity"] == 25
+        assert flat == {}
+        assert values == {}
+    assert payload["metrics"]["definition_version"] == 1
+    assert payload["metrics"]["fitness_status"] == "invalid"
+    assert payload["metrics"]["backtest_performed"] is False
 
 
 def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
@@ -387,10 +390,10 @@ def test_invalid_policy_is_an_error_not_a_candidate_penalty(bad):
         resolve_prefilter(bad)
 
 
-def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring():
+def test_prefilter_penalty_never_fabricates_or_rescores_objective_values():
     specs = extract_objective_specs(
         [
-            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
             {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
         ]
     )
@@ -399,13 +402,9 @@ def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring
     assert payload["fitness"] == (25, 25)
     assert payload["constraint_violation"] == 25
     assert payload["evaluation_vector"] == [1, 2]
-    assert payload["metrics"]["objectives"] == {
-        "adg_fraction_strategy_equity": -25,
-        "drawdown_max_fraction_strategy_equity": 25,
-    }
-    assert payload["metrics"]["stats"]["fills_count"]["mean"] == -25
-    assert payload["metrics"]["stats"]["trade_win_fraction"]["mean"] == -25
-    assert payload["metrics"]["stats"]["adg_fraction_usd"]["mean"] == -25
-    assert payload["metrics"]["stats"]["drawdown_max_fraction_btc"]["mean"] == 25
+    assert payload["metrics"]["definition_version"] == 1
+    assert payload["metrics"]["fitness_status"] == "invalid"
+    assert payload["metrics"]["objectives"] == {}
+    assert payload["metrics"]["stats"] == {}
     assert payload["metrics"]["backtest_performed"] is False
     assert payload["metrics"]["prefilter"]["version"] == 2

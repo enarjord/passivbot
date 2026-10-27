@@ -99,7 +99,7 @@ def test_actual_gpu_asymmetric_replay_matches_native_counts(monkeypatch, kind, p
     fills, _, native = execute_backtest(payload, config)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
                                 timestamps=timestamps, exchange=args.exchange, batch_size=1,
-                                needed_metrics={"fills_per_day"})
+                                needed_metrics={"gross_turnover_ratio_per_day"})
     # Inspect factual transport, without promoting exact-only counts to optimizer metrics.
     runner = proxy.fused_runner if proxy.fused_runner is not None else proxy.runners[sides]
     execute = runner.run
@@ -113,9 +113,9 @@ def test_actual_gpu_asymmetric_replay_matches_native_counts(monkeypatch, kind, p
     raw = captures[0]
     long_count = raw["fill_count_long"].item()
     short_count = raw["fill_count"].item() - long_count
-    assert long_count == native["fills_count_long"]
-    assert short_count == native["fills_count_short"]
-    assert result["fills_per_day"] == pytest.approx(native["fills_per_day"], rel=1e-5)
+    assert long_count == sum(str(row[13]).endswith("long") for row in fills)
+    assert short_count == sum(str(row[13]).endswith("short") for row in fills)
+    assert result["gross_turnover_ratio_per_day"] == pytest.approx(native["gross_turnover_ratio_per_day"], rel=1e-5)
     entries = [str(row[13]) for row in fills if str(row[13]).startswith("entry_")]
     assert all(value.endswith("_" + passing_side) for value in entries)
     if sides == "both" or sides == passing_side:

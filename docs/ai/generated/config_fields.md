@@ -24,7 +24,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.dynamic_wel_by_tradability` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.end_date` | string | `"now"` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.equity_floor_fraction` | float | `0.05` | fraction / starting balance | —; backtest, optimize | — | — | >= 0.0; < 1.0; finite | python |
-| `backtest.ew_half_life_days` | float \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.ew_half_life_days` | float \| null | `180.0` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.exchanges` | array | 2 items (see template) | — | —; backtest, optimize | — | — | — | python |
 | `backtest.filter_by_min_effective_cost` | boolean \| null | `null` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.gap_tolerance_ohlcvs_minutes` | float | `120.0` | — | —; backtest, optimize | — | — | — | python |
@@ -481,7 +481,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.pymoo.shared.mutation_probability` | float \| string | `"auto"` | probability / offspring candidates | —; optimize | — | — | >= 0.0; <= 1.0 | python |
 | `optimize.pymoo.shared.mutation_probability_per_variable` | float \| string | `"auto"` | probability / candidate coordinates conditional on mutation | —; optimize | — | — | >= 0.0; <= 1.0 | python |
 | `optimize.round_to_n_significant_digits` | integer | `3` | — | —; optimize | — | — | — | python |
-| `optimize.scoring` | array | 10 items (see template) | — | —; optimize | — | — | — | python |
+| `optimize.scoring` | array | 2 items (see template) | — | —; optimize | — | — | — | python |
 | `optimize.scoring.*.goal` | string | Not declared | — | —; optimize | — | — | `max`, `min` | python |
 | `optimize.scoring.*.metric` | string | Not declared | — | —; optimize | — | — | — | python |
 | `optimize.scoring.*.reducer` | string | Not declared | — | —; optimize | — | — | `max`, `mean`, `median`, `min`, `std` | python |

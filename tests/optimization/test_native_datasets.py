@@ -19,7 +19,7 @@ def fixture(manager):
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
-    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     config["optimize"]["limits"] = []
     for side in ("long", "short"):
         config["bot"][side]["risk"]["max_positions"] = 2
@@ -71,7 +71,7 @@ def test_standalone_registry_borrows_histories_and_owns_only_reusable_timestamps
             dataset = registry.bindings[0].dataset
             assert dataset.hlcvs == base.hlcvs_specs["binance"]
             assert dataset.btc == base.btc_usd_specs["binance"]
-            assert dataset.metrics == ("adg_fraction_strategy_equity",)
+            assert dataset.metrics == ("cagr_fraction_strategy_equity",)
             with dataset.attach() as arrays:
                 for actual, expected in zip(arrays, (candles, btc, timestamps), strict=True):
                     np.testing.assert_array_equal(actual, expected)
@@ -157,7 +157,7 @@ def test_registry_rejects_incomplete_inputs_and_releases_earlier_metadata(proble
             return spec, view
         monkeypatch.setattr(SharedArrayManager, "create_from", track)
         with pytest.raises(ValueError):
-            NativeDatasetRegistry(suite, metrics=["fills_per_day"] if problem == "metrics" else None)
+            NativeDatasetRegistry(suite, metrics=["gross_turnover_ratio_per_day"] if problem == "metrics" else None)
         assert allocated
         for spec in allocated:
             with pytest.raises(FileNotFoundError):

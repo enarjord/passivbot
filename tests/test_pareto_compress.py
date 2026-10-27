@@ -27,17 +27,18 @@ def _write_candidate(
         "bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0 + adg_fraction}}},
         "optimize": {
             "scoring": [
-                {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+                {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
                 {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
             ]
         },
         "metrics": {
+            "definition_version": 1,
             "objectives": {
-                "adg_fraction_strategy_equity": adg_fraction,
+                "cagr_fraction_strategy_equity": adg_fraction,
                 "drawdown_max_fraction_strategy_equity": drawdown,
             },
             "stats": {
-                "adg_fraction_strategy_equity": _metric_stats(adg_fraction),
+                "cagr_fraction_strategy_equity": _metric_stats(adg_fraction),
                 "drawdown_max_fraction_strategy_equity": _metric_stats(drawdown),
             },
         },
@@ -71,7 +72,7 @@ def test_compress_includes_ideal_then_objective_anchors(sample_pareto_dir: Path)
     ]
     assert members[0].reason_details == ["closest to ideal point"]
     assert {item["metric"] for item in objective_ranges} == {
-        "adg_fraction_strategy_equity",
+        "cagr_fraction_strategy_equity",
         "drawdown_max_fraction_strategy_equity",
     }
     assert truncated == []
@@ -99,7 +100,7 @@ def test_compress_truncates_to_ideal_when_count_is_small(sample_pareto_dir: Path
 
     assert [member.candidate.path.name for member in members] == ["diverse_fill.json"]
     assert members[0].reason == "ideal_anchor"
-    assert truncated == ["best adg_fraction_strategy_equity", "best drawdown_max_fraction_strategy_equity"]
+    assert truncated == ["best cagr_fraction_strategy_equity", "best drawdown_max_fraction_strategy_equity"]
 
 
 def test_compress_from_args_writes_selected_json_and_manifest(sample_pareto_dir: Path, tmp_path: Path):
@@ -140,7 +141,7 @@ def test_compress_writes_to_non_empty_output_dir_without_deleting_files(
     assert payload["selected_count"] == 2
     assert json.loads(stale_file.read_text()) == {"keep": True}
     selected_payload = json.loads(selected_file.read_text())
-    assert selected_payload["metrics"]["objectives"]["adg_fraction_strategy_equity"] == 0.003
+    assert selected_payload["metrics"]["objectives"]["cagr_fraction_strategy_equity"] == 0.003
     manifest = json.loads((out_dir / "selection.json").read_text())
     assert manifest["selected_count"] == 2
     assert "Output directory is non-empty" in caplog.text

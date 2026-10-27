@@ -17,6 +17,8 @@ pub struct Summary {
     pub restarts_short: u32,
     pub red_minutes: f64,
     pub observed_minutes: f64,
+    pub red_duration_ms: u64,
+    pub observed_duration_ms: u64,
     pub panic_close_fills: u32,
     pub panic_fill_loss_sum_usd: f64,
     pub signal_raw_max_fraction: f64,
@@ -57,48 +59,28 @@ struct Scope {
     watermark: Option<i64>,
     consumed: BTreeMap<(i64, &'static str), usize>,
     red: bool,
-    halt_started: Option<i64>,
     exit_started: Option<i64>,
-    restarted_without_retrigger: bool,
     panic_loss: f64,
-    panic_equity: Option<f64>,
+    panic_balance: Option<f64>,
 }
 
 #[derive(Clone, Default)]
-struct Distribution {
-    count: u64,
+struct EpisodeLossMoments {
     sum: f64,
-    min: f64,
     max: f64,
 }
-impl Distribution {
+impl EpisodeLossMoments {
     fn push(&mut self, value: f64) {
-        self.min = if self.count == 0 {
-            value
-        } else {
-            self.min.min(value)
-        };
-        self.max = self.max.max(value);
         self.sum += value;
-        self.count += 1;
-    }
-    fn mean(&self) -> f64 {
-        if self.count == 0 {
-            0.0
-        } else {
-            self.sum / self.count as f64
-        }
+        self.max = self.max.max(value);
     }
 }
 
 #[derive(Clone, Default)]
 struct LifecycleStats {
-    durations: Distribution,
-    flatten_minutes: Distribution,
-    trigger_scores: Distribution,
-    panic_loss_ratios: Distribution,
-    panic_loss_max: f64,
-    retriggers: u32,
+    panic_loss_ratios: EpisodeLossMoments,
+    execution_episode_count: u64,
+    episode_loss_invalid: bool,
 }
 
 #[derive(Default)]
@@ -112,8 +94,6 @@ pub(super) struct Report {
     retain_events: bool,
     sequence: u64,
     stats: LifecycleStats,
-    // One bar-close maximum per signal category: global, long, short.
-    pub signal_emas: [Vec<f64>; 3],
 }
 
 impl Report {
@@ -129,8 +109,11 @@ impl Report {
         if let Some(previous) = self.timestamp {
             let minutes = (now - previous).max(0) as f64 / 60_000.0;
             self.summary.observed_minutes += minutes;
+            let elapsed_ms = now.saturating_sub(previous).max(0) as u64;
+            self.summary.observed_duration_ms += elapsed_ms;
             if self.scopes.values().any(|s| s.red) {
                 self.summary.red_minutes += minutes;
+                self.summary.red_duration_ms += elapsed_ms;
             }
         }
         self.timestamp = Some(self.timestamp.map_or(now, |last| last.max(now)));
@@ -171,11 +154,6 @@ impl Report {
                 "reconstructed_red",
                 &mut scope,
             );
-            if let Some(d) = decision {
-                self.stats
-                    .trigger_scores
-                    .push(d.signal_raw_fraction.min(d.signal_ema_fraction));
-            }
         } else if action == Action::Normal && scope.red {
             self.restart(key, now, None, "current_permission", &mut scope);
         }
@@ -222,11 +200,6 @@ impl Report {
             Some(SHORT) => self.summary.triggers_short += 1,
             _ => {} // One unified event, without inventing two side controllers.
         }
-        if scope.restarted_without_retrigger {
-            self.stats.retriggers += 1;
-            scope.restarted_without_retrigger = false;
-        }
-        scope.halt_started.get_or_insert(now);
         scope.exit_started = Some(now);
         scope.red = true;
         self.sequence += 1;
@@ -260,14 +233,8 @@ impl Report {
             Some(SHORT) => self.summary.restarts_short += 1,
             _ => {}
         }
-        if let Some(start) = scope.halt_started.take() {
-            self.stats
-                .durations
-                .push((now - start).max(0) as f64 / 60_000.0);
-        }
         Self::finish_loss(&mut self.stats, scope);
         scope.exit_started = None;
-        scope.restarted_without_retrigger = true;
         scope.red = false;
         self.sequence += 1;
         if self.retain_events {
@@ -293,21 +260,12 @@ impl Report {
         match event.kind {
             "red" => {
                 self.trigger(key, now, Some(event.timestamp), event.reason, scope);
-                if let (Some(raw), Some(ema)) =
-                    (event.signal_raw_fraction, event.signal_ema_fraction)
-                {
-                    self.stats.trigger_scores.push(raw.min(ema));
-                }
             }
             "flat" => {
                 if !scope.red {
                     self.trigger(key, now, Some(event.red_at), "reconstructed_red", scope);
                 }
-                if let Some(start) = scope.exit_started.take() {
-                    self.stats
-                        .flatten_minutes
-                        .push((now - start).max(0) as f64 / 60_000.0);
-                }
+                scope.exit_started = None;
                 Self::finish_loss(&mut self.stats, scope);
                 self.sequence += 1;
                 if self.retain_events {
@@ -327,23 +285,33 @@ impl Report {
         }
     }
 
+    fn record_episode_loss(stats: &mut LifecycleStats, loss: f64, balance: f64) {
+        stats.execution_episode_count += 1;
+        if balance.is_finite() && balance > 0.0 && loss.is_finite() && loss >= 0.0 {
+            let fraction = loss / balance;
+            if fraction.is_finite() {
+                stats.panic_loss_ratios.push(fraction);
+            } else {
+                stats.episode_loss_invalid = true;
+            }
+        } else {
+            stats.episode_loss_invalid = true;
+        }
+    }
     fn finish_loss(stats: &mut LifecycleStats, scope: &mut Scope) {
-        if let Some(equity) = scope.panic_equity.take() {
-            stats.panic_loss_ratios.push(scope.panic_loss / equity);
+        if let Some(balance) = scope.panic_balance.take() {
+            Self::record_episode_loss(stats, scope.panic_loss, balance);
             scope.panic_loss = 0.0;
         }
     }
 
-    pub(super) fn panic_fill(&mut self, key: Key, net_pnl: f64, account_equity: f64) {
+    pub(super) fn panic_fill(&mut self, key: Key, net_pnl: f64, account_balance: f64) {
         if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
             let loss = (-net_pnl).max(0.0);
             self.summary.panic_close_fills += 1;
             self.summary.panic_fill_loss_sum_usd += loss;
-            self.stats.panic_loss_max = self.stats.panic_loss_max.max(loss);
             scope.panic_loss += loss;
-            scope
-                .panic_equity
-                .get_or_insert(account_equity.max(f64::EPSILON));
+            scope.panic_balance.get_or_insert(account_balance);
         }
     }
 
@@ -352,10 +320,7 @@ impl Report {
     pub(super) fn observed_flat(&mut self, key: Key, now: i64) {
         self.advance(now);
         if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
-            if let Some(start) = scope.exit_started.take() {
-                self.stats
-                    .flatten_minutes
-                    .push((now - start).max(0) as f64 / 60_000.0);
+            if scope.exit_started.take().is_some() {
                 Self::finish_loss(&mut self.stats, scope);
                 // A later same-bar fill may restore balance and permit replay.
                 // Do not report this already-observed flatten a second time.
@@ -378,68 +343,23 @@ impl Report {
         }
     }
 
-    pub(super) fn record_bar_signals(&mut self, now: i64, emas: [f64; 3]) {
-        self.advance(now);
-        for (samples, value) in self.signal_emas.iter_mut().zip(emas) {
-            samples.push(value);
-        }
-    }
-
-    /// Include censored open halts/exits without mutating observation state.
-    pub(super) fn metrics(&self, starting_balance: f64, minutes: f64) -> HardStopMetrics {
+    pub(super) fn core_summary(&self, enabled: bool) -> crate::core_metrics::HslSummary {
         let mut stats = self.stats.clone();
         for scope in self.scopes.values() {
-            if let (Some(start), Some(end)) = (scope.halt_started, self.timestamp) {
-                stats.durations.push((end - start).max(0) as f64 / 60_000.0);
-            }
-            if let (Some(start), Some(end)) = (scope.exit_started, self.timestamp) {
-                stats
-                    .flatten_minutes
-                    .push((end - start).max(0) as f64 / 60_000.0);
-            }
-            if let Some(equity) = scope.panic_equity {
-                stats.panic_loss_ratios.push(scope.panic_loss / equity);
+            if let Some(balance) = scope.panic_balance {
+                Self::record_episode_loss(&mut stats, scope.panic_loss, balance);
             }
         }
-        let annual = if minutes > 0.0 {
-            365.25 * 1440.0 / minutes
-        } else {
-            0.0
-        };
-        let s = &self.summary;
-        HardStopMetrics {
-            triggers: s.triggers,
-            triggers_per_year: s.triggers as f64 * annual,
-            triggers_long: s.triggers_long,
-            triggers_short: s.triggers_short,
-            restarts: s.restarts,
-            restarts_per_year: s.restarts as f64 * annual,
-            restarts_long: s.restarts_long,
-            restarts_short: s.restarts_short,
-            restarts_per_year_long: s.restarts_long as f64 * annual,
-            restarts_per_year_short: s.restarts_short as f64 * annual,
-            red_time_fraction: if s.observed_minutes > 0.0 {
-                s.red_minutes / s.observed_minutes
-            } else {
-                0.0
-            },
-            red_duration_mean_minutes: stats.durations.mean(),
-            red_duration_max_minutes: stats.durations.max,
-            trigger_signal_mean_fraction: stats.trigger_scores.mean(),
-            panic_fill_loss_sum_usd: s.panic_fill_loss_sum_usd,
-            panic_fill_loss_max_usd: stats.panic_loss_max,
-            panic_episode_loss_min_fraction: stats.panic_loss_ratios.min,
-            panic_episode_loss_mean_fraction: stats.panic_loss_ratios.mean(),
-            panic_episode_loss_max_fraction: stats.panic_loss_ratios.max,
-            panic_loss_starting_balance_fraction: s.panic_fill_loss_sum_usd
-                / starting_balance.max(f64::EPSILON),
-            flatten_time_mean_minutes: stats.flatten_minutes.mean(),
-            restart_retrigger_fraction: if s.restarts > 0 {
-                stats.retriggers as f64 / s.restarts as f64
-            } else {
-                0.0
-            },
-            ..HardStopMetrics::default()
+        crate::core_metrics::HslSummary {
+            enabled,
+            trigger_count: self.summary.triggers as u64,
+            execution_episode_count: stats.execution_episode_count,
+            episode_loss_fraction_sum: stats.panic_loss_ratios.sum,
+            episode_loss_fraction_max: stats.panic_loss_ratios.max,
+            episode_loss_valid: !stats.episode_loss_invalid,
+            red_duration_ms: self.summary.red_duration_ms,
+            observed_duration_ms: self.summary.observed_duration_ms,
+            observation_valid: true,
         }
     }
 }
@@ -748,16 +668,16 @@ mod tests {
     #[test]
     fn gpu_lifecycle_reference_covers_green_open_and_renewed_exposure() {
         let expected = [
-            (2, 1, 1.0, 4.5, 7.0, 2.0),
-            (2, 1, 1.0, 1.5, 2.0, 2.0),
-            (1, 1, 0.0, 1.0, 1.0, 1.0),
-            (2, 1, 1.0, 2.5, 3.0, 2.0),
-            (1, 0, 0.0, 2.0, 2.0, 2.0),
-            (2, 1, 1.0, 2.5, 3.0, 1.0),
+            (2, 1, 9.0, vec![4]),
+            (2, 1, 3.0, vec![]),
+            (1, 1, 1.0, vec![3]),
+            (2, 1, 5.0, vec![4]),
+            (1, 0, 2.0, vec![]),
+            (2, 1, 5.0, vec![4, 5]),
         ];
         for (mode, expected) in expected.into_iter().enumerate() {
             let key = (Some(LONG), Some(0));
-            let mut report = Report::new(false, false);
+            let mut report = Report::new(true, true);
             let mut observe = |minute: i64, action, kinds: &[&'static str]| {
                 let now = minute * 60_000;
                 let events = kinds
@@ -810,20 +730,27 @@ mod tests {
                 }
                 _ => 4,
             };
-            report.record_bar_signals(last * 60_000, [0.0; 3]);
-            let m = report.metrics(1000.0, last as f64);
+            report.advance(last * 60_000);
+            let flat_minutes = report
+                .events
+                .iter()
+                .filter(|e| e.kind == "flat")
+                .map(|e| e.observed_at / 60_000)
+                .collect::<Vec<_>>();
             assert_eq!(
                 (
-                    m.triggers,
-                    m.restarts,
-                    m.restart_retrigger_fraction,
-                    m.red_duration_mean_minutes,
-                    m.red_duration_max_minutes,
-                    m.flatten_time_mean_minutes
+                    report.summary.triggers,
+                    report.summary.restarts,
+                    report.summary.red_minutes,
+                    flat_minutes
                 ),
                 expected,
                 "mode {mode}"
             );
+            let core = report.core_summary(true);
+            assert_eq!(core.trigger_count, expected.0 as u64);
+            assert_eq!(core.red_duration_ms, (expected.2 * 60_000.0) as u64);
+            assert_eq!(core.observed_duration_ms, last as u64 * 60_000);
         }
     }
 
@@ -849,10 +776,14 @@ mod tests {
         );
         report.panic_fill(key, -25.0, 1000.0);
         report.panic_fill(key, 10.0, 900.0);
-        report.record_bar_signals(120_000, [0.1, 0.1, 0.0]);
+        report.advance(120_000);
         for _ in 0..2 {
-            assert_eq!(report.metrics(1000.0, 2.0).flatten_time_mean_minutes, 1.0);
+            let core = report.core_summary(true);
+            assert_eq!(core.execution_episode_count, 1);
+            assert_eq!(core.episode_loss_fraction_sum, 0.025);
+            assert_eq!(core.red_duration_ms, 60_000);
         }
+        assert_eq!(report.stats.execution_episode_count, 0);
         report.observe(
             key,
             180_000,
@@ -880,32 +811,28 @@ mod tests {
             &output(360_000, Action::Panic, vec![event(360_000, "red", 360_000)]),
         );
         report.panic_fill(key, -40.0, 800.0);
-        report.record_bar_signals(420_000, [0.1, 0.1, 0.0]);
+        report.advance(420_000);
         for _ in 0..2 {
             // Snapshot metrics must not consume unfinished episodes.
-            let m = report.metrics(1000.0, 7.0);
-            assert_eq!((m.triggers, m.restarts), (2, 1));
-            assert!((m.red_time_fraction - 5.0 / 7.0).abs() < 1e-12);
-            assert_eq!(m.red_duration_mean_minutes, 2.5);
-            assert_eq!(m.red_duration_max_minutes, 4.0);
-            assert_eq!(m.flatten_time_mean_minutes, 1.5); // Completed two minutes + open one minute.
-            assert_eq!(m.trigger_signal_mean_fraction, 0.1);
-            assert_eq!(m.panic_fill_loss_sum_usd, 65.0);
-            assert_eq!(m.panic_fill_loss_max_usd, 40.0);
-            assert_eq!(m.panic_episode_loss_min_fraction, 0.025);
-            assert!((m.panic_episode_loss_mean_fraction - 0.0375).abs() < 1e-12);
-            assert_eq!(m.panic_episode_loss_max_fraction, 0.05);
-            assert_eq!(m.panic_loss_starting_balance_fraction, 0.065);
-            assert_eq!(m.restart_retrigger_fraction, 1.0);
-            assert_eq!(m.triggers_per_year, 2.0 * 365.25 * 1440.0 / 7.0);
+            let core = report.core_summary(true);
+            assert_eq!((report.summary.triggers, report.summary.restarts), (2, 1));
+            assert_eq!(core.trigger_count, 2);
+            assert_eq!(core.red_duration_ms, 5 * 60_000);
+            assert_eq!(core.observed_duration_ms, 7 * 60_000);
+            assert_eq!(core.execution_episode_count, 2);
+            assert!((core.episode_loss_fraction_sum - 0.075).abs() < 1e-12);
+            assert_eq!(core.episode_loss_fraction_max, 0.05);
+            assert_eq!(report.summary.panic_fill_loss_sum_usd, 65.0);
+            assert_eq!(report.summary.signal_raw_max_fraction, 0.2);
+            assert_eq!(report.summary.signal_ema_max_fraction, 0.1);
         }
         assert!(report.samples.is_empty() && report.events.is_empty());
     }
 
     #[test]
-    fn repanic_flat_latency_uses_new_exit_but_keeps_continuous_halt_duration() {
+    fn repanic_preserves_flat_event_clocks_and_continuous_red_union() {
         let key = (None, None);
-        let mut report = Report::new(false, false);
+        let mut report = Report::new(true, true);
         let mut events = zero_cooldown_events(60_000);
         events.pop(); // RED then flat, held in cooldown.
         report.observe(
@@ -930,11 +857,21 @@ mod tests {
             "scope_flat",
             &output(240_000, Action::Normal, events),
         );
-        let m = report.metrics(1000.0, 3.0);
-        assert_eq!((m.triggers, m.restarts), (2, 1));
-        assert_eq!(m.red_duration_mean_minutes, 3.0);
-        assert_eq!(m.flatten_time_mean_minutes, 0.5); // Two exits: zero and one minute.
-        assert_eq!(m.triggers_long + m.triggers_short, 0);
+        assert_eq!((report.summary.triggers, report.summary.restarts), (2, 1));
+        assert_eq!(report.core_summary(true).red_duration_ms, 3 * 60_000);
+        assert_eq!(
+            report.summary.triggers_long + report.summary.triggers_short,
+            0
+        );
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|e| e.kind == "flat")
+                .map(|e| e.observed_at)
+                .collect::<Vec<_>>(),
+            vec![60_000, 240_000]
+        );
     }
     #[test]
     fn event_only_report_preserves_zero_cooldown_and_liquidation_sequences() {
@@ -1005,9 +942,55 @@ mod tests {
             );
         }
         assert_eq!(report.events.iter().filter(|e| e.kind == "flat").count(), 1);
-        let m = report.metrics(1000.0, 2.0);
-        assert_eq!(m.flatten_time_mean_minutes, 1.0);
-        assert_eq!(m.restarts, 1);
-        assert_eq!(m.panic_episode_loss_mean_fraction, 0.02);
+        assert_eq!(report.summary.restarts, 1);
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .find(|e| e.kind == "flat")
+                .unwrap()
+                .observed_at,
+            120_000
+        );
+        let core = report.core_summary(true);
+        assert_eq!(core.execution_episode_count, 1);
+        assert_eq!(core.episode_loss_fraction_sum, 0.02);
+    }
+    #[test]
+    fn core_episode_loss_anchors_once_to_balance_and_keeps_censored_tails() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::default();
+        report.advance(0);
+        report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
+        report.panic_fill(key, -100.0, 1000.0);
+        report.panic_fill(key, -100.0, 900.0);
+        report.panic_fill(key, -100.0, 800.0);
+        report.advance(60_000);
+        let summary = report.core_summary(true);
+        assert_eq!(summary.execution_episode_count, 1);
+        assert!((summary.episode_loss_fraction_max - 0.3).abs() < 1e-12);
+        assert!((summary.episode_loss_fraction_sum - 0.3).abs() < 1e-12);
+        assert_eq!(report.core_summary(true).execution_episode_count, 1);
+        report.observed_flat(key, 60_000);
+        assert_eq!(report.core_summary(true).execution_episode_count, 1);
+        report.observe(
+            key,
+            120_000,
+            "green",
+            &output(120_000, Action::Normal, vec![]),
+        );
+        assert_eq!(report.core_summary(true).red_duration_ms, 120_000);
+        assert_eq!(report.core_summary(true).observed_duration_ms, 120_000);
+    }
+    #[test]
+    fn invalid_episode_balance_is_not_floored_or_dropped() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::default();
+        report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
+        report.panic_fill(key, -10.0, 0.0);
+        report.observed_flat(key, 60_000);
+        let summary = report.core_summary(true);
+        assert!(!summary.episode_loss_valid);
+        assert_eq!(summary.execution_episode_count, 1);
     }
 }

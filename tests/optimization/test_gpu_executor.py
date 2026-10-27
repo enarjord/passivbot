@@ -319,7 +319,7 @@ def test_failed_producer_work_never_supplies_tuning_evidence(malformed):
         service.register_dataset("market", FailingReplay())
         future = service.submit(request(0))
         if malformed:
-            with pytest.raises(RuntimeError, match="NaN metric"):
+            with pytest.raises(RuntimeError, match="nonfinite raw metric"):
                 future.result(timeout=3)
         else:
             assert future.exception(timeout=3) is failure
@@ -926,11 +926,35 @@ def test_dataset_registration_and_request_validation():
             service.submit(BacktestRequest("1", "market", []))
 
 
-def test_explicit_infinite_metric_sentinels_are_not_fabricated():
+def test_raw_infinite_metrics_are_rejected_at_the_serializable_boundary():
     with GpuBacktestService(batch_size=1) as service:
         service.register_dataset("market", Replay())
-        result = service.submit(request(float("inf"))).result(timeout=3)
-    assert result.metrics["gain_multiplier"] == float("inf")
+        with pytest.raises(RuntimeError, match="nonfinite raw metric"):
+            service.submit(request(float("inf"))).result(timeout=3)
+
+
+@pytest.mark.parametrize("status", ["positive_infinity", "negative_infinity", "undefined", "invalid"])
+def test_null_metric_keeps_its_explicit_mathematical_status(status):
+    class StatusReplay:
+        def evaluate(self, candidates):
+            return [ReplayResult({"omega_ratio_strategy_equity": None}, False,
+                                 {"metric_status": {"omega_ratio_strategy_equity": {"status": status}}})
+                    for _ in candidates]
+    with GpuBacktestService(batch_size=1) as service:
+        service.register_dataset("market", StatusReplay())
+        result = service.submit(request(0)).result(timeout=3)
+    assert result.metrics == {"omega_ratio_strategy_equity": None}
+    assert result.metadata["metric_status"]["omega_ratio_strategy_equity"]["status"] == status
+
+
+def test_null_metric_without_status_fails_the_producer_contract():
+    class StatusReplay:
+        def evaluate(self, candidates):
+            return [ReplayResult({"omega_ratio_strategy_equity": None}, False) for _ in candidates]
+    with GpuBacktestService(batch_size=1) as service:
+        service.register_dataset("market", StatusReplay())
+        with pytest.raises(RuntimeError, match="null metric lacks"):
+            service.submit(request(0)).result(timeout=3)
 
 
 @pytest.mark.parametrize("automatic", [False, True])

@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
 from config.limits import resolve_reducer_mode
-from config.metrics import canonicalize_metric_name, resolve_metric_value
+from config.metrics import resolve_metric_value
 from config.scoring import extract_objective_specs
 from optimization.progress import duration, log_tokens
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
-from metrics_schema import flatten_metric_stats
+from metrics_schema import flatten_metric_stats, encode_metric_values
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -58,9 +58,7 @@ def _split_metric_field(raw_key: str) -> tuple[str, str]:
 
 
 def _resolve_metric_name(metric: str, metric_map: Dict[str, str]) -> str:
-    if metric.startswith("w_"):
-        return canonicalize_metric_name(metric_map.get(metric, metric))
-    return canonicalize_metric_name(metric)
+    return str(metric).strip()
 
 
 def _resolve_limit_value(
@@ -71,11 +69,11 @@ def _resolve_limit_value(
     metric_map: Dict[str, str],
 ) -> Optional[float]:
     metric = spec.metric
-    value = resolve_metric_value(objectives, metric)
+    value = objectives.get(metric)
     if value is not None:
         return value
     resolved_metric = _resolve_metric_name(metric, metric_map)
-    value = resolve_metric_value(objectives, resolved_metric)
+    value = objectives.get(resolved_metric)
     if value is not None:
         return value
     field = spec.field
@@ -107,36 +105,31 @@ def _format_available_limit_metrics(
     return ", ".join(available) if available else "<none>"
 
 
-def _suite_metrics_to_stats(
-    entry: Dict[str, Any],
-    reducer_cfg: Optional[Dict[str, str]] = None,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
-    aggregated_values: Dict[str, float] = {}
-    stats_flat: Dict[str, float] = {}
-    suite_metrics = entry.get("suite_metrics") or {}
-    if "metrics" in suite_metrics:
-        for metric, payload in suite_metrics["metrics"].items():
-            stats = payload.get("stats") or {}
-            if stats:
-                stats_flat.update(flatten_metric_stats({metric: stats}))
-            agg = payload.get("aggregated")
-            if agg is None and stats:
-                mode = _resolve_reducer_mode(metric, reducer_cfg)
-                agg = stats.get(mode, stats.get("mean"))
-            if agg is not None:
-                aggregated_values[metric] = agg
-    elif "aggregate" in suite_metrics:
-        aggregate = suite_metrics.get("aggregate") or {}
-        agg_stats = aggregate.get("stats") or {}
-        aggregated_values = aggregate.get("aggregated") or {}
-        if not aggregated_values and agg_stats and reducer_cfg:
-            for metric, metric_stats in agg_stats.items():
-                mode = _resolve_reducer_mode(metric, reducer_cfg)
-                val = metric_stats.get(mode, metric_stats.get("mean"))
-                if val is not None:
-                    aggregated_values[metric] = val
-        stats_flat = flatten_metric_stats(agg_stats)
-    return stats_flat, aggregated_values
+def _suite_metrics_to_stats(entry, reducer_cfg=None):
+    from metrics_schema import encode_metric_values, require_metric_definition, MetricAggregationError
+
+    suite = entry.get("suite_metrics") or {}
+    if not suite:
+        return {}, {}
+    require_metric_definition(suite)
+    rows = suite.get("metrics", {})
+    all_stats = {name: row.get("stats", {}) for name, row in rows.items()}
+    aggregates = {}
+    for name, row in rows.items():
+        try:
+            if "aggregated" in row:
+                value = resolve_metric_value(row, "aggregated")
+            else:
+                fields = row.get("stats", {})
+                mode = _resolve_reducer_mode(name, reducer_cfg)
+                value = resolve_metric_value(fields, mode)
+        except MetricAggregationError:
+            # Optional diagnostics retain their stat status. A selected lookup
+            # still rejects the unavailable metric through its stat value.
+            continue
+        if value is not None:
+            aggregates[name] = value
+    return flatten_metric_stats(all_stats), encode_metric_values(aggregates)
 
 
 def _evaluate_limits(
@@ -264,6 +257,8 @@ class ParetoStore:
         Return True if the store actually changed.
         """
         self.n_iters += 1
+        if entry.get("metrics", {}).get("fitness_status") == "invalid":
+            return False
         self._apply_entry_scoring_specs(entry)
         h = calc_hash(entry)
         with self._lock:
@@ -273,12 +268,16 @@ class ParetoStore:
 
             metrics_block = entry.get("metrics", {}) or {}
             obj, _ = extract_objectives(
-                entry, scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring")
+                entry,
+                scoring_keys=self.scoring_specs
+                or entry.get("optimize", {}).get("scoring"),
             )
             obj = self._validate_objective_vector(obj)
             violation = extract_violation(entry)
             if not math.isfinite(violation):
-                raise ValueError(f"Pareto entry has non-finite constraint violation: {violation!r}")
+                raise ValueError(
+                    f"Pareto entry has non-finite constraint violation: {violation!r}"
+                )
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -440,8 +439,10 @@ class ParetoStore:
                 raise ValueError(
                     f"Pareto objective at index {idx} is missing or non-numeric: {value!r}"
                 ) from exc
-            if not math.isfinite(numeric):
-                raise ValueError(f"Pareto objective at index {idx} is non-finite: {value!r}")
+            if math.isnan(numeric):
+                raise ValueError(
+                    f"Pareto objective at index {idx} is non-finite: {value!r}"
+                )
             values.append(numeric)
         return tuple(values)
 
@@ -612,9 +613,9 @@ def main():
             "Examples:\n"
             "  python3 src/pareto_store.py\n"
             "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
-            '  python3 src/pareto_store.py -l "peak_recovery_max_hours_realized_pnl<800"\n'
-            '  python3 src/pareto_store.py -l "peak_recovery_max_hours_realized_pnl.max<600"\n'
-            "  python3 src/pareto_store.py -o adg_fraction_btc,mdg_fraction_btc -w 0.1,0.1\n"
+            '  python3 src/pareto_store.py -l "peak_recovery_max_days_strategy_equity<30"\n'
+            '  python3 src/pareto_store.py -l "peak_recovery_max_days_strategy_equity.max<30"\n'
+            "  python3 src/pareto_store.py -o cagr_fraction_strategy_equity,omega_ratio_strategy_equity -w 0.1,0.1\n"
         ),
     )
     parser.add_argument(
@@ -668,10 +669,9 @@ def main():
         action="append",
         help=(
             "Limit filters applied before ranking. Repeat for multiple expressions:\n"
-            '  -l "peak_recovery_max_hours_realized_pnl<800" -l "position_held_max_hours<400"\n'
+            '  -l "peak_recovery_max_days_strategy_equity<30" -l "position_held_max_days<15"\n'
             "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
             "suite-level aggregates (if available) are used; otherwise the mean.\n"
-            "Legacy w_i identifiers are still accepted for old result files."
         ),
     )
     parser.add_argument(
@@ -680,8 +680,7 @@ def main():
         type=str,
         help=(
             "Restrict the objective vector to the provided comma-separated list\n"
-            "(metric names for new results; legacy w_i identifiers are still accepted\n"
-            "for old runs). By default all stored objectives are used."
+            "By default all stored named raw objectives are used."
         ),
     )
     args = parser.parse_args()
@@ -745,11 +744,12 @@ def main():
             if metric_names is None:
                 objective_specs = extract_objective_specs(entry)
                 metric_names = [spec.metric for spec in objective_specs]
-                metric_name_map = {f"w_{i}": spec.metric for i, spec in enumerate(objective_specs)}
+                metric_name_map = {spec.metric: spec.metric for spec in objective_specs}
             metrics_block = entry.get("metrics", {}) or {}
             objective_values, extracted_keys = extract_objectives(
                 entry,
-                scoring_keys=objective_specs or entry.get("optimize", {}).get("scoring"),
+                scoring_keys=objective_specs
+                or entry.get("optimize", {}).get("scoring"),
             )
             objectives = dict(zip(extracted_keys, objective_values))
             backtest_cfg = entry.get("backtest", {})
@@ -768,7 +768,9 @@ def main():
             if not objective_keys:
                 all_objective_keys = list(extracted_keys)
                 if args.objectives:
-                    requested_objectives = [obj.strip() for obj in args.objectives.split(",")]
+                    requested_objectives = [
+                        obj.strip() for obj in args.objectives.split(",")
+                    ]
                     objective_keys = []
                     for obj_name in requested_objectives:
                         resolved_name = (metric_name_map or {}).get(obj_name, obj_name)
@@ -793,10 +795,9 @@ def main():
                 metric_name_map or {},
             ):
                 continue
-            values = [
-                resolve_metric_value(objectives, _resolve_metric_name(k, metric_name_map or {}))
-                for k in objective_keys
-            ]
+            # extract_objectives has already decoded standard JSON-safe facts.
+            values = [objectives.get(_resolve_metric_name(k, metric_name_map or {}))
+                      for k in objective_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]
@@ -806,7 +807,9 @@ def main():
             print(f"Error loading {h}: {e}")
     print(f"Found {len(entries)} Pareto members.")
     if args.objectives:
-        print(f"Using objectives: {[metric_name_map.get(k, k) for k in objective_keys]}")
+        print(
+            f"Using objectives: {[metric_name_map.get(k, k) for k in objective_keys]}"
+        )
     if not points:
         print("No valid Pareto points found.")
         exit(0)
@@ -817,7 +820,9 @@ def main():
         print("Mismatch between values and keys!")
         exit(1)
 
-    weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
+    weights = (
+        tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
+    )
     if len(weights) == 1:
         weights = tuple([weights[0]] * values_matrix.shape[1])
     selected_specs = None
@@ -827,14 +832,25 @@ def main():
             spec_by_metric[key] for key in objective_keys if key in spec_by_metric
         ] or None
 
-    ideal = compute_ideal(
-        values_matrix,
+    distance_matrix = (2.0 / np.pi) * np.arctan(values_matrix)
+    ideal_distance = compute_ideal(
+        distance_matrix,
         mode=args.mode,
         weights=weights,
         objective_specs=selected_specs,
     )
-    mins = np.min(values_matrix, axis=0)
-    maxs = np.max(values_matrix, axis=0)
+    ideal = np.array(
+        [
+            (
+                math.inf
+                if x == 1.0
+                else -math.inf if x == -1.0 else math.tan(x * math.pi / 2.0)
+            )
+            for x in ideal_distance
+        ]
+    )
+    mins = np.min(distance_matrix, axis=0)
+    maxs = np.max(distance_matrix, axis=0)
 
     norm_matrix = np.array(
         [
@@ -842,22 +858,30 @@ def main():
                 (v - mins[i]) / (maxs[i] - mins[i]) if maxs[i] > mins[i] else v
                 for i, v in enumerate(row)
             ]
-            for row in values_matrix
+            for row in distance_matrix
         ]
     )
     ideal_norm = [
-        (ideal[i] - mins[i]) / (maxs[i] - mins[i]) if maxs[i] > mins[i] else ideal[i]
+        (
+            (ideal_distance[i] - mins[i]) / (maxs[i] - mins[i])
+            if maxs[i] > mins[i]
+            else ideal_distance[i]
+        )
         for i in range(len(ideal))
     ]
 
     dists = np.linalg.norm(norm_matrix - ideal_norm, axis=1)
     closest_idx = int(np.argmin(dists))
 
-    print(f"Ideal point ({args.mode}{' ' + str(weights) if args.mode == 'weighted' else ''})")
+    print(
+        f"Ideal point ({args.mode}{' ' + str(weights) if args.mode == 'weighted' else ''})"
+    )
     paddings = {k: len(v) for k, v in (metric_name_map or {}).items()} or {"": 0}
     paddings = {k: max(paddings.values()) - v for k, v in paddings.items()}
     for i, key in enumerate(objective_keys):
-        print(f"  {metric_name_map.get(key, key)} {' ' * paddings.get(key, 0)} = {ideal[i]:.5f}")
+        print(
+            f"  {metric_name_map.get(key, key)} {' ' * paddings.get(key, 0)} = {ideal[i]:.5f}"
+        )
     print(
         f"Closest to ideal: {pareto_dir}/{filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}"
     )
@@ -869,19 +893,20 @@ def main():
     if args.json:
         summary = {
             "n_members": len(hashes),
-            "ideal": {
-                metric_name_map.get(k, k): float(ideal[i]) for i, k in enumerate(objective_keys)
-            },
+            "ideal": encode_metric_values({
+                metric_name_map.get(k, k): float(ideal[i])
+                for i, k in enumerate(objective_keys)
+            }),
             "closest": {
                 "hash": hashes[closest_idx],
-                **{
+                **encode_metric_values({
                     metric_name_map.get(k, k): float(values_matrix[closest_idx][i])
                     for i, k in enumerate(objective_keys)
-                },
+                }),
                 "normalized_distance": float(dists[closest_idx]),
             },
         }
-        print(json.dumps(summary, indent=4))
+        print(json.dumps(summary, indent=4, allow_nan=False))
 
     fig = plt.figure(figsize=(12, 4))
 
@@ -987,13 +1012,26 @@ def main():
         for i in top_indices:
             if i == closest_idx:
                 ax.plot(
-                    range(len(objective_keys)), norm_matrix[i], "r-", linewidth=2.5, alpha=0.9, zorder=5
+                    range(len(objective_keys)),
+                    norm_matrix[i],
+                    "r-",
+                    linewidth=2.5,
+                    alpha=0.9,
+                    zorder=5,
                 )
             else:
-                ax.plot(range(len(objective_keys)), norm_matrix[i], "b-", linewidth=1, alpha=0.3)
+                ax.plot(
+                    range(len(objective_keys)),
+                    norm_matrix[i],
+                    "b-",
+                    linewidth=1,
+                    alpha=0.3,
+                )
 
         # Plot ideal point
-        ax.plot(range(len(objective_keys)), ideal_norm, "go--", linewidth=2, markersize=8)
+        ax.plot(
+            range(len(objective_keys)), ideal_norm, "go--", linewidth=2, markersize=8
+        )
 
         # Customize appearance
         ax.set_xticks(range(len(objective_keys)))
@@ -1017,7 +1055,9 @@ def main():
                 # Calculate correlation
                 mean1, mean2 = np.mean(vals1), np.mean(vals2)
                 num = np.sum((vals1 - mean1) * (vals2 - mean2))
-                den = np.sqrt(np.sum((vals1 - mean1) ** 2) * np.sum((vals2 - mean2) ** 2))
+                den = np.sqrt(
+                    np.sum((vals1 - mean1) ** 2) * np.sum((vals2 - mean2) ** 2)
+                )
 
                 if den != 0:
                     corr_matrix[i, j] = num / den
@@ -1058,14 +1098,19 @@ def main():
         print("\nTop 5 Solutions Closest to Ideal:")
         print("-" * 80)
         header = f"{'Rank':<5} {'Hash':<16} {'Distance':<10} " + " ".join(
-            [f"{shorten_str(metric_name_map.get(k, k))[:8]:<10}" for k in objective_keys]
+            [
+                f"{shorten_str(metric_name_map.get(k, k))[:8]:<10}"
+                for k in objective_keys
+            ]
         )
         print(header)
         print("-" * 80)
 
         for rank, (idx, row) in enumerate(df_sorted.head(5).iterrows(), 1):
             values_str = " ".join([f"{row[k]:<10.4f}" for k in objective_keys])
-            print(f"{rank:<5} {row['hash']:<16} {row['dist_from_ideal']:<10.4f} {values_str}")
+            print(
+                f"{rank:<5} {row['hash']:<16} {row['dist_from_ideal']:<10.4f} {values_str}"
+            )
 
         # Print key insights
         print("\nKey Insights:")
@@ -1077,7 +1122,9 @@ def main():
             for j in range(i + 1, len(objective_keys)):
                 corr = corr_matrix[i, j]
                 if abs(corr) > 0.65:
-                    relation = "positively correlated with" if corr > 0 else "trade-off with"
+                    relation = (
+                        "positively correlated with" if corr > 0 else "trade-off with"
+                    )
                     strong_correlations.append(
                         (objective_keys[i], objective_keys[j], corr, relation)
                     )

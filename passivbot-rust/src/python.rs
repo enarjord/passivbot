@@ -1,6 +1,3 @@
-use crate::analysis::{
-    analyze_backtest_pair_with_options, analyze_backtest_usd_with_profile, FillActivityMetrics,
-};
 use crate::backtest::BacktestEngine;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -23,9 +20,9 @@ use crate::strategies::{
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
-use crate::types::{Analysis, OrderType};
+use crate::types::OrderType;
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
+    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands,
     EquityHardStopLossConfig, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
     OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
     TrailingPriceBundle, TwelEnforcerPolicy,
@@ -44,7 +41,7 @@ use serde_json::{self, Value};
 use std::str::FromStr;
 use std::time::Instant;
 
-type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
+type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, PyObject);
 
 /// Native CPU market execution counts, SELL lane0 and BUY lane1.
 ///
@@ -182,114 +179,115 @@ fn profile_to_py_dict(
     Ok(py_profile.unbind())
 }
 
-#[pyfunction(signature = (equity, timestamps_ms, half_life_days, candle_interval_minutes=1))]
-pub fn calculate_ew_metrics(
-    py: Python<'_>,
-    equity: Vec<f64>,
-    timestamps_ms: Vec<u64>,
-    half_life_days: f64,
-    candle_interval_minutes: u64,
-) -> PyResult<PyObject> {
-    let result = crate::ew::analyze_ew_equity(
-        &equity,
-        &timestamps_ms,
-        half_life_days,
-        candle_interval_minutes,
-    )
-    .map_err(PyValueError::new_err)?;
-    Ok(struct_to_py_dict(py, &result)?.into_py(py))
+/// One source-owned catalog for configuration, capability checks and result versions.
+#[pyfunction]
+pub fn get_core_metric_catalog(py: Python<'_>) -> PyResult<PyObject> {
+    let catalog = PyDict::new_bound(py);
+    catalog.set_item("definition_version", crate::core_metrics::CORE_METRIC_DEFINITION_VERSION)?;
+    catalog.set_item("year_days", crate::core_metrics::YEAR_DAYS)?;
+    catalog.set_item("default_ew_half_life_days", crate::core_metrics::DEFAULT_EW_HALF_LIFE_DAYS)?;
+    let definitions = PyList::empty_bound(py);
+    for definition in &crate::core_metrics::METRIC_CATALOG {
+        definitions.append(struct_to_py_dict(py, definition)?)?;
+    }
+    catalog.set_item("metrics", definitions)?;
+    Ok(catalog.into_py(py))
 }
 
-fn attach_ew_analysis(
+#[pyfunction]
+pub fn get_core_gpu_observation_catalog(py: Python<'_>) -> PyResult<PyObject> {
+    json_value_to_py(py, &crate::core_metrics_gpu::observation_catalog())
+}
+
+#[pyfunction]
+#[pyo3(signature = (values, metric_names, origin_timestamp_ms, observation_interval_ms, intended_end_timestamp_ms, ew_half_life_days=None, hsl_effective_policy_enabled=None))]
+pub fn core_metrics_from_gpu_observations(
     py: Python<'_>,
-    dict: &Py<PyDict>,
-    curve_name: &str,
-    curve: &crate::ew::EwAnalysis,
-    strategy: &crate::ew::EwAnalysis,
-) -> PyResult<()> {
-    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_equity_ew")] {
-        if let Some(metrics) = analysis.metrics {
-            for (key, value) in [
-                ("adg_fraction", metrics.adg_fraction),
-                ("sharpe_ratio", metrics.sharpe_ratio),
-                ("sortino_ratio", metrics.sortino_ratio),
-                ("omega_ratio", metrics.omega_ratio),
-            ] {
-                dict.bind(py).set_item(format!("{key}{suffix}"), value)?;
+    values: PyReadonlyArray2<'_, f32>,
+    metric_names: Vec<String>,
+    origin_timestamp_ms: u64,
+    observation_interval_ms: u64,
+    intended_end_timestamp_ms: u64,
+    ew_half_life_days: Option<&Bound<'_, PyAny>>,
+    hsl_effective_policy_enabled: Option<Vec<bool>>,
+) -> PyResult<PyObject> {
+    let half_life = match ew_half_life_days {
+        Some(item) if !item.is_none() => {
+            if item.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err("ew_half_life_days must be a finite positive number"));
             }
+            let value = item.extract::<f64>()?;
+            if !value.is_finite() || value <= 0.0 {
+                return Err(PyValueError::new_err("ew_half_life_days must be finite and positive"));
+            }
+            value
+        }
+        _ => crate::core_metrics::DEFAULT_EW_HALF_LIFE_DAYS,
+    };
+    let array = values.as_array();
+    if array.ncols() != crate::core_metrics_gpu::OBSERVATION_FIELDS.len() {
+        return Err(PyValueError::new_err("GPU core observation packet width mismatch"));
+    }
+    let rows = array.as_slice().ok_or_else(|| {
+        PyValueError::new_err("GPU core observations must be a contiguous float32 matrix")
+    })?;
+    let results = crate::core_metrics_gpu::finalize_observations(
+        rows, array.nrows(), &metric_names, origin_timestamp_ms,
+        observation_interval_ms, intended_end_timestamp_ms,
+        Some(half_life),
+        hsl_effective_policy_enabled.as_deref(),
+    ).map_err(PyValueError::new_err)?;
+    let output = PyList::empty_bound(py);
+    for (result, liquidated) in results {
+        output.append(core_metrics_to_py(py, &result, liquidated)?)?;
+    }
+    Ok(output.into_py(py))
+}
+
+/// Keep raw mathematical status separate from standard-JSON-safe scalar values.
+pub(crate) fn core_metrics_to_py(
+    py: Python<'_>,
+    result: &crate::core_metrics::CoreMetricsResult,
+    liquidated: bool,
+) -> PyResult<Py<PyDict>> {
+    use crate::core_metrics::MetricStatus;
+    let analysis = PyDict::new_bound(py);
+    let statuses = PyDict::new_bound(py);
+    for (name, value) in &result.metrics {
+        if value.status == MetricStatus::Finite {
+            let numeric = value.value.filter(|x| x.is_finite()).ok_or_else(|| {
+                PyValueError::new_err(format!("finite core metric {name} has no finite value"))
+            })?;
+            analysis.set_item(*name, numeric)?;
+        } else {
+            analysis.set_item(*name, py.None())?;
+            let status = struct_to_py_dict(py, value)?;
+            status.bind(py).del_item("value")?;
+            statuses.set_item(*name, status)?;
         }
     }
-    let metadata = PyDict::new_bound(py);
-    metadata.set_item(curve_name, struct_to_py_dict(py, &curve.metadata)?)?;
-    metadata.set_item(
-        "strategy_equity",
-        struct_to_py_dict(py, &strategy.metadata)?,
-    )?;
-    dict.bind(py).set_item("_ew_metadata", metadata)?;
-    Ok(())
-}
-
-fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
-    analysis.fills_active_days_count = metrics.fills_active_days_count;
-    analysis.fills_active_day_fraction = metrics.fills_active_day_fraction;
-    analysis.fills_active_symbols_count = metrics.fills_active_symbols_count;
-    analysis.analysis_duration_days = metrics.analysis_duration_days;
-    analysis.fills_count = metrics.fills_count;
-    analysis.fills_close_count = metrics.fills_close_count;
-    analysis.fills_entry_count = metrics.fills_entry_count;
-    analysis.fills_count_long = metrics.fills_count_long;
-    analysis.fills_count_short = metrics.fills_count_short;
-    analysis.entry_to_close_fill_count_ratio = metrics.entry_to_close_fill_count_ratio;
-    analysis.fills_gap_max_days = metrics.fills_gap_max_days;
-    analysis.fills_gap_mean_hours = metrics.fills_gap_mean_hours;
-    analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
-    analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
-    analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
-    analysis.fills_gap_time_weighted_mean_hours = metrics.fills_gap_time_weighted_mean_hours;
-    analysis.fills_per_day = metrics.fills_per_day;
-    analysis.fills_close_per_day = metrics.fills_close_per_day;
-    analysis.fills_entry_per_day = metrics.fills_entry_per_day;
-    analysis.fills_per_day_long = metrics.fills_per_day_long;
-    analysis.fills_per_day_per_position_slot = metrics.fills_per_day_per_position_slot;
-    analysis.fills_per_day_per_position_slot_long = metrics.fills_per_day_per_position_slot_long;
-    analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
-    analysis.fills_per_day_short = metrics.fills_per_day_short;
-    analysis.fills_top_symbol_fraction = metrics.fills_top_symbol_fraction;
-}
-
-fn calc_backtest_completion_fraction(
-    equities: &Equities,
-    backtest_params: &BacktestParams,
-    n_timesteps: usize,
-) -> f64 {
-    let interval_ms = backtest_params
-        .candle_interval_minutes
-        .max(1)
-        .saturating_mul(60_000);
-    let requested_start_ts = backtest_params.requested_start_timestamp_ms;
-    let requested_end_ts = backtest_params
-        .first_timestamp_ms
-        .saturating_add((n_timesteps as u64).saturating_mul(interval_ms));
-    if requested_end_ts <= requested_start_ts {
-        return 1.0;
+    analysis.set_item("metric_status", statuses)?;
+    let metadata = struct_to_py_dict(py, &result.metadata)?;
+    let request = crate::core_metrics::MetricRequest::from_names(result.metrics.keys().copied())
+        .map_err(PyValueError::new_err)?;
+    if !request.needs_daily_returns() {
+        for field in ["daily_return_count", "daily_first_close_timestamp_ms", "daily_last_close_timestamp_ms"] {
+            metadata.bind(py).del_item(field)?;
+        }
     }
-    let Some(&first_equity_ts) = equities.timestamps_ms.first() else {
-        return 0.0;
-    };
-    let Some(&last_equity_ts) = equities.timestamps_ms.last() else {
-        return 0.0;
-    };
-    if last_equity_ts < first_equity_ts {
-        return 0.0;
+    if !request.contains(crate::core_metrics::Metric::PeakRecoveryMax)
+        && metadata.bind(py).contains("peak_recovery_tail_censored")? {
+        metadata.bind(py).del_item("peak_recovery_tail_censored")?;
     }
-    let final_covered_ts = last_equity_ts.saturating_add(interval_ms);
-    let covered_end_ts = requested_end_ts.min(final_covered_ts);
-    let covered_span = covered_end_ts.saturating_sub(requested_start_ts);
-    let requested_span = requested_end_ts.saturating_sub(requested_start_ts);
-    if requested_span == 0 {
-        return 1.0;
+    if !request.needs_holding() {
+        metadata.bind(py).del_item("holding_episode_count")?;
     }
-    ((covered_span as f64) / (requested_span as f64)).clamp(0.0, 1.0)
+    if !request.contains(crate::core_metrics::Metric::CagrEw) {
+        metadata.bind(py).del_item("ew_half_life_days")?;
+    }
+    analysis.set_item("metric_metadata", metadata)?;
+    analysis.set_item("liquidated", liquidated)?;
+    Ok(analysis.unbind())
 }
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
@@ -1638,9 +1636,20 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     profile_add(&mut rust_profile, "rust_input_parse_ms", input_parse_start);
 
     let metrics_only = backtest_params.metrics_only;
-    let skip_btc_analysis = metrics_only
-        && backtest_params.skip_btc_analysis
-        && backtest_params.btc_collateral_target_ratio <= 0.0;
+    let metric_requests = match backtest_params_dict.get_item("metric_requests")? {
+        Some(value) if !value.is_none() => {
+            let values = value.downcast::<PyList>().map_err(|_| {
+                PyValueError::new_err("metric_requests must be a list of canonical core metric names")
+            })?;
+            let names = values.iter().map(|name| name.extract::<String>())
+                .collect::<PyResult<Vec<_>>>()?;
+            crate::core_metrics::MetricRequest::from_names(names.iter().map(String::as_str))
+                .map_err(PyValueError::new_err)?
+        }
+        _ => crate::core_metrics::MetricRequest::all(),
+    };
+    let ew_half_life_days = backtest_params.ew_half_life_days
+        .unwrap_or(crate::core_metrics::DEFAULT_EW_HALF_LIFE_DAYS);
     let init_start = profile_start(profile_enabled);
     let mut backtest = BacktestEngine::<ORGANILLO>::new_with_strategy_params(
         hlcvs_rust,
@@ -1653,6 +1662,8 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     );
     backtest.eligibility = eligibility.as_ref().map(|a| a.as_array());
     backtest.eligibility_rows = eligibility_rows.as_ref().map(|a| a.as_array());
+    backtest.configure_core_metrics(metric_requests, ew_half_life_days)
+        .map_err(PyValueError::new_err)?;
     profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
@@ -1660,377 +1671,25 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         let simulation_start = profile_start(profile_enabled);
         let (fills, equities) = backtest.run().map_err(PyValueError::new_err)?;
         profile_add(&mut rust_profile, "rust_simulation_ms", simulation_start);
-        let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
-        let (mut analysis_usd, mut analysis_btc) = if skip_btc_analysis {
-            let (analysis_usd, analysis_profile) = analyze_backtest_usd_with_profile(
-                &fills,
-                &equities,
-                &backtest.total_wallet_exposures,
-                backtest.liquidated(),
-                profile_enabled,
-            );
-            if profile_enabled {
-                rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
-                rust_profile.push(("rust_analysis_btc_ms", 0.0));
-                rust_profile.push(("rust_btc_fill_prepare_ms", 0.0));
-                rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
-                rust_profile.push(("rust_btc_analysis_skipped", 1.0));
-            }
-            (analysis_usd, Analysis::default())
-        } else if profile_enabled {
-            let ((analysis_usd, analysis_btc), analysis_profile) =
-                analyze_backtest_pair_with_options(
-                    &fills,
-                    &equities,
-                    backtest.balance.use_btc_collateral,
-                    &backtest.total_wallet_exposures,
-                    backtest.liquidated(),
-                    true,
-                );
-            rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
-            rust_profile.push((
-                "rust_btc_fill_prepare_ms",
-                analysis_profile.btc_fill_prepare_ms,
-            ));
-            rust_profile.push(("rust_analysis_btc_ms", analysis_profile.analysis_btc_ms));
-            rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
-            (analysis_usd, analysis_btc)
-        } else {
-            analyze_backtest_pair_with_options(
-                &fills,
-                &equities,
-                backtest.balance.use_btc_collateral,
-                &backtest.total_wallet_exposures,
-                backtest.liquidated(),
-                false,
-            )
-            .0
-        };
-        backtest.exposure_rms.apply(&mut analysis_usd);
-        backtest.exposure_rms.apply(&mut analysis_btc);
-        analysis_usd.initial_entry_balance_fraction_long = entry_pct_long;
-        analysis_usd.initial_entry_balance_fraction_short = entry_pct_short;
-        analysis_btc.initial_entry_balance_fraction_long = entry_pct_long;
-        analysis_btc.initial_entry_balance_fraction_short = entry_pct_short;
-        let completion_start = profile_start(profile_enabled);
-        let completion_ratio =
-            calc_backtest_completion_fraction(&equities, &backtest_params, n_timesteps);
-        analysis_usd.backtest_completion_fraction = completion_ratio;
-        analysis_btc.backtest_completion_fraction = completion_ratio;
-        profile_add(
-            &mut rust_profile,
-            "rust_completion_ratio_ms",
-            completion_start,
-        );
-        let fill_activity_start = profile_start(profile_enabled);
-        let fill_activity = backtest.fill_activity_metrics_for_analysis(&fills, &equities);
-        apply_fill_activity_metrics(&mut analysis_usd, fill_activity);
-        apply_fill_activity_metrics(&mut analysis_btc, fill_activity);
-        profile_add(
-            &mut rust_profile,
-            "rust_fill_activity_ms",
-            fill_activity_start,
-        );
-
-        let hard_stop_metrics_start = profile_start(profile_enabled);
-        let hs = backtest.hard_stop_metrics();
-        profile_add(
-            &mut rust_profile,
-            "rust_hard_stop_metrics_ms",
-            hard_stop_metrics_start,
-        );
-        let strategy_metrics_start = profile_start(profile_enabled);
-        let strategy = backtest.strategy_equity_metrics_for_analysis();
-        profile_add(
-            &mut rust_profile,
-            "rust_strategy_equity_metrics_ms",
-            strategy_metrics_start,
-        );
-        analysis_usd.hsl_trigger_count = hs.triggers;
-        analysis_usd.hsl_triggers_per_year = hs.triggers_per_year;
-        analysis_usd.hsl_trigger_count_long = hs.triggers_long;
-        analysis_usd.hsl_trigger_count_short = hs.triggers_short;
-        analysis_usd.hsl_panic_loss_starting_balance_fraction =
-            hs.panic_loss_starting_balance_fraction;
-        analysis_usd.hsl_restart_count = hs.restarts;
-        analysis_usd.hsl_restarts_per_year = hs.restarts_per_year;
-        analysis_usd.hsl_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_usd.hsl_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_usd.hsl_restart_count_long = hs.restarts_long;
-        analysis_usd.hsl_restart_count_short = hs.restarts_short;
-        analysis_usd.hsl_red_time_fraction = hs.red_time_fraction;
-        analysis_usd.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
-        analysis_usd.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
-        analysis_usd.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
-        analysis_usd.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
-        analysis_usd.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
-        analysis_usd.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
-        analysis_usd.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
-        analysis_usd.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
-        analysis_usd.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
-        analysis_usd.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
-        analysis_usd.drawdown_max_fraction_strategy_equity =
-            strategy.overall.drawdown_max_fraction_strategy_equity;
-        analysis_usd.drawdown_max_fraction_strategy_equity_long =
-            strategy.long.drawdown_max_fraction_strategy_equity;
-        analysis_usd.drawdown_max_fraction_strategy_equity_short =
-            strategy.short.drawdown_max_fraction_strategy_equity;
-        analysis_usd.hsl_signal_ema_max_fraction = strategy
-            .long
-            .hsl_signal_ema_max_fraction
-            .max(strategy.short.hsl_signal_ema_max_fraction);
-        analysis_usd.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
-        analysis_usd.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
-        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
-            .overall
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
-            .long
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_usd.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
-            .short
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction = strategy
-            .long
-            .hsl_signal_ema_worst_1pct_mean_fraction
-            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
-        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_long =
-            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
-        analysis_usd.hsl_signal_ema_worst_1pct_mean_fraction_short =
-            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
-        analysis_usd.pain_index_fraction_strategy_equity =
-            strategy.overall.pain_index_fraction_strategy_equity;
-        analysis_usd.ulcer_index_fraction_strategy_equity =
-            strategy.overall.ulcer_index_fraction_strategy_equity;
-        analysis_usd.recovery_mean_days_strategy_equity =
-            strategy.overall.recovery_mean_days_strategy_equity;
-        analysis_usd.recovery_median_days_strategy_equity =
-            strategy.overall.recovery_median_days_strategy_equity;
-        analysis_usd.recovery_p95_days_strategy_equity =
-            strategy.overall.recovery_p95_days_strategy_equity;
-        analysis_usd.recovery_p99_days_strategy_equity =
-            strategy.overall.recovery_p99_days_strategy_equity;
-        analysis_usd.recovery_worst_5pct_mean_days_strategy_equity = strategy
-            .overall
-            .recovery_worst_5pct_mean_days_strategy_equity;
-        analysis_usd.recovery_worst_1pct_mean_days_strategy_equity = strategy
-            .overall
-            .recovery_worst_1pct_mean_days_strategy_equity;
-        analysis_usd.recovery_max_days_strategy_equity =
-            strategy.overall.recovery_max_days_strategy_equity;
-        analysis_usd.recovery_max_hours_strategy_equity =
-            strategy.overall.recovery_max_hours_strategy_equity;
-        analysis_usd.recovery_max_hours_strategy_equity_long =
-            strategy.long.recovery_max_hours_strategy_equity;
-        analysis_usd.recovery_max_hours_strategy_equity_short =
-            strategy.short.recovery_max_hours_strategy_equity;
-        analysis_usd.recovery_max_days_strategy_equity_long =
-            strategy.long.recovery_max_days_strategy_equity;
-        analysis_usd.recovery_max_days_strategy_equity_short =
-            strategy.short.recovery_max_days_strategy_equity;
-        analysis_usd.gain_multiplier_strategy_equity =
-            strategy.overall.gain_multiplier_strategy_equity;
-        analysis_usd.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
-        analysis_usd.adg_rolling_hmean_fraction_strategy_equity =
-            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
-        analysis_usd.adg_time_integrated_fraction_strategy_equity = strategy
-            .overall
-            .adg_time_integrated_fraction_strategy_equity;
-        analysis_usd.positive_log_return_participation_score_strategy_equity = strategy
-            .overall
-            .positive_log_return_participation_score_strategy_equity;
-        analysis_usd.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
-        analysis_usd.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
-        analysis_usd.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
-        analysis_usd.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
-        analysis_usd.expected_shortfall_1pct_fraction_strategy_equity = strategy
-            .overall
-            .expected_shortfall_1pct_fraction_strategy_equity;
-        analysis_usd.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
-        analysis_usd.sterling_ratio_strategy_equity =
-            strategy.overall.sterling_ratio_strategy_equity;
-        analysis_btc.hsl_trigger_count = hs.triggers;
-        analysis_btc.hsl_triggers_per_year = hs.triggers_per_year;
-        analysis_btc.hsl_trigger_count_long = hs.triggers_long;
-        analysis_btc.hsl_trigger_count_short = hs.triggers_short;
-        analysis_btc.hsl_panic_loss_starting_balance_fraction =
-            hs.panic_loss_starting_balance_fraction;
-        analysis_btc.hsl_restart_count = hs.restarts;
-        analysis_btc.hsl_restarts_per_year = hs.restarts_per_year;
-        analysis_btc.hsl_restarts_per_year_long = hs.restarts_per_year_long;
-        analysis_btc.hsl_restarts_per_year_short = hs.restarts_per_year_short;
-        analysis_btc.hsl_restart_count_long = hs.restarts_long;
-        analysis_btc.hsl_restart_count_short = hs.restarts_short;
-        analysis_btc.hsl_red_time_fraction = hs.red_time_fraction;
-        analysis_btc.hsl_red_duration_mean_minutes = hs.red_duration_mean_minutes;
-        analysis_btc.hsl_red_duration_max_minutes = hs.red_duration_max_minutes;
-        analysis_btc.hsl_trigger_signal_mean_fraction = hs.trigger_signal_mean_fraction;
-        analysis_btc.hsl_panic_fill_loss_sum_usd = hs.panic_fill_loss_sum_usd;
-        analysis_btc.hsl_panic_fill_loss_max_usd = hs.panic_fill_loss_max_usd;
-        analysis_btc.hsl_panic_episode_loss_min_fraction = hs.panic_episode_loss_min_fraction;
-        analysis_btc.hsl_panic_episode_loss_mean_fraction = hs.panic_episode_loss_mean_fraction;
-        analysis_btc.hsl_panic_episode_loss_max_fraction = hs.panic_episode_loss_max_fraction;
-        analysis_btc.hsl_flatten_time_mean_minutes = hs.flatten_time_mean_minutes;
-        analysis_btc.hsl_restart_retrigger_fraction = hs.restart_retrigger_fraction;
-        analysis_btc.drawdown_max_fraction_strategy_equity =
-            strategy.overall.drawdown_max_fraction_strategy_equity;
-        analysis_btc.drawdown_max_fraction_strategy_equity_long =
-            strategy.long.drawdown_max_fraction_strategy_equity;
-        analysis_btc.drawdown_max_fraction_strategy_equity_short =
-            strategy.short.drawdown_max_fraction_strategy_equity;
-        analysis_btc.hsl_signal_ema_max_fraction = strategy
-            .long
-            .hsl_signal_ema_max_fraction
-            .max(strategy.short.hsl_signal_ema_max_fraction);
-        analysis_btc.hsl_signal_ema_max_fraction_long = strategy.long.hsl_signal_ema_max_fraction;
-        analysis_btc.hsl_signal_ema_max_fraction_short = strategy.short.hsl_signal_ema_max_fraction;
-        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity = strategy
-            .overall
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_long = strategy
-            .long
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_btc.drawdown_daily_worst_1pct_mean_fraction_strategy_equity_short = strategy
-            .short
-            .drawdown_daily_worst_1pct_mean_fraction_strategy_equity;
-        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction = strategy
-            .long
-            .hsl_signal_ema_worst_1pct_mean_fraction
-            .max(strategy.short.hsl_signal_ema_worst_1pct_mean_fraction);
-        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_long =
-            strategy.long.hsl_signal_ema_worst_1pct_mean_fraction;
-        analysis_btc.hsl_signal_ema_worst_1pct_mean_fraction_short =
-            strategy.short.hsl_signal_ema_worst_1pct_mean_fraction;
-        analysis_btc.pain_index_fraction_strategy_equity =
-            strategy.overall.pain_index_fraction_strategy_equity;
-        analysis_btc.ulcer_index_fraction_strategy_equity =
-            strategy.overall.ulcer_index_fraction_strategy_equity;
-        analysis_btc.recovery_mean_days_strategy_equity =
-            strategy.overall.recovery_mean_days_strategy_equity;
-        analysis_btc.recovery_median_days_strategy_equity =
-            strategy.overall.recovery_median_days_strategy_equity;
-        analysis_btc.recovery_p95_days_strategy_equity =
-            strategy.overall.recovery_p95_days_strategy_equity;
-        analysis_btc.recovery_p99_days_strategy_equity =
-            strategy.overall.recovery_p99_days_strategy_equity;
-        analysis_btc.recovery_worst_5pct_mean_days_strategy_equity = strategy
-            .overall
-            .recovery_worst_5pct_mean_days_strategy_equity;
-        analysis_btc.recovery_worst_1pct_mean_days_strategy_equity = strategy
-            .overall
-            .recovery_worst_1pct_mean_days_strategy_equity;
-        analysis_btc.recovery_max_days_strategy_equity =
-            strategy.overall.recovery_max_days_strategy_equity;
-        analysis_btc.recovery_max_hours_strategy_equity =
-            strategy.overall.recovery_max_hours_strategy_equity;
-        analysis_btc.recovery_max_hours_strategy_equity_long =
-            strategy.long.recovery_max_hours_strategy_equity;
-        analysis_btc.recovery_max_hours_strategy_equity_short =
-            strategy.short.recovery_max_hours_strategy_equity;
-        analysis_btc.recovery_max_days_strategy_equity_long =
-            strategy.long.recovery_max_days_strategy_equity;
-        analysis_btc.recovery_max_days_strategy_equity_short =
-            strategy.short.recovery_max_days_strategy_equity;
-        analysis_btc.gain_multiplier_strategy_equity =
-            strategy.overall.gain_multiplier_strategy_equity;
-        analysis_btc.adg_fraction_strategy_equity = strategy.overall.adg_fraction_strategy_equity;
-        analysis_btc.adg_rolling_hmean_fraction_strategy_equity =
-            strategy.overall.adg_rolling_hmean_fraction_strategy_equity;
-        analysis_btc.adg_time_integrated_fraction_strategy_equity = strategy
-            .overall
-            .adg_time_integrated_fraction_strategy_equity;
-        analysis_btc.positive_log_return_participation_score_strategy_equity = strategy
-            .overall
-            .positive_log_return_participation_score_strategy_equity;
-        analysis_btc.mdg_fraction_strategy_equity = strategy.overall.mdg_fraction_strategy_equity;
-        analysis_btc.sharpe_ratio_strategy_equity = strategy.overall.sharpe_ratio_strategy_equity;
-        analysis_btc.sortino_ratio_strategy_equity = strategy.overall.sortino_ratio_strategy_equity;
-        analysis_btc.omega_ratio_strategy_equity = strategy.overall.omega_ratio_strategy_equity;
-        analysis_btc.expected_shortfall_1pct_fraction_strategy_equity = strategy
-            .overall
-            .expected_shortfall_1pct_fraction_strategy_equity;
-        analysis_btc.calmar_ratio_strategy_equity = strategy.overall.calmar_ratio_strategy_equity;
-        analysis_btc.sterling_ratio_strategy_equity =
-            strategy.overall.sterling_ratio_strategy_equity;
-
-        if backtest_params.equity_hard_stop_loss.hsl.is_some() {
-            for analysis in [&mut analysis_usd, &mut analysis_btc] {
-                analysis.hsl_signal_ema_max_fraction = strategy.overall.hsl_signal_ema_max_fraction;
-                analysis.hsl_signal_ema_worst_1pct_mean_fraction =
-                    strategy.overall.hsl_signal_ema_worst_1pct_mean_fraction;
-            }
-        }
-        let analysis_dict_start = profile_start(profile_enabled);
-        let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
-        let py_analysis_btc = if skip_btc_analysis {
-            PyDict::new_bound(py).unbind()
-        } else {
-            struct_to_py_dict(py, &analysis_btc)?
-        };
-        if let Some(half_life_days) = backtest_params.ew_half_life_days {
-            let calc = |series: &[f64]| -> PyResult<crate::ew::EwAnalysis> {
-                let mut result = crate::ew::analyze_ew_equity(
-                    series,
-                    &equities.timestamps_ms,
-                    half_life_days,
-                    backtest_params.candle_interval_minutes,
-                )
-                .map_err(PyValueError::new_err)?;
-                if backtest.liquidated() {
-                    result.metrics = None;
-                    result.metadata.status = "liquidated";
-                }
-                Ok(result)
-            };
-            let strategy_ew = calc(backtest.strategy_equity_series_for_artifacts())?;
-            let usd_ew = calc(&equities.usd_total_equity)?;
-            attach_ew_analysis(py, &py_analysis_usd, "usd", &usd_ew, &strategy_ew)?;
-            if !skip_btc_analysis {
-                let btc_ew = calc(&equities.btc_total_equity)?;
-                attach_ew_analysis(py, &py_analysis_btc, "btc", &btc_ew, &strategy_ew)?;
-            }
-        }
-        let hsl_report = hsl_report_to_py(py, &backtest)?;
-        profile_add(
-            &mut rust_profile,
-            "rust_analysis_py_dict_ms",
-            analysis_dict_start,
-        );
+        let analysis_start = profile_start(profile_enabled);
+        let py_analysis = core_metrics_to_py(
+            py, backtest.core_metrics_result().map_err(PyValueError::new_err)?,
+            backtest.liquidated(),
+        )?;
+        profile_add(&mut rust_profile, "rust_core_metrics_finalize_ms", analysis_start);
+        let py_extra = PyDict::new_bound(py);
         if metrics_only {
-            let py_extra = if profile_enabled || hsl_report.is_some() {
-                let py_extra = PyDict::new_bound(py);
-                if profile_enabled {
-                    py_extra.set_item(
-                        RUST_PROFILE_KEY,
-                        profile_to_py_dict(py, &rust_profile, profile_total_start)?,
-                    )?;
-                }
-                if let Some(report) = &hsl_report {
-                    py_extra.set_item("hsl", report)?;
-                }
-                py_extra.into_py(py)
-            } else {
-                py.None().into_py(py)
-            };
-            let equities_timestamps_array =
-                Array2::from_shape_fn((equities.timestamps_ms.len(), 1), |(i, _)| {
-                    equities.timestamps_ms[i] as f64
-                })
-                .into_pyarray_bound(py)
-                .unbind();
-            return Ok((
-                py.None().into_py(py),
-                equities_timestamps_array.into_py(py),
-                py_analysis_usd,
-                py_analysis_btc,
-                py_extra,
-            ));
+            if profile_enabled {
+                py_extra.set_item(RUST_PROFILE_KEY,
+                    profile_to_py_dict(py, &rust_profile, profile_total_start)?)?;
+            }
+            return Ok((py.None().into_py(py), py.None().into_py(py),
+                py_analysis, py_extra.into_py(py)));
+        }
+        if let Some(report) = hsl_report_to_py(py, &backtest)? {
+            py_extra.set_item("hsl", report)?;
         }
         let artifact_conversion_start = profile_start(profile_enabled);
-        let py_hard_stop_plot = PyDict::new_bound(py);
-        if let Some(report) = hsl_report {
-            py_hard_stop_plot.set_item("hsl", report)?;
-        }
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
@@ -2077,7 +1736,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
             artifact_conversion_start,
         );
         if profile_enabled {
-            py_hard_stop_plot.set_item(
+            py_extra.set_item(
                 RUST_PROFILE_KEY,
                 profile_to_py_dict(py, &rust_profile, profile_total_start)?,
             )?;
@@ -2085,9 +1744,8 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         Ok((
             fills_array.into_py(py),
             equities_array.into_py(py),
-            py_analysis_usd,
-            py_analysis_btc,
-            py_hard_stop_plot.into_py(py),
+            py_analysis,
+            py_extra.into_py(py),
         ))
     })
 }
@@ -2392,6 +2050,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         "btc_collateral_cap",
         "btc_collateral_ltv_cap",
         "max_usd_debt_to_equity_ratio",
+        "skip_btc_analysis",
     ] {
         if dict.get_item(retired)?.is_some() {
             return Err(PyValueError::new_err(format!(
@@ -2466,10 +2125,13 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .unwrap_or(false),
         ew_half_life_days: match dict.get_item("ew_half_life_days")? {
             Some(item) if !item.is_none() => {
+                if item.is_instance_of::<PyBool>() {
+                    return Err(PyValueError::new_err("ew_half_life_days must be a finite positive number"));
+                }
                 let value = item.extract::<f64>()?;
-                if !value.is_finite() || value < 1.0 {
+                if !value.is_finite() || value <= 0.0 {
                     return Err(PyValueError::new_err(
-                        "ew_half_life_days must be finite and at least 1 day",
+                        "ew_half_life_days must be finite and positive",
                     ));
                 }
                 Some(value)
@@ -2478,11 +2140,6 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         },
         hsl_detailed_report: dict
             .get_item("hsl_detailed_report")?
-            .map(|item| item.extract::<bool>())
-            .transpose()?
-            .unwrap_or(false),
-        skip_btc_analysis: dict
-            .get_item("skip_btc_analysis")?
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),

@@ -42,7 +42,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["live"]["lookback_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
     config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     candles = candles.copy()
     candles[:, :, :3] = (101.0, 99.0, 100.4)
@@ -60,7 +60,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=3,
-        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day"},
+        needed_metrics={"cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"},
     )
     return proxy, inputs
 
@@ -110,7 +110,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=2,
-        needed_metrics={"adg_fraction_strategy_equity"},
+        needed_metrics={"cagr_fraction_strategy_equity"},
     )
     _, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(candles, markets, config, exchange, btc, timestamps)
@@ -142,7 +142,7 @@ def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=2,
-        needed_metrics={"adg_fraction_strategy_equity"},
+        needed_metrics={"cagr_fraction_strategy_equity"},
     )
     _, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(candles, markets, config, exchange, btc, timestamps)
@@ -165,7 +165,7 @@ def test_tm_loss_history_consumer_and_compiler_ablation(sides, max_loss_pct):
     enabled = max_loss_pct < 1.0
     assert runner.loss_gate_enabled == enabled
     assert not hasattr(runner, "_unstuck_pnl_buffers")
-    assert runner.settings[-1].item() == float(enabled)
+    assert runner.settings[16 if len(sides) == 2 else 14].item() == float(enabled)
     if len(sides) == 1:
         runner.max_dispatch_candidate_bars = 24
         _, replayed = raw(proxy, [{}, {}])
@@ -188,7 +188,7 @@ def test_tm_loss_history_consumer_and_compiler_ablation(sides, max_loss_pct):
 def test_tm_loss_plan_survives_replay_scratch_reuse_and_reordering(sides):
     import numpy as np
 
-    proxy, _ = fee_only_close_fixture(sides, 2, 8 / 1440, 0.0003)
+    proxy, _ = fee_only_close_fixture(sides, 2, 8.0, 0.0003)
     candidates = [{}, {f"{sides[0]}_entry_initial_qty_fraction": 0.3}, {}]
     runner, expected = raw(proxy, candidates)
     assert expected["balance"][0].item() != expected["balance"][1].item()
@@ -217,7 +217,7 @@ def test_native_tm_loss_admission_never_replays_on_cpu(monkeypatch, sides, coins
     from optimization.gpu.native import CudaBacktestService
     from tools.gpu_parity import _native_dataset
 
-    proxy, inputs = fee_only_close_fixture(sides, coins, 8 / 1440, 0.0003)
+    proxy, inputs = fee_only_close_fixture(sides, coins, 8.0, 0.0003)
     candidates = [{}, {f"{sides[0]}_entry_initial_qty_fraction": 0.3}, {}]
     expected = proxy.evaluate_results(candidates)
 
@@ -229,7 +229,7 @@ def test_native_tm_loss_admission_never_replays_on_cpu(monkeypatch, sides, coins
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
     candles, markets, config, exchange, btc, timestamps = inputs
     with _native_dataset((config, candles, markets, btc, timestamps), exchange,
-                         {"adg_fraction_strategy_equity", "fills_per_day"}) as dataset:
+                         {"cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day"}) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
             service.register_dataset("tm-loss", dataset)
             pending = [service.submit(BacktestRequest(str(i), "tm-loss", values))
@@ -308,7 +308,7 @@ kernel void tm_account_admission_probe(
     }
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     bool success = apply_tm_multicoin_close_admission(
-        &long_side, &short_side, account, bars, ticks, settings,
+        ticks, &long_side, &short_side, account, bars, ticks, settings,
         0, 2, 2, budget / 1000.0f, b == 5 ? 0.01f : 0.0f
     );
     output[b * 3] = success ? 1.0f : 0.0f;
@@ -403,7 +403,7 @@ kernel void tm_finalized_loss_probe(
     }
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     bool success = apply_tm_multicoin_close_admission(
-        short_side ? nullptr : &side, short_side ? &side : nullptr,
+        ticks, short_side ? nullptr : &side, short_side ? &side : nullptr,
         account, bars, ticks, settings, 0, 2, 1, budget / 1000.0f, 0.0f
     );
     output[b * 3] = success ? 1.0f : 0.0f;

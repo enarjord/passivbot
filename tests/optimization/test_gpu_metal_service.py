@@ -88,7 +88,7 @@ def test_metal_prepared_service_switches_subset_datasets_and_reuses_results(monk
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--coins", "3", "--sides", "both", "--bars", "512",
     ]))
-    requested = ("adg_fraction_strategy_equity", "backtest_completion_fraction", "fills_per_day")
+    requested = ("cagr_fraction_strategy_equity", "backtest_completion_fraction", "gross_turnover_ratio_per_day")
     subset_config = deepcopy(config)
     subset_config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
     def forbidden(*args, **kwargs):
@@ -129,7 +129,7 @@ def test_metal_worker_failure_releases_owner_and_preserves_original(monkeypatch,
     def fail(**kwargs):
         raise failure
     monkeypatch.setattr(replay_module, "SharedAccountReplay", fail)
-    with _native_dataset(inputs, "binance", ("fills_per_day",)) as dataset:
+    with _native_dataset(inputs, "binance", ("gross_turnover_ratio_per_day",)) as dataset:
         service = NativeBacktestService()
         service.register_dataset("market", dataset)
         with pytest.raises(type(failure)) as caught:

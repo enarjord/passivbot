@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 
 import pytest
+from released_v8_fixtures import without_metric_selection
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
@@ -13,11 +14,7 @@ from tools.migrate_config_v9 import migrate
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_path, kind):
-    source = get_released_v8_defaults(strategy_kind=kind)
-    source["optimize"]["scoring"] = [
-        row for row in source["optimize"]["scoring"]
-        if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    source = without_metric_selection(get_released_v8_defaults(strategy_kind=kind))
     source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.375
     source["bot"]["long"]["hsl"].update(red_threshold=0.23, ema_span_minutes=12.5)
     source["live"]["max_realized_loss_pct"] = 0.125
@@ -102,11 +99,7 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
 def test_released_flat_hsl_bounds_keep_their_source_keys_after_native_id_rename(
     source_key, target, value
 ):
-    source = get_released_v8_defaults()
-    source["optimize"]["scoring"] = [
-        row for row in source["optimize"]["scoring"]
-        if not row["metric"].endswith("_w") and not row["metric"].startswith("strategy_eq_underwater_pct_")
-    ]
+    source = without_metric_selection(get_released_v8_defaults())
     released_leaf = "red_threshold" if source_key == "hsl_red_threshold" else "ema_span_minutes"
     source["optimize"]["bounds"]["long"]["hsl"].pop(released_leaf)
     source["optimize"]["bounds"][f"long_{source_key}"] = value
