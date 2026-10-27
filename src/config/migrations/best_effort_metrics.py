@@ -100,6 +100,7 @@ def _split_released(name):
 
 def legacy_metric_identity(name):
     """Resolve frozen aliases before looking up an original reducer policy."""
+    name = str(name).strip()
     split = _split_released(name)
     if split is None:
         return name

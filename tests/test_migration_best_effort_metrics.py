@@ -537,6 +537,31 @@ def test_legacy_limit_dictionary_rejects_nonfinite_numeric_strings_before_conver
     assert source == before
 
 
+@pytest.mark.parametrize("pad_selector", [False, True])
+@pytest.mark.parametrize("pad_rule", [False, True])
+@pytest.mark.parametrize("growth", [False, True])
+def test_original_reducer_identity_strips_metric_and_rule_whitespace(pad_selector, pad_rule, growth):
+    metric = "adg_strategy_pnl_rebased" if growth else "long_short_profit_ratio"
+    rule = "adg_strategy_eq" if growth else "pnl_ratio_long_short"
+    if pad_selector:
+        metric = " \t" + metric + "  "
+    if pad_rule:
+        rule = " \t" + rule + "  "
+    source = retired_source(metric, limit={"penalize_if": "greater_than", "value": .001 if growth else .8})
+    source["backtest"]["reducer"] = {"default": "mean", rule: "std"}
+    before = deepcopy(source)
+    result = migrate(source, best_effort=True)
+    if growth:
+        assert result.config["optimize"]["limits"] == []
+        assert result.config["backtest"]["reducer"][CAGR] == "std"
+    else:
+        assert result.config["optimize"]["scoring"] == [{"metric": SHORT_SHARE, "goal": "max", "reducer": "std"}]
+        assert result.config["optimize"]["limits"] == [{
+            "metric": SHORT_SHARE, "penalize_if": "greater_than", "value": .8, "reducer": "std",
+        }]
+    assert source == before
+
+
 def test_inactive_numeric_string_range_is_reported_in_its_authored_form():
     source = released_v8_policy()
     source["optimize"]["limits"] = [{
