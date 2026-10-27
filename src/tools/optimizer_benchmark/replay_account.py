@@ -50,6 +50,7 @@ def account_valuation_input_identity(*, hlcvs, candle_timestamps_ms, coins, mark
 def _account_observation_plan(
     *,
     equities,
+    native_fills,
     timestamps,
     capital,
     first_bar_index,
@@ -163,13 +164,22 @@ def _account_observation_plan(
         raise ValueError(
             "successful non-liquidated native replay omitted required account observations"
         )
-    # A terminal fill at open[k] replaces the close[k-1] artifact at the shared
-    # clock. Its post-fill position uses only that preceding completed close.
-    terminal_fill_bar = (
-        indices[-1]
-        if (liquidated or not execution_completed) and indices[-1] <= last_bar_index
-        else None
-    )
+    # The completed CPU owner records an opening terminal only when its raw
+    # account balance is depleted after fills. Prove that phase from the final
+    # executed fill's clock and post-fill USD balance; liquidation status alone
+    # also covers completed-close mark losses and cannot establish the phase.
+    # An interrupted execution does not establish that its last opening fill
+    # was included in the retained equity row, so its close coverage stays strict.
+    terminal_fill_bar = None
+    if execution_completed and liquidated and indices[-1] <= last_bar_index and len(native_fills):
+        final_fill = native_fills[-1]
+        if (
+            len(final_fill) >= 14
+            and _clock(final_fill[0], "final fill index") == indices[-1]
+            and _clock(final_fill[1], "final fill timestamp") == raw_times[-1]
+            and _number(final_fill[5], "final fill post-fill USD balance") <= 0
+        ):
+            terminal_fill_bar = indices[-1]
     marks = [None, *(index - 1 for index in indices[1:])]
     cutoffs = [first_bar_index - 1, *marks[1:]]
     if terminal_fill_bar is not None:
@@ -200,7 +210,11 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     activation is excluded from evaluation coverage, never filled synthetically. Missing
     marks of held inventory, unknown order-side attribution or omitted fills are
     errors. Core-v1 metadata validates its included baseline and completed-close
-    clocks; absent metadata retains the frozen historical clock adapter. Neither native HSL signals nor strategy equity is a quality ruler.
+    clocks. A completed liquidated replay can include a final opening only when
+    the final fill proves its clock and depleted post-fill account balance;
+    interrupted artifacts retain strict completed-close fill coverage. Absent
+    metadata retains the frozen historical clock adapter. Neither native HSL
+    signals nor strategy equity is a quality ruler.
     """
     import numpy as np
 
@@ -255,7 +269,7 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     if equities.ndim != 2 or equities.shape[0] < 1 or equities.shape[1] < 2:
         raise ValueError("full native ordinary-account equity rows are required")
     plan = _account_observation_plan(
-        equities=equities, timestamps=timestamps, capital=capital,
+        equities=equities, native_fills=native_fills, timestamps=timestamps, capital=capital,
         first_bar_index=first_bar_index, last_bar_index=last_bar_index,
         interval=interval, bootstrap_bar_indices=bootstrap_bar_indices,
         liquidated=liquidated, execution_completed=execution_completed,

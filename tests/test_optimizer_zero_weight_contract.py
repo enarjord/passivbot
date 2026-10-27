@@ -132,6 +132,12 @@ def test_fixed_zero_genes_keep_native_behavior_through_actual_writer_and_reload(
     assert len(raw_result[0]) > 0
     np.testing.assert_array_equal(raw_result[0], loaded_result[0])
     np.testing.assert_array_equal(raw_result[1], loaded_result[1])
-    # Native parallel metric reductions may differ by a rounding bit.
-    assert raw_result[2] == pytest.approx(loaded_result[2], rel=1e-14, abs=1e-14, nan_ok=True)
+    # Compare statuses and clock metadata exactly; finite native reductions may
+    # differ by a rounding bit. Short fixtures legitimately lack daily returns.
+    assert raw_result[2].keys() == loaded_result[2].keys()
+    for name, expected in loaded_result[2].items():
+        if isinstance(expected, float):
+            assert raw_result[2][name] == pytest.approx(expected, rel=1e-14, abs=1e-14), name
+        else:
+            assert raw_result[2][name] == expected, name
     assert candidate == before

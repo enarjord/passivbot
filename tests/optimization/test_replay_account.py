@@ -292,11 +292,12 @@ def test_core_clock_bridge_requires_baseline_full_grid_and_metadata_fields():
 
 
 @pytest.mark.parametrize("future_close", [9999.0, float("nan")])
-def test_core_opening_terminal_uses_preceding_close_with_post_fill_inventory(future_close):
+@pytest.mark.parametrize("side,sign", [("long", 1), ("short", -1)])
+def test_core_opening_terminal_uses_preceding_close_with_post_fill_inventory(future_close, side, sign):
     inputs = prepared()
     inputs["hlcvs"][2, 0, 2] = future_close  # close[2] has not completed at open[2].
-    fills = [native_fill(0, "A", 1, 1, 100, "entry_initial_long"),
-             native_fill(2, "A", 1, 2, 99, "entry_grid_long")]
+    fills = [native_fill(0, "A", sign, sign, 100, f"entry_initial_{side}"),
+             native_fill(2, "A", sign, 2 * sign, 99, f"entry_grid_{side}")]
     result = metrics_from_native_replay(
         native_fills=fills, native_equities=np.array([[0, 1000], [60000, 1000], [120000, 0]]),
         metric_metadata=core_metadata(end=120000, count=3), liquidated=True,
@@ -340,3 +341,52 @@ def test_current_confirmation_reads_declared_clock_metadata_and_rejects_null_met
     result[2]["metric_metadata"] = None
     with pytest.raises(ValueError, match="clock metadata"):
         cpu_confirmation_from_native(result, **options)
+
+
+def test_core_mark_liquidation_retains_completed_close_phase_without_opening_fill():
+    inputs = prepared()
+    result = metrics_from_native_replay(
+        native_fills=[native_fill(0, "A", 1, 1, 100, "entry_initial_long")],
+        native_equities=np.array([[0, 1000], [60000, 1000], [120000, 0]]),
+        metric_metadata=core_metadata(end=120000, count=3), liquidated=True,
+        execution_completed=True, initial_positions={},
+        valuation_input_sha256=account_valuation_input_identity(**inputs), **inputs)
+    assert result["terminal_open_bar_index"] is None
+    assert result["last_native_bar_index"] == 1
+    assert result["gross_exposure_terminal_ratio"] == .22
+    assert result["observed_end_ms"] == 120000 and result["liquidated"]
+
+
+@pytest.mark.parametrize("liquidated,completed,final_balance", [
+    (False, False, 0), (True, False, 0), (True, True, 1000),
+])
+def test_core_partial_close_cannot_admit_an_unproven_next_open_fill(liquidated, completed, final_balance):
+    inputs = prepared()
+    opening = native_fill(2, "A", 1, 2, 99, "entry_grid_long")
+    opening[5] = final_balance
+    with pytest.raises(ValueError, match="observed account coverage"):
+        metrics_from_native_replay(
+            native_fills=[native_fill(0, "A", 1, 1, 100, "entry_initial_long"), opening],
+            native_equities=np.array([[0, 1000], [60000, 1000], [120000, 0]]),
+            metric_metadata=core_metadata(end=120000, count=3), liquidated=liquidated,
+            execution_completed=completed, initial_positions={},
+            valuation_input_sha256=account_valuation_input_identity(**inputs), **inputs)
+
+
+@pytest.mark.parametrize("timestamp,balance,match", [
+    (120001, 0, "observed account coverage"),
+    (120000, True, "post-fill USD balance"),
+    (120000, float("nan"), "post-fill USD balance"),
+    (120000, float("inf"), "post-fill USD balance"),
+])
+def test_core_opening_terminal_requires_exact_clock_and_finite_balance(timestamp, balance, match):
+    inputs = prepared()
+    opening = native_fill(2, "A", 1, 2, 99, "entry_grid_long", timestamp=timestamp)
+    opening[5] = balance
+    with pytest.raises(ValueError, match=match):
+        metrics_from_native_replay(
+            native_fills=[native_fill(0, "A", 1, 1, 100, "entry_initial_long"), opening],
+            native_equities=np.array([[0, 1000], [60000, 1000], [120000, 0]]),
+            metric_metadata=core_metadata(end=120000, count=3), liquidated=True,
+            execution_completed=True, initial_positions={},
+            valuation_input_sha256=account_valuation_input_identity(**inputs), **inputs)
