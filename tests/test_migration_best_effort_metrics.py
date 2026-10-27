@@ -459,6 +459,47 @@ def test_malformed_inactive_bounds_are_not_erased_during_inference(inactive):
     assert source == before
 
 
+@pytest.mark.parametrize("metric", ["adg_strategy_eq", "position_held_hours_max", "long_short_profit_ratio"])
+@pytest.mark.parametrize("inactive", [["typo"], [0.0, float("inf")], [0.0, 1.0, 2.0]])
+def test_inactive_list_value_is_validated_before_removal(metric, inactive):
+    source = released_v8_policy()
+    source["optimize"]["limits"] = [{
+        "metric": metric, "penalize_if": "outside_range", "range": [.001, .002],
+        "value": inactive, "reducer": "mean",
+    }]
+    before = deepcopy(source)
+    with pytest.raises((ValueError, TypeError)):
+        migrate(source, best_effort=True)
+    assert source == before
+
+
+@pytest.mark.parametrize("metric,bounds,target,expected", [
+    ("adg_strategy_eq", [.001, .002], CAGR,
+     [math.expm1(365.25 * math.log1p(x)) for x in [.001, .002]]),
+    ("position_held_hours_max", [24.0, 48.0], "position_held_max_days", [1.0, 2.0]),
+    ("long_short_profit_ratio", [.1, .6], SHORT_SHARE, [.4, .9]),
+])
+@pytest.mark.parametrize("legacy_value_form", [False, True])
+def test_range_constraints_keep_the_active_range_and_report_raw_value_removal(
+    metric, bounds, target, expected, legacy_value_form,
+):
+    source = released_v8_policy()
+    old_value = bounds if legacy_value_form else ["0", "48"]
+    entry = {"metric": metric, "penalize_if": "outside_range", "value": old_value,
+             "reducer": "mean"}
+    if not legacy_value_form:
+        entry["range"] = bounds
+    source["optimize"]["limits"] = [entry]
+    before = deepcopy(source)
+    result = migrate(source, best_effort=True)
+    limit = result.config["optimize"]["limits"][0]
+    assert limit["metric"] == target and limit["penalize_if"] == "outside_range"
+    assert limit["range"] == pytest.approx(expected)
+    assert "value" not in limit
+    removed(result, "optimize.limits[0].value", old_value)
+    assert source == before
+
+
 def test_inactive_numeric_string_range_is_reported_in_its_authored_form():
     source = released_v8_policy()
     source["optimize"]["limits"] = [{

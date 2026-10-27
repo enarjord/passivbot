@@ -156,7 +156,8 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             # The owner preserves inactive fields too. Validate each bound form;
             # an inactive range must never redirect conversion of an active scalar.
             if field == "value" and isinstance(normalized[field], (list, tuple)) and "range" in normalized:
-                normalized.pop(field)  # Released range-as-value presentation.
+                probe = {**entry, "penalize_if": "outside_range", "range": normalized[field]}
+                normalized[field] = normalize_limit_entries([probe])[0]["range"]
                 continue
             probe = {**entry, "penalize_if": direction}
             normalized[field] = normalize_limit_entries([probe])[0][field]
@@ -175,7 +176,10 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         else:
             _closed_fields(probe, _LIMIT_FIELDS | set(LIMIT_REDUCER_ALIASES), path)
             normalized = normalized_limit_policy(probe)
-            bounds = [*normalized.get("range", []), *([normalized["value"]] if "value" in normalized else [])]
+            bounds = list(normalized.get("range", []))
+            if "value" in normalized:
+                value = normalized["value"]
+                bounds.extend(value if isinstance(value, (list, tuple)) else [value])
             if any(not math.isfinite(bound) for bound in bounds):
                 raise ValueError(f"{path}: limit bounds must be finite")
         original_reducer(entry, metric, kind)
@@ -239,8 +243,11 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             entry["reducer"] = {"min": "max", "max": "min"}.get(reducer, reducer)
         if inactive_bound is not None:
             field, old = inactive_bound
+            reason = "discard inactive bound field during inferred metric conversion; penalize_if selects the active scalar or range constraint"
+            if field == "value" and "range" not in before:
+                reason = "preserve legacy range-as-value constraint in the canonical range field during inferred metric conversion"
             record_guess(changes, selector_path.removesuffix(".metric") + "." + field, old, None,
-                         "discard inactive bound field during inferred metric conversion; penalize_if selects the active scalar or range constraint")
+                         reason)
         if entry != before or (kind == "limits" and choice.transform == "annualize_daily"):
             reason = {
                 "complement": "complement long share to short contribution; reverse ordering and min/max reducers, while standard deviation is unchanged",
