@@ -7174,6 +7174,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         short_coin_overrides=overrides,
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
+        market_order_slippage_fraction=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -7686,6 +7687,9 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
     ]
     data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
     values = {key: 0.0 for key in param_keys}
+    values.update(_UNSTUCK_DISABLED_VALUES)
+    values.update(_HSL_DISABLED_VALUES)
+    values.update(_ADAPTIVE_DISABLED_VALUES)
     values.update(
         {
             "n_positions": 2.0,
@@ -7705,15 +7709,18 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
     else:
         values.update(
             {
-                "ema_span_0_minutes": 2.0,
-                "ema_span_1_minutes": 3.0,
+                "entry_ema_span_0_minutes": 2.0,
+                "entry_ema_span_1_minutes": 3.0,
                 "entry_initial_ema_distance_fraction": 0.01,
                 "entry_initial_qty_fraction": 0.1,
                 "gate_initial": 1.0,
                 "gate_reentry": 1.0,
             }
         )
-    values.update(unstuck_ema_span_0_minutes=17.25, unstuck_ema_span_1_minutes=211.75)
+    values.update(
+        unstuck_ema_span_0_minutes=17.25, unstuck_ema_span_1_minutes=211.75,
+        unstuck_memory_ema_span_minutes=43200.0, loss_gate_memory_ema_span_minutes=43200.0,
+    )
     side_row = [values[key] for key in param_keys]
     params = np.asarray([side_row + side_row], dtype=np.float64)
 
@@ -7721,11 +7728,13 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
         runs[0], data, pnl_lookback_bars=1440, hedge_mode=True,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(params)
     one_way_output = runner_cls(
         runs[0], data, pnl_lookback_bars=1440, hedge_mode=False,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(params)
     override_cols = (
         EMA_ANCHOR_COIN_OVERRIDE_COLS
@@ -7746,6 +7755,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
         hedge_mode=False,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(params)
     synchronize()
 
@@ -9155,9 +9165,9 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
     TmCloseGridContext probe_context = {
         false, 0.4f, 40.0f, 1000.0f, 0.016f,
         390, 400, 400, 0.0f, 0,
-        config.close_qty_fraction, config.close_threshold_base,
-        config.close_threshold_we, config.close_threshold_v1h,
-        config.close_threshold_v1m, 0.0f, 0.0f,
+        config.close_qty_fraction, config.close_threshold_base_fraction,
+        config.close_threshold_exposure_ratio_coefficient, config.close_threshold_log_range_1h_coefficient,
+        config.close_threshold_log_range_1m_coefficient, 0.0f, 0.0f,
         0.1f, 0.1f, 0.1f, 40.0f, 1.0f, 0, 0.0f, 1,
         100.0f, true, 0.001f, 0.4f
     };
@@ -9234,7 +9244,8 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         device=gpu_device(),
     )
     library = compile_shader(
-        passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe_kernel
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe_kernel,
+        mps_coin_capacity=1, cuda_coin_capacity=1,
     )
 
     remaining_sizes = []
@@ -9677,6 +9688,9 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
         "trailing_martingale",
         "long",
         count=10,
+        # Identical symbol quotes give identical one-way tie decisions. Different
+        # symbols can otherwise legitimately choose opposite position sides.
+        closes=(100.0, 100.0),
         return_context=True,
         market_order_slippage_fraction=0.01,
     )
@@ -10863,8 +10877,9 @@ def test_mps_trailing_martingale_multicoin_drops_subminimum_final_touch_close(
     ],
 )
 @pytest.mark.parametrize("spans", [(2.5, 91.75), (0.1, 0.9), (100000.5, 2.25)])
-def test_mps_independent_unstuck_band_matches_adjusted_recurrence(source_name, spans):
+def test_mps_independent_unstuck_band_matches_seeded_scalar_recurrence(source_name, spans):
     import passivbot_rust
+    import pandas as pd
 
     closes = np.array([100.0, 97.0, 93.0, 98.0, 104.0, 91.0], dtype=np.float32)
     probe = r"""
@@ -10883,15 +10898,15 @@ kernel void unstuck_band_probe(constant float* inputs, device float* output,
     output = torch.zeros(12, dtype=torch.float32, device=gpu_device())
     library = compile_shader(getattr(passivbot_rust, source_name)() + probe)
     library.unstuck_band_probe(inputs, output, threads=(1, 1, 1))
-    expected = []
-    # Use the Rust price EMA reference, including its price/1 initialization.
-    # Backtests clamp sub-candle spans to alpha=1 (equivalent to span=1).
-    for i in range(len(closes)):
-        values = [
-            passivbot_rust.ema_last(closes[: i + 1].astype(np.float64), max(1.0, span))
-            for span in (*spans, np.sqrt(spans[0] * spans[1]))
-        ]
-        expected.extend([min(values), max(values)])
+    # The supplied seed has already finalized bootstrap normalization. Future
+    # completed candles use the ordinary scalar recurrence; re-running ema_last
+    # on each growing prefix would normalize the bootstrap again at every tick.
+    series = pd.Series(closes.astype(np.float64))
+    columns = np.column_stack([
+        series.ewm(span=max(1.0, span), adjust=False).mean().to_numpy()
+        for span in (*spans, np.sqrt(spans[0] * spans[1]))
+    ])
+    expected = np.column_stack([columns.min(axis=1), columns.max(axis=1)]).reshape(-1)
     np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-6, atol=2e-5)
 
 
