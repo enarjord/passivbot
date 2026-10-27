@@ -110,6 +110,14 @@ See [Config Workflow](config_workflow.md) for the recommended way to copy and cu
 
 ## Backtest Results
 
+The terminal summary aligns canonical metric names and values in a table, using five
+significant digits and `%` for fraction-valued metrics. Ratios retain their raw scale.
+Explicitly disabled sides and HSL omit their zero-valued rows when no activity was observed;
+enabled features still show zero activity, and unknown applicability remains visible.
+Infinite, undefined and invalid values retain their distinct statuses, with reasons beside
+the metric. Counts and unfinished recovery tails appear as compact support information.
+This presentation does not round or filter `analysis.json`, or change optimizer metrics.
+
 Standalone runs write metrics and plots to `backtests/{exchange}/<session>/`. Suite runs
 collect results under `backtests/suite_runs/<session>/` with a top-level `suite_summary.json`.
 Session names use this date-sortable UTC format (the suite component appears only for suites):
