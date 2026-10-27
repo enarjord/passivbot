@@ -227,7 +227,8 @@ def test_producer_failure_stops_new_admission_and_cancels_other_work():
 
 
 @pytest.mark.parametrize("future_failure", [False, True])
-def test_submission_failure_preserves_prior_completion_and_original_future_error(future_failure):
+@pytest.mark.parametrize("submit_ready_first", [False, True])
+def test_submission_failure_preserves_prior_completion_and_original_future_error(future_failure, submit_ready_first):
     original = ValueError("original producer failure")
     submission = RuntimeError("service failed during replenishment")
     class FailedAfterReady(Service):
@@ -241,6 +242,8 @@ def test_submission_failure_preserves_prior_completion_and_original_future_error
     session = NativeEvaluationSession(FailedAfterReady(capacity=4), scorer())
     session.admit(plan(0))
     session.admit(plan(1))
+    if submit_ready_first:
+        session.submit_ready()
     assert [row.candidate_id for row in session.poll()] == ["0"]
     with pytest.raises(ValueError if future_failure else RuntimeError) as raised:
         session.poll()
@@ -483,3 +486,52 @@ def test_invalid_completion_bound_does_not_poison_session(value):
         session.poll(max_completions=value)
     session.admit(plan(0))
     session.stop_admission()
+
+
+def test_submit_ready_never_collects_or_scores_cache_and_alias_completions(monkeypatch):
+    service, value = Service(), scorer()
+    score = value.score
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("submitting ready rows must not score completions")
+    monkeypatch.setattr(value, "score", forbidden)
+    session = NativeEvaluationSession(service, value, max_candidates=2)
+    session.admit(plan(0))
+    session.admit(plan(1, key="0"))
+    session.submit_ready()
+    assert len(service.requests) == 2
+    for request_id in tuple(service.requests):
+        service.complete(request_id)
+    session.submit_ready()
+    assert session.active_candidate_ids == ("0", "1")
+    assert session.diagnostics_snapshot()["replay_rows"] == 0
+    monkeypatch.setattr(value, "score", score)
+    assert [row.candidate_id for row in session.poll()] == ["0", "1"]
+    monkeypatch.setattr(value, "score", forbidden)
+    session.admit(plan(2, key="0"))
+    session.submit_ready()
+    assert len(service.requests) == 2
+    assert [row.candidate_id for row in session.poll()] == ["2"]
+    session.stop_admission()
+    session.submit_ready()
+    assert len(service.requests) == 2
+
+
+def test_submit_ready_propagates_immediate_submission_failure_and_stops_admission():
+    failure = ValueError("original submission failure")
+    class BrokenService(Service):
+        def set_preparing(self, dataset_ids):
+            self.preparing = frozenset(dataset_ids)
+        def submit(self, request):
+            raise failure
+    service = BrokenService()
+    session = NativeEvaluationSession(service, scorer())
+    session.set_preparing({"binance", "bybit"})
+    session.admit(plan(0))
+    with pytest.raises(ValueError) as raised:
+        session.submit_ready()
+    assert raised.value is failure
+    assert session.pending_request_count == 0
+    assert service.preparing == frozenset()
+    with pytest.raises(RuntimeError, match="session failed") as raised:
+        session.submit_ready()
+    assert raised.value.__cause__ is failure
