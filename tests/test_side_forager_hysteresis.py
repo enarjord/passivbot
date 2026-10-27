@@ -182,14 +182,16 @@ def test_actual_native_replay_applies_each_margin_before_later_fill(kind, high_s
     fills, _, result = execute_backtest(payload, config)
     low_side = "short" if high_side == "long" else "long"
     entries = [row for row in fills if str(row[13]).startswith("entry_")]
-    assert result["fills_count_" + high_side] == 0
+    fill_counts = {side: sum(str(row[13]).endswith("_" + side) for row in fills)
+                   for side in ("long", "short")}
+    assert fill_counts[high_side] == 0
     if topology == "oneway" and high_side == "long":
         # Existing one-way tie arbitration keeps the long pending order. A low
         # short margin does not override that independent entry permission.
-        assert not entries and result["fills_count_short"] == 0
+        assert not entries and fill_counts["short"] == 0
     else:
         assert entries and all(str(row[13]).endswith("_" + low_side) for row in entries)
-        assert result["fills_count_" + low_side] > 0
+        assert fill_counts[low_side] > 0
         assert int(fills[0][1]) == int(timestamps[40])
 
 
