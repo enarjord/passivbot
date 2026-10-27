@@ -931,6 +931,10 @@ Each limit entry is a dictionary with:
   `mean`, `std`, or `median`). If omitted, Passivbot uses the metric's `backtest.reducer` rule,
   then `backtest.reducer.default`, then `mean`.
 
+The `auto` alias derives its penalty direction from a scoring objective for the
+same metric. Without that objective, the limit is rejected; choose an explicit
+`penalize_if` direction for a quantity used only as a limit.
+
 #### Format
 
 Define limits in `optimize.limits` as a list:
