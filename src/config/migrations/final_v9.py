@@ -146,9 +146,34 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             modes = {**modes, **suite_modes}
         return resolve_reducer_mode(legacy_metric_identity(metric), modes)
 
+    def require_finite_bounds(entry, path):
+        from config.limits import _ensure_float
+
+        def inspect(value, current):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    inspect(child, f"{current}.{key}")
+            elif isinstance(value, (list, tuple)):
+                for index, child in enumerate(value):
+                    inspect(child, f"{current}[{index}]")
+            else:
+                try:
+                    number = _ensure_float(value)
+                except OverflowError as exc:
+                    raise ValueError(f"{current}: limit bounds must be finite") from exc
+                if number is not None and not math.isfinite(number):
+                    raise ValueError(f"{current}: limit bounds must be finite")
+
+        for field in ("value", "range"):
+            if field in entry:
+                inspect(entry[field], f"{path}.{field}")
+
     def normalized_limit_policy(entry):
         from config.limits import normalize_limit_entries
 
+        # Range normalization sorts endpoints; NaN can otherwise vanish through
+        # min/max depending on endpoint order. Inspect raw values before sorting.
+        require_finite_bounds(entry, "limit")
         normalized = normalize_limit_entries([entry])[0]
         for field, direction in (("value", "greater_than"), ("range", "outside_range")):
             if field not in normalized:
@@ -362,6 +387,8 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                         converted.append(selected)
                 elif kind in {"scoring", "limits"} and isinstance(value, dict) and "metric" in value:
                     before = deepcopy(value)
+                    if best_effort and kind == "limits":
+                        require_finite_bounds(value, current)
                     selector_path = current + ".metric"
                     metric = value["metric"]
                     selected = convert(metric, selector_path)
@@ -427,6 +454,8 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                     prefix = next((part for part in ("penalize_if_greater_than_", "penalize_if_lower_than_", "lower_bound_", "upper_bound_") if limit_name.startswith(part)), "")
                     limit_path = f"{current}.{limit_name}"
                     metric = limit_name.removeprefix(prefix)
+                    if best_effort:
+                        require_finite_bounds({"value": bound}, limit_path)
                     entry = _legacy_limits_dict_to_entries({limit_name: bound})[0]
                     selected = convert(metric, limit_path)
                     if limit_path in outer_reducers:

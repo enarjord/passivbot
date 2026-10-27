@@ -500,6 +500,43 @@ def test_range_constraints_keep_the_active_range_and_report_raw_value_removal(
     assert source == before
 
 
+@pytest.mark.parametrize("metric", ["long_short_profit_ratio", "hard_stop_restarts_per_year_long", "loss_profit_ratio"])
+@pytest.mark.parametrize("bounds", [[0.0, float("nan")], [float("nan"), 0.0], ["0", "NaN"], {"low": "0", "high": "NaN"}])
+@pytest.mark.parametrize("inactive", [False, True])
+def test_raw_nonfinite_endpoints_fail_before_range_sorting_or_removal(metric, bounds, inactive):
+    source = released_v8_policy()
+    entry = {"metric": metric, "penalize_if": "outside_range", "range": bounds,
+             "reducer": "mean"}
+    if inactive:
+        entry.update(range=[.1, .9], value=bounds)
+    source["optimize"]["limits"] = [entry]
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="finite"):
+        migrate(source, best_effort=True)
+    assert source == before
+
+
+@pytest.mark.parametrize("metric", ["long_short_profit_ratio", "hard_stop_restarts_per_year_long", "loss_profit_ratio"])
+def test_nonfinite_scalar_string_cannot_be_removed_or_hidden(metric):
+    source = released_v8_policy()
+    source["optimize"]["limits"] = [{
+        "metric": metric, "penalize_if": "greater_than", "value": "NaN", "range": [0, 1],
+    }]
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="finite"):
+        migrate(source, best_effort=True)
+    assert source == before
+
+
+def test_legacy_limit_dictionary_rejects_nonfinite_numeric_strings_before_conversion():
+    source = released_v8_policy()
+    source["optimize"]["limits"] = {"penalize_if_greater_than_loss_profit_ratio": "NaN"}
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="finite"):
+        migrate(source, best_effort=True)
+    assert source == before
+
+
 def test_inactive_numeric_string_range_is_reported_in_its_authored_form():
     source = released_v8_policy()
     source["optimize"]["limits"] = [{
