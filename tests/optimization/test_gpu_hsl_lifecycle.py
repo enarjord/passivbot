@@ -1,6 +1,7 @@
 """GPU lifecycle reporting includes open RED, GREEN recovery and retriggers."""
 
 import pytest
+from hsl_fixture import set_risk_memory_spans
 
 
 
@@ -60,7 +61,7 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
     inputs = list(_fixture("long", 2, "initial"))
     config = generated_template(inputs[0], mode)
     inputs[0] = config
-    config['live'].update(lookback_drawdown_fraction_ema_span_minutes=1440.0)
+    set_risk_memory_spans(config, 1440.0)
     config['bot']["portfolio"]['strategy_kind'] = strategy
     config['bot']["portfolio"]['hedge_mode'] = sides == 'both'
     policy = dict(drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=1,
@@ -116,7 +117,7 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     inputs = list(_fixture("long", 1, "initial"))
     config = generated_template(inputs[0], "coin")
     inputs[0] = config
-    config['live'].update(lookback_drawdown_fraction_ema_span_minutes=1440.0)
+    set_risk_memory_spans(config, 1440.0)
     config['bot']["portfolio"]['strategy_kind'] = strategy
     config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=5.0)

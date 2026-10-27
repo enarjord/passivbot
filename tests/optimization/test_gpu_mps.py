@@ -4037,22 +4037,22 @@ kernel void passivbot_multicoin_candidate_recovery_probe(
     {init_state}(
         candidate_side, config, coin_settings, coin_overrides, C
     );
-    candidate_side.forager_volume[0] = 200.0f;
-    candidate_side.forager_volume[1] = 100.0f;
+    candidate_side.forager_volume_ema[0] = 200.0f;
+    candidate_side.forager_volume_ema[1] = 100.0f;
     {update_selection}(
         candidate_side, config, bars, coin_settings, coin_overrides,
         1, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
     );
     output[0] = candidate_side.selected[0] ? 1.0f : 0.0f;
     output[1] = candidate_side.selected[1] ? 1.0f : 0.0f;
-    {"candidate_side.forager_volume[1] = 300.0f;" if change == "ranking" else ""}
+    {"candidate_side.forager_volume_ema[1] = 300.0f;" if change == "ranking" else ""}
     {update_selection}(
         candidate_side, config, bars, coin_settings, coin_overrides,
         2, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
     );
     output[2] = candidate_side.selected[0] ? 1.0f : 0.0f;
     output[3] = candidate_side.selected[1] ? 1.0f : 0.0f;
-    {"candidate_side.forager_volume[1] = 100.0f;" if change == "ranking" else ""}
+    {"candidate_side.forager_volume_ema[1] = 100.0f;" if change == "ranking" else ""}
     {update_selection}(
         candidate_side, config, bars, coin_settings, coin_overrides,
         3, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
@@ -4115,8 +4115,8 @@ kernel void passivbot_tm_incumbent_probe(
     init_trailing_martingale_multicoin_side_state(
         state, config, coin_settings, coin_overrides, 2
     );
-    state.forager_volume[0] = 100.0f;
-    state.forager_volume[1] = 200.0f;
+    state.forager_volume_ema[0] = 100.0f;
+    state.forager_volume_ema[1] = 200.0f;
     // A held coin stays selected regardless of its score.
     state.psize[0] = 1.0f;
     update_tm_multicoin_side_selection(
@@ -5194,7 +5194,8 @@ def test_mps_multicoin_coin_hsl_reselects_around_blocked_forager_coin(
         "hsl_enabled": 1.0,
         "hsl_drawdown_threshold_fraction": 0.05,
         "hsl_drawdown_fraction_ema_span_minutes": 1.0,
-        'hsl_cooldown_ms_lo': 0.0,
+        # Keep the executed stop blocked through this 64-minute fixture.
+        'hsl_cooldown_ms_lo': 6_000_000.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
         'hsl_cooldown_ms_hi': 0.0,
@@ -5251,7 +5252,8 @@ def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
         "hsl_enabled": 1.0,
         "hsl_drawdown_threshold_fraction": 0.05,
         "hsl_drawdown_fraction_ema_span_minutes": 1.0,
-        'hsl_cooldown_ms_lo': 0.0,
+        # Keep the executed stop blocked through this 64-minute fixture.
+        'hsl_cooldown_ms_lo': 6_000_000.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 1.0,
         'hsl_cooldown_ms_hi': 0.0,
@@ -5713,31 +5715,31 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         for _ in range(coin_count)
     ]
     data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
-    row = [
-        0.1,
-        10.0,
-        30.0,
-        1.5,
-        0.01,
-        0.0,
-        0.0,
-        0.0,
-        60.0,
-        60.0,
-        0.0,
-        1.0,
-        60.0,
-        60.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        2.0,
-    ]
-    row += _single_coin_exposure_fields() + [0.0, 0.0]
-    row += list(_UNSTUCK_DISABLED_VALUES.values())
-    row += list(_HSL_DISABLED_VALUES.values()) + [2.0, 3.0]
-    row += list(_ADAPTIVE_DISABLED_VALUES.values()) + [43200.0, 43200.0]
+    parameter_values = {key: 0.0 for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS}
+    parameter_values.update(
+        base_qty_fraction=0.1,
+        ema_span_0_minutes=10.0,
+        ema_span_1_minutes=30.0,
+        entry_qty_exposure_coefficient=1.5,
+        offset_fraction=0.01,
+        offset_log_range_ema_span_1h_candles=60.0,
+        offset_log_range_ema_span_minutes=60.0,
+        total_wallet_exposure_limit_ratio=1.0,
+        forager_volume_ema_span_minutes=60.0,
+        forager_log_range_ema_span_minutes=60.0,
+        forager_score_weights_ema_readiness=1.0,
+        n_positions=2.0,
+        twel_entry_gate_enabled=1.0,
+        twel_enforcer_threshold_ratio=1.0,
+        unstuck_ema_span_0_minutes=2.0,
+        unstuck_ema_span_1_minutes=3.0,
+        unstuck_memory_ema_span_minutes=43200.0,
+        loss_gate_memory_ema_span_minutes=43200.0,
+    )
+    parameter_values.update(_UNSTUCK_DISABLED_VALUES)
+    parameter_values.update(_HSL_DISABLED_VALUES)
+    parameter_values.update(_ADAPTIVE_DISABLED_VALUES)
+    row = [parameter_values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -5752,7 +5754,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         filter_by_min_effective_cost={"long": False, "short": False},
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
-    assert runner.settings.cpu()[5].item() <= 0.1
+    assert runner.settings.cpu()[5].item() == float(np.float32(0.1))
     assert runner.settings.cpu()[9].item() == 1.0
     assert runner.settings.cpu()[10].item() == pytest.approx(0.003)
     output = runner.run(np.array([row, row], dtype=np.float64))
@@ -8209,7 +8211,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
     )
-    assert runner.settings.cpu()[5].item() <= 0.1
+    assert runner.settings.cpu()[5].item() == float(np.float32(0.1))
     output = runner.run(np.array([row, row], dtype=np.float64))
     synchronize()
 
