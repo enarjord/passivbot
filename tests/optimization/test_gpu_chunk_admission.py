@@ -11,6 +11,7 @@ from optimization.gpu.autotune import history_dispatch_ceiling
 def _dispatch(monkeypatch, markers, device="cuda"):
     runner = object.__new__(mps_kernel.MpsTrailingMartingaleMulticoinRunner)
     runner.bars = SimpleNamespace(device=SimpleNamespace(type=device))
+    runner.n = 101
     runner.native_factual_hsl = False
     runner.max_dispatch_candidate_bars = 4
     runner.n_coins = 1

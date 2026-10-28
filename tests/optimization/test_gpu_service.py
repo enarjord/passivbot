@@ -305,23 +305,23 @@ def test_forward_hsl_keeps_only_an_inert_binding(enabled, expected):
 
 
 @pytest.mark.parametrize(
-    "strategy,batch,bars,sides,cap,expected",
+    "strategy,batch,bars,sides,cap,metal_expected,cuda_expected",
     [
-        ("trailing_martingale", 4096, 900000, 1, 1_000_000_000, (True, 512, 4096)),
-        ("trailing_martingale", 4096, 60000, 1, 1_000_000_000, (False, 574, 60000)),
-        ("trailing_martingale", 4096, 4320, 1, 1_000_000_000, (False, 4096, 4320)),
-        ("trailing_martingale", 16, 900000, 1, 1_000_000_000, (False, 16, 900000)),
-        ("trailing_martingale", 4096, 900000, 2, 1_000_000_000, (False, 19, 900000)),
-        ("ema_anchor", 4096, 900000, 1, 1_000_000_000, (False, 38, 900000)),
-        ("trailing_martingale", 4096, 900000, 1, 100, (True, 1, 3)),
+        ("trailing_martingale", 4096, 900000, 1, 1_000_000_000, (1024, 2048), (1024, 128)),
+        ("trailing_martingale", 4096, 60000, 1, 1_000_000_000, (1024, 2048), (1024, 128)),
+        ("trailing_martingale", 4096, 4320, 1, 1_000_000_000, (1024, 2048), (1024, 128)),
+        ("trailing_martingale", 16, 900000, 1, 1_000_000_000, (16, 8192), (16, 128)),
+        ("trailing_martingale", 4096, 900000, 2, 1_000_000_000, (1024, 2048), (1024, 128)),
+        ("ema_anchor", 4096, 900000, 1, 1_000_000_000, (1024, 2048), (1024, 128)),
+        ("trailing_martingale", 4096, 900000, 1, 100, (3, 1), (1, 3)),
+        ("trailing_martingale", 4096, 900000, 2, 1000, (17, 1), (1, 17)),
     ],
 )
 @pytest.mark.parametrize("device", ["mps", "cuda"])
 def test_mps_multicoin_temporal_plan_preserves_work_limit(
-    strategy, batch, bars, sides, cap, expected, device
+    strategy, batch, bars, sides, cap, metal_expected, cuda_expected, device
 ):
-    expected = ((True, 1, 3) if cap == 100 else
-                (True, min(batch, 1024 if device == "cuda" else 512), 128))
+    expected = (True, *(metal_expected if device == "mps" else cuda_expected))
     result = _mps_multicoin_dispatch_plan(
         strategy,
         batch,
@@ -350,7 +350,7 @@ def test_cuda_tm_long_history_has_interrupt_boundaries_below_work_cap(sides, bat
 
 
 @pytest.mark.parametrize("batch", [1, 17, 512, 513, 1024, 1025, 4096])
-@pytest.mark.parametrize("device,limit", [("mps", 512), ("cuda", 1024)])
+@pytest.mark.parametrize("device,limit", [("mps", 1024), ("cuda", 1024)])
 def test_multicoin_temporal_plan_respects_requested_batch_and_state_cap(
     batch, device, limit
 ):
@@ -367,6 +367,44 @@ def test_multicoin_temporal_plan_respects_requested_batch_and_state_cap(
     if temporal:
         assert candidates * history <= 2_097_152
     assert candidates * history * 28 <= 1_000_000_000
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("coins,sides", [(1, 1), (2, 2), (64, 1), (64, 2)])
+def test_metal_plan_spends_small_work_budget_on_parallel_candidates(strategy, coins, sides):
+    # There is room for all 512 candidates but only two bars per dispatch.
+    cap = 512 * coins * sides * 2
+    assert _mps_multicoin_dispatch_plan(
+        strategy, 512, n_bars=2_500_000, n_coins=coins, n_sides=sides,
+        max_candidate_bars=cap, device="mps",
+    ) == (True, 512, 2)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_metal_plan_rejects_budget_that_cannot_fit_one_candidate_bar(strategy):
+    with pytest.raises(ValueError, match="one GPU candidate exceeds"):
+        _mps_multicoin_dispatch_plan(
+            strategy, 1024, n_bars=2_500_000, n_coins=29, n_sides=2,
+            max_candidate_bars=57, device="mps",
+        )
+
+
+@pytest.mark.parametrize("fused", [False, True])
+def test_larger_metal_capacity_still_clamps_to_resident_scratch(fused):
+    from optimization.gpu.native import NativeBacktestService
+
+    _, capacity, _ = _mps_multicoin_dispatch_plan(
+        "trailing_martingale", 4096, n_bars=2_500_000, n_coins=64,
+        n_sides=2 if fused else 1, max_candidate_bars=500_000_000, device="mps",
+    )
+    assert capacity == 1024
+    runner = SimpleNamespace(_history_batch_limit=lambda: 17)
+    replay = SimpleNamespace(
+        dispatch_batch_size=capacity,
+        fused_runner=runner if fused else None,
+        runners={} if fused else {"long": runner},
+    )
+    assert NativeBacktestService._dispatch_ceiling(replay) == 17
 
 
 def test_mps_dispatch_batch_size_bounds_single_and_multicoin_work():
@@ -654,6 +692,7 @@ def test_multicoin_exposure_eligibility_unions_fused_sides():
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
     monkeypatch,
+    caplog,
     strategy_kind,
     runner_name,
     override_cols,
@@ -808,6 +847,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     values = np.ones((4, 2, 4), dtype=np.float64)
     timestamps = np.arange(4, dtype=np.int64) * interval_minutes * 60_000
 
+    caplog.set_level("INFO")
     proxy = SharedAccountReplay(
         config=config,
         hlcvs=values,
@@ -819,6 +859,11 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         needed_metrics=needed_metrics,
     )
 
+    setup_log = next(record.getMessage() for record in caplog.records
+                     if record.getMessage().startswith("GPU temporal replay |"))
+    assert "candidate_batch_cap=8" in setup_log
+    assert "history_bars=4 coins=2 sides=2" in setup_log
+    assert "chunk_bars" not in setup_log  # Actual chunks belong to replay-start logs.
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
     from config.metrics import EXPOSURE_RMS_METRICS
     assert constructed["kwargs"]["exposure_rms_enabled"] == bool(
@@ -2265,7 +2310,7 @@ def test_realized_gate_fraction_uses_shared_nearest_f32_graph(fraction):
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("device,factual,expected", [
     ("cuda", True, (True, 64, 128)),
-    ("mps", True, (True, 64, 128)),
+    ("mps", True, (True, 64, 8192)),
 ])
 def test_native_plan_has_interrupt_boundaries_on_both_devices(strategy, device, factual, expected):
     assert _mps_multicoin_dispatch_plan(
