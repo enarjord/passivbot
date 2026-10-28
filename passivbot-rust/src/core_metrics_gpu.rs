@@ -333,6 +333,7 @@ pub fn finalize_observations(
                     enabled: policy_enabled,
                     trigger_count: triggers.unwrap_or(0),
                     execution_episode_count: episodes.unwrap_or(0),
+                    execution_episode_count_valid: episodes.is_some(),
                     episode_loss_fraction_sum: p.get("hsl_episode_sum"),
                     episode_loss_fraction_max: p.get("hsl_episode_max"),
                     episode_loss_valid: episodes.is_some() && !p.flag("hsl_episode_invalid")?,

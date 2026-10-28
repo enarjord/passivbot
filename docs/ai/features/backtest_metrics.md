@@ -44,7 +44,7 @@ Let `E` be strategy equity, `D` elapsed evaluated days, `Y = D / 365.25`,
 S denotes a suitable score as well as a limit; L denotes a primarily useful limit.
 Directions are recommendations. Every numeric selector accepts lower and upper
 penalties independently or together. Risk-minimizing scores need appropriate growth
-or activity conditions. There are 24 quantities and 25 selectors because position
+or activity conditions. There are 25 quantities and 26 selectors because position
 utilization retains explicit long and short scopes.
 
 | Quantity | Canonical selector | Formula | Role |
@@ -67,6 +67,7 @@ utilization retains explicit long and short scopes.
 | Position utilization RMS | `position_exposure_utilization_rms_ratio_long`, `position_exposure_utilization_rms_ratio_short` | Budget-relative per-side RMS defined below | S minimize |
 | Maximum HSL episode loss | `hsl_panic_episode_loss_max_fraction` | `max(L_e)` | L |
 | Mean HSL episode loss | `hsl_panic_episode_loss_mean_fraction` | Arithmetic `mean(L_e)` | L |
+| HSL execution count | `hsl_execution_episode_count` | Actual execution episodes containing at least one HSL-attributed fill, including zero-loss episodes | L |
 | HSL trigger rate | `hsl_triggers_per_year` | Actual observed trigger count divided by `Y` | L |
 | Gross strategy exposure RMS | `gross_exposure_rms_ratio_strategy_equity` | `sqrt(mean(g_t^2))` | S minimize |
 | Maximum gross strategy exposure | `gross_exposure_max_ratio_strategy_equity` | `max(g_t)` | L |
@@ -157,6 +158,12 @@ before the first HSL fill. Zero-loss executed episodes count as zero in the arit
 episode mean; triggers without executed fills do not enter it. With no execution
 episodes, maximum and mean are zero with episode-count metadata. Invalid anchors make
 the selected loss aggregate unavailable, not a smaller sample of surviving episodes.
+
+`hsl_execution_episode_count` counts actual execution episodes over the evaluated window,
+including zero-loss and unfinished episodes with an attributed fill. Triggers without an HSL
+fill do not count. Panic-tagged fills after the controller retires HSL intent do not count.
+A lower limit of one requires an executed stop without requiring a loss;
+no execution episodes gives zero. Invalid execution-count support makes the selector unavailable.
 
 Count actual observed trigger/lifecycle events. Do not reconstruct hypothetical old
 triggers. RED time retains reported controller RED, including enforced restart cooldown,

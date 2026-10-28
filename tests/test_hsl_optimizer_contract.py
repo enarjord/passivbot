@@ -382,3 +382,27 @@ def test_combined_suite_validates_actual_source_market_policy(
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
             suite.build_scenario_candidate_config(cfg, ctx)
+
+
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
+def test_executed_hsl_lower_limit_uses_native_episode_count(mode):
+    from config import prepare_config
+    from limit_utils import compute_limit_violation, expand_limit_checks
+
+    cfg, markets, _ = inputs(mode)
+    metric = "hsl_execution_episode_count"
+    cfg["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
+    cfg["optimize"]["limits"] = [
+        {"metric": metric, "penalize_if": "less_than", "value": 1}
+    ]
+    cfg["backtest"].pop("coins", None)
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["AAA"]}
+    validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
+    args = payload(mode, cfg=cfg, mss=markets)
+    args[-1]["metric_requests"] = [metric]
+    analysis = run(args)[2]
+    assert analysis[metric] == analysis["metric_metadata"][metric] >= 1
+    check = expand_limit_checks(cfg["optimize"]["limits"], {}, penalty_weight=1.0)[0]
+    assert compute_limit_violation(check, analysis[metric]) == 0
+    assert compute_limit_violation(check, 0) > 0

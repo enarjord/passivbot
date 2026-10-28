@@ -124,6 +124,7 @@ def test_native_hsl_transport_and_report(mode):
                        for fill in full[0] if "panic" in str(fill[13]))
     assert report["summary"]["panic_fill_loss_sum_usd"] == pytest.approx(panic_losses)
     assert metadata["hsl_execution_episode_count"] > 0
+    assert full[2]["hsl_execution_episode_count"] == metadata["hsl_execution_episode_count"]
     assert full[2]["hsl_panic_episode_loss_max_fraction"] > 0
     assert full[2]["drawdown_max_fraction_strategy_equity"] > 0.0
     assert report["summary"]["signal_ema_max_fraction"] > 0.0

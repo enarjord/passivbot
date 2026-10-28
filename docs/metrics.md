@@ -1,6 +1,6 @@
 # Metrics reference
 
-Passivbot uses **24 core quantities**, exposed through 25 exact selectors because position
+Passivbot uses **25 core quantities**, exposed through 26 exact selectors because position
 utilization has separate long and short scopes. The generated [quantity reference](ai/generated/metric_fields.md)
 lists the selectors and units; the [numerical contract](ai/features/backtest_metrics.md) owns
 their clocks, formulas and validity rules. There are no automatic USD/BTC, unit, rate or
@@ -64,6 +64,7 @@ Every S metric is also a limit.
 | `position_exposure_utilization_rms_ratio_long` / `_short` | Budget-relative position RMS, below | S minimize |
 | `hsl_panic_episode_loss_max_fraction` | Maximum HSL execution-episode loss / balance before its first HSL fill | L |
 | `hsl_panic_episode_loss_mean_fraction` | Arithmetic mean of those episode loss fractions | L |
+| `hsl_execution_episode_count` | Actual execution episodes with at least one HSL fill, including zero-loss episodes | L |
 | `hsl_triggers_per_year` | Observed trigger count / `Y` | L |
 | `gross_exposure_rms_ratio_strategy_equity` | `sqrt(mean(g_t^2))`, with gross marked exposure `g_t` below | S minimize |
 | `gross_exposure_max_ratio_strategy_equity` | `max(g_t)` | L |
@@ -158,6 +159,18 @@ Costs are negative signed fees and rebates positive. Profitable fills do not off
 Zero-loss executed episodes count as zero in the mean; triggers without executed HSL fills do
 not enter that mean. With no execution episodes, both loss aggregates are zero with count
 metadata. A nonpositive/invalid balance anchor makes the selected aggregate unavailable.
+
+Use an optimizer limit to require an executed stop during a selected evaluation window:
+
+```json
+{"metric": "hsl_execution_episode_count", "penalize_if": "less_than", "value": 1}
+```
+
+This counts execution episodes, including zero-loss and unfinished episodes with an HSL fill.
+Multiple fills in one episode count once. A trigger without an HSL fill does not satisfy it.
+Panic-tagged fills after the controller retires HSL intent do not count.
+The count is not annualized. For suites, select the intended base scenario explicitly if the
+requirement should not apply to every scenario through an aggregate reducer.
 
 Reported RED includes enforced restart cooldown and can outlast immediate panic permission.
 RED time is the union across enabled controllers, excluding warmup. In coin/position-side mode
