@@ -554,3 +554,115 @@ def test_normal_window_submits_ready_rows_before_sealing_with_backpressure(monke
         assert sorted(replayed) == sorted(recorded)
         assert all(name.startswith("candidate:") for name in submitted)
         assert load_checkpoint(checkpoint, base.config)["completed"] == 4
+
+
+@pytest.mark.parametrize("seed_count,expected_window", [(12, 12), (1100, 1024)])
+def test_seed_admission_uses_available_cohort_on_fresh_and_resumed_runs(
+    monkeypatch, tmp_path, seed_count, expected_window,
+):
+    import optimization.backends.gpu_backend as backend
+
+    guard_cpu(monkeypatch)
+    observed = []
+    class StopBeforeEvaluation(Exception):
+        pass
+    def inspect_seed_window(self):
+        observed.append((self.state["phase"], len(self.state["population"]),
+                         self.session.max_candidates))
+        raise StopBeforeEvaluation
+    monkeypatch.setattr(backend._Search, "evaluate_population", inspect_seed_window)
+
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        vector = optimize.config_to_individual(
+            base.config, base.bounds, optimization_shape=base.optimization_shape,
+        )
+        columns = [key for key, _path in base.key_paths]
+        long_column = columns.index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
+        short_column = columns.index("bot.short.strategy.trailing_martingale.entry.initial_qty_fraction")
+        starts = [list(vector) for _ in range(seed_count)]
+        for i, row in enumerate(starts):
+            row[long_column] = 0.01 + 0.001 * (i % 34)
+            row[short_column] = 0.01 + 0.001 * (i // 34)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        recorder = SimpleNamespace(record=lambda _row: pytest.fail("no candidate has run"))
+        with pytest.raises(StopBeforeEvaluation):
+            execute(base, recorder, checkpoint, starts=starts)
+        fresh = load_checkpoint(checkpoint, base.config)
+        np.testing.assert_array_equal(fresh["population"].get("X"), starts)
+        with pytest.raises(StopBeforeEvaluation):
+            execute(base, recorder, checkpoint, resume=True)
+        restored = load_checkpoint(checkpoint, base.config)
+        np.testing.assert_array_equal(restored["population"].get("X"), starts)
+        assert observed == [("seeds", seed_count, expected_window)] * 2
+        assert restored["completed"] == restored["sequence"] == 0
+        assert FakeService.rows == []
+
+
+def test_seed_cohort_fills_batch_beyond_evolutionary_population(monkeypatch, tmp_path):
+    import optimization.backends.gpu_backend as backend
+    import optimization.gpu.native as native
+
+    guard_cpu(monkeypatch)
+    monkeypatch.setattr(backend, "time", SimpleNamespace(
+        monotonic=time.monotonic, perf_counter=lambda: 0.0,
+    ))
+    batches, hints, services, windows = [], [], [], []
+    evaluate_population = backend._Search.evaluate_population
+    def observe_window(self):
+        windows.append((self.state["phase"], self.session.max_candidates))
+        return evaluate_population(self)
+    monkeypatch.setattr(backend._Search, "evaluate_population", observe_window)
+    class WideService(FakeService):
+        def __init__(self, **kwargs):
+            kwargs.update(max_pending=8, max_batch_delay=None)
+            super().__init__(**kwargs)
+            services.append(self)
+        def register_dataset(self, dataset_id, dataset):
+            super().register_dataset(dataset_id, dataset)
+            replay = self._replays[dataset_id]
+            evaluate = replay.evaluate
+            def record_batch(candidates):
+                batches.append(tuple(row["long_entry_initial_qty_fraction"] for row in candidates))
+                return evaluate(candidates)
+            replay.evaluate = record_batch
+        def set_preparing(self, dataset_ids):
+            hints.append(frozenset(dataset_ids))
+            super().set_preparing(dataset_ids)
+    monkeypatch.setattr(native, "NativeBacktestService", WideService)
+
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"].update(population_size=4, iters=4)
+        base.config["optimize"]["gpu"].update(batch_size=8, tuning_mode="auto")
+        vector = optimize.config_to_individual(
+            base.config, base.bounds, optimization_shape=base.optimization_shape,
+        )
+        column = [key for key, _path in base.key_paths].index(
+            "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction",
+        )
+        starts = [list(vector) for _ in range(18)]
+        for i, row in enumerate(starts):
+            row[column] = (10 + i) / 1000
+        records, checkpoint = [], tmp_path / "checkpoint.pkl"
+        execute(base, SimpleNamespace(record=records.append), checkpoint, starts=starts)
+
+        assert len(batches[0]) == 8 > base.config["optimize"]["population_size"]
+        replayed = [value for batch in batches for value in batch]
+        assert sorted(replayed) == sorted(row[column] for row in starts)
+        assert len(records) == len(FakeService.rows) == 18
+        state = load_checkpoint(checkpoint, base.config)
+        assert state["completed"] == 18 and state["phase"] == "idle"
+        assert len(state["algorithm"].pop) == 4
+        assert any(hints) and hints[-1] == frozenset()
+        assert all(service._preparing == frozenset() for service in services)
+        assert windows == [("seeds", 18), ("generation", 4)]
+
+        # The drained seed window must not survive into ordinary evolution,
+        # either in this run or when a later generation resumes from disk.
+        base.config["optimize"]["iters"] = 8
+        execute(base, SimpleNamespace(record=records.append), checkpoint, resume=True)
+        assert windows[2:] == [("generation", 4)]
+        restored = load_checkpoint(checkpoint, base.config)
+        assert restored["completed"] == len(records) > 18
+        assert restored["phase"] == "idle" and len(restored["algorithm"].pop) == 4

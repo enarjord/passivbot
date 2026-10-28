@@ -344,8 +344,15 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         service = NativeBacktestService(batch_size=batch_size, **memory_options,
                                      max_dispatch_candidate_bars=dispatch_budget,
                                      interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
-        session = NativeEvaluationSession(service, registry.scorer,
-                                          max_candidates=max(2, min(population_size, 1024)))
+        # Seed survival waits for the complete seed cohort, so its available
+        # work is independent of the later evolutionary population size. Keep
+        # admission bounded while allowing the service to fill wider batches.
+        population_window = max(2, min(population_size, 1024))
+        seed_count = len(state["population"]) if state["phase"] == "seeds" else 0
+        session = NativeEvaluationSession(
+            service, registry.scorer,
+            max_candidates=max(population_window, min(seed_count, 1024)),
+        )
         search = _Search(state=state, session=session, registry=registry, recorder=recorder,
                          template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
@@ -362,6 +369,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     payloads=[dict(F=individual.F, G=individual.G) for individual in seeds],
                     population_size=population_size, bounds=base.bounds, rng_seed=seed,
                 )
+                session.max_candidates = population_window
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
             logging.info("Starting GPU native optimization...")
