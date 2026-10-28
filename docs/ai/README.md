@@ -29,6 +29,7 @@ current task.
 | Fill/PnL ingestion, fees, coverage | `error_contract.md`, `features/fill_events_manager.md`, relevant exchange contract |
 | Historical runtime/fill attribution | `features/runtime_attribution.md`, `features/fill_events_manager.md`, `features/live_events.md` |
 | Commands, tests, backtests, optimizer, execution safety | `runbooks/commands.md` |
+| Planning, running, monitoring, or qualifying an optimization campaign | `runbooks/optimization_campaign.md` |
 | Core backtest/optimizer metric definitions, clocks and statuses | `features/backtest_metrics.md` |
 | Version selection, release trigger, release preparation, or publication | `runbooks/release.md` |
 | Autonomous PR review | `runbooks/pr_review.md` |
