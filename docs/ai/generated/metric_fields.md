@@ -1,7 +1,7 @@
 # Analysis Quantity Reference
 
 Generated from `src/config/metric_definitions.py`; do not edit by hand.
-The Rust-owned core catalog supplies the 25 exact selectors for 24 quantities.
+The Rust-owned core catalog supplies the 26 exact selectors for 25 quantities.
 This describes quantities, not objective direction, selector aliases, reductions or backend support.
 Core definition version 1 owns values, clocks and status semantics; historical definitions require re-evaluation.
 
@@ -15,6 +15,7 @@ Core definition version 1 owns values, clocks and status semantics; historical d
 | `gross_exposure_max_ratio_strategy_equity` | ratio / strategy equity | Gross marked position notional, long and short added | minute marks including flat periods; maximum | strategy_equity, uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `gross_exposure_rms_ratio_strategy_equity` | ratio / strategy equity | Gross marked position notional, long and short added | minute marks including flat periods; RMS | strategy_equity, uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `gross_turnover_ratio_per_day` | per_day / each fill's raw pre-fill account balance and all elapsed days | Sum absolute executed fill notional/pre-fill balance, divided by elapsed days; entries and exits count | actual fills; normalized notional sum per day | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
+| `hsl_execution_episode_count` | count | Actual HSL execution episodes containing at least one attributed fill, including zero-loss episodes | controller execution episodes; count over the evaluated window | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `hsl_panic_episode_loss_max_fraction` | fraction / raw account balance before episode's first HSL fill | HSL episode loss-only net realized cashflow fraction including signed fees once | actual HSL execution episodes; maximum | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `hsl_panic_episode_loss_mean_fraction` | fraction / raw account balance before episode's first HSL fill | HSL episode loss-only net realized cashflow fraction including zero-loss executed episodes | actual HSL execution episodes; arithmetic mean | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `hsl_red_time_fraction` | fraction / observed evaluated HSL duration | Union elapsed time with any enabled controller RED | controller lifecycle and actual clocks; union duration quotient | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |

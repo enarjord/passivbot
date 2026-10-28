@@ -354,6 +354,7 @@ impl Report {
             enabled,
             trigger_count: self.summary.triggers as u64,
             execution_episode_count: stats.execution_episode_count,
+            execution_episode_count_valid: true,
             episode_loss_fraction_sum: stats.panic_loss_ratios.sum,
             episode_loss_fraction_max: stats.panic_loss_ratios.max,
             episode_loss_valid: !stats.episode_loss_invalid,
@@ -982,6 +983,21 @@ mod tests {
         assert_eq!(report.core_summary(true).red_duration_ms, 120_000);
         assert_eq!(report.core_summary(true).observed_duration_ms, 120_000);
     }
+    #[test]
+    fn zero_loss_hsl_fills_count_once_including_the_unfinished_episode() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::default();
+        report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
+        report.panic_fill(key, 0.0, 1000.0);
+        report.panic_fill(key, 10.0, 1000.0);
+        let open = report.core_summary(true);
+        assert_eq!(open.execution_episode_count, 1);
+        assert!(open.execution_episode_count_valid);
+        assert_eq!(open.episode_loss_fraction_sum, 0.0);
+        report.observed_flat(key, 60_000);
+        assert_eq!(report.core_summary(true).execution_episode_count, 1);
+    }
+
     #[test]
     fn invalid_episode_balance_is_not_floored_or_dropped() {
         let key = (Some(LONG), Some(0));

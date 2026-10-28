@@ -10,7 +10,7 @@ from tools.generate_metric_reference import DEFAULT_OUTPUT, render_reference
 def test_registry_matches_native_catalog_and_definition_version():
     catalog = native.get_core_metric_catalog()
     assert catalog["definition_version"] == 1
-    assert len(catalog["metrics"]) == 25
+    assert len(catalog["metrics"]) == 26
     assert METRIC_DEFINITIONS.keys() == KNOWN_METRICS == CORE_METRIC_CATALOG.keys()
     for item in catalog["metrics"]:
         field = get_metric_definition(item["name"])

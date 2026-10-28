@@ -81,7 +81,7 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     verify_loaded_runtime_extension()
     config, candles, markets, btc, timestamps = _recovered_panic_inputs(side, mode, strategy_kind)
     payload = build_backtest_payload(candles, markets, deepcopy(config), "bybit", btc,
-                                     timestamps, metrics_only=False, metric_requests=["gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"])
+                                     timestamps, metrics_only=False, metric_requests=["gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count"])
     fills, _, analysis = execute_backtest(payload, config)
     report = payload.hard_stop_plot_data["hsl"]
     assert report["summary"]["triggers"] > 0
@@ -92,7 +92,10 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     assert all(int(fill[0]) == 6 and int(fill[1]) == int(timestamps[6]) for fill in panic_fills)
     assert all(float(fill[3]) == float(fill[4]) == 0. and float(fill[5]) == 1024.
                and float(fill[9]).is_integer() and float(fill[10]).is_integer() for fill in fills)
-    metrics = {"gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"}
+    # The controller retired its panic intent at the recovered pre-fill mark.
+    # A panic-tagged order alone does not make this an active HSL episode.
+    assert analysis["hsl_execution_episode_count"] == analysis["metric_metadata"]["hsl_execution_episode_count"] == 0
+    metrics = {"gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count"}
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
         needed_metrics=metrics, factual_hsl=True)

@@ -131,6 +131,12 @@ def _definitions():
             "actual HSL execution episodes",
             "arithmetic mean",
         ),
+        "hsl_execution_episode_count": (
+            None,
+            "Actual HSL execution episodes containing at least one attributed fill, including zero-loss episodes",
+            "controller execution episodes",
+            "count over the evaluated window",
+        ),
         "hsl_triggers_per_year": (
             "actual elapsed years of 365.25 days",
             "Actual observed HSL trigger count per year",

@@ -14,12 +14,12 @@ CORE_METRIC_DEFINITION_VERSION = 1
 if _catalog.get("definition_version") != CORE_METRIC_DEFINITION_VERSION:
     raise RuntimeError("Core metric definition mismatch; rebuild the Rust extension")
 _entries = _catalog.get("metrics")
-if not isinstance(_entries, list) or len(_entries) != 25:
+if not isinstance(_entries, list) or len(_entries) != 26:
     raise RuntimeError("Malformed native core metric catalog")
 CORE_METRIC_CATALOG = MappingProxyType(
     {item["name"]: MappingProxyType(dict(item)) for item in _entries}
 )
-if len(CORE_METRIC_CATALOG) != 25 or any(
+if len(CORE_METRIC_CATALOG) != 26 or any(
     item["role"] not in {"maximize", "minimize", "limit"}
     or not isinstance(item.get("requires_minute_observations"), bool)
     for item in _entries

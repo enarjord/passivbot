@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `hsl_execution_episode_count` as a backtest metric and optimizer limit on CPU and GPU.
+  Require executed hard-stop episodes without requiring realized losses or counting unfilled triggers.
+
 - Best-effort v8 migration infers close growth, turnover, drawdown, holding-duration and
   profit-contribution replacements, reporting unit, direction and reducer transformations.
   Remove verified unsupported objectives, limits and stale reducer rules with full warnings;

@@ -49,6 +49,35 @@ def test_inactive_effective_hsl_policy_uses_verified_elapsed_coverage():
         native.core_metrics_from_gpu_observations(packet, names, 0, 60_000, 60_000, 180.0, [])
 
 
+@pytest.mark.parametrize("episodes", [0, 1, 3])
+def test_hsl_execution_count_packet_distinguishes_triggers_and_zero_loss_fills(episodes):
+    packet, fields = _flat_packet()
+    for name, value in {"hsl_enabled": 1, "hsl_observed_steps": 1,
+                        "hsl_trigger_count": 3, "hsl_episode_count": episodes,
+                        "hsl_episode_invalid": 1}.items():
+        packet[0, fields.index(name)] = value
+    name = "hsl_execution_episode_count"
+    row = _native().core_metrics_from_gpu_observations(
+        packet, [name], 0, 60_000, 60_000)[0]
+    assert row[name] == episodes
+    assert row["metric_metadata"][name] == episodes
+    assert not row["metric_status"]
+
+
+@pytest.mark.parametrize("episodes", [math.nan, -1., .5, float(2**24 + 2)])
+def test_hsl_execution_count_packet_rejects_invalid_count_without_hiding_growth(episodes):
+    packet, fields = _flat_packet()
+    for name, value in {"hsl_enabled": 1, "hsl_observed_steps": 1,
+                        "hsl_episode_count": episodes}.items():
+        packet[0, fields.index(name)] = value
+    name = "hsl_execution_episode_count"
+    row = _native().core_metrics_from_gpu_observations(
+        packet, [name, "cagr_fraction_strategy_equity"], 0, 60_000, 60_000)[0]
+    assert row[name] is None
+    assert row["metric_status"][name]["status"] == "invalid"
+    assert row["cagr_fraction_strategy_equity"] == 0
+
+
 def test_hsl_counter_overflow_does_not_invalidate_unrelated_cagr():
     native = _native()
     packet, fields = _flat_packet()

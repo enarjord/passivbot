@@ -59,13 +59,16 @@ def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
     ]))
     metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
                "hsl_triggers_per_year",
-               "hsl_red_time_fraction")
+               "hsl_red_time_fraction", "hsl_execution_episode_count")
     policies = {**DEFAULT_TOLERANCES,
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5),
+                "hsl_execution_episode_count": MetricTolerance(0, 0)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     _save_evidence(mode, report, inputs)
     assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_execution_episode_count"]["cpu"] >= 1
+    assert report["metrics"]["hsl_execution_episode_count"]["gpu"] == report["metrics"]["hsl_execution_episode_count"]["cpu"]
     assert report["passed"], report
 
 

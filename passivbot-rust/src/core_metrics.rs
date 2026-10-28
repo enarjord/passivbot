@@ -46,6 +46,7 @@ pub enum Metric {
     HslRedTime,
     LossProfit,
     ShortContribution,
+    HslExecutionEpisodeCount,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -78,9 +79,9 @@ macro_rules! definition {
     };
 }
 
-/// Twenty-four quantities, with two explicit position-utilization side scopes.
+/// Twenty-five quantities, with two explicit position-utilization side scopes.
 /// Roles are recommendations; every selector supports either limit direction.
-pub const METRIC_CATALOG: [MetricDefinition; 25] = [
+pub const METRIC_CATALOG: [MetricDefinition; 26] = [
     definition!(Cagr, "cagr_fraction_strategy_equity", "fraction", Maximize),
     definition!(
         Volatility,
@@ -191,6 +192,12 @@ pub const METRIC_CATALOG: [MetricDefinition; 25] = [
         "fraction",
         Limit
     ),
+    definition!(
+        HslExecutionEpisodeCount,
+        "hsl_execution_episode_count",
+        "count",
+        Limit
+    ),
 ];
 
 impl Metric {
@@ -274,6 +281,7 @@ impl MetricRequest {
             Metric::HslEpisodeLossMean,
             Metric::HslTriggersPerYear,
             Metric::HslRedTime,
+            Metric::HslExecutionEpisodeCount,
         ])
     }
 }
@@ -401,6 +409,7 @@ pub struct HslSummary {
     pub enabled: bool,
     pub trigger_count: u64,
     pub execution_episode_count: u64,
+    pub execution_episode_count_valid: bool,
     pub episode_loss_fraction_sum: f64,
     pub episode_loss_fraction_max: f64,
     pub episode_loss_valid: bool,
@@ -414,6 +423,7 @@ impl Default for HslSummary {
             enabled: false,
             trigger_count: 0,
             execution_episode_count: 0,
+            execution_episode_count_valid: true,
             episode_loss_fraction_sum: 0.0,
             episode_loss_fraction_max: 0.0,
             episode_loss_valid: true,
@@ -1409,6 +1419,16 @@ impl CoreMetrics {
                             })
                         }
                     }
+                    Metric::HslExecutionEpisodeCount => {
+                        let h = finalization.hsl;
+                        if !h.execution_episode_count_valid
+                            || !h.clock_valid(end - state.window.start_timestamp_ms)
+                        {
+                            MetricValue::invalid("invalid_hsl_execution_episode_count")
+                        } else {
+                            MetricValue::finite(h.execution_episode_count as f64)
+                        }
+                    }
                     Metric::HslTriggersPerYear => {
                         if !finalization
                             .hsl
@@ -1572,7 +1592,7 @@ mod tests {
             assert_eq!(definition.metric as usize, i);
             assert!(names.insert(definition.name));
         }
-        assert_eq!(MetricRequest::all().len(), 25);
+        assert_eq!(MetricRequest::all().len(), 26);
         assert!(MetricRequest::default().is_empty());
         let r = MetricRequest::from_names(["loss_profit_ratio", "loss_profit_ratio"]).unwrap();
         assert_eq!(r.len(), 1);
@@ -1963,6 +1983,7 @@ mod tests {
             enabled: true,
             trigger_count: 2,
             execution_episode_count: 2,
+            execution_episode_count_valid: true,
             episode_loss_fraction_sum: 0.15,
             episode_loss_fraction_max: 0.1,
             episode_loss_valid: true,
@@ -1986,6 +2007,50 @@ mod tests {
         f.hsl.observed_duration_ms = 0;
         assert_eq!(
             value(&state.finish(f), Metric::HslRedTime).status,
+            MetricStatus::Invalid
+        );
+    }
+
+    #[test]
+    fn hsl_execution_count_requires_fills_but_not_losses_or_restart() {
+        let state = flat(&[Metric::HslExecutionEpisodeCount], DAY_MS);
+        let mut f = finalization(DAY_MS);
+        close(
+            number(&state.finish(f), Metric::HslExecutionEpisodeCount),
+            0.0,
+        );
+        f.hsl.enabled = true;
+        f.hsl.observed_duration_ms = DAY_MS;
+        f.hsl.trigger_count = 3;
+        // Trigger-only episodes and unfilled panic orders do not count.
+        close(
+            number(&state.finish(f), Metric::HslExecutionEpisodeCount),
+            0.0,
+        );
+        for count in [1, 3] {
+            f.hsl.execution_episode_count = count;
+            // Zero-loss and unfinished executed episodes still count. Loss
+            // anchor validity belongs to the loss metrics, not this count.
+            f.hsl.episode_loss_valid = false;
+            close(
+                number(&state.finish(f), Metric::HslExecutionEpisodeCount),
+                count as f64,
+            );
+        }
+        f.hsl.execution_episode_count_valid = false;
+        assert_eq!(
+            value(&state.finish(f), Metric::HslExecutionEpisodeCount).status,
+            MetricStatus::Invalid
+        );
+        f.hsl.execution_episode_count_valid = true;
+        f.hsl.observed_duration_ms = 0;
+        assert_eq!(
+            value(&state.finish(f), Metric::HslExecutionEpisodeCount).status,
+            MetricStatus::Invalid
+        );
+        f.hsl.enabled = false;
+        assert_eq!(
+            value(&state.finish(f), Metric::HslExecutionEpisodeCount).status,
             MetricStatus::Invalid
         );
     }
