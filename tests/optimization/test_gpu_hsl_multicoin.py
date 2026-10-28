@@ -167,7 +167,9 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
             }
         ],
     )
-    assert not runner.dispatch_hsl_disabled
+    assert runner.dispatch_hsl_disabled == (
+        strategy == "ema_anchor" and len(sides) == 1 and mode != "coin"
+    )
     compare(baseline, changed)
     assert float(baseline["fill_count"].sum()) > 0
     assert not (baseline["hsl_triggers_long"] + baseline["hsl_triggers_short"]).any()
@@ -298,13 +300,10 @@ def test_metal_hsl_capacity_matches_full_arrays(strategy, mode, sides):
     ]
     small = make_proxy(mode, strategy, sides, coin_count=3)
     runner, actual = raw(small, candidates)
-    assert runner.mps_coin_capacity == (
-        4 if strategy == "trailing_martingale" else None
-    )
+    assert runner.mps_coin_capacity == 4
     full = make_proxy(mode, strategy, sides, coin_count=3)
     full_runner = full.fused_runner if full.fused_runner else full.runners["long"]
-    if strategy == "trailing_martingale":
-        full_runner.mps_coin_capacity = 64
+    full_runner.mps_coin_capacity = 64
     _, expected = raw(full, candidates)
     compare(actual, expected)
 

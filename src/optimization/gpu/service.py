@@ -661,6 +661,25 @@ def _mps_multicoin_dispatch_plan(
         if temporal_chunking
         else requested_batch_size
     )
+    if device == "mps":
+        # Preserve parallel candidates by shortening each temporal dispatch.
+        # Only a one-bar launch can force a smaller physical candidate batch;
+        # the runner separately clamps this ceiling to its resident scratch.
+        dispatch_batch_size = _mps_dispatch_batch_size(
+            dispatch_candidates,
+            n_bars=1,
+            n_coins=n_coins,
+            n_sides=n_sides,
+            max_candidate_bars=max_candidate_bars,
+        )
+        dispatch_history = min(
+            n_bars,
+            MPS_TM_MULTICOIN_CHUNK_BARS,
+            MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_batch_size,
+            max_candidate_bars // (dispatch_batch_size * n_coins * n_sides),
+        )
+        return temporal_chunking, dispatch_batch_size, dispatch_history
+
     dispatch_history = (
         min(
             n_bars,
@@ -1135,7 +1154,7 @@ class SharedAccountReplay:
         if len(enabled_sides) not in (1, 2):
             raise ValueError("MPS multicoin proxy requires one or two enabled sides")
         self.sides = enabled_sides
-        self.temporal_chunking, self.dispatch_batch_size, dispatch_history = (
+        self.temporal_chunking, self.dispatch_batch_size, _dispatch_history = (
             _mps_multicoin_dispatch_plan(
                 self.strategy_kind,
                 self.batch_size,
@@ -1148,13 +1167,16 @@ class SharedAccountReplay:
             )
         )
         if self.temporal_chunking:
+            # A partial batch may use a larger history chunk than the plan at
+            # this capacity. Replay-start logs report the actual chunk size.
             logging.info(
-                "GPU MPS temporal replay | candidate_batch=%d chunk_bars<=%d "
-                "history_bars=%d coins=%d max_candidate_bars=%d",
+                "GPU temporal replay | device=%s candidate_batch_cap=%d "
+                "history_bars=%d coins=%d sides=%d max_candidate_bars=%d",
+                gpu_device(torch),
                 self.dispatch_batch_size,
-                dispatch_history,
                 len(values),
                 coin_count,
+                len(enabled_sides),
                 self.max_dispatch_candidate_bars,
             )
         else:

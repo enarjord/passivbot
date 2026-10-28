@@ -352,7 +352,7 @@ batches use that limit. This prevents several serial scratch/work splits from de
 the return of an oversized outer batch. Preparation retains no inactive runner references;
 switching datasets can release their tensors and mutable scratch.
 
-Automatic Metal widths start at the existing replay cap of 512 candidates, clamped by the
+Automatic Metal widths start at the replay cap of 1,024 candidates, clamped by the
 prepared memory/history ceiling and service admission limit. CUDA starts at 64. The GPU
 owner selects the device before creating a prepared controller; producer-side construction
 remains device-independent. Explicit widths and

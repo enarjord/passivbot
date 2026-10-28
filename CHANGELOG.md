@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow Metal replay batches of up to 1,024 candidates within existing scratch and work
+  budgets. Shorten temporal chunks before reducing parallel candidates, and distinguish
+  batch capacity from actual replay geometry in startup logs.
+
 - Add `hsl_execution_episode_count` as a backtest metric and optimizer limit on CPU and GPU.
   Require executed hard-stop episodes without requiring realized losses or counting unfilled triggers.
 
