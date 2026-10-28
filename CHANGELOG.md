@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Admit GPU starting-config cohorts independently of the later evolutionary population
+  size, within the existing 1,024-candidate collection bound. Restore the population-based
+  admission window after seed selection, including on resumed runs.
+
 - Allow Metal replay batches of up to 1,024 candidates within existing scratch and work
   budgets. Shorten temporal chunks before reducing parallel candidates, and distinguish
   batch capacity from actual replay geometry in startup logs.
