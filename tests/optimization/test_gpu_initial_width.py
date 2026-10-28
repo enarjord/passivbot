@@ -31,6 +31,8 @@ def test_native_construction_never_imports_device_runtime(monkeypatch, setting, 
         (NativeBacktestService, "mps", None, "auto", 320, 512, 320),
         (NativeBacktestService, "mps", "auto", "refresh", 320, 512, 320),
         (NativeBacktestService, "mps", None, "auto", 1024, 512, 512),
+        (NativeBacktestService, "mps", None, "auto", 1024, 1024, 1024),
+        (NativeBacktestService, "mps", "auto", "refresh", 2048, 2048, 1024),
         (NativeBacktestService, "mps", None, "auto", 1024, 173, 173),
         (NativeBacktestService, "cuda", None, "auto", 320, 512, 64),
         (CudaBacktestService, "cuda", None, "auto", 320, 512, 64),
@@ -85,7 +87,7 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         assert service._batch_policy.width("market", service._batch_size) == 1
         assert not service._batch_policy.controllers
         if service._batch_tuner is not None:
-            assert service._batch_tuner.initial == (512 if device == "mps" else 64)
+            assert service._batch_tuner.initial == (1024 if device == "mps" else 64)
         preparing.set()
         assert release.wait(3)
         service._batch_policy.constrain("market", prepared_ceiling)
