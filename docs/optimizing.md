@@ -1,5 +1,9 @@
 # Optimizing
 
+For a staged search procedure, monitoring and completion criteria, see the
+[agent campaign runbook](ai/runbooks/optimization_campaign.md) and its
+[long-only template recipe](ai/case_studies/long_only_template_optimization.md).
+
 Optimizer resume reuses checkpoint fitness only when its fixed evaluation contract matches the
 current run. This includes backtest execution and data policies, backtest-consumed live settings,
 fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
