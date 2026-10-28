@@ -3,6 +3,8 @@
 Read this before planning, running, resuming, or advancing an optimization campaign. The goal is a
 useful set of qualified configurations, with evidence for their tradeoffs and a reproducible path
 to the result. A long-running process or an attractive GPU Pareto front is an intermediate output.
+The final deliverable is a diverse qualified Pareto front, not a single "optimal" config: multiple
+objectives have tradeoffs, and the user chooses among them.
 
 Follow [AGENTS.md](../../../AGENTS.md) for authority and publication boundaries. This runbook does
 not grant remote-process or live-trading authority. Use [Optimizing](../../optimizing.md) for CLI
@@ -138,15 +140,15 @@ When building config-only seeds, use the canonical result extractor, retain the 
 and fixed policy, and remove historical fitness. Do not accidentally carry fine-tuned fixed bounds
 into a supposed full-parameter stage. Recheck canonical normalization/clamping before launch.
 
-Begin with broad failure/risk limits, then inspect observed distributions before adding growth or
-activity guards. Low Ulcer or short holding time can reward inactive or loss-making behavior.
-Inspect fill and episode support as well as the objective values. A raw risk-feasible point is not
-necessarily an economically useful finalist. Report these categories separately.
+Use limits to penalize objectively unusable configurations or enforce explicit user requirements,
+never to encode the agent's preferences or bias the front toward favored tradeoffs. Inspect activity
+and objective support to diagnose unusable behavior; a weak value on one objective alone does not
+justify excluding a valid tradeoff. Keep the front diverse.
 
 Before tightening a limit, estimate how much useful diversity survives, including extremes and
 interior choices. If the feasible pool empties, diagnose the conflict or search weakness; do not
-present the least-penalized infeasible member as a qualified winner. Apply a changed limit in a new
-declared stage with fresh evaluation. Filtering old records is exploratory selection, not replay.
+present the least-penalized infeasible member as a qualified front member. Apply a changed limit in
+a new declared stage with fresh evaluation. Filtering old records is exploratory selection, not replay.
 
 For suites, inspect the effective coin intersection and nonempty coverage of every scenario. An
 average can conceal a disastrous subset; retain per-scenario diagnostics and suitable worst-case
@@ -213,7 +215,7 @@ experiment. Compare throughput only for equivalent work and verify correctness b
 
 Consider the campaign complete when the declared final tests are finished, the retained CPU front
 passes policy and limits, useful diversity remains, and confirmation offers little material gain.
-Deliver configs, a metric table, representative tradeoffs, one justified recommendation if wanted,
+Deliver the full Pareto configs, a metric table, representative tradeoff annotations,
 baseline and scenario comparisons, reproduction evidence, and remaining limitations. If no pool
 qualifies, report the unmet requirements and preserve the search evidence; that is not a validated
 template. Optimization completion does not authorize deployment.

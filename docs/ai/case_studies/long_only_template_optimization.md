@@ -63,8 +63,8 @@ uses the drawdown path including flat/zero-drawdown periods. See the
 [metric definitions](../features/backtest_metrics.md); preserve their statuses and support counts.
 
 The initial limits are broad discovery guards, not a claim that a 70% drawdown is acceptable for
-deployment. Inspect the observed feasible pool before adding a positive-growth or activity floor.
-Do not select a no-trade or money-losing member merely because it minimizes holding time or Ulcer.
+deployment. Additional limits must address objectively unusable behavior or an explicit user
+requirement; do not add growth/activity floors merely to impose a preferred tradeoff.
 Also inspect maximum holding time and recovery tails: a favorable weighted mean can hide a bad
 individual episode. Keep the four scoring objectives stable when adding diagnostic metrics.
 
@@ -128,9 +128,8 @@ scenario lists must not silently broaden the intended universe. Fix aggregation 
 scenario's risk rather than relying only on its mean. Continue search where the broader tests
 expose weaknesses. Every changed evaluation policy gets fresh scores.
 
-Before final promotion, inspect whether broad positive-growth/activity limits retain useful
-diversity. Choose any stricter risk tolerance from the intended use and observed evidence. Do not
-ratchet limits until every point is infeasible, or quietly redefine success to keep one winner.
+Preserve the diverse Pareto front through final promotion. Observed distributions inform diagnosis;
+they do not authorize inventing stricter risk tolerances or selecting a single "optimal" config.
 
 Optionally polish several distinct tradeoffs after broad discovery. For each one, create a config
 containing that candidate's bot values and a copy of the original authored bounds:
