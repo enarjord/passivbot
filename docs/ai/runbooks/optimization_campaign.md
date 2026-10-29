@@ -3,6 +3,8 @@
 Read this before planning, running, resuming, or advancing an optimization campaign. The goal is a
 useful set of qualified configurations, with evidence for their tradeoffs and a reproducible path
 to the result. A long-running process or an attractive GPU Pareto front is an intermediate output.
+The final deliverable is a diverse qualified Pareto front, not a single "optimal" config: multiple
+objectives have tradeoffs, and the user chooses among them.
 
 Follow [AGENTS.md](../../../AGENTS.md) for authority and publication boundaries. This runbook does
 not grant remote-process or live-trading authority. Use [Optimizing](../../optimizing.md) for CLI
@@ -85,6 +87,9 @@ evaluation change. Never infer numerical drift from mismatched trade-start polic
   Different loader routes can carry different metadata. An array that loads is not proof that the
   optimizer accepted the intended source identity. Preserve validation when investigating a route
   mismatch; do not modify factual cache metadata to make it pass.
+- Check the owner's cache identity before reusing history: equivalent date spellings can hash
+  differently on some revisions. Complete candle caches can still trigger public market-metadata
+  refreshes. Copy genuine metadata with its timestamps intact; never fabricate freshness or identity.
 - Preflight RAM, swap, shared memory, VRAM, scratch/history growth, and competing workloads. Retain
   resource guards. Run a bounded smoke and a standalone Rust CPU baseline before a large search.
 
@@ -138,21 +143,25 @@ When building config-only seeds, use the canonical result extractor, retain the 
 and fixed policy, and remove historical fitness. Do not accidentally carry fine-tuned fixed bounds
 into a supposed full-parameter stage. Recheck canonical normalization/clamping before launch.
 
-Begin with broad failure/risk limits, then inspect observed distributions before adding growth or
-activity guards. Low Ulcer or short holding time can reward inactive or loss-making behavior.
-Inspect fill and episode support as well as the objective values. A raw risk-feasible point is not
-necessarily an economically useful finalist. Report these categories separately.
+Use limits to penalize objectively unusable configurations or enforce explicit user requirements,
+never to encode the agent's preferences or bias the front toward favored tradeoffs. Inspect activity
+and objective support to diagnose unusable behavior; a weak value on one objective alone does not
+justify excluding a valid tradeoff. Keep the front diverse.
 
 Before tightening a limit, estimate how much useful diversity survives, including extremes and
 interior choices. If the feasible pool empties, diagnose the conflict or search weakness; do not
-present the least-penalized infeasible member as a qualified winner. Apply a changed limit in a new
-declared stage with fresh evaluation. Filtering old records is exploratory selection, not replay.
+present the least-penalized infeasible member as a qualified front member. Apply a changed limit in
+a new declared stage with fresh evaluation. Filtering old records is exploratory selection, not replay.
 
 For suites, inspect the effective coin intersection and nonempty coverage of every scenario. An
 average can conceal a disastrous subset; retain per-scenario diagnostics and suitable worst-case
 limits. Supported scenario screening can reduce offspring cost, but only completed full-suite
 results count as final fitness. Scenarios used to steer the search are training evidence, even if
 introduced later. Keep genuinely unused holdouts or forward checks separate.
+
+Some revisions require symmetric suite approval lists even for a disabled side. If so, use a shared
+data universe, keep the unwanted side explicitly disabled, and verify effective side activation in
+every prepared context. An approval list alone does not enable a side.
 
 Record how the universe was selected: extending history for today's approved coins does not remove
 selection or survivorship bias. If sides or coins were explored independently, replay the combined
@@ -213,7 +222,7 @@ experiment. Compare throughput only for equivalent work and verify correctness b
 
 Consider the campaign complete when the declared final tests are finished, the retained CPU front
 passes policy and limits, useful diversity remains, and confirmation offers little material gain.
-Deliver configs, a metric table, representative tradeoffs, one justified recommendation if wanted,
+Deliver the full Pareto configs, a metric table, representative tradeoff annotations,
 baseline and scenario comparisons, reproduction evidence, and remaining limitations. If no pool
 qualifies, report the unmet requirements and preserve the search evidence; that is not a validated
 template. Optimization completion does not authorize deployment.
