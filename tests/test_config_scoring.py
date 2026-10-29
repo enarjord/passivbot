@@ -208,10 +208,11 @@ def test_scoring_reducer_override_requires_effective_suite_scenario():
 
 
 
-def test_position_held_time_weighted_metric_defaults_to_minimize():
-    specs, _ = normalize_scoring_entries(["position_held_time_weighted_mean_hours"])
+@pytest.mark.parametrize("metric", ["position_held_time_weighted_mean_hours", "fills_gap_time_weighted_mean_hours"])
+def test_time_weighted_duration_metric_defaults_to_minimize(metric):
+    specs, _ = normalize_scoring_entries([metric])
     assert [(spec.metric, spec.goal) for spec in specs] == [
-        ("position_held_time_weighted_mean_hours", "min")
+        (metric, "min")
     ]
 
 

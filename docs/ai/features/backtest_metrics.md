@@ -44,7 +44,7 @@ Let `E` be strategy equity, `D` elapsed evaluated days, `Y = D / 365.25`,
 S denotes a suitable score as well as a limit; L denotes a primarily useful limit.
 Directions are recommendations. Every numeric selector accepts lower and upper
 penalties independently or together. Risk-minimizing scores need appropriate growth
-or activity conditions. There are 25 quantities and 26 selectors because position
+or activity conditions. There are 26 quantities and 27 selectors because position
 utilization retains explicit long and short scopes.
 
 | Quantity | Canonical selector | Formula | Role |
@@ -59,6 +59,7 @@ utilization retains explicit long and short scopes.
 | Pain Index | `pain_index_fraction_strategy_equity` | `mean(d)` | S minimize |
 | CAGR EW | `cagr_fraction_strategy_equity_ew` | Calendar-weighted log growth defined below | S maximize |
 | Completion | `backtest_completion_fraction` | `clip(covered_seconds / intended_seconds, 0, 1)` | L |
+| Time-weighted portfolio fill gap | `fills_gap_time_weighted_mean_hours` | `sum(g_i^2) / sum(g_i)`, for gap hours `g_i` in `[start, sorted unique fills, end]` | S minimize |
 | Maximum portfolio fill gap | `fills_gap_max_days` | Longest gap in `[start, sorted fills, end]`, divided by 86400 seconds | L |
 | Maximum peak recovery | `peak_recovery_max_days_strategy_equity` | Longest last-high-to-recovery episode, in days | L |
 | Maximum position holding | `position_held_max_days` | `max(h_i) / 24`, for episode hours `h_i` | L |
@@ -113,7 +114,11 @@ open tails through actual end. Holding duration is not notional-weighted. With n
 positive-duration holding episode, both holding aggregates are zero with count metadata.
 
 Fill gaps include start and end boundaries. Duplicate timestamps add zero elapsed time.
-A no-fill run has a maximum gap equal to its full evaluated duration.
+A no-fill run has a maximum gap equal to its full evaluated duration. The time-weighted
+mean is `sum(g_i^2) / sum(g_i)` in hours, with all portfolio gaps including both
+boundaries. Its denominator is the full actual evaluated duration; with no fills
+it equals that duration in hours. Same-clock fills contribute zero and do not
+change the result. Early termination uses actual end, excluding the unobserved tail.
 
 Turnover counts every entry and exit using execution-price absolute notional with the
 instrument's canonical conversion, including contract multiplier. `B_i_pre` is raw,

@@ -146,7 +146,7 @@ def test_backtest_with_candle_interval():
     assert analysis["liquidated"] is False
     assert analysis["metric_metadata"]["observation_interval_ms"] == 300_000
     for metric in ("cagr_fraction_strategy_equity", "backtest_completion_fraction",
-                   "gross_turnover_ratio_per_day", "fills_gap_max_days",
+                   "gross_turnover_ratio_per_day", "fills_gap_max_days", "fills_gap_time_weighted_mean_hours",
                    "position_held_max_days", "position_held_time_weighted_mean_hours"):
         assert np.isfinite(analysis[metric])
     for metric in ("drawdown_max_fraction_strategy_equity", "pain_index_fraction_strategy_equity",

@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore `fills_gap_time_weighted_mean_hours` as a core backtest/optimizer score and limit,
+  including evaluation boundaries, duplicate-timestamp neutrality, and native GPU support.
+
 - Admit GPU starting-config cohorts independently of the later evolutionary population
   size, within the existing 1,024-candidate collection bound. Restore the population-based
   admission window after seed selection, including on resumed runs.

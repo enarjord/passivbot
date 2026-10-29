@@ -47,6 +47,7 @@ pub enum Metric {
     LossProfit,
     ShortContribution,
     HslExecutionEpisodeCount,
+    FillGapTimeWeightedMean,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -79,9 +80,9 @@ macro_rules! definition {
     };
 }
 
-/// Twenty-five quantities, with two explicit position-utilization side scopes.
+/// Twenty-six quantities, with two explicit position-utilization side scopes.
 /// Roles are recommendations; every selector supports either limit direction.
-pub const METRIC_CATALOG: [MetricDefinition; 26] = [
+pub const METRIC_CATALOG: [MetricDefinition; 27] = [
     definition!(Cagr, "cagr_fraction_strategy_equity", "fraction", Maximize),
     definition!(
         Volatility,
@@ -197,6 +198,12 @@ pub const METRIC_CATALOG: [MetricDefinition; 26] = [
         "hsl_execution_episode_count",
         "count",
         Limit
+    ),
+    definition!(
+        FillGapTimeWeightedMean,
+        "fills_gap_time_weighted_mean_hours",
+        "hours",
+        Minimize
     ),
 ];
 
@@ -535,6 +542,8 @@ pub struct FillSummary {
     pub count: u64,
     pub last_timestamp_ms: u64,
     pub max_gap_ms: u64,
+    /// Squared gap hours through the last fill; finalization adds the tail once.
+    pub gap_hours_squared_sum: f64,
     pub turnover_sum: f64,
     pub realized_profit: f64,
     pub realized_loss: f64,
@@ -839,6 +848,7 @@ pub struct CoreMetrics {
     fill_count: u64,
     last_fill_timestamp_ms: u64,
     fill_gap_max_ms: u64,
+    fill_gap_hours_squared_sum: f64,
     fill_clock_invalid: bool,
     turnover_sum: f64,
     turnover_invalid: bool,
@@ -911,6 +921,7 @@ impl CoreMetrics {
             fill_count: 0,
             last_fill_timestamp_ms: window.start_timestamp_ms,
             fill_gap_max_ms: 0,
+            fill_gap_hours_squared_sum: 0.0,
             fill_clock_invalid: false,
             turnover_sum: 0.0,
             turnover_invalid: false,
@@ -992,6 +1003,7 @@ impl CoreMetrics {
         state.fill_count = f.count;
         state.last_fill_timestamp_ms = f.last_timestamp_ms;
         state.fill_gap_max_ms = f.max_gap_ms;
+        state.fill_gap_hours_squared_sum = f.gap_hours_squared_sum;
         state.fill_clock_invalid = !f.clock_valid
             || f.last_timestamp_ms < window.start_timestamp_ms
             || (f.count == 0 && f.last_timestamp_ms != window.start_timestamp_ms)
@@ -1145,6 +1157,10 @@ impl CoreMetrics {
             self.fill_gap_max_ms = self
                 .fill_gap_max_ms
                 .max(fill.timestamp_ms - self.last_fill_timestamp_ms);
+        }
+        if self.request.contains(Metric::FillGapTimeWeightedMean) {
+            let gap_hours = (fill.timestamp_ms - self.last_fill_timestamp_ms) as f64 / HOUR_MS;
+            self.fill_gap_hours_squared_sum += gap_hours * gap_hours;
         }
         self.last_fill_timestamp_ms = fill.timestamp_ms;
         if self.request.contains(Metric::Turnover) {
@@ -1305,6 +1321,23 @@ impl CoreMetrics {
                                     .max(end - state.last_fill_timestamp_ms)
                                     as f64
                                     / DAY_MS as f64,
+                            )
+                        }
+                    }
+                    Metric::FillGapTimeWeightedMean => {
+                        if state.fill_clock_invalid || state.last_fill_timestamp_ms > end {
+                            MetricValue::invalid("invalid_fill_clock")
+                        } else if !state.fill_gap_hours_squared_sum.is_finite()
+                            || state.fill_gap_hours_squared_sum < 0.0
+                        {
+                            MetricValue::invalid("invalid_fill_gap_moments")
+                        } else {
+                            let tail_hours = (end - state.last_fill_timestamp_ms) as f64 / HOUR_MS;
+                            let total_hours =
+                                (end - state.window.start_timestamp_ms) as f64 / HOUR_MS;
+                            MetricValue::finite(
+                                (state.fill_gap_hours_squared_sum + tail_hours * tail_hours)
+                                    / total_hours,
                             )
                         }
                     }
@@ -1592,7 +1625,7 @@ mod tests {
             assert_eq!(definition.metric as usize, i);
             assert!(names.insert(definition.name));
         }
-        assert_eq!(MetricRequest::all().len(), 26);
+        assert_eq!(MetricRequest::all().len(), 27);
         assert!(MetricRequest::default().is_empty());
         let r = MetricRequest::from_names(["loss_profit_ratio", "loss_profit_ratio"]).unwrap();
         assert_eq!(r.len(), 1);
@@ -1881,6 +1914,81 @@ mod tests {
         close(
             number(&state.finish(finalization(DAY_MS)), Metric::FillGapMax),
             0.5,
+        );
+    }
+
+    #[test]
+    fn fill_gap_time_weighted_mean_has_boundary_inclusive_hour_units() {
+        let metric = Metric::FillGapTimeWeightedMean;
+        for (timestamps, expected) in [
+            (vec![], 4.0),
+            (vec![0], 4.0),
+            (vec![4 * HOUR_MS as u64], 4.0),
+            (vec![0, 4 * HOUR_MS as u64], 4.0),
+            (vec![HOUR_MS as u64], 2.5),
+            (
+                vec![HOUR_MS as u64, HOUR_MS as u64, 3 * HOUR_MS as u64],
+                1.5,
+            ),
+        ] {
+            let end = 4 * HOUR_MS as u64;
+            let mut state = flat(&[metric], end);
+            for (coin, t) in timestamps.into_iter().enumerate() {
+                state.observe_fill(fill(t, coin, PositionSide::Long, 0.0, 0.0));
+            }
+            // Querying twice must not add the open tail twice.
+            close(number(&state.finish(finalization(end)), metric), expected);
+            close(number(&state.finish(finalization(end)), metric), expected);
+        }
+    }
+
+    #[test]
+    fn fill_gap_time_weighted_mean_uses_actual_end_and_rejects_invalid_clocks() {
+        let metric = Metric::FillGapTimeWeightedMean;
+        let start = DAY_MS + 15 * MINUTE_MS;
+        let end = start + 90 * MINUTE_MS + 30_000;
+        let mut state = CoreMetrics::new(
+            request(&[metric]),
+            EvaluationWindow {
+                start_timestamp_ms: start,
+                intended_end_timestamp_ms: start + DAY_MS,
+            },
+            100.0,
+            None,
+        )
+        .unwrap();
+        for t in ((start + MINUTE_MS)..end).step_by(MINUTE_MS as usize) {
+            state.observe_minute(t, 100.0);
+        }
+        state.observe_terminal(end, 100.0);
+        state.observe_fill(fill(
+            start + 30 * MINUTE_MS,
+            0,
+            PositionSide::Long,
+            0.0,
+            0.0,
+        ));
+        let tail = (end - start - 30 * MINUTE_MS) as f64 / HOUR_MS;
+        close(
+            number(&state.finish(finalization(end)), metric),
+            (0.5_f64.powi(2) + tail * tail) / (0.5 + tail),
+        );
+        state.observe_fill(fill(start + MINUTE_MS, 0, PositionSide::Long, 0.0, 0.0));
+        assert_eq!(
+            value(&state.finish(finalization(end)), metric).status,
+            MetricStatus::Invalid
+        );
+
+        let mut beyond_end = flat(&[metric], DAY_MS);
+        beyond_end.observe_fill(fill(DAY_MS + 1, 0, PositionSide::Long, 0.0, 0.0));
+        assert_eq!(
+            value(&beyond_end.finish(finalization(DAY_MS)), metric).status,
+            MetricStatus::Invalid
+        );
+        let empty = new(&[metric], DAY_MS);
+        assert_eq!(
+            value(&empty.finish(finalization(0)), metric).status,
+            MetricStatus::Invalid
         );
     }
 
@@ -2236,6 +2344,7 @@ mod tests {
                 count: e.fill_count,
                 last_timestamp_ms: e.last_fill_timestamp_ms,
                 max_gap_ms: e.fill_gap_max_ms,
+                gap_hours_squared_sum: e.fill_gap_hours_squared_sum,
                 turnover_sum: e.turnover_sum,
                 realized_profit: e.realized_profit,
                 realized_loss: e.realized_loss,

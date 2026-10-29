@@ -61,7 +61,7 @@ def test_close_formula_choices_preserve_authored_objective_policy_and_report(old
 @pytest.mark.parametrize("metric", [
     "mdg_strategy_eq", "mdg_strategy_eq_w", "adg_pnl", "adg_pnl_w", "adg_btc",
     "adg_per_exposure_long", "hard_stop_restarts_per_year_long",
-    "drawdown_worst_mean_1pct_strategy_eq", "fills_gap_time_weighted_mean_hours",
+    "drawdown_worst_mean_1pct_strategy_eq", "fills_gap_p95_hours",
     "position_held_hours_mean", "peak_recovery_hours_strategy_eq",
 ])
 def test_recognized_unsupported_entries_are_removed_whole_and_never_supply_defaults(metric, caplog):
@@ -574,4 +574,20 @@ def test_inactive_numeric_string_range_is_reported_in_its_authored_form():
     assert limit["value"] == pytest.approx(math.expm1(365.25 * math.log1p(.001)))
     assert limit["metric"] == CAGR and "range" not in limit
     removed(result, "optimize.limits[0].range", ["0", "48"])
+    assert source == before
+
+
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_restored_fill_gap_metric_preserves_objective_limit_and_reducer(best_effort):
+    metric = "fills_gap_time_weighted_mean_hours"
+    source = retired_source(metric, goal="min", limit={
+        "penalize_if": "greater_than", "value": 12.5, "reducer": "max",
+    })
+    source["backtest"]["reducer"] = {"default": "mean", metric: "median"}
+    before = deepcopy(source)
+    result = migrate(source, best_effort=best_effort, memory_span_minutes=1440.,
+                     acknowledge_metric_formula_change=not best_effort)
+    assert result.config["optimize"]["scoring"] == [{"metric": metric, "goal": "min"}]
+    assert result.config["optimize"]["limits"] == source["optimize"]["limits"]
+    assert result.config["backtest"]["reducer"][metric] == "median"
     assert source == before

@@ -14,6 +14,7 @@ CAGR = "cagr_fraction_strategy_equity"
 ULCER = "ulcer_index_fraction_strategy_equity"
 LOSS = "loss_profit_ratio"
 SHORT = "short_net_profit_contribution_fraction"
+FILL_GAP = "fills_gap_time_weighted_mean_hours"
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +97,16 @@ def test_native_profit_ratios_reconcile_with_fill_cashflows_and_open_positions(r
     assert analysis[SHORT] == pytest.approx(side_profit["short"] / total)
 
 
-@pytest.mark.parametrize("requests", [[CAGR, ULCER], [LOSS, SHORT], []])
+def test_native_fill_gap_weighted_mean_matches_exported_unique_fill_clocks(replay):
+    *_, (fills, equity, analysis) = replay
+    clocks = np.unique([int(fill[1]) for fill in fills])
+    boundaries = np.concatenate(([equity[0, 0]], clocks, [equity[-1, 0]]))
+    gaps = np.diff(boundaries) / 3_600_000
+    assert np.all(gaps >= 0)
+    assert analysis[FILL_GAP] == pytest.approx(np.sum(gaps ** 2) / np.sum(gaps), rel=1e-12)
+
+
+@pytest.mark.parametrize("requests", [[CAGR, ULCER], [LOSS, SHORT], [FILL_GAP], []])
 def test_request_masks_preserve_economics_and_selected_values(replay, requests):
     config, candles, markets, btc, timestamps, full = replay
     payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps,

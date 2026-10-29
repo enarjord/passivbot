@@ -18,7 +18,7 @@ def render_reference():
         "# Analysis Quantity Reference",
         "",
         "Generated from `src/config/metric_definitions.py`; do not edit by hand.",
-        "The Rust-owned core catalog supplies the 26 exact selectors for 25 quantities.",
+        "The Rust-owned core catalog supplies the 27 exact selectors for 26 quantities.",
         "This describes quantities, not objective direction, selector aliases, reductions or backend support.",
         "Core definition version 1 owns values, clocks and status semantics; historical definitions require re-evaluation.",
         "",

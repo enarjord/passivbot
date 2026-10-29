@@ -1,7 +1,7 @@
 # Analysis Quantity Reference
 
 Generated from `src/config/metric_definitions.py`; do not edit by hand.
-The Rust-owned core catalog supplies the 26 exact selectors for 25 quantities.
+The Rust-owned core catalog supplies the 27 exact selectors for 26 quantities.
 This describes quantities, not objective direction, selector aliases, reductions or backend support.
 Core definition version 1 owns values, clocks and status semantics; historical definitions require re-evaluation.
 
@@ -12,6 +12,7 @@ Core definition version 1 owns values, clocks and status semantics; historical d
 | `cagr_fraction_strategy_equity_ew` | fraction / calendar-age-weighted elapsed days | Annualized weighted log growth; one fixed positive campaign half-life | minute intervals; exponential calendar-age weighting | strategy_equity, calendar exponential | signed; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `drawdown_max_fraction_strategy_equity` | fraction / running strategy-equity peak | Largest decline from the running peak | minute marks plus initial baseline; maximum | strategy_equity, uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `fills_gap_max_days` | days | Maximum no-fill interval including leading and trailing boundaries | actual fills and evaluation boundaries; maximum | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
+| `fills_gap_time_weighted_mean_hours` | hours / sum of gap hours (full evaluated duration) | Sum of squared portfolio no-fill gap hours divided by total gap hours, including leading and trailing boundaries | unique actual fill timestamps and evaluation boundaries; duration-weighted mean | gap duration | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `gross_exposure_max_ratio_strategy_equity` | ratio / strategy equity | Gross marked position notional, long and short added | minute marks including flat periods; maximum | strategy_equity, uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `gross_exposure_rms_ratio_strategy_equity` | ratio / strategy equity | Gross marked position notional, long and short added | minute marks including flat periods; RMS | strategy_equity, uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
 | `gross_turnover_ratio_per_day` | per_day / each fill's raw pre-fill account balance and all elapsed days | Sum absolute executed fill notional/pre-fill balance, divided by elapsed days; entries and exits count | actual fills; normalized notional sum per day | uniform | nonnegative; extended real with explicit status; Core definition version 1; unavailable and genuine infinite endpoints retain explicit status |
