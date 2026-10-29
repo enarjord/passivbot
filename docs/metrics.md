@@ -1,6 +1,6 @@
 # Metrics reference
 
-Passivbot uses **25 core quantities**, exposed through 26 exact selectors because position
+Passivbot uses **26 core quantities**, exposed through 27 exact selectors because position
 utilization has separate long and short scopes. The generated [quantity reference](ai/generated/metric_fields.md)
 lists the selectors and units; the [numerical contract](ai/features/backtest_metrics.md) owns
 their clocks, formulas and validity rules. There are no automatic USD/BTC, unit, rate or
@@ -56,6 +56,7 @@ Every S metric is also a limit.
 | `pain_index_fraction_strategy_equity` | `mean(d)` | S minimize |
 | `cagr_fraction_strategy_equity_ew` | Annualized calendar-weighted log growth, below | S maximize |
 | `backtest_completion_fraction` | Covered duration / intended duration, clipped to `[0,1]` | L |
+| `fills_gap_time_weighted_mean_hours` | `sum(g_i^2) / sum(g_i)`, for portfolio no-fill gap hours `g_i` including evaluation boundaries | S minimize |
 | `fills_gap_max_days` | Longest gap between evaluation boundaries and consecutive portfolio fills, in days | L |
 | `peak_recovery_max_days_strategy_equity` | Longest underwater episode until regaining its previous high, in days | L |
 | `position_held_max_days` | Longest coin/position-side open-to-flat episode, including open tails | L |
@@ -114,8 +115,11 @@ relevant sample counts. Uncomputed group counts are omitted. `effective_start_da
 Liquidation is separate support metadata: final-minute liquidation can have completion `1`.
 
 Fill gaps include the leading and trailing evaluation intervals; no fills gives one gap equal
-to the full duration. Duplicate fill timestamps add no elapsed gap. Recovery starts at the last
-high before a decline and ends at its first recovery; a plateau at the high is recovered.
+to the full duration. `fills_gap_time_weighted_mean_hours` computes
+`sum(gap_hours^2) / sum(gap_hours)` over the same boundary-inclusive gaps. With no
+fills it equals the actual evaluated duration in hours, including early termination.
+Duplicate fill timestamps add no elapsed gap and do not change the weighted mean.
+Recovery starts at the last high before a decline and ends at its first recovery; a plateau at the high is recovered.
 Include unfinished recovery and holding episodes through evaluation end. Position additions
 and partial closes do not reset holding starts. With no positive-duration position episode,
 both holding metrics are zero.

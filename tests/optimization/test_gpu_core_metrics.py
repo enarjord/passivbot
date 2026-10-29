@@ -346,3 +346,29 @@ def test_fill_terminal_ignores_future_close_of_another_held_coin(strategy):
         assert packet[fields.index("last_equity")].item() == (100 if strategy == "ema_anchor" else -200)
         observations.append(packet)
     torch.testing.assert_close(*observations, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("squares", [5., -1., math.nan, math.inf])
+def test_fill_gap_packet_uses_native_finalizer_and_keeps_invalid_moments_scoped(squares):
+    packet, fields = _flat_packet()
+    for name, value in {"end_step": 240, "minute_count": 241, "fill_count": 3,
+                        "last_fill_step": 180, "fill_gap_max_steps": 120,
+                        "fill_gap_hours_squared_sum": squares}.items():
+        packet[0, fields.index(name)] = value
+    metric = "fills_gap_time_weighted_mean_hours"
+    row = _native().core_metrics_from_gpu_observations(
+        packet, [metric, "fills_gap_max_days"], 0, 60_000, 240 * 60_000)[0]
+    if squares == 5.:
+        assert row[metric] == pytest.approx((5. + 1.) / 4.)
+    else:
+        assert row[metric] is None
+        assert row["metric_status"][metric]["status"] == "invalid"
+    assert row["fills_gap_max_days"] == pytest.approx(120 / 1440)
+
+
+@pytest.mark.parametrize("notional", [0., 1.])
+def test_actual_gpu_weighted_gap_includes_boundaries_and_coalesces_same_clock_fills(notional):
+    metric = "fills_gap_time_weighted_mean_hours"
+    row = _probe([1000.] * 121, [metric], turnover_notional=notional)
+    gaps = [1. / 60, 0., 119. / 60] if notional else [2.]
+    assert row[metric] == pytest.approx(sum(g * g for g in gaps) / sum(gaps), rel=1e-6)

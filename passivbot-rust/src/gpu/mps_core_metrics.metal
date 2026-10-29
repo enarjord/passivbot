@@ -26,6 +26,7 @@ struct CoreGpuState {
     float drawdown_correction;
     float squared_correction;
     float turnover_correction;
+    float fill_gap_squares_correction;
     float profit_correction;
     float loss_correction;
     float gross_correction;
@@ -74,6 +75,7 @@ inline CoreGpuState init_core_gpu(float initial_equity, int start_step) {
     s.pending_gross_notional = s.pending_utilization_long = s.pending_utilization_short = 0.0f;
     s.drawdown_correction = s.squared_correction = s.turnover_correction = 0.0f;
     s.profit_correction = s.loss_correction = s.gross_correction = 0.0f;
+    s.fill_gap_squares_correction = 0.0f;
     s.util_long_correction = s.util_short_correction = 0.0f;
     s.pre_fill_balance = initial_equity;
     s.current_fill_step = -1.0f;
@@ -198,6 +200,10 @@ inline void core_record_fill(thread CoreGpuState& s, int step, float net_pnl, bo
     if (float(step) < s.start_step) return;
     if (float(step) < s.last_fill_step) { s.fill_invalid = 1.0f; return; }
     s.fill_gap_max_steps = fmax(s.fill_gap_max_steps, float(step) - s.last_fill_step);
+    if (CORE_WANTS(FILL_GAP_MEAN)) {
+        const float gap_hours = (float(step) - s.last_fill_step) / 60.0f;
+        core_add(gap_hours * gap_hours, s.fill_gap_hours_squared_sum, s.fill_gap_squares_correction);
+    }
     s.last_fill_step = float(step);
     core_increment(s.fill_count);
     if (!isfinite(net_pnl)) { s.realized_invalid = 1.0f; s.equity_invalid = 1.0f; }

@@ -100,7 +100,7 @@ def test_native_service_fill_gap_clocks_match_exact_rust(side, coin_count):
 
     assert not verify_loaded_runtime_extension().get("skipped")
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
-    requested = {"fills_gap_max_days"}
+    requested = {"fills_gap_max_days", "fills_gap_time_weighted_mean_hours"}
     _, _, analysis = run_backtest(candles, markets, config, "bybit", btc, timestamps)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,

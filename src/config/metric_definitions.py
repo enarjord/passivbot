@@ -95,6 +95,12 @@ def _definitions():
             "actual fills and evaluation boundaries",
             "maximum",
         ),
+        "fills_gap_time_weighted_mean_hours": (
+            "sum of gap hours (full evaluated duration)",
+            "Sum of squared portfolio no-fill gap hours divided by total gap hours, including leading and trailing boundaries",
+            "unique actual fill timestamps and evaluation boundaries",
+            "duration-weighted mean",
+        ),
         "position_held_max_days": (
             None,
             "Longest coin/position-side open-to-flat holding episode including open tails",
@@ -200,7 +206,8 @@ def _definitions():
             aggregation,
             "signed" if name in signed else "nonnegative",
             "extended real with explicit status",
-            weighting="calendar exponential" if name.endswith("_ew") else "uniform",
+            weighting=("gap duration" if name == "fills_gap_time_weighted_mean_hours"
+                       else "calendar exponential" if name.endswith("_ew") else "uniform"),
             curve="strategy_equity" if "strategy_equity" in name else None,
             position_side=next(
                 (side for side in ("long", "short") if name.endswith("_" + side)), None
