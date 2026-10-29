@@ -87,6 +87,9 @@ evaluation change. Never infer numerical drift from mismatched trade-start polic
   Different loader routes can carry different metadata. An array that loads is not proof that the
   optimizer accepted the intended source identity. Preserve validation when investigating a route
   mismatch; do not modify factual cache metadata to make it pass.
+- Check the owner's cache identity before reusing history: equivalent date spellings can hash
+  differently on some revisions. Complete candle caches can still trigger public market-metadata
+  refreshes. Copy genuine metadata with its timestamps intact; never fabricate freshness or identity.
 - Preflight RAM, swap, shared memory, VRAM, scratch/history growth, and competing workloads. Retain
   resource guards. Run a bounded smoke and a standalone Rust CPU baseline before a large search.
 
@@ -155,6 +158,10 @@ average can conceal a disastrous subset; retain per-scenario diagnostics and sui
 limits. Supported scenario screening can reduce offspring cost, but only completed full-suite
 results count as final fitness. Scenarios used to steer the search are training evidence, even if
 introduced later. Keep genuinely unused holdouts or forward checks separate.
+
+Some revisions require symmetric suite approval lists even for a disabled side. If so, use a shared
+data universe, keep the unwanted side explicitly disabled, and verify effective side activation in
+every prepared context. An approval list alone does not enable a side.
 
 Record how the universe was selected: extending history for today's approved coins does not remove
 selection or survivorship bias. If sides or coins were explored independently, replay the combined
