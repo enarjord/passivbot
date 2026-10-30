@@ -6,6 +6,15 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore trailing confirmation on exchanges that report a position update timestamp
+  without a position open time (for example Binance USDT-M). When a cached fill chain
+  keeps a stale residue the exchange no longer reports, a single additive anchor fill
+  whose replay from flat reproduces the exchange size and price is accepted as
+  confirmation evidence, and recovery is reported through a
+  `FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED` diagnostic with
+  `recovery=position_update_single_fill`. Coalesced fill cohorts, reduction fills and
+  snapshots predating the anchor fill remain fail-closed.
+
 - Authorize routine, evidence-backed replies in existing PR review threads for assigned
   implementation and review work without per-reply approval, preserving explicit user restrictions,
   privacy boundaries and disputed-thread resolution requirements.

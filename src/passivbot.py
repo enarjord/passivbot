@@ -8471,6 +8471,14 @@ class Passivbot:
             qty_tolerance=qty_tolerance,
         ):
             return "position_open_boundary"
+        if self._position_update_boundary_single_fill_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+        ):
+            return "position_update_boundary"
         return None
 
     def _position_open_fill_replay_matches_state(
@@ -8621,6 +8629,96 @@ class Passivbot:
             pprice, position_price, strict_price_tolerance
         )
 
+    def _position_update_boundary_single_fill_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+    ) -> bool:
+        """Replay the anchor fill from flat when the exchange proves inclusion.
+
+        Some exchanges (for example Binance USDT-M) expose a position update
+        timestamp but no position open time. A cached fill chain can retain a
+        stale residue after the exchange stops exposing the intervening close,
+        so the recorded after-state never converges and confirmation stays
+        pending forever. When the exchange reports the position updated at or
+        after the anchor fill, the snapshot already includes that fill; if the
+        additive anchor fill replayed from zero reproduces the position size
+        and price, the prior size must have been zero and the cached residue is
+        stale. Only a singleton additive fill qualifies, so a coalesced cohort
+        or a reduction remains fail-closed.
+        """
+        position = self.positions.get(symbol, {}).get(pside, {})
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        if update_ts is None or anchor_ts <= 0 or int(update_ts) < anchor_ts:
+            return False
+        manager = getattr(self, "_pnls_manager", None)
+        if manager is None:
+            return False
+        try:
+            events = [
+                event
+                for event in manager.get_events()
+                if str(getattr(event, "symbol", "")) == symbol
+                and str(getattr(event, "position_side", "")).lower() == pside
+                and 0 < int(getattr(event, "timestamp", 0) or 0) <= anchor_ts
+            ]
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if not events:
+            return False
+        events.sort(key=lambda event: int(event.timestamp))
+        latest_event = events[-1]
+        if self._fill_position_change_epoch(latest_event) != str(
+            anchor.get("epoch") or ""
+        ):
+            return False
+        source_ids = [
+            str(source_id)
+            for source_id in (getattr(latest_event, "source_ids", None) or [])
+            if source_id
+        ]
+        if len(source_ids) != 1:
+            return False
+        try:
+            qty = float(latest_event.qty)
+            price = float(latest_event.price)
+            event_c_mult = float(getattr(latest_event, "c_mult", 1.0) or 1.0)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if (
+            not all(math.isfinite(value) for value in (qty, price, event_c_mult))
+            or price <= 0.0
+            or event_c_mult <= 0.0
+        ):
+            return False
+        is_add = (pside == "long" and qty > 0.0) or (pside == "short" and qty < 0.0)
+        if not is_add:
+            return False
+        position_size, position_price = state
+        position_c_mult = abs(
+            float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0)
+        )
+        replay_size = abs(qty) * event_c_mult
+        expected_size = abs(position_size) * position_c_mult
+        effective_price_tick = self._effective_position_price_tick(
+            symbol, position_price, price
+        )
+        strict_price_tolerance = max(
+            effective_price_tick * 0.5,
+            abs(position_price) * 1e-9,
+            1e-12,
+        )
+        return abs(
+            replay_size - expected_size
+        ) <= qty_tolerance and self._within_absolute_tolerance(
+            price, position_price, strict_price_tolerance
+        )
+
     def _emit_position_open_fill_recovery_used(
         self, symbol: str, pside: str, anchor: dict
     ) -> None:
@@ -8644,6 +8742,37 @@ class Passivbot:
                 {
                     "recovery": "position_open_single_fill",
                     "open_timestamp": int(open_ts),
+                    "position_update_timestamp": int(update_ts),
+                    "fill_timestamp": int(anchor_ts),
+                    "cohort_fill_count": 1,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
+
+    def _emit_position_update_fill_recovery_used(
+        self, symbol: str, pside: str, anchor: dict
+    ) -> None:
+        """Report stale-cache residue recovery only after confirmation clears."""
+        update_ts = self._position_update_timestamp_ms(symbol, pside)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        logging.warning(
+            "[fills] recovered polluted cached after-state from explicit position "
+            "update boundary | symbol=%s pside=%s fill_ts=%s position_update_ts=%s",
+            self._log_symbol(symbol),
+            pside,
+            anchor_ts,
+            update_ts,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "position_update_single_fill",
                     "position_update_timestamp": int(update_ts),
                     "fill_timestamp": int(anchor_ts),
                     "cohort_fill_count": 1,
@@ -8990,6 +9119,10 @@ class Passivbot:
                         continue
                     if position_match_kind == "position_open_boundary":
                         self._emit_position_open_fill_recovery_used(
+                            symbol, pside, anchor
+                        )
+                    elif position_match_kind == "position_update_boundary":
+                        self._emit_position_update_fill_recovery_used(
                             symbol, pside, anchor
                         )
                     elif position_match_kind == "recorded_after_state_price_tolerance":
