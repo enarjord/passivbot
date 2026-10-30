@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid redundant full-config copies when validating ordinary HSL override paths,
+  preserving selector changes, validation failures and foreign-input handling.
+
 - Reduce GPU optimizer CPU preparation by keeping static-identity shortcuts active with
   recording metadata and avoiding redundant snapshot copies. Compare automatic batch widths
   using the fullest observed batch shape, so small cohort tails do not dilute capacity
