@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("overridden", [False, True])
 def test_inherited_overrides_preserve_hsl_and_temporal_continuation(monkeypatch, mode, sides, overridden):

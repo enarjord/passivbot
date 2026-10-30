@@ -300,6 +300,44 @@ def validate_hsl_paths(config):
             )
 
 
+def _readonly_override_selection(config):
+    """Whether selector reads can use this ordinary config without copying it.
+
+    Validation consumes only the engine and scope paths. Other values, including
+    recording metadata, need not be copied when no selector is being patched.
+    Foreign containers on consumed paths retain their deepcopy semantics.
+    """
+    def ordinary_mapping(node):
+        return type(node) is dict and all(type(key) is str for key in node)
+
+    if not ordinary_mapping(config):
+        return False
+    live = config.get("live", {})
+    if not ordinary_mapping(live) or "hsl_engine" in live:
+        return False
+    bot = config.get("bot", {})
+    if type(bot) is not dict:
+        from copyreg import dispatch_table
+        from .activation import PreparedActivationBot
+        from .bot_inheritance import PreparedBotPolicy
+
+        if type(bot) not in (PreparedActivationBot, PreparedBotPolicy):
+            return False
+        attributes = getattr(bot, "__dict__", {})
+        if type(bot) in dispatch_table or any(
+            name in type(bot).__dict__ or name in attributes
+            for name in ("__deepcopy__", "__reduce__", "__reduce_ex__")
+        ):
+            return False
+    if any(type(key) is not str for key in bot):
+        return False
+    portfolio = bot.get("portfolio", {})
+    if not ordinary_mapping(portfolio):
+        return False
+    hsl = portfolio.get("hsl", {})
+    return ordinary_mapping(hsl) and type(hsl.get("scope", "coin")) is str
+
+
 def validate_override_paths(config, overrides, *, allow_engine=False):
     """Check explicit patch paths using the final selected engine and scope mode."""
     leaves = dict(_walk_paths(overrides))
@@ -307,7 +345,9 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
         raise ValueError(
             "live.hsl_engine is a startup selector, not a scenario or optimizer override"
         )
-    selected = deepcopy(config)
+    changes_selection = ("bot.portfolio.hsl.scope" in leaves or "live.hsl_engine" in leaves)
+    selected = (config if not changes_selection and _readonly_override_selection(config)
+                else deepcopy(config))
     if "bot.portfolio.hsl.scope" in leaves:
         selected.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("hsl", {})["scope"] = leaves["bot.portfolio.hsl.scope"]
     for key in ("hsl_engine",):
