@@ -508,7 +508,7 @@ def test_projection_never_retains_mutable_config_values_or_grows_after_fallbacks
     assert planner._execution_projections == {pair: original}
 
 
-def test_metadata_replacement_and_unsupported_objects_disable_the_guard(monkeypatch):
+def test_strategy_metadata_replacement_disables_the_guard(monkeypatch):
     planner, vector = projection_inputs()
     config = planner.prepare("base", vector).record_config
     pair = next(iter(planner._variants))
@@ -516,31 +516,117 @@ def test_metadata_replacement_and_unsupported_objects_disable_the_guard(monkeypa
     monkeypatch.setattr(planning, "get_strategy_spec", lambda kind: deepcopy(previous(kind)))
     assert not planner._execution_projections[pair].matches(config)
     assert planner._execution_key(pair, config) == planning.execution_key(config)
-    opaque = deepcopy(config)
-    opaque["_opaque"] = object()
-    projection = planning._ExecutionProjection(opaque, planning.execution_key(opaque))
-    assert projection.guard is None
-    assert not projection.matches(opaque)
 
 
-@pytest.mark.parametrize("kind", ["cycle", "deep", "subclass"])
-def test_ignored_unsupported_metadata_does_not_introduce_a_new_error(kind):
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+def test_raw_activation_snapshot_does_not_disable_planner_projection(monkeypatch, strategy):
+    from config.activation import ActivationSource, PreparedActivationBot
+
+    planner, vector = projection_inputs(strategy=strategy)
+    snapshot = PreparedActivationBot({"long": {"enabled": True}, "short": {"enabled": False}},
+                                     ActivationSource(True, False))
+    planner.base.config["_raw_effective"] = {"bot": snapshot}
+    cleaner = planning.clean_config
+    calls = []
+
+    def observed(config):
+        calls.append(config)
+        return cleaner(config)
+
+    monkeypatch.setattr(planning, "clean_config", observed)
+    first = planner.prepare("first", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
+    pair = next(iter(planner._variants))
+    projection = planner._execution_projections[pair]
+    assert projection.guard is not None
+    calls.clear()
+    # Snapshot provenance remains owned by the config, outside static identity.
+    planner.base.config["_raw_effective"]["bot"]._activation_source = ActivationSource(False, True)
+    second = planner.prepare("second", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    assert not calls
+    assert first.effective_key != second.effective_key
+    assert projection.matches(second.record_config)
+    assert projection.key == planning.execution_key(second.record_config)
+    assert second.record_config["_raw_effective"]["bot"]._activation_source == ActivationSource(False, True)
+
+
+@pytest.mark.parametrize("kind", ["object", "cycle", "deep", "subclass", "activation"])
+def test_ignored_unsupported_metadata_does_not_disable_static_projection(kind):
+    from config.activation import ActivationSource, PreparedActivationBot
+
     planner, vector = projection_inputs()
     config = planner.prepare("base", vector).record_config
-    if kind == "cycle":
+    expected = planning.execution_key(config)
+    original = planning._ExecutionProjection(config, expected)
+    if kind == "object":
+        metadata = object()
+    elif kind == "cycle":
         metadata = []
         metadata.append(metadata)
     elif kind == "deep":
         metadata = None
         for _ in range(40):
             metadata = [metadata]
-    else:
+    elif kind == "subclass":
         class Opaque(dict):
             def items(self):
                 raise AssertionError("the optional projection must not inspect subclass methods")
         metadata = Opaque()
+    else:
+        metadata = {"bot": PreparedActivationBot({}, ActivationSource(None, False))}
     config["_opaque"] = metadata
+    assert planning.execution_key(config) == expected
+    projection = planning._ExecutionProjection(config, expected)
+    assert projection.guard is not None and projection.matches(config)
+    assert original.matches(config)
+    del config["_opaque"]
+    assert projection.matches(config)
+
+
+@pytest.mark.parametrize("change", ["activation", "universe_source", "bound_authority", "static_policy", "invalid_scalar"])
+def test_ignored_snapshot_does_not_hide_execution_changes(change):
+    from dataclasses import replace
+    from config.activation import ActivationSource, PreparedActivationBot, apply_activation_patch
+    from config.bot_inheritance import apply_bot_config_patch
+
+    planner, vector = projection_inputs()
+    config = planner.prepare("base", vector).record_config
+    config["_raw_effective"] = {"bot": PreparedActivationBot({}, ActivationSource(None, False))}
+    projection = planning._ExecutionProjection(config, planning.execution_key(config))
+    assert projection.matches(config)
+    changed = deepcopy(config)
+    if change == "activation":
+        apply_activation_patch(changed, {"bot.short.enabled": False})
+    elif change == "universe_source":
+        apply_bot_config_patch(changed, {"bot.short.universe.approved_coins": ["OTHER"]})
+    elif change == "bound_authority":
+        bounds = changed["optimize"]["bounds"]
+        bounds._bound_plan = replace(bounds._bound_plan, source_signature="changed")
+    elif change == "static_policy":
+        changed["backtest"]["starting_balance"] *= 2.0
+    else:
+        changed["bot"]["long"]["risk"]["max_positions"] = "bad"
+    assert not projection.matches(changed)
+    pair = next(iter(planner._variants))
+    planner._execution_projections[pair] = projection
+    assert outcome(lambda: planner._execution_key(pair, changed)) == outcome(lambda: planning.execution_key(changed))
+
+
+@pytest.mark.parametrize("kind", ["root", "key"])
+def test_projection_filters_metadata_only_after_declining_unsupported_root_types(kind):
+    planner, vector = projection_inputs()
+    config = planner.prepare("base", vector).record_config
     expected = planning.execution_key(config)
     projection = planning._ExecutionProjection(config, expected)
-    assert projection.guard is None
-    assert not projection.matches(config)
+    if kind == "root":
+        class Opaque(dict):
+            def items(self):
+                raise AssertionError("optional projection inspected a root subclass")
+        changed = Opaque(config)
+    else:
+        class Opaque(str):
+            def startswith(self, *_args, **_kwargs):
+                raise AssertionError("optional projection inspected a key subclass")
+        changed = {**config, Opaque("_opaque"): object()}
+    assert not projection.matches(changed)
+    unsupported = planning._ExecutionProjection(changed, expected)
+    assert unsupported.guard is None

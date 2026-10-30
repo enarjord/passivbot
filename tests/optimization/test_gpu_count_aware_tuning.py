@@ -32,9 +32,9 @@ def window(result, samples):
 
 def test_slower_smaller_width_is_rejected_despite_larger_unweighted_median():
     result = policy(256)
-    assert window(result, WIDE) == pytest.approx(256 / 1.3)
+    assert window(result, WIDE) == pytest.approx(255 / 1.2)
     assert result.width("a", 256) == 128
-    assert window(result, NARROW) == pytest.approx(256 / 2.1)
+    assert window(result, NARROW) == pytest.approx(128 / 1.0)
     controller = result.controllers["a"]
     assert controller.width == 256 and controller.baseline is None
     assert controller.cooldown == 3
@@ -42,9 +42,9 @@ def test_slower_smaller_width_is_rejected_despite_larger_unweighted_median():
 
 def test_faster_larger_width_is_accepted_despite_smaller_unweighted_median():
     result = policy(128)
-    assert window(result, NARROW) == pytest.approx(256 / 2.1)
+    assert window(result, NARROW) == pytest.approx(128 / 1.0)
     assert result.width("a", 256) == 256
-    assert window(result, WIDE) == pytest.approx(256 / 1.3)
+    assert window(result, WIDE) == pytest.approx(255 / 1.2)
     controller = result.controllers["a"]
     assert controller.width == 256 and controller.baseline is None
     assert controller.cooldown == 1
@@ -53,7 +53,7 @@ def test_faster_larger_width_is_accepted_despite_smaller_unweighted_median():
 def test_isolated_stalls_are_smoothed_within_the_same_actual_count():
     result = policy(256)
     samples = [(1, .1), (255, 1.2), (1, .1), (255, 50), (1, .1), (255, 1.2)]
-    assert window(result, samples) == pytest.approx(256 / 1.3)
+    assert window(result, samples) == pytest.approx(255 / 1.2)
 
 
 def test_each_count_is_weighted_by_its_warm_occurrence_frequency():
@@ -134,8 +134,11 @@ def test_cohort_report_exposes_actual_decision_rate_separately_from_global_media
     window(result, WIDE)
     completed = evidence["completed_windows"][0]
     assert completed["median_candidates_per_second"] == pytest.approx(111.25)
-    assert completed["candidates_per_second"] == pytest.approx(256 / 1.3)
-    assert completed["rate_aggregation"] == "per_count"
+    assert completed["candidates_per_second"] == pytest.approx(255 / 1.2)
+    assert completed["rate_aggregation"] == "largest_count"
+    assert completed["window_candidates_per_second"] == pytest.approx(256 / 1.3)
+    assert completed["comparison_count"] == 255
+    assert completed["comparison_samples"] == completed["comparison_frequency"] == 3
 
 
 @pytest.mark.parametrize("value", ["unknown", None, False, []])

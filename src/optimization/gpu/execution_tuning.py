@@ -78,7 +78,9 @@ class ExecutionBatchTuner:
                 min_seconds=EVIDENCE_SECONDS,
                 long_window_samples=LONG_EVIDENCE_SAMPLES,
                 long_window_seconds=LONG_EVIDENCE_SECONDS,
-                rate_aggregation="per_count",
+                rate_aggregation="largest_count",
+                shrink_min_rate_ratio=1.0,
+                growth_min_rate_ratio=1.0,
                 growth_limit=lambda: self._demand[dataset_id],
                 can_grow=lambda: self.headroom(),
                 can_trial=lambda: self._allow_trial,
@@ -154,7 +156,13 @@ class ExecutionBatchTuner:
                          rows=value["rows"], replay_seconds=value["replay_seconds"],
                          dataset_id=dataset_id, peak_demand=peak_demand,
                          previous_width=old_width, width=controller.width,
-                         window_rows_per_second=controller.last_window_rate)
+                         window_rows_per_second=controller.last_window_actual_rate,
+                         comparison_rows_per_second=controller.last_window_rate,
+                         comparison_count=controller.last_comparison_count,
+                         comparison_samples=controller.last_comparison_samples,
+                         comparison_frequency=controller.last_comparison_frequency,
+                         comparison_full_width=controller.last_comparison_count == old_width,
+                         rate_aggregation=controller.rate_aggregation)
             value["last_decision"] = event
             if decision == "trial_selected" and value["first_trial"] is None:
                 value["first_trial"] = dict(event)

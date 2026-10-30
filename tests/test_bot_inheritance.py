@@ -9,6 +9,75 @@ from config.field_spec import FieldRegistry, FieldSpec, FieldType
 from config.universe import ResolvedCoinList
 
 
+def test_policy_path_lookup_preserves_owned_and_foreign_mapping_values():
+    from collections import UserDict
+    from types import MappingProxyType
+    from config.bot_inheritance import ABSENT, _get
+
+    leaf = object()
+    for wrap in (dict, UserDict, MappingProxyType):
+        nested = wrap({"leaf": leaf, "nullable": None})
+        node = wrap({"nested": nested})
+        assert _get(node, ("nested", "leaf")) is leaf
+        assert _get(node, ("nested", "nullable")) is None
+        assert _get(node, ("nested", "missing")) is ABSENT
+        fallback = object()
+        assert _get(node, ("missing",), fallback) is fallback
+    for node in (None, 17, [], object()):
+        assert _get(node, ()) is node
+        assert _get(node, ("missing",)) is ABSENT
+    assert _get({"nested": None}, ("nested", "missing")) is ABSENT
+
+
+def test_policy_path_lookup_retains_custom_membership_and_indexing():
+    from config.bot_inheritance import _get
+
+    events = []
+
+    class Virtual(dict):
+        def __contains__(self, key):
+            events.append(("contains", key))
+            return key == "virtual"
+
+        def __getitem__(self, key):
+            events.append(("getitem", key))
+            return {"leaf": 3.25}
+
+    assert _get(Virtual(), ("virtual", "leaf")) == 3.25
+    assert events == [("contains", "virtual"), ("getitem", "virtual")]
+
+    class Broken(dict):
+        def __contains__(self, key):
+            raise RuntimeError("membership failed")
+
+    with pytest.raises(RuntimeError, match="membership failed"):
+        _get(Broken(), ("value",))
+
+    class BrokenLookup(Virtual):
+        def __getitem__(self, key):
+            raise KeyError("indexing failed")
+
+    with pytest.raises(KeyError, match="indexing failed"):
+        _get(BrokenLookup(), ("virtual",))
+
+
+def test_policy_path_lookup_keeps_typing_mapping_class_spoof_behavior():
+    from config.bot_inheritance import _get
+
+    class MappingView:
+        @property
+        def __class__(self):
+            return dict
+
+        def __contains__(self, key):
+            return key == "value"
+
+        def __getitem__(self, key):
+            return 7.5
+
+    assert _get(MappingView(), ("value",)) == 7.5
+
+
 def catalog():
     fields = []
     defaults = {

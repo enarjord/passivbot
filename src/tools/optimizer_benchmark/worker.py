@@ -252,7 +252,11 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
         if completed:
             tuning_windows.append(dict(elapsed_seconds=time.perf_counter() - started, previous_width=previous_width, next_width=controller.width,
                 candidates_per_second=getattr(controller, "last_window_rate", None) or statistics.median(rates),
-                rate_aggregation=getattr(controller, "rate_aggregation", "median"), baseline=controller.baseline))
+                rate_aggregation=getattr(controller, "rate_aggregation", "median"), baseline=controller.baseline,
+                window_candidates_per_second=getattr(controller, "last_window_actual_rate", None),
+                comparison_count=getattr(controller, "last_comparison_count", None),
+                comparison_samples=getattr(controller, "last_comparison_samples", None),
+                comparison_frequency=getattr(controller, "last_comparison_frequency", None)))
         return completed
     BatchController.observe = observed_window
     prepared = time.perf_counter()

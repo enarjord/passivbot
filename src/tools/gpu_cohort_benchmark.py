@@ -244,6 +244,10 @@ def _observe_batches(policy, batches):
                 median_candidates_per_second=statistics.median(rates),
                 candidates_per_second=getattr(controller, "last_window_rate", None) or statistics.median(rates),
                 rate_aggregation=getattr(controller, "rate_aggregation", "median"),
+                window_candidates_per_second=getattr(controller, "last_window_actual_rate", None),
+                comparison_count=getattr(controller, "last_comparison_count", None),
+                comparison_samples=getattr(controller, "last_comparison_samples", None),
+                comparison_frequency=getattr(controller, "last_comparison_frequency", None),
                 resulting_width=controller.width))
 
     policy.observe = observe
