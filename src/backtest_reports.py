@@ -393,7 +393,7 @@ def create_hsl_overview(store, options, *, start=None, end=None, title=None):
     return fig
 
 
-def episode_frame(report):
+def episode_frame(report, *, scope=None):
     columns = [
         "scope",
         "trigger_time_utc",
@@ -407,6 +407,8 @@ def episode_frame(report):
     ]
     records = []
     for episode in report.get("execution_episodes", []):
+        if scope is not None and scope_name(report, episode) != scope:
+            continue
         record = {
             key: episode.get(key)
             for key in columns
@@ -456,6 +458,12 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
             plt.close(figure)
 
     try:
+        if options.scope is not None:
+            report = store.hsl()
+            if report is None or options.scope not in {
+                scope_name(report, item) for item in report["scopes"]
+            }:
+                raise ValueError("Unknown HSL controller scope")
         for group in options.plots:
             if aliases.get(group, group) in disabled:
                 continue
@@ -470,6 +478,8 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
                 if report is not None:
                     for i, episode in enumerate(report.get("execution_episodes", [])):
                         name = scope_name(report, episode)
+                        if options.scope is not None and name != options.scope:
+                            continue
                         selected = ReportOptions(
                             ("hsl",), options.equity_scale, options.btc, scope=name
                         )
@@ -530,7 +540,9 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
             status["timings_seconds"][group] = time.perf_counter() - start
         report = store.hsl()
         if report is not None and "execution_episodes" in report:
-            episode_frame(report).to_csv(directory / "hsl_episodes.csv", index=False)
+            episode_frame(report, scope=options.scope).to_csv(
+                directory / "hsl_episodes.csv", index=False
+            )
             status["artifacts"].append("hsl_episodes.csv")
         if options.equity_csv:
             start = time.perf_counter()

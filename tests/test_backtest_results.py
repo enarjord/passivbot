@@ -430,6 +430,42 @@ def test_hsl_display_decimation_does_not_create_idle_gaps_in_continuous_exposure
         assert np.count_nonzero(group["gap_before"]) < len(group["timestamp"]) // 2
 
 
+def test_scoped_episode_reports_and_csv_include_only_the_requested_controller(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    import matplotlib.pyplot as plt
+    from test_hsl_backtest_config import payload, run
+
+    report = deepcopy(run(payload("coin"))[3]["hsl"])
+    report["coins"].append("BBB")
+    policy = deepcopy(next(scope for scope in report["scopes"] if scope["side"] == 0))
+    policy["coin"] = 1
+    report["scopes"].append(policy)
+    original = report["execution_episodes"][0]
+    report["execution_episodes"] = [original, {**original, "coin": 1}]
+    write_hsl(tmp_path, report)
+    rendered = []
+
+    def overview(store, options, **kwargs):
+        rendered.append(options.scope)
+        return plt.figure()
+
+    monkeypatch.setattr("backtest_reports.create_hsl_overview", overview)
+    store = ResultStore(tmp_path)
+    status = render_reports(
+        store, options=ReportOptions(("hsl_episodes",), scope="AAA:long")
+    )
+    assert rendered == ["AAA:long"]
+    assert status["artifacts"] == ["hsl_episode_1.png", "hsl_episodes.csv"]
+    table = pd.read_csv(tmp_path / "reports/hsl_episodes.csv")
+    assert table.scope.tolist() == ["AAA:long"]
+    with pytest.raises(ValueError, match="Unknown HSL controller"):
+        render_reports(
+            store, options=ReportOptions(("hsl_episodes",), scope="UNKNOWN:long")
+        )
+
+
 def test_idle_gaps_keep_integer_utc_clocks_with_strict_numpy_errors():
     from backtest_reports import _gap_lines
 
