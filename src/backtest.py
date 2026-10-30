@@ -3031,16 +3031,12 @@ def post_process(
         report_status = rendered["status"]
     finally:
         stages["reports"] = time.perf_counter() - report_started
-        total = (
-            time.perf_counter() - context["started"] + context.get("prior_seconds", 0.0)
-        )
+        total = time.perf_counter() - context["started"]
         write_json(
             Path(results_path) / "timings.json",
             {
                 "schema_version": 1,
-                "scope": context.get(
-                    "scope", "standalone" if timing_context else "post_process"
-                ),
+                "scope": "standalone" if timing_context else "post_process",
                 "total_seconds": total,
                 "stages_seconds": stages,
                 "native_milliseconds": (
@@ -3398,42 +3394,22 @@ async def main():
     else:
         # Single exchange mode
         configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
-        shared_stages = dict(timing_context["stages_seconds"])
-        shared_preparation_seconds = time.perf_counter() - preparation_started
-
-        async def timed_preparation(exchange):
-            started = time.perf_counter()
-            prepared = await prepare_hlcvs_mss(
-                configs[exchange], exchange, force_refetch_gaps=force_refetch_gaps
-            )
-            return prepared, time.perf_counter() - started
-
         tasks = {}
         for exchange in backtest_exchanges:
-            tasks[exchange] = asyncio.create_task(timed_preparation(exchange))
+            tasks[exchange] = asyncio.create_task(
+                prepare_hlcvs_mss(
+                    configs[exchange], exchange, force_refetch_gaps=force_refetch_gaps
+                )
+            )
         for exchange in tasks:
-            prepared, preparation_seconds = await tasks[exchange]
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
-                prepared
+                await tasks[exchange]
             )
-            prior_seconds = (
-                sum(shared_stages.values())
-                + shared_preparation_seconds
-                + preparation_seconds
-            )
-            exchange_timing_context = {
-                "started": time.perf_counter(),
-                "prior_seconds": prior_seconds,
-                "scope": "standalone_exchange",
-                "stages_seconds": {
-                    **shared_stages,
-                    "preparation": shared_preparation_seconds + preparation_seconds,
-                },
-            }
             try:
                 configs[exchange]["backtest"]["coins"][exchange] = coins
                 configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
                 raise_if_backtest_cancel_requested("backtest execution")
+                timing_context["stages_seconds"]["preparation"] = time.perf_counter() - preparation_started
                 stage_started = time.perf_counter()
                 output_directory, output_metadata = _create_backtest_output(
                     configs[exchange],
@@ -3444,7 +3420,7 @@ async def main():
                     mss,
                     results_path,
                 )
-                exchange_timing_context["stages_seconds"]["identity"] = (
+                timing_context["stages_seconds"]["identity"] = (
                     time.perf_counter() - stage_started
                 )
                 stage_started = time.perf_counter()
@@ -3457,7 +3433,7 @@ async def main():
                     timestamps,
                     return_payload=True,
                 )
-                exchange_timing_context["stages_seconds"]["backtest"] = (
+                timing_context["stages_seconds"]["backtest"] = (
                     time.perf_counter() - stage_started
                 )
                 post_process(
@@ -3472,7 +3448,7 @@ async def main():
                     plot_context=BacktestPlotContext.from_payload(payload),
                     output_directory=output_directory,
                     report_options=report_options,
-                    timing_context=exchange_timing_context,
+                    timing_context=timing_context,
                 )
                 _finish_backtest_output(output_directory, output_metadata)
             finally:

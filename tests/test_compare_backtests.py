@@ -102,6 +102,23 @@ def test_compare_backtest_artifacts_reports_dataset_metrics_fills_and_equity(tmp
     assert report["strategy_equity"]["common_sample_count"] == 3
 
 
+def test_identical_binary_and_csv_equity_do_not_report_parser_rounding_differences(tmp_path):
+    from backtest_results import write_equity
+
+    base = _write_artifact(tmp_path / "base")
+    candidate = _write_artifact(tmp_path / "candidate")
+    values = [0.12345678912345678, 0.22345678912345678, 0.32345678912345678]
+    frame = pd.DataFrame({name: values for name in (
+        "strategy_equity", "usd_total_equity", "btc_total_equity",
+    )}, index=pd.date_range("2025-01-01", periods=3, freq="min"))
+    frame.to_csv(base / "balance_and_equity.csv.gz")
+    write_equity(candidate, frame)
+    result = compare_backtest_artifacts(base, candidate)["strategy_equity"]
+    assert result["common_sample_count"] == 3
+    assert result["equity_rmse_initial_equity_fraction"] == 0.0
+    assert result["max_abs_relative_equity_delta_fraction"] == 0.0
+
+
 def test_relative_metric_delta_uses_absolute_base_and_preserves_zero_sentinel():
     metrics = _metric_comparison(
         {

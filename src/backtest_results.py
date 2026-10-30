@@ -312,7 +312,14 @@ class ResultStore:
                 frame = frame.drop(
                     columns=[key for key in frame if str(key).startswith("Unnamed")]
                 )
-                frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="raise")
+                stamps = frame["timestamp"]
+                frame["timestamp"] = pd.to_datetime(
+                    stamps,
+                    unit="ms" if pd.api.types.is_numeric_dtype(stamps) else None,
+                    errors="raise",
+                )
+                if frame["timestamp"].isna().any():
+                    raise ValueError("Fill ledger contains missing clocks")
                 self._fills = frame
             return self._fills.copy()
 

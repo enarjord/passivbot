@@ -219,6 +219,38 @@ async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
+async def test_cli_defaults_render_hsl_and_keep_reused_entrypoint_timings_scoped(
+    tmp_path, monkeypatch, mode
+):
+    import time
+    import backtest
+
+    cfg = offline_cli_config(tmp_path, monkeypatch, mode)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sys, "argv", ["backtest", str(config_path)])
+    # Importing backtest may precede a programmatic call by hours. That idle
+    # time is not startup, preparation or rendering work for this result.
+    monkeypatch.setattr(backtest, "_BACKTEST_IMPORT_FINISHED", time.perf_counter() - 3600)
+    monkeypatch.setattr(backtest, "_BACKTEST_IMPORT_STARTED", backtest._BACKTEST_IMPORT_FINISHED - 0.25)
+    started = time.perf_counter()
+    await backtest.main()
+    elapsed = time.perf_counter() - started
+    (manifest,) = (tmp_path / "results").rglob("timings.json")
+    timings = json.loads(manifest.read_text())
+    assert timings["scope"] == "standalone"
+    assert 0 < timings["total_seconds"] <= elapsed + 0.25
+    assert timings["report_status"] == "complete"
+    assert timings["stages_seconds"]["startup"] == 0.25
+    assert timings["native_milliseconds"]["rust_simulation_ms"] > 0
+    report = json.loads((manifest.parent / "reports/report.json").read_text())
+    assert report["options"]["equity_scale"] == "log"
+    assert {"equity.png", "hsl.png"} <= set(report["artifacts"])
+    assert not (manifest.parent / "balance_and_equity.csv.gz").exists()
+
+
+@pytest.mark.asyncio
 async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     from optimize import main
     import msgpack

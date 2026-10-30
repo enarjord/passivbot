@@ -63,7 +63,7 @@ def _load_json(path: Path) -> dict:
 def _load_csv(path: Path, *, compression: str | None = None) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"missing backtest artifact file: {path}")
-    return pd.read_csv(path, compression=compression)
+    return pd.read_csv(path, compression=compression, float_precision="round_trip")
 
 
 def _normalize_scalar(value: Any) -> Any:

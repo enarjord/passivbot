@@ -181,9 +181,8 @@ Normal backtests retain exact observations independently of their plots:
   export and rendering. `reports/report.json` records report selection and completion
   or failure separately from saved simulation facts.
 
-Standalone exchange runs attribute shared startup plus that exchange's measured
-preparation and processing; concurrent preparation and earlier result rendering do
-not inflate another exchange's preparation stage. Suite artifacts label timings
+Standalone startup timings measure module import work. Reusing the programmatic
+entry point does not include idle time since import. Suite artifacts label timings
 limited to post-processing explicitly.
 
 The default plots are `reports/equity.png` and, when HSL is enabled,

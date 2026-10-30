@@ -199,6 +199,17 @@ def test_browser_api_loads_metadata_lazily_and_pages_position_sides(tmp_path):
     assert not api.store._arrays
 
 
+def test_legacy_fill_millisecond_clocks_are_not_interpreted_as_nanoseconds(tmp_path):
+    _, frame = result(tmp_path)
+    fills = pd.read_csv(tmp_path / "fills.csv")
+    clock = int(frame.index[0].value // 1_000_000)
+    fills["timestamp"] = [clock]
+    fills.to_csv(tmp_path / "fills.csv", index=False)
+    view = BacktestAPI(tmp_path).request(f"/api/fills?start={clock}&end={clock}")
+    assert view["total"] == 1
+    assert view["rows"][0]["timestamp"] == "2025-01-01 00:00:00 UTC"
+
+
 @pytest.mark.parametrize(
     "path",
     [
