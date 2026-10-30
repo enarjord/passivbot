@@ -62,7 +62,8 @@ def test_policy_path_lookup_retains_custom_membership_and_indexing():
 
 
 def test_policy_path_lookup_keeps_typing_mapping_class_spoof_behavior():
-    from config.bot_inheritance import _get
+    from typing import Mapping
+    from config.bot_inheritance import ABSENT, _get
 
     class MappingView:
         @property
@@ -75,7 +76,11 @@ def test_policy_path_lookup_keeps_typing_mapping_class_spoof_behavior():
         def __getitem__(self, key):
             return 7.5
 
-    assert _get(MappingView(), ("value",)) == 7.5
+    value = MappingView()
+    # typing.Mapping's treatment of a spoofed __class__ can differ between
+    # Python versions. Preserve its existing predicate for foreign objects.
+    expected = 7.5 if isinstance(value, Mapping) else ABSENT
+    assert _get(value, ("value",)) == expected
 
 
 def catalog():
