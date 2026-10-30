@@ -80,7 +80,7 @@ def test_bounded_cohort_can_try_non_power_of_two_growth_and_accept_or_roll_back(
         policy.observe("a", count, 2, backlog=244 if count == 256 else 0, closing=False)
     controller = policy.controllers["a"]
     assert controller.width == 500 and controller.ceiling == 512
-    assert controller.baseline == (256, 125.0)
+    assert controller.baseline == (256, 128.0)
     assert queries == [1]
     assert policy._demand["a"] == 0
     for _ in range(EVIDENCE_SAMPLES + 1):

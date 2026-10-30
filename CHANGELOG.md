@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce GPU optimizer CPU preparation by keeping static-identity shortcuts active with
+  recording metadata and avoiding redundant snapshot copies. Compare automatic batch widths
+  using the fullest observed batch shape, so small cohort tails do not dilute capacity
+  estimates, and require throughput preservation in either tuning direction.
+
 - Restore `fills_gap_time_weighted_mean_hours` as a core backtest/optimizer score and limit,
   including evaluation boundaries, duplicate-timestamp neutrality, and native GPU support.
 

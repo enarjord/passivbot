@@ -68,6 +68,20 @@ def _request_owned_paths(config):
         yield ("bot", "portfolio", "hsl", key)
 
 
+def _static_policy_input(config):
+    """Exclude top-level bookkeeping that the static identity never consumes."""
+    return {key: value for key, value in config.items()
+            if not isinstance(key, str) or not key.startswith("_")}
+
+
+def _projection_input(config):
+    # Reject unsupported root/key subclasses before inspecting their methods.
+    # The optional shortcut must not introduce an error absent from the full key.
+    if type(config) is not dict or any(type(key) is not str for key in config):
+        return None
+    return _static_policy_input(config)
+
+
 def _static_contract(config):
     """Leave every execution value not represented by a dynamic request in place.
 
@@ -75,9 +89,7 @@ def _static_contract(config):
     Changing one requires another prepared dataset, never silently ignoring it.
     """
     from config.universe import anchored_universe_source_view, runtime_universe_snapshot, universe_snapshot_signature
-    policy = {key: value for key, value in config.items()
-              if not isinstance(key, str) or not key.startswith("_")}
-    cleaned = clean_config(anchored_universe_source_view(policy))
+    cleaned = clean_config(anchored_universe_source_view(_static_policy_input(config)))
     result = {key: cleaned[key] for key in ("bot", "live", "backtest", "coin_overrides") if key in cleaned}
     # Numeric exposure/position values are dynamic, but their side enablement
     # chooses the registered replay's directional/fused kernel topology.
@@ -268,8 +280,9 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, in
 class _ExecutionProjection:
     """One validated input shape per planner scenario/exchange, never persisted.
 
-    Every other input value and key is compared, including optimizer policies and
-    metadata which the cleaner may inspect. Changed/unsupported inputs fall back
+    Every other static-identity input value and key is compared, including
+    optimizer policies. Top-level bookkeeping is excluded by the same boundary
+    as the full key. Changed/unsupported inputs fall back
     to execution_key. Finite request-owned numbers cannot change cleaned static
     content; weights additionally require nonnegative values, so their joint
     normalization succeeds and changes only discarded optimizer bounds.
@@ -282,6 +295,9 @@ class _ExecutionProjection:
         self.key = key
         self.cleaner = clean_config
         self.guard = None
+        config = _projection_input(config)
+        if config is None:
+            return
         # Decline unsupported inputs before metadata helpers inspect containers
         # with potentially overridden methods. This check runs only at creation.
         if _compile_projection_guard(config, ()) is None:
@@ -299,7 +315,10 @@ class _ExecutionProjection:
         self.sides = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
 
     def matches(self, config):
-        if self.cleaner is not clean_config or self.guard is None or not self.guard(config):
+        if self.cleaner is not clean_config or self.guard is None:
+            return False
+        config = _projection_input(config)
+        if config is None or not self.guard(config):
             return False
         specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
         return (len(self.specs) == len(specs) and all(a is b for a, b in zip(self.specs, specs)) and

@@ -131,6 +131,8 @@ class BatchController:
         rate_aggregation="median",
         long_window_samples=None,
         long_window_seconds=None,
+        shrink_min_rate_ratio=0.98,
+        growth_min_rate_ratio=1.05,
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -139,8 +141,12 @@ class BatchController:
         if (isinstance(min_seconds, bool) or not isinstance(min_seconds, (int, float))
                 or not math.isfinite(min_seconds) or min_seconds < 0):
             raise ValueError("batch evidence duration must be finite and non-negative")
-        if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count"}:
-            raise ValueError("batch rate aggregation must be median or per_count")
+        if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count", "largest_count"}:
+            raise ValueError("batch rate aggregation must be median, per_count or largest_count")
+        for ratio in (shrink_min_rate_ratio, growth_min_rate_ratio):
+            if (isinstance(ratio, bool) or not isinstance(ratio, (int, float))
+                    or not math.isfinite(ratio) or ratio <= 0):
+                raise ValueError("batch acceptance rate ratios must be positive and finite")
         if growth_limit is not None and not callable(growth_limit):
             raise TypeError("batch growth limit must be callable")
         if (long_window_samples is None) != (long_window_seconds is None):
@@ -164,9 +170,15 @@ class BatchController:
         self.window_samples = window_samples
         self.min_seconds = min_seconds
         self.rate_aggregation = rate_aggregation
+        self.shrink_min_rate_ratio = float(shrink_min_rate_ratio)
+        self.growth_min_rate_ratio = float(growth_min_rate_ratio)
         self.long_window_samples = long_window_samples
         self.long_window_seconds = long_window_seconds
         self.last_window_rate = None
+        self.last_window_actual_rate = None
+        self.last_comparison_count = None
+        self.last_comparison_samples = None
+        self.last_comparison_frequency = None
         self.samples = deque(maxlen=window_samples)
         self._replay_durations = deque(maxlen=window_samples)
         # Only execution tuning groups actual integer batch sizes. Frequencies
@@ -178,6 +190,16 @@ class BatchController:
         self.baseline = None
         self.direction = -1 if self.width == self.ceiling else 1
         self.cooldown = 0
+
+    def _comparison_tokens(self, prefix=""):
+        if self.rate_aggregation != "largest_count":
+            return []
+        return [
+            "rate_aggregation=largest_count",
+            f"{prefix}comparison_count={self.last_comparison_count}",
+            f"{prefix}comparison_samples={self.last_comparison_samples}",
+            f"{prefix}comparison_frequency={self.last_comparison_frequency}",
+        ]
 
     def observe(self, count, seconds, *, evidence_seconds=None, cold=None):
         """Return true when a complete evidence window has been consumed."""
@@ -197,7 +219,7 @@ class BatchController:
             return
         self.samples.append(count / seconds)
         self._replay_durations.append(seconds)
-        if self.rate_aggregation == "per_count":
+        if self.rate_aggregation in {"per_count", "largest_count"}:
             durations = self._durations_by_count.get(count)
             if durations is None:
                 durations = self._durations_by_count[count] = deque(maxlen=self.window_samples)
@@ -214,14 +236,27 @@ class BatchController:
                          >= self.long_window_seconds / self.long_window_samples)
         if not (complete or long_complete):
             return
-        if self.rate_aggregation == "per_count":
+        if self.rate_aggregation in {"per_count", "largest_count"}:
             candidates = sum(count * frequency for count, frequency in self._count_frequencies.items())
             duration = math.fsum(statistics.median(self._durations_by_count[count]) * frequency
                                  for count, frequency in self._count_frequencies.items())
-            rate = candidates / duration
+            actual_rate = candidates / duration
+            rate = actual_rate
+            if self.rate_aggregation == "largest_count":
+                # Compare the fullest shape that actually ran. A configured
+                # ceiling is not the throughput of a mix of startup/tail fills.
+                # Partial-only workloads still supply a measured shape; no
+                # missing full-width timing is extrapolated or manufactured.
+                count = max(self._durations_by_count)
+                durations = self._durations_by_count[count]
+                rate = count / statistics.median(durations)
+                self.last_comparison_count = count
+                self.last_comparison_samples = len(durations)
+                self.last_comparison_frequency = self._count_frequencies[count]
         else:
-            rate = statistics.median(self.samples)
+            rate = actual_rate = statistics.median(self.samples)
         self.last_window_rate = rate
+        self.last_window_actual_rate = actual_rate
         evidence_seconds = self.seconds
         self.samples.clear()
         self._replay_durations.clear()
@@ -231,13 +266,18 @@ class BatchController:
         if self.baseline is not None:
             old_width, old_rate = self.baseline
             self.baseline = None
-            # Prefer a smaller allocation on a plateau; larger ones must pay off.
-            accepted = rate >= old_rate * (0.98 if self.width < old_width else 1.05)
+            # Callers may require throughput preservation in both directions;
+            # generic tuning retains its legacy plateau/growth thresholds.
+            ratio = (self.shrink_min_rate_ratio if self.width < old_width
+                     else self.growth_min_rate_ratio)
+            accepted = rate >= old_rate * ratio
             if accepted:
                 log_tokens("GPU auto-tune accepted |", [
                     f"batch={self.width}", f"candidates/s={rate:.3f}",
                     f"previous_candidates/s={old_rate:.3f}",
-                    "reason=smaller_plateau" if self.width < old_width else "reason=throughput_gain",
+                    ("reason=smaller_plateau" if self.width < old_width and ratio < 1.0 else
+                     "reason=throughput_preserved" if rate == old_rate else "reason=throughput_gain"),
+                    *self._comparison_tokens(),
                 ])
                 self.save(self.width, rate, evidence_seconds)
                 self.cooldown = 1
@@ -246,6 +286,7 @@ class BatchController:
                     f"batch={old_width}", f"trial_batch={self.width}",
                     f"candidates/s={old_rate:.3f}", f"trial_candidates/s={rate:.3f}",
                     "reason=insufficient_gain",
+                    *self._comparison_tokens("trial_"),
                 ])
                 self.width = old_width
                 self.direction *= -1
@@ -285,6 +326,7 @@ class BatchController:
         log_tokens("GPU auto-tune trial |", [
             f"batch={trial}", f"previous={self.baseline[0]}",
             f"rolling_candidates/s={rate:.3f}", "reason=throughput_probe",
+            *self._comparison_tokens("baseline_"),
         ])
         return True
 

@@ -370,12 +370,19 @@ observations and three seconds of completed work, or three observations totaling
 30 seconds with a median replay duration of at least ten seconds. The median requirement
 prevents an isolated stall from shortening a fast workload's smoothing window. Timing
 samples are grouped by actual candidate count. Each group retains up to six durations;
-its median duration is weighted by its number of warm occurrences. Total actual candidates divided by the sum of
-those weighted durations supplies the decision rate. This smooths stalls within like-sized
-work without giving a singleton the same influence as a nearly full batch. A rarely seen
-count has fewer samples to smooth. The decision rate is a robust replay-cost estimate,
-not measured end-to-end optimizer throughput. The growth threshold, smaller-plateau
-preference, cooldown and rollback apply. Growth also requires
+the fullest observed shape supplies the decision rate from its median duration. Small
+startup or cohort-tail batches therefore cannot dilute the measured capacity of a fuller
+batch. Partial-only workloads still provide their largest measured shape; missing full-width
+timings are never extrapolated. Window eligibility still counts all warm observations, so
+the selected shape can have fewer supporting samples than the complete window.
+Diagnostics report the comparison count, retained samples, occurrence frequency and whether
+it filled the configured width. They separately retain the whole-window rate: total actual
+candidates divided by the sum of per-count median durations weighted by warm occurrences.
+These are conditional replay-capacity estimates, not measured end-to-end optimizer
+throughput or confidence bounds. Execution-width trials must preserve or improve the
+comparison rate in either direction; they do not prefer a slower smaller allocation or
+require a fixed percentage gain to grow. Generic tuning callers retain their own plateau
+and growth thresholds. Existing cooldown and rollback apply. Growth also requires
 observed request demand and device memory headroom. Metal growth also requires available
 RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Missing
 or invalid OS telemetry denies a growth trial without failing completed replay work.
@@ -390,6 +397,15 @@ or search policy. Measurements are run-local; `auto` and `refresh` currently bot
 fresh. Persistent advisory calibration, richer workload classes, residency budgets and
 further CPU/evolution cadence experiments remain development work. This policy does not
 claim a globally optimal width or a representative optimizer speedup.
+
+Native CPU preparation retains canonical policy validation and lowering. Its optional
+static-identity projection compares the same top-level input boundary as the full key,
+excluding bookkeeping metadata while preserving typed activation, universe and bound
+authority. GPU parameter compilation omits only the recording snapshots `_raw`,
+`_raw_effective` and `_transform_log` for ordinary dictionary inputs; execution fields and
+prepared source owners remain intact. Unsupported input shapes use canonical lowering.
+The GPU path still prepares candidates on one CPU producer; `optimize.n_cpus` controls the
+CPU optimizer's pool rather than creating GPU preparation workers.
 
 Native CUDA temporal replay separately adapts history-chunk length from completed command
 durations, targeting one second within existing candle/work/history ceilings. It shrinks

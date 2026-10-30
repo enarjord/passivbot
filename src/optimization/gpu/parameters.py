@@ -145,7 +145,16 @@ def prepare_candidate_parameters(config, markets, exchange):
     from config.gpu import validate_gpu_backtest_config
     from config.runtime_compile import compile_runtime_config
     validate_gpu_backtest_config(config)
-    effective = compile_runtime_config(config, runtime="backtest", record_step=False)
+    # Runtime lowering does not consume recording provenance. Its initial
+    # deepcopy would otherwise duplicate complete historical config snapshots
+    # for every candidate. Retain every execution field and prepared source
+    # owner; only these exact top-level recording decorations are excluded.
+    runtime_input = config
+    # Foreign roots/keys retain their ordinary deepcopy and mapping behavior.
+    if type(config) is dict and all(type(key) is str for key in config):
+        runtime_input = {key: value for key, value in config.items()
+                         if key not in {"_raw", "_raw_effective", "_transform_log"}}
+    effective = compile_runtime_config(runtime_input, runtime="backtest", record_step=False)
     effective["coin_overrides"] = {}
     bots, strategies, _markets, backtest = prep_backtest_args(
         effective, markets, exchange, is_runtime_compiled=True, metrics_only=True,

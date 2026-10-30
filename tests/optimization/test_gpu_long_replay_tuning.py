@@ -40,7 +40,7 @@ def test_warm_new_counts_train_after_actual_cold_compilation_is_excluded():
         assert controller.width == 256
     observed(result, 243, 40, backlog=0)
     assert controller.width == 500
-    assert controller.baseline == (256, 500 / 90)
+    assert controller.baseline == (256, 256 / 30)
     snapshot = result.diagnostics_snapshot()
     assert snapshot["cold_observations"] == 1
     assert snapshot["completed_windows"] == 1
@@ -272,7 +272,7 @@ def test_cached_library_reports_actual_feature_misses_across_batch_counts(monkey
     snapshot = result.diagnostics_snapshot()
     assert snapshot["cold_observations"] == 2
     assert snapshot["completed_windows"] == 1
-    assert result.controllers["market"].baseline == (4, 9 / 30)
+    assert result.controllers["market"].baseline == (4, .4)
 
 
 def test_legacy_diagnostics_distinguish_first_count_rejection_from_reported_compilation():

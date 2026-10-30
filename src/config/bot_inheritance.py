@@ -144,7 +144,7 @@ def _thaw(value):
 
 def _get(node, path, default=ABSENT):
     for part in path:
-        if not isinstance(node, Mapping) or part not in node:
+        if (type(node) is not dict and not isinstance(node, Mapping)) or part not in node:
             return default
         node = node[part]
     return node
