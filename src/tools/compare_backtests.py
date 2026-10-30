@@ -318,10 +318,15 @@ def compare_backtest_artifacts(base_dir: str | Path, candidate_dir: str | Path) 
     candidate_analysis = _load_json(candidate_dir / "analysis.json")
     base_fills = _load_csv(base_dir / "fills.csv")
     candidate_fills = _load_csv(candidate_dir / "fills.csv")
-    base_equity = _load_csv(base_dir / "balance_and_equity.csv.gz", compression="gzip")
-    candidate_equity = _load_csv(
-        candidate_dir / "balance_and_equity.csv.gz", compression="gzip"
-    )
+    from backtest_results import EQUITY_FILE, load_equity_frame
+    def equity_samples(directory):
+        if (directory / EQUITY_FILE).exists():
+            return load_equity_frame(directory).rename_axis("timestamp").reset_index()
+        # Legacy comparisons also support sample identifiers without a UTC
+        # clock. Preserve those identifiers; do not invent timestamps for them.
+        return _load_csv(directory / "balance_and_equity.csv.gz", compression="gzip")
+    base_equity = equity_samples(base_dir)
+    candidate_equity = equity_samples(candidate_dir)
     return {
         "base_artifact_dir": str(base_dir),
         "candidate_artifact_dir": str(candidate_dir),

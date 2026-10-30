@@ -497,7 +497,7 @@ def plot_fills_forager(
                 "pprices_short",
             ]
         )
-    ax.legend(legend)
+    ax.legend(legend, loc="upper left")
     ax.set_xlabel("datetime" if minute_to_datetime is not None else "minute")
     return plt
 
@@ -826,6 +826,7 @@ def create_forager_hard_stop_drawdown_figure(
         autoplot=autoplot,
         return_figures=(not autoplot) if return_figures is None else return_figures,
         display=_ipy_display,
+        trace=(hard_stop_plot_data.get("hsl_trace") if hard_stop_plot_data else None),
     )
 
 

@@ -77,9 +77,9 @@ def test_cpu_backtest_exports_and_plots_without_gpu_imports(tmp_path, strategy):
         post_process(config, candles, fills, equity, btc, analysis, str(output) + "/", "binance",
                      plot_context=BacktestPlotContext.from_payload(payload))
         files = {path.name: path for path in output.rglob("*") if path.is_file()}
-        assert {"analysis.json", "fills.csv", "balance_and_equity.csv.gz", "config.json"} <= files.keys()
+        assert {"analysis.json", "fills.csv", "balance_and_equity.npz", "config.json"} <= files.keys()
         pictures = [path for name, path in files.items() if name.endswith(".png")]
-        assert len(pictures) >= 3
+        assert len(pictures) >= 1
         assert all(path.read_bytes().startswith(b"\\x89PNG\\r\\n\\x1a\\n") for path in pictures)
     """)
 

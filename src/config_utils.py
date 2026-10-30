@@ -1733,8 +1733,8 @@ CLI_HELP_OVERRIDES = {
         "coin_sources, and overrides."
     ),
     "backtest.balance_sample_divider": (
-        "Plot-only minutes per balance/equity sample. Higher values thin plots; "
-        "balance_and_equity.csv.gz retains full-precision values at every native observation."
+        "Retained for existing configs; new reports use bounded extrema selection instead. "
+        "balance_and_equity.npz retains every full-precision native observation."
     ),
     "backtest.ew_half_life_days": (
         "CAGR EW half-life in positive finite days. Default 180; null resolves to "

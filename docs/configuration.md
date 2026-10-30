@@ -1057,9 +1057,11 @@ conversion never widens new dimensions implicitly. Per-coin override support doe
 per-coin optimizer genes. Schema, policies, inputs and implementation participate in saved-fitness
 identity; incompatible checkpoints fail and migrated numeric seeds require fresh evaluation.
 
-Backtests retain HSL summaries and transitions. Set `backtest.hsl_detailed_report=true`
-for optional per-minute risk samples and plots; optimizer replay omits additional diagnostic
-arrays. Core strategy-equity metric requests are independent of optional HSL reporting. See [metrics](metrics.md) and [qualification](hsl_testing.md).
+Backtests automatically retain native HSL summaries, transitions and columnar plot traces,
+and render an HSL overview. Set `backtest.hsl_detailed_report=true` only for additional
+verbose diagnostic dictionaries. Metrics-only optimizer replay omits diagnostic arrays.
+Core strategy-equity metric requests are independent of HSL reporting. See
+[reports](backtesting.md#saved-facts-and-reports), [metrics](metrics.md) and [qualification](hsl_testing.md).
 
 Rollback requires version-matched source/runtime and the original config backup. Offline
 validation and migration authorize no bot startup, deployment or account action.

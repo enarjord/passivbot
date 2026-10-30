@@ -137,8 +137,8 @@ def test_post_process_exports_full_equity_precision_and_status_without_detailed_
     saved = json.loads((directory / "config.json").read_text())
     assert raw == analysis
     json.dumps(saved, allow_nan=False)
-    frame = pd.read_csv(directory / "balance_and_equity.csv.gz", index_col=0,
-                        parse_dates=[0], float_precision="round_trip")
+    from backtest_results import load_equity_frame
+    frame = load_equity_frame(directory)
     assert len(frame) == 3
     np.testing.assert_array_equal(frame["strategy_equity"], values)
     assert (directory / "fills.csv").exists()
@@ -182,7 +182,7 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
 
     def _fake_build_backtest_frames(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
-        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
 
@@ -198,32 +198,6 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
         lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
     )
 
-    monkeypatch.setattr(
-        bt,
-        "create_forager_balance_figures",
-        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1)
-        or {},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_twe_figure",
-        lambda *args, **kwargs: calls.__setitem__("twe", calls["twe"] + 1) or {},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_pnl_figure",
-        lambda *args, **kwargs: calls.__setitem__("pnl", calls["pnl"] + 1) or {},
-    )
-    monkeypatch.setattr(
-        bt,
-        "save_figures",
-        lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1) or {},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_coin_figures",
-        lambda *args, **kwargs: calls.__setitem__("coin", calls["coin"] + 1) or {},
-    )
 
     config = {
         "disable_plotting": True,
@@ -259,7 +233,8 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
         exchange="binance",
     )
 
-    assert calls == {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
+    assert not list(tmp_path.rglob("*.png"))
+    assert list(tmp_path.rglob("balance_and_equity.npz"))
 
 def test_post_process_writes_original_config_for_dataset_override(
     tmp_path, monkeypatch
@@ -268,7 +243,7 @@ def test_post_process_writes_original_config_for_dataset_override(
 
     def _fake_build_backtest_frames(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
-        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
 
@@ -279,13 +254,6 @@ def test_post_process_writes_original_config_for_dataset_override(
     monkeypatch.setattr(bt, "build_backtest_frames", _fake_build_backtest_frames)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "dump_config", _fake_dump_config)
-    monkeypatch.setattr(
-        bt, "create_forager_balance_figures", lambda *args, **kwargs: {}
-    )
-    monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "create_forager_coin_figures", lambda *args, **kwargs: {})
 
     original_config = {
         "backtest": {"start_date": "2025-01-01", "coins": {"binance": ["ETH"]}},
@@ -359,7 +327,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
 
     def _fake_build_backtest_frames(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
-        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
 
@@ -375,34 +343,6 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
     )
 
-    monkeypatch.setattr(
-        bt,
-        "create_forager_balance_figures",
-        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1)
-        or {"balance": object()},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_twe_figure",
-        lambda *args, **kwargs: calls.__setitem__("twe", calls["twe"] + 1)
-        or {"twe": object()},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_pnl_figure",
-        lambda *args, **kwargs: calls.__setitem__("pnl", calls["pnl"] + 1)
-        or {"pnl": object()},
-    )
-    monkeypatch.setattr(
-        bt,
-        "save_figures",
-        lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1) or {},
-    )
-    monkeypatch.setattr(
-        bt,
-        "create_forager_coin_figures",
-        lambda *args, **kwargs: calls.__setitem__("coin", calls["coin"] + 1) or {},
-    )
 
     config = {
         "disable_plotting": "coin_fills",
@@ -438,14 +378,14 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         exchange="binance",
     )
 
-    assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
+    assert [p.name for p in tmp_path.rglob("*.png")] == ["equity.png"]
 
 def test_post_process_formats_console_without_filtering_or_rounding_exports(
     tmp_path, monkeypatch, caplog
 ):
     def _fake_build_backtest_frames(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
-        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
 
@@ -460,13 +400,6 @@ def test_post_process_formats_console_without_filtering_or_rounding_exports(
         "dump_config",
         lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
     )
-    monkeypatch.setattr(
-        bt, "create_forager_balance_figures", lambda *args, **kwargs: {}
-    )
-    monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
-    monkeypatch.setattr(bt, "create_forager_coin_figures", lambda *args, **kwargs: {})
 
     config = {
         "disable_plotting": True,

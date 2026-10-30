@@ -107,6 +107,15 @@ bar. Optional fill debt does not create a new readiness requirement.
 
 ## Configuration and validation
 
+Normal backtest reporting retains native typed plot observations while exposed or in
+cooldown, plus the first inactive boundary. This is independent of verbose diagnostic
+dictionary retention and never supplies trading inputs or metric support. Preserve
+native ordering at equal timestamps, immediate insolvency flags, and all lifecycle
+events. Report-only gaps indicate omitted idle periods, not fabricated observations.
+Executed-episode records use the same native owner, loss-only net cashflows and causal
+account-balance anchor as the core metric accumulator. Metrics-only optimizer runs
+retain neither plot observations nor verbose rows.
+
 Released-v8 configs require explicit migration to config schema v9.0.0, including CLI mutations, overrides,
 scenarios, seeds and optimizer bounds. Mode `unified`, rolling-day memory and restart
 selectors and the separate realized-loss gate window are migration inputs only.

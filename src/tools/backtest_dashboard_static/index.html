@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Backtest analyzer</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <span class="eyebrow">PASSIVBOT</span>
+          <h1>Backtest analyzer</h1>
+          <p id="period">Loading saved results…</p>
+        </div>
+        <span class="local-label">Local result</span>
+      </header>
+      <div
+        id="metrics"
+        class="metrics"
+        aria-label="Native backtest metrics"
+      ></div>
+      <div class="toolbar">
+        <nav aria-label="Result views">
+          <button type="button" data-tab="equity" aria-pressed="true">
+            Equity</button
+          ><button type="button" data-tab="hsl" aria-pressed="false">HSL</button
+          ><button type="button" data-tab="fills" aria-pressed="false">
+            Fills
+          </button>
+        </nav>
+        <div class="dates">
+          <label>From (UTC)<input id="start" type="datetime-local" /></label
+          ><label>To (UTC)<input id="end" type="datetime-local" /></label
+          ><button type="button" id="apply">Apply interval</button>
+        </div>
+      </div>
+      <section id="equity-panel" aria-label="Equity view">
+        <div class="chart-header">
+          <h2>Strategy equity</h2>
+          <div class="options">
+            <label
+              >Scale<select id="scale">
+                <option value="log">Logarithmic</option>
+                <option value="linear">Linear</option>
+              </select></label
+            ><label class="check"
+              ><input type="checkbox" id="btc" />BTC view</label
+            >
+          </div>
+        </div>
+        <div id="equity-chart" class="chart"></div>
+        <h2>Drawdown</h2>
+        <div id="drawdown-chart" class="chart small"></div>
+        <div id="btc-panel" hidden>
+          <h2>Equity denominated in BTC</h2>
+          <div id="btc-chart" class="chart small"></div>
+        </div>
+      </section>
+      <section id="hsl-panel" aria-label="HSL view" hidden>
+        <div class="chart-header">
+          <h2>Hard stop loss</h2>
+          <label
+            >Controller<select id="scope">
+              <option value="">All active controllers</option>
+            </select></label
+          >
+        </div>
+        <p id="hsl-policy"></p>
+        <div id="hsl-chart" class="chart"></div>
+        <h2>Controller state</h2>
+        <div id="state-chart" class="chart small"></div>
+        <h2>Executed HSL stops</h2>
+        <div id="episodes" class="table-wrap"></div>
+      </section>
+      <section id="fills-panel" aria-label="Fill ledger" hidden>
+        <div class="chart-header">
+          <h2>Fill ledger</h2>
+          <div class="options">
+            <label
+              >Coin<select id="coin">
+                <option value="">All coins</option>
+              </select></label
+            ><label
+              >Position side<select id="side">
+                <option value="all">Both</option>
+                <option value="long">Long</option>
+                <option value="short">Short</option>
+              </select></label
+            >
+          </div>
+        </div>
+        <div id="fills-table" class="table-wrap"></div>
+        <div class="pagination">
+          <button id="previous" type="button">Previous</button
+          ><span id="fill-count"></span
+          ><button id="next" type="button">Next</button>
+        </div>
+      </section>
+      <p id="status" role="status" aria-live="polite"></p>
+      <p class="footnote">
+        Metrics use native observations. Charts preserve extrema while reducing
+        display points. Times are UTC.
+      </p>
+    </main>
+    <div id="tooltip" role="tooltip" hidden></div>
+  </body>
+</html>
