@@ -438,6 +438,13 @@ re-raises, exchange calls, or trading behavior.
 
 ## Fill Confirmation Fallbacks
 
+`fill.position_open_boundary_recovery_used` reports a confirmed trailing reset.
+`recovery=position_open_single_fill` uses an explicit opening boundary;
+`recovery=position_update_fresh_single_fill` uses a complete fresh trade cohort
+at the exact position update millisecond. Both are emitted only after all
+confirmation predicates clear. Payloads contain bounded timestamps and cohort
+count, never raw fills. This diagnostic does not authorize historical PnL repair.
+
 `fill.position_price_tolerance_used` records the accepted bounded numeric difference
 between a reconstructed fill after-state price and the authoritative exchange position
 price. It includes the effective connector-aware price tick, absolute delta, delta in
