@@ -6,6 +6,15 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Recover trailing confirmation on Binance USDT-M when stale cached position
+  residue prevents replay from matching the exchange. Recovery requires a fresh,
+  complete trade query at the exact position update millisecond, one identified
+  additive fill matching the position, and post-snapshot confirmation. Later
+  updates, conflicting opening times, incomplete or multi-fill cohorts remain
+  pending. Historical fills and PnL are preserved; successful recovery emits
+  `fill.position_open_boundary_recovery_used` with
+  `recovery=position_update_fresh_single_fill`.
+
 - Authorize routine, evidence-backed replies in existing PR review threads for assigned
   implementation and review work without per-reply approval, preserving explicit user restrictions,
   privacy boundaries and disputed-thread resolution requirements.
