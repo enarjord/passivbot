@@ -2471,7 +2471,6 @@ async def run_backtest_suite_async(
             base_ignored=base_ignored,
             quiet=True,
             prepared_universe=prepared_universes[scenario.label],
-            **({"report_options": report_options} if report_options is not None else {}),
         )
         coin_exchange = _compute_effective_coin_exchange(
             scenario, scenario_coins, datasets, dataset_available_exchanges
@@ -2566,6 +2565,7 @@ async def run_backtest_suite_async(
             base_coins=base_coins,
             base_ignored=base_ignored,
             prepared_universe=prepared_universes[scenario.label],
+            **({"report_options": report_options} if report_options is not None else {}),
         )
         results.append(result)
         logging.info(

@@ -502,18 +502,31 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
                     )
                     save(name, fig)
             elif group == "coin_fills":
-                from backtest_artifacts import load_backtest_artifact
-                from plotting import create_forager_coin_figures
+                from backtest_artifacts import (
+                    load_backtest_artifact,
+                    plot_fills_for_coin,
+                )
 
                 artifact = load_backtest_artifact(store.directory)
-                create_forager_coin_figures(
-                    artifact.coins,
-                    artifact.fills,
-                    artifact.hlcvs,
-                    timestamps=artifact.timestamps,
-                    on_figure=save,
-                    close_after_callback=False,
-                )
+                # Cached arrays can cover a suite's entire master dataset.
+                # Native fill bar indices belong to the scenario's replay
+                # slice. Align by the saved execution clocks instead, including
+                # the preceding candle for fills executed at a bar close.
+                for coin in artifact.fills.coin.unique():
+                    fills = artifact.fills.loc[artifact.fills.coin == coin]
+                    first = fills.timestamp.min()
+                    last = fills.timestamp.max()
+                    first_ms = first.value // 1_000_000
+                    index = max(
+                        0, int(np.searchsorted(artifact.timestamps, first_ms)) - 1
+                    )
+                    plot_start = pd.Timestamp(artifact.timestamps[index], unit="ms")
+                    save(
+                        coin,
+                        plot_fills_for_coin(
+                            artifact, coin, start_date=plot_start, end_date=last
+                        ),
+                    )
             status["timings_seconds"][group] = time.perf_counter() - start
         report = store.hsl()
         if report is not None and "execution_episodes" in report:

@@ -203,6 +203,8 @@ Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` a
 switch still suppresses its named groups. Cumulative PnL is no longer generated.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
 optional. The TWE view labels its hourly fill-event averaging population explicitly.
+Fill reports align cached candles and position-price observations by saved UTC
+execution clocks, including when a suite scenario starts inside a master dataset.
 
 Reports can be regenerated without running the strategy or contacting an exchange:
 

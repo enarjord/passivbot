@@ -201,6 +201,38 @@ def test_workspace_plot_fills_for_coin_uses_loaded_artifact(tmp_path):
         plt.close(fig)
 
 
+def test_regenerated_suite_fill_plot_uses_execution_clocks_in_the_master_cache(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from backtest_reports import ReportOptions, render_reports
+    from backtest_results import ResultStore
+
+    directory = _write_artifact(tmp_path)
+    fills = pd.read_csv(directory / "fills.csv").iloc[[0, 2]].copy()
+    fills["timestamp"] = ["2026-01-01 00:03:00", "2026-01-01 00:04:00"]
+    fills["minute"] = [0, 1]  # Native indices in a later scenario replay slice.
+    fills["price"] = [103.0, 104.0]
+    fills["pprice"] = [103.0, 0.0]
+    fills["psize"] = [1.0, 0.0]
+    fills.to_csv(directory / "fills.csv", index=False)
+    observed = {}
+    original = Figure.savefig
+
+    def capture(figure, *args, **kwargs):
+        ax = figure.axes[0]
+        line = next(line for line in ax.lines if line.get_label() == "close")
+        observed["clock"] = line.get_xdata().copy()
+        observed["close"] = line.get_ydata().copy()
+        observed["position"] = next(line for line in ax.lines if line.get_label() == "long pprice").get_xdata().copy()
+        return original(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    status = render_reports(ResultStore(directory), options=ReportOptions(("coin_fills",)))
+    assert status["artifacts"] == ["BTC.png"]
+    np.testing.assert_equal(observed["close"], [102.0, 103.0, 104.0])
+    np.testing.assert_array_equal(pd.to_datetime(observed["clock"]), pd.date_range("2026-01-01 00:02:00", periods=3, freq="min"))
+    assert min(pd.to_datetime(observed["position"])) == pd.Timestamp("2026-01-01 00:03:00")
+
+
 @pytest.mark.parametrize(
     ("start_fraction", "end_fraction", "expected_minutes"),
     [(0.0, 1.0, [1, 2, 3]), (0.5, 0.5, [2])],

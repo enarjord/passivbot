@@ -251,6 +251,34 @@ async def test_cli_defaults_render_hsl_and_keep_reused_entrypoint_timings_scoped
 
 
 @pytest.mark.asyncio
+async def test_suite_cli_forwards_report_options_to_scenario_execution(tmp_path, monkeypatch):
+    import backtest
+
+    cfg = offline_cli_config(tmp_path, monkeypatch, "portfolio")
+    set_side_universe_sources(cfg, "approved_coins", {"long": ["BTC"], "short": ["BTC"]})
+    cfg["bot"]["short"]["enabled"] = False
+    cfg["backtest"].update(suite_enabled=True, scenarios=[
+        {"label": "full"},
+        {"label": "late", "start_date": "2024-01-01T01:00:00", "end_date": "2024-01-01T02:40:00"},
+    ])
+    path = tmp_path / "suite.json"
+    path.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sys, "argv", [
+        "backtest", str(path), "--plots", "equity,hsl,coin_fills",
+        "--equity-scale", "linear", "--report-btc",
+    ])
+    await backtest.main()
+    reports = list((tmp_path / "results").rglob("report.json"))
+    assert len(reports) == 2
+    for path in reports:
+        report = json.loads(path.read_text())
+        assert report["status"] == "complete"
+        assert report["options"]["equity_scale"] == "linear"
+        assert report["options"]["btc"] is True
+        assert {"equity.png", "hsl.png", "BTC.png"} <= set(report["artifacts"])
+
+
+@pytest.mark.asyncio
 async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     from optimize import main
     import msgpack
