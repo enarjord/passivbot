@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep coins with no overlapping history inactive in backtest suite scenarios,
+  instead of treating a missing edge candle as valid and failing replay.
+
 - Save exact backtest equity and native HSL plot traces in lossless binary files,
   with automatic HSL reports and phase timings. Default to a log-scale equity and
   extrema-preserving drawdown overview; select linear scale, BTC views, fill plots

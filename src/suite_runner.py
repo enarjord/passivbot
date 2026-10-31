@@ -2169,8 +2169,10 @@ def _prepare_dataset_subset(
                     0, int(coin_meta.get("first_valid_index", 0)) - adjustment_1m
                 )
             if "last_valid_index" in coin_meta:
-                coin_meta["last_valid_index"] = max(
-                    0, int(coin_meta.get("last_valid_index", 0)) - adjustment_1m
+                # A negative end means history ended before this scenario.
+                # Preserve it until intersecting with the sliced window below.
+                coin_meta["last_valid_index"] = (
+                    int(coin_meta["last_valid_index"]) - adjustment_1m
                 )
         if offset_bars > 0:
             meta["candle_interval_offset_bars"] = 0
@@ -2195,12 +2197,6 @@ def _recompute_index_metadata(
         meta = mss.setdefault(coin, {})
         first_idx = int(meta.get("first_valid_index", 0))
         last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
-        first_idx = max(0, min(first_idx, total_steps_1m))
-        last_idx = max(0, min(last_idx, total_steps_1m - 1))
-        if first_idx >= total_steps_1m:
-            first_idx = total_steps_1m - 1
-        if last_idx < first_idx:
-            last_idx = first_idx
         if "first_valid_index" not in meta or "last_valid_index" not in meta:
             close_series = hlcvs[:, idx, 2]
             finite = np.isfinite(close_series)
@@ -2208,6 +2204,15 @@ def _recompute_index_metadata(
                 valid_indices = np.where(finite)[0]
                 first_idx = int(valid_indices[0]) * interval
                 last_idx = int(valid_indices[-1]) * interval + (interval - 1)
+            else:
+                first_idx, last_idx = total_steps_1m, total_steps_1m - 1
+        # Intersect inclusive source bounds with the scenario. Empty ranges must
+        # stay empty: clamping both ends to an edge invents a valid NaN candle
+        # for symbols listed later, delisted earlier, or absent altogether.
+        first_idx = max(0, first_idx)
+        last_idx = min(last_idx, total_steps_1m - 1)
+        if first_idx > last_idx:
+            first_idx, last_idx = total_steps_1m, total_steps_1m - 1
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
         if warmup_map:
