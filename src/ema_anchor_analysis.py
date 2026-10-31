@@ -351,7 +351,8 @@ def load_backtest_artifact_dataset(artifact_dir: str | Path, *, coin: str | None
     config = _load_json(artifact_dir / "config.json")
     analysis = _load_json(artifact_dir / "analysis.json")
     fills_df = pd.read_csv(artifact_dir / "fills.csv")
-    balance_df = pd.read_csv(artifact_dir / "balance_and_equity.csv.gz")
+    from backtest_results import load_equity_frame
+    balance_df = load_equity_frame(artifact_dir).rename_axis("timestamp").reset_index()
 
     coins = list(dataset_meta["coins"])
     if not coins:

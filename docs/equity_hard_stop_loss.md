@@ -126,9 +126,11 @@ acknowledgement of any removed Never policy. It retains original configs for ver
 rollback and never reuses old optimizer fitness. See [configuration](configuration.md#hsl-configuration).
 
 HSL risk diagnostics are model-dependent. Use ordinary account-equity metrics from full
-fills/equity for v8/v9 economic comparison. Optional `backtest.hsl_detailed_report=true`
-adds risk samples/plots; optimizer replay omits extra diagnostic arrays while required
-account/objective metrics remain complete.
+fills/equity for v8/v9 economic comparison. Normal backtests automatically retain native
+columnar HSL plot facts and render an HSL overview. Optional
+`backtest.hsl_detailed_report=true` additionally retains verbose diagnostic dictionaries;
+it is not required for plots. Metrics-only optimizer replay omits diagnostic arrays while
+required account/objective metrics remain complete. See [saved reports](backtesting.md#saved-facts-and-reports).
 
 Follow the [validation matrix](hsl_testing.md). Supported-device numerical execution,
 end-to-end performance and exact intended-config backtests are separate evidence gates.

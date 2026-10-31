@@ -170,15 +170,31 @@ def evaluation_implementation_identity() -> dict:
             "rebuild and verify the extension before starting or resuming"
         )
     source_root = Path(__file__).resolve().parents[1]
-    paths, external = evaluator_dependencies(source_root)
+    # A conservative manifest is cheaper than walking every AST and resolving
+    # providers for dynamic imports on each CLI start. Hash source contents and
+    # every installed distribution, so an unrelated change can invalidate reuse
+    # but a dynamically selected module/dependency cannot escape the identity.
+    paths = set(source_root.rglob("*.py"))
+    distributions = []
+    for distribution in metadata.distributions():
+        text = distribution.read_text("METADATA")
+        if text is None:
+            text = distribution.read_text("PKG-INFO")
+        if text is None:
+            raise RuntimeError("Installed distribution has no reproducible metadata")
+        distributions.append({
+            "name": distribution.metadata["Name"], "version": distribution.version,
+            "metadata_sha256": sha256(text.encode()).hexdigest(),
+        })
+    distributions.sort(key=lambda item: (item["name"], item["version"], item["metadata_sha256"]))
     return {
-        "version": 1,
+        "version": 2,
         "python_source_sha256": _hash_sources(source_root, paths),
         "python_runtime": {
             "implementation": sys.implementation.name,
             "version": list(sys.version_info[:3]),
         },
-        "python_dependencies": evaluator_dependency_versions(external),
+        "python_dependencies": {"distributions": distributions},
         "rust_source_sha256": rust_source,
         "rust_artifact_sha256": rust_artifact,
     }

@@ -167,6 +167,85 @@ The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlc
 `timestamps`, `btc_usd_prices`, `coins`, `market_settings`, `candles_for_coin`, and
 `plot_fills_for_coin`.
 
+### Saved facts and reports
+
+Normal backtests retain exact observations independently of their plots:
+
+- `result.json` versions the result format and identifies its factual artifacts.
+- `balance_and_equity.npz` stores integer millisecond clocks and float64 equity/cash
+  columns at every native observation. Missing cash observations remain missing.
+- `fills.csv`, `analysis.json`, config, dataset and session metadata remain available.
+- `hsl_report.json` holds native policy, summaries, lifecycle events and executed-stop
+  details. `hsl_trace.npz` stores ordered native numeric plot facts automatically.
+- `timings.json` separates startup, preparation, identity, simulation, conversion,
+  export and rendering. `reports/report.json` records report selection and completion
+  or failure separately from saved simulation facts.
+
+Standalone startup timings measure module import work. Reusing the programmatic
+entry point does not include idle time since import. Suite artifacts label timings
+limited to post-processing explicitly.
+
+The default plots are `reports/equity.png` and, when HSL is enabled,
+`reports/hsl.png`. Equity uses log scale by default. A nonpositive observation causes
+an explicitly labelled linear fallback so losses are not hidden. Drawdown is computed
+from full-resolution strategy equity before view reduction; the original peak and
+trough timestamps are retained. Plot sampling never changes native metric support.
+
+```bash
+passivbot backtest CONFIG --equity-scale linear
+passivbot backtest CONFIG --report-btc
+passivbot backtest CONFIG --plots all --equity-csv
+passivbot backtest CONFIG --plots none
+```
+
+Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` and
+`none` select the complete set or disable rendering. The legacy `--disable_plotting`
+switch still suppresses its named groups. Cumulative PnL is no longer generated.
+BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
+optional. The TWE view labels its hourly fill-event averaging population explicitly.
+Fill reports align cached candles and position-price observations by saved UTC
+execution clocks, including when a suite scenario starts inside a master dataset.
+
+Reports can be regenerated without running the strategy or contacting an exchange:
+
+```bash
+passivbot tool backtest-report RUN --equity-scale linear
+passivbot tool backtest-report RUN --plots hsl,hsl_episodes --scope BTC:long
+passivbot tool backtest-report RUN --plots coin_fills --output-dir RUN/detail
+passivbot tool backtest-report RUN --plots none --equity-csv
+passivbot tool backtest-dash RUN
+```
+
+The analyzer binds only to localhost and prints its URL. It opens metadata first,
+then reads requested equity/HSL columns and pages the fill ledger. It supports time
+intervals, native HSL controller selection, executed-stop inspection, log/linear
+equity and optional BTC denomination. It serves only the selected result and bundled
+UI resources, rejects foreign Host/Origin headers, and has no write or exchange API.
+
+The binary files contain no Python objects and are read with pickles disabled.
+Native float64 HSL and accounting precision are preserved. Trace
+columns retain same-timestamp sequence, observation phase, exposure, raw/EMA/trigger
+signals, remembered currency drawdown, budget, UPNL and controller state. Flat idle
+periods are omitted, while the first inactive boundary after activity is retained;
+plots show those idle intervals as gaps. Lifecycle transitions remain ordered even
+when trigger, flatten and restart share a timestamp. Unused sides do not generate
+an all-GREEN default plot. An enabled controller with no exposure gets an explicit
+empty-observation report rather than an invented zero signal.
+
+`backtest.hsl_detailed_report` retains its opt-in verbose diagnostic row dictionaries;
+normal plots do not require it. Metrics-only optimizer evaluations retain neither
+plot traces nor verbose rows. Older CSV results and detailed JSON HSL reports remain
+readable. A legacy result without native HSL samples cannot supply an exact HSL plot;
+its absence is reported explicitly. Full candle/fill plots additionally require the
+verified dataset referenced by `dataset.json`; missing caches are not downloaded by
+the report tools.
+
+For lazy Python access, use `backtest_results.ResultStore(RUN)`. Its `equity`,
+`fills`, `hsl` and `hsl_trace` methods load their respective facts on demand. The
+existing `load_backtest_artifact_workspace` remains an eager notebook convenience.
+Dense equity CSV is an explicit export under the report output directory and is
+not a second default copy of the binary history.
+
 ## HLCV Data Contract
 
 Direct or prepared backtest inputs must contain finite high, low, and close prices throughout

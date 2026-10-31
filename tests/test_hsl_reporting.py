@@ -103,7 +103,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
     finally:
         for fig in figures.values():
             plt.close(fig)
-    assert report == before
+    np.testing.assert_equal(report, before)
 
 
 def test_missing_native_report_never_synthesizes_hsl_signal(caplog):
@@ -193,7 +193,10 @@ def test_native_report_saved_even_when_all_plotting_disabled(tmp_path):
     )
     (saved,) = tmp_path.rglob("hsl_report.json")
     report = json.loads(saved.read_text())
-    assert report == prepared.hard_stop_plot_data["hsl"]
+    from backtest_results import ResultStore
+    expected = prepared.hard_stop_plot_data["hsl"]
+    assert {k: v for k, v in report.items() if k != "trace"} == {k: v for k, v in expected.items() if k != "trace"}
+    np.testing.assert_equal(ResultStore(saved.parent).hsl_trace(), prepared.hard_stop_plot_data["hsl_trace"])
     assert report["detailed"] is True
     assert report["schema_version"] == 1 and report["engine"] == "hsl"
     assert report["scopes"][0]["policy"]["drawdown_threshold_fraction"] == 0.01
@@ -224,10 +227,13 @@ def test_artifact_workspace_preserves_native_report_and_legacy_absence(tmp_path)
     folder = _write_artifact(tmp_path)
     assert load_backtest_artifact(folder).hsl_report is None
     report = run(payload("portfolio"))[3]["hsl"]
-    (folder / "hsl_report.json").write_text(json.dumps(report))
+    from backtest_results import ResultStore, write_hsl
+    native_trace = run(payload("portfolio"))[3]["hsl_trace"]
+    metadata = write_hsl(folder, report, trace=native_trace)
     artifact = load_backtest_artifact(folder)
-    assert artifact.hsl_report == report
-    assert artifact.workspace()["hsl_report"] == report
+    assert artifact.hsl_report == metadata
+    assert artifact.workspace()["hsl_report"] == metadata
+    np.testing.assert_equal(ResultStore(folder).hsl_trace(), native_trace)
 
 
 def test_unsupported_report_version_is_not_interpreted_as_legacy():
@@ -302,7 +308,7 @@ def test_report_rows_and_reason_lists_are_independent():
     report["samples"][0]["reasons"].append("caller annotation")
     assert report["samples"][1:] == before["samples"][1:]
     assert report["events"] == before["events"]
-    assert run(payload("coin"))[3]["hsl"] == before
+    np.testing.assert_equal(run(payload("coin"))[3]["hsl"], before)
 
 
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
@@ -322,9 +328,9 @@ def test_default_report_preserves_trading_metrics_and_events_without_samples(mod
     assert detailed_report["detailed"] is True
     assert detailed_report["samples"]
     assert compact_report["events"]
-    assert {
+    np.testing.assert_equal({
         k: v for k, v in compact_report.items() if k not in {"detailed", "samples"}
-    } == {k: v for k, v in detailed_report.items() if k not in {"detailed", "samples"}}
+    }, {k: v for k, v in detailed_report.items() if k not in {"detailed", "samples"}})
     args[-1]["metrics_only"] = True  # Opt-in cannot inflate optimizer results.
     metrics = run(args)
     assert metrics[2] == detailed[2]
@@ -353,7 +359,7 @@ def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inac
         np.testing.assert_equal(got, expected)
     def without_samples(report):
         return {k: v for k, v in report.items() if k not in {"detailed", "samples"}}
-    assert without_samples(actual[3]["hsl"]) == without_samples(reference[3]["hsl"])
+    np.testing.assert_equal(without_samples(actual[3]["hsl"]), without_samples(reference[3]["hsl"]))
     args[-1]["metrics_only"] = True
     metrics = run(args)
     assert metrics[2] == reference[2]

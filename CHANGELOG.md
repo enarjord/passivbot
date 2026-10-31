@@ -6,6 +6,17 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Save exact backtest equity and native HSL plot traces in lossless binary files,
+  with automatic HSL reports and phase timings. Default to a log-scale equity and
+  extrema-preserving drawdown overview; select linear scale, BTC views, fill plots
+  and CSV exports explicitly. Remove cumulative PnL from backtest reports. Regenerate
+  reports with `backtest-report` or inspect saved results with the local `backtest-dash`
+  tool. Existing CSV result readers remain supported.
+
+- Reduce standalone setup overhead with a conservative source and installed-runtime
+  identity manifest. The versioned identity deliberately invalidates prior evaluation
+  reuse when any Python source or installed distribution metadata changes.
+
 - Avoid redundant full-config copies when validating ordinary HSL override paths,
   preserving selector changes, validation failures and foreign-input handling.
 

@@ -150,12 +150,9 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
 
         hsl_report = hsl_report({"hsl": _load_json(report_path)})
 
-    fills = _normalize_timestamp_column(_read_csv_if_exists(artifact_dir / "fills.csv"))
-    balance_and_equity = _normalize_timestamp_column(
-        _read_csv_if_exists(
-            artifact_dir / "balance_and_equity.csv.gz", compression="gzip"
-        )
-    )
+    from backtest_results import ResultStore, load_equity_frame
+    fills = ResultStore(artifact_dir).fills()
+    balance_and_equity = load_equity_frame(artifact_dir).rename_axis("timestamp").reset_index()
 
     hlcvs_path = _resolve_artifact_path(
         dataset, "hlcvs_file", artifact_dir=artifact_dir

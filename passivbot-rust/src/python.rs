@@ -1535,7 +1535,8 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     eligibility: Option<PyReadonlyArray2<'py, u8>>,
     eligibility_rows: Option<PyReadonlyArray1<'py, i32>>,
 ) -> PyResult<BacktestPyResult> {
-    let profile_enabled = rust_profile_enabled();
+    let profile_enabled = rust_profile_enabled() || backtest_params_dict
+        .get_item("profile")?.map(|value| value.extract::<bool>()).transpose()?.unwrap_or(false);
     let profile_total_start = profile_start(profile_enabled);
     let mut rust_profile = Vec::new();
     let input_parse_start = profile_start(profile_enabled);
@@ -1686,9 +1687,12 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
             return Ok((py.None().into_py(py), py.None().into_py(py),
                 py_analysis, py_extra.into_py(py)));
         }
+        let hsl_conversion_start = profile_start(profile_enabled);
         if let Some(report) = hsl_report_to_py(py, &backtest)? {
             py_extra.set_item("hsl", report)?;
+            py_extra.set_item("hsl_trace", hsl_trace_to_py(py, &backtest)?)?;
         }
+        profile_add(&mut rust_profile, "rust_hsl_conversion_ms", hsl_conversion_start);
         let artifact_conversion_start = profile_start(profile_enabled);
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
@@ -1816,6 +1820,26 @@ pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
     report_dict.set_item(pyo3::intern!(py, "samples"), samples)?;
     report_dict.set_item(pyo3::intern!(py, "events"), events)?;
     Ok(Some(report))
+}
+
+fn hsl_trace_to_py<const ORGANILLO: bool>(
+    py: Python<'_>, backtest: &BacktestEngine<'_, ORGANILLO>,
+) -> PyResult<PyObject> {
+    let trace = PyDict::new_bound(py);
+    trace.set_item("schema_version", 1)?;
+    let rows = backtest.hsl_plot_trace();
+    macro_rules! column {
+        ($field:ident) => {
+            trace.set_item(stringify!($field), rows.iter().map(|row| row.$field)
+                .collect::<Vec<_>>().into_pyarray_bound(py))?;
+        };
+    }
+    column!(sequence); column!(timestamp); column!(side); column!(coin);
+    column!(phase); column!(action); column!(exposed);
+    column!(signal_raw_fraction); column!(signal_ema_fraction);
+    column!(trigger_signal_fraction); column!(nonpositive_equity);
+    column!(drawdown_memory_usd); column!(budget_usd); column!(upnl_usd);
+    Ok(trace.into_py(py))
 }
 
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {

@@ -62,6 +62,11 @@ def test_source_archive_and_wheel_ship_checked_schema_and_installed_cli_is_offli
     (project / "schemas").mkdir()
     shutil.copy2(ROOT / SCHEMA, project / SCHEMA)
     expected = (ROOT / SCHEMA).read_bytes()
+    dashboard_assets = {
+        f"tools/backtest_dashboard_static/{name}":
+            (ROOT / "src/tools/backtest_dashboard_static" / name).read_bytes()
+        for name in ("index.html", "app.js", "style.css")
+    }
 
     archives = tmp_path / "archives"
     built = run_offline_python(
@@ -75,6 +80,10 @@ def test_source_archive_and_wheel_ship_checked_schema_and_installed_cli_is_offli
         schema_member = next(member for member in source.getmembers()
                              if member.name.endswith("/" + SCHEMA.as_posix()))
         assert source.extractfile(schema_member).read() == expected
+        for path, contents in dashboard_assets.items():
+            member = next(member for member in source.getmembers()
+                          if member.name.endswith("/src/" + path))
+            assert source.extractfile(member).read() == contents
         source.extractall(unpacked, filter="data")
     archived_project = next(unpacked.iterdir())
     wheels = tmp_path / "wheels"
@@ -86,6 +95,8 @@ def test_source_archive_and_wheel_ship_checked_schema_and_installed_cli_is_offli
     installed = tmp_path / "installed"
     with zipfile.ZipFile(next(wheels.glob("passivbot-*.whl"))) as wheel:
         assert wheel.read("tools/schemas/config-v9.schema.json") == expected
+        for path, contents in dashboard_assets.items():
+            assert wheel.read(path) == contents
         wheel.extractall(installed)
     shutil.rmtree(project)
     shutil.rmtree(unpacked)

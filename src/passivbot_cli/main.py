@@ -43,6 +43,8 @@ CORE_COMMANDS: dict[str, CommandSpec] = {
 }
 
 TOOL_COMMANDS: dict[str, CommandSpec] = {
+    "backtest-report": CommandSpec("tools.backtest_report", "render saved backtest results without replay", requires_full=True),
+    "backtest-dash": CommandSpec("tools.backtest_dash", "inspect a saved backtest in a local browser", requires_full=True),
     "optimizer-bounds": CommandSpec(
         "tools.optimizer_bounds", "explicitly apply recommended optimizer bounds to a v9 config"
     ),

@@ -1749,6 +1749,7 @@ async def run_backtest_scenario(
     base_coins: Optional[List[str]] = None,
     base_ignored: Optional[List[str]] = None,
     prepared_universe: Optional[_PreparedScenarioUniverse] = None,
+    report_options=None,
 ) -> ScenarioResult:
     from backtest import (
         BacktestPlotContext,
@@ -1756,6 +1757,9 @@ async def run_backtest_scenario(
         execute_backtest,
         post_process,
     )
+    if report_options is not None:
+        from functools import partial
+        post_process = partial(post_process, report_options=report_options)
 
     scenario_config, scenario_coins = apply_scenario(
         base_config,
@@ -2360,6 +2364,7 @@ async def run_backtest_suite_async(
     *,
     disable_plotting: bool,
     suite_output_root: Optional[Path] = None,
+    report_options=None,
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
 
@@ -2560,6 +2565,7 @@ async def run_backtest_suite_async(
             base_coins=base_coins,
             base_ignored=base_ignored,
             prepared_universe=prepared_universes[scenario.label],
+            **({"report_options": report_options} if report_options is not None else {}),
         )
         results.append(result)
         logging.info(

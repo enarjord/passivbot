@@ -18,7 +18,7 @@ def hsl_report(plot_data):
     return report
 
 
-def create_hsl_figures(report, *, figsize, autoplot, return_figures, display=None):
+def create_hsl_figures(report, *, figsize, autoplot, return_figures, display=None, trace=None):
     import matplotlib.pyplot as plt
     import pandas as pd
 
@@ -26,8 +26,21 @@ def create_hsl_figures(report, *, figsize, autoplot, return_figures, display=Non
         logging.warning("HSL plots unavailable: native report was not supplied")
         return {}
     if not report["detailed"]:
+        if trace is not None:
+            from types import SimpleNamespace
+            from backtest_reports import ReportOptions, create_hsl_overview
+            store = SimpleNamespace(hsl=lambda: report, hsl_trace=lambda: trace)
+            fig = create_hsl_overview(store, ReportOptions())
+            if fig is None:
+                return {}
+            if autoplot:
+                display(fig) if display is not None else fig.show()
+            if return_figures:
+                return {"hsl": fig}
+            plt.close(fig)
+            return {}
         logging.info(
-            "HSL drawdown plots omitted: enable backtest.hsl_detailed_report for per-minute samples (unavailable in metrics-only runs)"
+            "HSL plot trace unavailable in this legacy result; replay to retain native plot facts"
         )
         return {}
 

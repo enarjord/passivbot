@@ -236,7 +236,7 @@ def test_portfolio_ignores_conflicting_inactive_side_policies():
         policy.update(enabled=True, drawdown_threshold_fraction=0.9)
     actual = run(args)
     np.testing.assert_array_equal(actual[0], expected[0])
-    assert actual[3]["hsl"] == expected[3]["hsl"]
+    np.testing.assert_equal(actual[3]["hsl"], expected[3]["hsl"])
 
 
 def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
@@ -504,7 +504,7 @@ def test_native_missing_selector_retains_exact_hsl_results():
     implicit = run(args)
     np.testing.assert_array_equal(implicit[0], selected[0])
     assert implicit[2] == selected[2]
-    assert implicit[3] == selected[3]
+    np.testing.assert_equal(implicit[3], selected[3])
 
 
 @pytest.mark.parametrize("slots", [1, 10])

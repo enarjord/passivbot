@@ -1,3 +1,7 @@
+import time
+
+_BACKTEST_IMPORT_STARTED = time.perf_counter()
+
 from simulation_data import (
     OfflineDataError,
     is_offline,
@@ -151,14 +155,6 @@ from backtest_universe import (
 )
 from pathlib import Path
 import re
-from plotting import (
-    create_forager_balance_figures,
-    create_forager_coin_figures,
-    create_forager_hard_stop_drawdown_figure,
-    create_forager_pnl_figure,
-    create_forager_twe_figure,
-    save_figures,
-)
 from collections import defaultdict
 import logging
 import gzip
@@ -197,6 +193,7 @@ class BacktestPlotContext:
     hlcvs: np.ndarray | None = None
     timestamps: np.ndarray | None = None
     hard_stop_plot_data: Any = None
+    native_profile: Any = None
 
     @classmethod
     def from_payload(cls, payload) -> "BacktestPlotContext":
@@ -204,6 +201,7 @@ class BacktestPlotContext:
             hlcvs=np.asarray(payload.bundle.hlcvs),
             timestamps=np.asarray(payload.bundle.timestamps),
             hard_stop_plot_data=payload.hard_stop_plot_data,
+            native_profile=getattr(payload, "rust_profile", None),
         )
 
 
@@ -235,7 +233,6 @@ def parse_disabled_plot_groups(value) -> set[str]:
                 "disable_plotting must be one of all, summary, balance, twe, pnl, hard_stop, coin_fills"
             )
     return disabled
-
 
 
 # Fallback stubs for test environments without full extension symbols
@@ -1300,12 +1297,14 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     Execute a prepared backtest payload and expand the resulting analysis.
     """
 
+    execution_params = dict(payload.backtest_params)
+    execution_params["profile"] = not execution_params.get("metrics_only", False)
     backtest_result = pbr.run_backtest_bundle(
         payload.bundle,
         payload.bot_params_list,
         payload.strategy_params_list,
         payload.exchange_params,
-        payload.backtest_params,
+        execution_params,
     )
     if len(backtest_result) != 4:
         raise ValueError("run_backtest_bundle must return the versioned four-value core result")
@@ -2918,6 +2917,8 @@ def post_process(
     plot_context: BacktestPlotContext | None = None,
     *,
     output_directory: Path | None = None,
+    report_options=None,
+    timing_context=None,
 ):
     from config.hsl import engine
 
@@ -2925,24 +2926,26 @@ def post_process(
     from hsl_reporting import hsl_report
 
     hsl_report = hsl_report(plot_context.hard_stop_plot_data if plot_context else None)
-    sts = utc_ms()
+    from backtest_reports import ReportOptions, render_reports
+    from backtest_results import ResultStore, write_equity, write_hsl, write_json
+
+    report_options = report_options or ReportOptions()
+    post_started = time.perf_counter()
+    context = timing_context or {"started": post_started, "stages_seconds": {}}
+    stages = dict(context["stages_seconds"])
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
     equities_array = np.asarray(equities_array)
-    balance_sample_divider = get_optional_config_value(
-        config, "backtest.balance_sample_divider", 60
-    )
-    try:
-        balance_sample_divider = int(round(float(balance_sample_divider)))
-    except (TypeError, ValueError):
-        balance_sample_divider = 60
-    balance_sample_divider = max(1, balance_sample_divider)
     fdf, bal_eq = build_backtest_frames(fills, equities_array)
-    logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
+    stages["frames"] = time.perf_counter() - post_started
+    logging.info("[backtest] reporting frames ready in %.3fs", stages["frames"])
     label_prefix = f"[{label}] " if label else ""
     logging.info(
-        "%sBacktest metrics\n%s", label_prefix,
+        "%sBacktest metrics\n%s",
+        label_prefix,
         format_backtest_metrics(
-            analysis, config, fill_types=fdf["type"].unique() if "type" in fdf else (),
+            analysis,
+            config,
+            fill_types=fdf["type"].unique() if "type" in fdf else (),
         ),
     )
     results_path = make_get_filepath(
@@ -2950,12 +2953,14 @@ def post_process(
         if output_directory is not None
         else oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
+    export_started = time.perf_counter()
     json.dump(
-        analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True, allow_nan=False
+        analysis,
+        open(f"{results_path}analysis.json", "w"),
+        indent=4,
+        sort_keys=True,
+        allow_nan=False,
     )
-    if hsl_report is not None:
-        with open(f"{results_path}hsl_report.json", "w", encoding="utf-8") as output:
-            json.dump(hsl_report, output, indent=2, sort_keys=True, allow_nan=False)
     original_config = config.get("_original_backtest_config")
     if original_config is not None:
         dump_config(
@@ -2981,69 +2986,87 @@ def post_process(
     )
     dump_config(sanitized_config, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
+    stages["metadata_export"] = time.perf_counter() - export_started
+    export_started = time.perf_counter()
     fdf.to_csv(f"{results_path}fills.csv")
-    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
-    plot_bal_eq = bal_eq
-    if balance_sample_divider > 1 and not bal_eq.empty:
-        plot_bal_eq = bal_eq.resample(f"{balance_sample_divider}min").last()
-    if "balance" not in disabled_plot_groups:
-        balance_figs = create_forager_balance_figures(
-            plot_bal_eq,
-            include_logy=True,
-            autoplot=False,
-            return_figures=True,
-        )
-        save_figures(balance_figs, results_path)
-    if "twe" not in disabled_plot_groups:
-        twe_figs = create_forager_twe_figure(fdf, autoplot=False, return_figures=True)
-        save_figures(twe_figs, results_path)
-    if "pnl" not in disabled_plot_groups:
-        pnl_figs = create_forager_pnl_figure(
-            fdf,
-            plot_bal_eq,
-            balance_sample_divider=balance_sample_divider,
-            autoplot=False,
-            return_figures=True,
-        )
-        save_figures(pnl_figs, results_path)
-    if "hard_stop" not in disabled_plot_groups and hsl_report is not None:
-        hard_stop_figs = create_forager_hard_stop_drawdown_figure(
-            plot_bal_eq,
-            config,
-            hard_stop_plot_data=(
-                plot_context.hard_stop_plot_data if plot_context else None
+    stages["fills_export"] = time.perf_counter() - export_started
+    logging.info("[backtest] exporting exact equity and native HSL trace")
+    export_started = time.perf_counter()
+    equity_metadata = write_equity(Path(results_path), bal_eq)
+    stages["equity_export"] = time.perf_counter() - export_started
+    export_started = time.perf_counter()
+    hsl_metadata = write_hsl(
+        Path(results_path),
+        hsl_report,
+        trace=(
+            plot_context.hard_stop_plot_data.get("hsl_trace")
+            if plot_context and plot_context.hard_stop_plot_data
+            else None
+        ),
+    )
+    stages["hsl_export"] = time.perf_counter() - export_started
+    write_json(
+        Path(results_path) / "result.json",
+        {
+            "schema_version": 1,
+            "equity": equity_metadata,
+            "hsl": (
+                None
+                if hsl_metadata is None
+                else {"metadata": "hsl_report.json", "trace": hsl_metadata.get("trace")}
             ),
-            autoplot=False,
-            return_figures=True,
+            "fills": "fills.csv",
+            "analysis": "analysis.json",
+        },
+    )
+    logging.info("[backtest] facts saved; generating requested reports")
+    report_started = time.perf_counter()
+    report_status = "failed"
+    try:
+        rendered = render_reports(
+            ResultStore(results_path),
+            options=report_options,
+            disabled=disabled_plot_groups,
         )
-        if hard_stop_figs:
-            save_figures(hard_stop_figs, results_path)
-    if "coin_fills" not in disabled_plot_groups:
-        try:
-            coins = require_config_value(config, f"backtest.coins.{exchange}")
-            fills_plot_dir = oj(results_path, "fills_plots")
-            hlcvs_for_plot = (
-                plot_context.hlcvs
-                if plot_context is not None and plot_context.hlcvs is not None
-                else hlcvs
-            )
-
-            def _save_coin_figure(name, fig):
-                save_figures({name: fig}, fills_plot_dir, close=True)
-
-            create_forager_coin_figures(
-                coins,
-                fdf,
-                hlcvs_for_plot,
-                timestamps=plot_context.timestamps if plot_context else None,
-                on_figure=_save_coin_figure,
-                close_after_callback=False,
-            )
-        except Exception as e:
-            logging.info(f"Error creating fill plots: {e}")
+        report_status = rendered["status"]
+    finally:
+        stages["reports"] = time.perf_counter() - report_started
+        total = time.perf_counter() - context["started"]
+        write_json(
+            Path(results_path) / "timings.json",
+            {
+                "schema_version": 1,
+                "scope": "standalone" if timing_context else "post_process",
+                "total_seconds": total,
+                "stages_seconds": stages,
+                "native_milliseconds": (
+                    plot_context.native_profile if plot_context else None
+                )
+                or {},
+                "report_status": report_status,
+            },
+        )
+    logging.info(
+        "[backtest] complete in %.3fs | equity export %.3fs | HSL export %.3fs | reports %.3fs | %s",
+        total,
+        stages["equity_export"],
+        stages["hsl_export"],
+        stages["reports"],
+        results_path,
+    )
 
 
 async def main():
+    main_started = time.perf_counter()
+    from backtest_reports import add_report_arguments, options_from_args
+
+    import_seconds = _BACKTEST_IMPORT_FINISHED - _BACKTEST_IMPORT_STARTED
+    timing_context = {
+        "started": main_started - import_seconds,
+        "stages_seconds": {
+            "startup": import_seconds,
+        },
+    }
     raw_argv = sys.argv[1:]
     help_all = help_all_requested(raw_argv)
     parser = build_command_parser(
@@ -3105,6 +3128,7 @@ async def main():
     )
 
     runtime_group = parser.add_argument_group("Backtest Runtime")
+    add_report_arguments(runtime_group)
     runtime_group.add_argument(
         "--disable_plotting",
         "-dp",
@@ -3211,6 +3235,7 @@ async def main():
         log_config_transforms=True,
         raw_snapshot=raw_snapshot,
     )
+    report_options = options_from_args(args)
     from config.hsl import require_runtime_support
 
     require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
@@ -3272,6 +3297,7 @@ async def main():
             config,
             suite_cfg,
             disable_plotting=args.disable_plotting,
+            report_options=report_options,
         )
         logging.info(
             "Suite %s completed | scenarios=%d | output=%s",
@@ -3284,6 +3310,10 @@ async def main():
     from simulation_validation import validate_simulation_config
 
     validate_simulation_config(config)
+    preparation_started = time.perf_counter()
+    timing_context["stages_seconds"]["configuration"] = (
+        preparation_started - main_started
+    )
     for ex in backtest_exchanges:
         await load_markets(ex, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
@@ -3321,6 +3351,8 @@ async def main():
             config["backtest"]["cache_dir"][exchange] = str(cache_dir)
             raise_if_backtest_cancel_requested("backtest execution")
 
+            timing_context["stages_seconds"]["preparation"] = time.perf_counter() - preparation_started
+            stage_started = time.perf_counter()
             output_directory, output_metadata = _create_backtest_output(
                 config,
                 exchange,
@@ -3330,6 +3362,8 @@ async def main():
                 mss,
                 results_path,
             )
+            timing_context["stages_seconds"]["identity"] = time.perf_counter() - stage_started
+            stage_started = time.perf_counter()
             fills, equities_array, analysis, payload = run_backtest(
                 hlcvs,
                 mss,
@@ -3339,6 +3373,7 @@ async def main():
                 timestamps,
                 return_payload=True,
             )
+            timing_context["stages_seconds"]["backtest"] = time.perf_counter() - stage_started
             post_process(
                 config,
                 hlcvs,
@@ -3350,6 +3385,8 @@ async def main():
                 exchange,
                 plot_context=BacktestPlotContext.from_payload(payload),
                 output_directory=output_directory,
+                report_options=report_options,
+                timing_context=timing_context,
             )
             _finish_backtest_output(output_directory, output_metadata)
         finally:
@@ -3372,6 +3409,8 @@ async def main():
                 configs[exchange]["backtest"]["coins"][exchange] = coins
                 configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
                 raise_if_backtest_cancel_requested("backtest execution")
+                timing_context["stages_seconds"]["preparation"] = time.perf_counter() - preparation_started
+                stage_started = time.perf_counter()
                 output_directory, output_metadata = _create_backtest_output(
                     configs[exchange],
                     exchange,
@@ -3381,6 +3420,10 @@ async def main():
                     mss,
                     results_path,
                 )
+                timing_context["stages_seconds"]["identity"] = (
+                    time.perf_counter() - stage_started
+                )
+                stage_started = time.perf_counter()
                 fills, equities_array, analysis, payload = run_backtest(
                     hlcvs,
                     mss,
@@ -3389,6 +3432,9 @@ async def main():
                     btc_usd_prices,
                     timestamps,
                     return_payload=True,
+                )
+                timing_context["stages_seconds"]["backtest"] = (
+                    time.perf_counter() - stage_started
                 )
                 post_process(
                     configs[exchange],
@@ -3401,10 +3447,15 @@ async def main():
                     exchange,
                     plot_context=BacktestPlotContext.from_payload(payload),
                     output_directory=output_directory,
+                    report_options=report_options,
+                    timing_context=timing_context,
                 )
                 _finish_backtest_output(output_directory, output_metadata)
             finally:
                 release_materialized_payload(hlcvs)
+
+
+_BACKTEST_IMPORT_FINISHED = time.perf_counter()
 
 
 if __name__ == "__main__":
@@ -3413,7 +3464,10 @@ if __name__ == "__main__":
     except SimulationConfigError as exc:
         from simulation_validation import simulation_config_error_message
 
-        print(simulation_config_error_message(exc, get_cli_prog("backtest")), file=sys.stderr)
+        print(
+            simulation_config_error_message(exc, get_cli_prog("backtest")),
+            file=sys.stderr,
+        )
         sys.exit(2)
     except ValueError as exc:
         logging.error("Backtest failed: %s", exc, exc_info=True)

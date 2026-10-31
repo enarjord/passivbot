@@ -23,6 +23,7 @@ pub struct Summary {
     pub panic_fill_loss_sum_usd: f64,
     pub signal_raw_max_fraction: f64,
     pub signal_ema_max_fraction: f64,
+    pub trigger_signal_max_fraction: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,6 +52,39 @@ pub struct Event {
     pub reason: &'static str,
 }
 
+/// Native plot facts, independent of permissions and metric accumulation. Flat
+/// idle scopes are omitted; the first inactive boundary after activity is kept.
+#[derive(Clone, Copy, Debug)]
+pub struct PlotSample {
+    pub sequence: u64,
+    pub timestamp: i64,
+    pub side: i8,
+    pub coin: i64,
+    pub phase: u8,
+    pub action: u8,
+    pub exposed: u8,
+    pub signal_raw_fraction: f64,
+    pub signal_ema_fraction: f64,
+    pub trigger_signal_fraction: f64,
+    pub nonpositive_equity: u8,
+    pub drawdown_memory_usd: f64,
+    pub budget_usd: f64,
+    pub upnl_usd: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionEpisode {
+    pub side: Option<usize>,
+    pub coin: Option<usize>,
+    pub trigger_timestamp_ms: Option<i64>,
+    pub first_fill_timestamp_ms: Option<i64>,
+    pub finished_timestamp_ms: Option<i64>,
+    pub fill_count: u64,
+    pub loss_usd: f64,
+    pub account_balance_usd: Option<f64>,
+    pub loss_fraction: Option<f64>,
+}
+
 #[derive(Default)]
 struct Scope {
     // Events at a previous capture timestamp can be extended by more same-time
@@ -62,6 +96,8 @@ struct Scope {
     exit_started: Option<i64>,
     panic_loss: f64,
     panic_balance: Option<f64>,
+    execution_episode: Option<usize>,
+    plot_active: bool,
 }
 
 #[derive(Clone, Default)]
@@ -89,6 +125,8 @@ pub(super) struct Report {
     pub summary: Summary,
     pub samples: Vec<Sample>,
     pub events: Vec<Event>,
+    pub trace: Vec<PlotSample>,
+    pub execution_episodes: Vec<ExecutionEpisode>,
     timestamp: Option<i64>,
     detailed: bool,
     retain_events: bool,
@@ -186,6 +224,62 @@ impl Report {
         self.scopes.insert(key, scope);
     }
 
+    pub(super) fn observe_facts(
+        &mut self,
+        key: Key,
+        now: i64,
+        phase: &'static str,
+        output: &Output,
+        native: &crate::hsl_decay::Decision,
+        budget_usd: f64,
+        upnl_usd: f64,
+    ) {
+        self.observe(key, now, phase, output);
+        let trigger = if native.nonpositive_equity {
+            1.0
+        } else {
+            native.signal_raw_fraction.min(native.signal_ema_fraction)
+        };
+        self.summary.trigger_signal_max_fraction =
+            self.summary.trigger_signal_max_fraction.max(trigger);
+        if !self.retain_events {
+            return;
+        }
+        let scope = self.scopes.get_mut(&key).expect("observed HSL scope");
+        let Some(decision) = output.decision.as_ref() else {
+            return;
+        };
+        let active = native.exposed || decision.action != Action::Normal;
+        if active || scope.plot_active {
+            self.trace.push(PlotSample {
+                sequence: self.sequence,
+                timestamp: now,
+                side: key.0.map_or(-1, |side| side as i8),
+                coin: key.1.map_or(-1, |coin| coin as i64),
+                phase: match phase {
+                    "bar_close" => 0,
+                    "pre_fill" => 1,
+                    "post_fill" => 2,
+                    _ => unreachable!("unknown native HSL observation phase"),
+                },
+                action: match decision.action {
+                    Action::Normal => 0,
+                    Action::Panic => 1,
+                    Action::Halted => 2,
+                },
+                exposed: u8::from(native.exposed),
+                signal_raw_fraction: decision.signal_raw_fraction,
+                signal_ema_fraction: decision.signal_ema_fraction,
+                trigger_signal_fraction: trigger,
+                nonpositive_equity: u8::from(native.nonpositive_equity),
+                drawdown_memory_usd: native.drawdown_memory_usd,
+                budget_usd: budget_usd,
+                upnl_usd: upnl_usd,
+            });
+        }
+        scope.plot_active = active;
+    }
+
     fn trigger(
         &mut self,
         key: Key,
@@ -233,7 +327,7 @@ impl Report {
             Some(SHORT) => self.summary.restarts_short += 1,
             _ => {}
         }
-        Self::finish_loss(&mut self.stats, scope);
+        Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
         scope.exit_started = None;
         scope.red = false;
         self.sequence += 1;
@@ -266,7 +360,7 @@ impl Report {
                     self.trigger(key, now, Some(event.red_at), "reconstructed_red", scope);
                 }
                 scope.exit_started = None;
-                Self::finish_loss(&mut self.stats, scope);
+                Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
                 self.sequence += 1;
                 if self.retain_events {
                     self.events.push(Event {
@@ -298,10 +392,18 @@ impl Report {
             stats.episode_loss_invalid = true;
         }
     }
-    fn finish_loss(stats: &mut LifecycleStats, scope: &mut Scope) {
+    fn finish_loss(
+        stats: &mut LifecycleStats,
+        scope: &mut Scope,
+        episodes: &mut [ExecutionEpisode],
+        now: i64,
+    ) {
         if let Some(balance) = scope.panic_balance.take() {
             Self::record_episode_loss(stats, scope.panic_loss, balance);
             scope.panic_loss = 0.0;
+        }
+        if let Some(index) = scope.execution_episode.take() {
+            episodes[index].finished_timestamp_ms = Some(now);
         }
     }
 
@@ -310,6 +412,31 @@ impl Report {
             let loss = (-net_pnl).max(0.0);
             self.summary.panic_close_fills += 1;
             self.summary.panic_fill_loss_sum_usd += loss;
+            if self.retain_events {
+                let index = *scope.execution_episode.get_or_insert_with(|| {
+                    let index = self.execution_episodes.len();
+                    self.execution_episodes.push(ExecutionEpisode {
+                        side: key.0,
+                        coin: key.1,
+                        trigger_timestamp_ms: scope.exit_started,
+                        first_fill_timestamp_ms: self.timestamp,
+                        finished_timestamp_ms: None,
+                        fill_count: 0,
+                        loss_usd: 0.0,
+                        account_balance_usd: (account_balance.is_finite() && account_balance > 0.0)
+                            .then_some(account_balance),
+                        loss_fraction: None,
+                    });
+                    index
+                });
+                let episode = &mut self.execution_episodes[index];
+                episode.fill_count += 1;
+                episode.loss_usd += loss;
+                episode.loss_fraction = episode
+                    .account_balance_usd
+                    .map(|balance| episode.loss_usd / balance)
+                    .filter(|value| value.is_finite());
+            }
             scope.panic_loss += loss;
             scope.panic_balance.get_or_insert(account_balance);
         }
@@ -321,7 +448,7 @@ impl Report {
         self.advance(now);
         if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
             if scope.exit_started.take().is_some() {
-                Self::finish_loss(&mut self.stats, scope);
+                Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
                 // A later same-bar fill may restore balance and permit replay.
                 // Do not report this already-observed flatten a second time.
                 scope.consumed.retain(|(t, _), _| *t == now);
@@ -399,6 +526,7 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
             "schema_version": 1, "engine": "hsl", "mode": config.mode,
             "detailed": self.hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
+            "execution_episodes": self.hsl_report.execution_episodes,
             "samples": [], "events": [],
         })))
     }
@@ -410,6 +538,10 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
 
     pub fn hsl_events(&self) -> &[Event] {
         &self.hsl_report.events
+    }
+
+    pub fn hsl_plot_trace(&self) -> &[PlotSample] {
+        &self.hsl_report.trace
     }
 
     #[cfg(test)]
@@ -1008,5 +1140,87 @@ mod tests {
         let summary = report.core_summary(true);
         assert!(!summary.episode_loss_valid);
         assert_eq!(summary.execution_episode_count, 1);
+    }
+
+    #[test]
+    fn compact_trace_keeps_native_precision_and_only_one_idle_boundary() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::new(false, true);
+        let mut native = crate::hsl_decay::Decision {
+            timestamp_ms: 0,
+            action: Action::Normal,
+            exposed: false,
+            red: false,
+            signal_raw_fraction: 0.123456789123,
+            signal_ema_fraction: 0.098765432198,
+            drawdown_memory_usd: 123.456789123,
+            cooldown_until: None,
+            flatten_qualified: false,
+            nonpositive_equity: false,
+        };
+        let mut observed = output(0, Action::Normal, vec![]);
+        observed.decision.as_mut().unwrap().signal_raw_fraction = native.signal_raw_fraction;
+        observed.decision.as_mut().unwrap().signal_ema_fraction = native.signal_ema_fraction;
+        report.observe_facts(key, 0, "bar_close", &observed, &native, 1000.0, -1.0);
+        assert!(report.trace.is_empty());
+        native.exposed = true;
+        report.observe_facts(key, 60_000, "pre_fill", &observed, &native, 1000.0, -1.0);
+        native.exposed = false;
+        report.observe_facts(key, 60_000, "post_fill", &observed, &native, 1000.0, 0.0);
+        report.observe_facts(key, 120_000, "bar_close", &observed, &native, 1000.0, 0.0);
+        assert_eq!(report.trace.len(), 2);
+        assert_eq!(
+            report.trace[0].signal_raw_fraction,
+            native.signal_raw_fraction
+        );
+        assert_eq!(
+            report.trace[0].signal_ema_fraction,
+            native.signal_ema_fraction
+        );
+        assert_eq!(
+            report.trace[0].drawdown_memory_usd,
+            native.drawdown_memory_usd
+        );
+        assert_eq!(
+            report.trace[0].trigger_signal_fraction,
+            native.signal_ema_fraction
+        );
+        assert_eq!((report.trace[0].phase, report.trace[1].phase), (1, 2));
+        assert!(report.trace[0].sequence < report.trace[1].sequence);
+    }
+
+    #[test]
+    fn retained_episode_facts_match_metric_accounting_without_inflating_metrics_only() {
+        let key = (Some(SHORT), Some(0));
+        let mut full = Report::new(false, true);
+        let mut metrics_only = Report::new(false, false);
+        for report in [&mut full, &mut metrics_only] {
+            report.observe(
+                key,
+                60_000,
+                "pre_fill",
+                &output(60_000, Action::Panic, vec![]),
+            );
+            report.panic_fill(key, -100.0, 1000.0);
+            report.panic_fill(key, -50.0, 900.0);
+            report.observed_flat(key, 120_000);
+        }
+        let episode = &full.execution_episodes[0];
+        assert_eq!(episode.trigger_timestamp_ms, Some(60_000));
+        assert_eq!(episode.first_fill_timestamp_ms, Some(60_000));
+        assert_eq!(episode.finished_timestamp_ms, Some(120_000));
+        assert_eq!(episode.fill_count, 2);
+        assert_eq!(episode.loss_usd, 150.0);
+        for report in [&full, &metrics_only] {
+            let metrics = report.core_summary(true);
+            assert_eq!(metrics.execution_episode_count, 1);
+            assert_eq!(
+                Some(metrics.episode_loss_fraction_max),
+                episode.loss_fraction
+            );
+        }
+        assert!(metrics_only.execution_episodes.is_empty());
+        assert!(metrics_only.trace.is_empty());
+        assert!(metrics_only.events.is_empty());
     }
 }

@@ -416,7 +416,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 episodes: 0,
             };
             self.hsl_report
-                .observe((side, coin), timestamp, phase, &scope.result);
+                .observe_facts((side, coin), timestamp, phase, &scope.result,
+                    &decision, budget, upnl);
         }
         self.clear_hsl_entries();
         Ok(())

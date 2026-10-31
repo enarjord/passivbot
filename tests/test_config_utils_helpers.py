@@ -2033,8 +2033,9 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "not a live slippage cap" in help_text
     assert "Terminal metric visibility config" not in help_text
     assert "--backtest.visible_metrics" not in help_text
-    assert "Plot-only minutes per balance/equity sample" in help_text
-    assert "full-precision values at every native observation" in help_text
+    assert "new reports use bounded extrema selection instead" in help_text
+    assert "balance_and_equity.npz retains every full-precision native observation" in help_text
+    assert "Plot-only minutes per balance/equity sample" not in help_text
     assert "Default 180; null resolves to the native default" in help_text
     assert "--bot.long.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
