@@ -26,7 +26,7 @@ class MetricDefinition:
 
 
 def _definitions():
-    from .metrics import CORE_METRIC_CATALOG
+    from .metrics import CORE_METRIC_CATALOG, CORE_METRIC_DEFINITION_VERSION
 
     descriptions = {
         "cagr_fraction_strategy_equity": (
@@ -212,7 +212,7 @@ def _definitions():
             position_side=next(
                 (side for side in ("long", "short") if name.endswith("_" + side)), None
             ),
-            notes="Core definition version 1; unavailable and genuine infinite endpoints retain explicit status",
+            notes=f"Core definition version {CORE_METRIC_DEFINITION_VERSION}; unavailable and genuine infinite endpoints retain explicit status",
         )
     return result
 

@@ -10,7 +10,7 @@ from tools import pareto_dash
 
 def _make_suite_metrics():
     return {
-        "definition_version": 1,
+        "definition_version": 2,
         "metrics": {
             "cagr_fraction_strategy_equity": {
                 "aggregated": 0.1,
@@ -34,7 +34,7 @@ def test_load_pareto_dataframe_handles_suite_and_params(tmp_path):
         "bot": {"long": {"n_positions": 3}},
         "suite_metrics": _make_suite_metrics(),
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {
                 "cagr_fraction_strategy_equity": 1.0,
                 "omega_ratio_strategy_equity": 2.5,
@@ -80,7 +80,7 @@ def test_load_pareto_dataframe_keeps_median_named_aggregated_metric(tmp_path):
     pareto_dir = run_dir / "pareto"
     entry = {
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "metrics": {
                 "position_held_time_weighted_mean_hours": {
                     "aggregated": 2.5,
@@ -116,7 +116,7 @@ def test_load_history_dataframe_emits_iterations(tmp_path):
     entry = {
         "suite_metrics": _make_suite_metrics(),
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"cagr_fraction_strategy_equity": 2.0},
         },
     }
@@ -287,7 +287,7 @@ def test_dashboard_preserves_statuses_and_uses_raw_infinities_for_filters(tmp_pa
     for name, status in (("infinite", "positive_infinity"), ("undefined", "undefined")):
         entry = {
             "metrics": {
-                "definition_version": 1,
+                "definition_version": 2,
                 "objectives": {
                     metric: None,
                     "metric_status": {
@@ -328,11 +328,11 @@ def test_history_retains_valid_invalid_and_prefilter_rows_with_explicit_status(
     metric = "cagr_fraction_strategy_equity"
     base = {"optimize": {"scoring": [metric]}}
     packets = [
-        {**base, "metrics": {"definition_version": 1, "objectives": {metric: 0.4}}},
+        {**base, "metrics": {"definition_version": 2, "objectives": {metric: 0.4}}},
         {
             **base,
             "metrics": {
-                "definition_version": 1,
+                "definition_version": 2,
                 "fitness_status": "invalid",
                 "objectives": {},
                 "stats": {},
@@ -342,7 +342,7 @@ def test_history_retains_valid_invalid_and_prefilter_rows_with_explicit_status(
         {
             **base,
             "metrics": {
-                "definition_version": 1,
+                "definition_version": 2,
                 "fitness_status": "invalid",
                 "evaluation_origin": "config_prefilter",
                 "objectives": {},

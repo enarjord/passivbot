@@ -118,7 +118,7 @@ def test_native_hsl_transport_and_report(mode):
     assert "hard_stop_time_in_yellow_pct" not in full[2]
     assert "hard_stop_time_in_orange_pct" not in full[2]
     metadata = full[2]["metric_metadata"]
-    assert metadata["definition_version"] == 1
+    assert metadata["definition_version"] == 2
     assert metadata["hsl_trigger_count"] == report["summary"]["triggers"]
     panic_losses = sum(max(-(float(fill[3]) + float(fill[4])), 0.0)
                        for fill in full[0] if "panic" in str(fill[13]))

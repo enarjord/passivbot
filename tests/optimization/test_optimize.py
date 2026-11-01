@@ -84,7 +84,7 @@ def _core_analysis(values, **metadata):
     """A current native result fixture; quantities are supplied by each test."""
     return {
         **values,
-        "metric_metadata": {"definition_version": 1, **metadata},
+        "metric_metadata": {"definition_version": 2, **metadata},
         "liquidated": False,
     }
 
@@ -704,7 +704,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     for idx, cagr_fraction_strategy_equity in enumerate((0.001, 0.002)):
         artifact = deepcopy(config)
         artifact["metrics"] = {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {
                 "cagr_fraction_strategy_equity": cagr_fraction_strategy_equity,
                 "drawdown_max_fraction_strategy_equity": 0.3 - idx * 0.1,
@@ -763,7 +763,7 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     ]
     artifact = deepcopy(config)
     artifact["metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "objectives": {
             "cagr_fraction_strategy_equity": 0.002,
             "drawdown_max_fraction_strategy_equity": 0.8,
@@ -786,7 +786,7 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
         },
     }
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["base", "stress"],
         "metrics": {
             "cagr_fraction_strategy_equity": {
@@ -4120,7 +4120,7 @@ class TestResultRecorder:
 
         entry = build_pymoo_record_entry(
             vector=vector,
-            metrics={"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.5}, "constraint_violation": 0.0},
+            metrics={"definition_version": 2, "objectives": {"cagr_fraction_strategy_equity": 0.5}, "constraint_violation": 0.0},
             template=template,
             build_config_fn=individual_to_config,
             overrides_fn=optimize.optimizer_overrides,
@@ -4154,7 +4154,7 @@ class TestResultRecorder:
         }
 
         individual.evaluation_metrics = {
-            "definition_version": 1,
+            "definition_version": 2,
             "effective_start_date": "2024-01-02T00:00:00Z",
             "effective_end_date": "2024-01-03T00:00:00Z",
             "objectives": objectives,
@@ -4211,7 +4211,7 @@ class TestResultRecorder:
 
         entry = build_pymoo_record_entry(
             vector=vector,
-            metrics={"definition_version": 1, "objectives": objectives, "constraint_violation": 0.0},
+            metrics={"definition_version": 2, "objectives": objectives, "constraint_violation": 0.0},
             template=template,
             build_config_fn=individual_to_config,
             overrides_fn=optimize.optimizer_overrides,
@@ -4299,7 +4299,7 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {}, "short": {}},
                 "metrics": {
-                    "definition_version": 1,
+                    "definition_version": 2,
                     "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
@@ -4325,7 +4325,7 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
                 "metrics": {
-                    "definition_version": 1,
+                    "definition_version": 2,
                     "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
@@ -4352,7 +4352,7 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {}, "short": {}},
                 "metrics": {
-                    "definition_version": 1,
+                    "definition_version": 2,
                     "objectives": {"cagr_fraction_strategy_equity": None},
                     "constraint_violation": 0.0,
                 },
@@ -4379,7 +4379,7 @@ class TestResultRecorder:
             data = {
                 "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
                 "metrics": {
-                    "definition_version": 1,
+                    "definition_version": 2,
                     "objectives": {"cagr_fraction_strategy_equity": 0.5},
                     "constraint_violation": 0.0,
                 },
@@ -5097,8 +5097,8 @@ class TestEvaluator:
 
         assert objectives == pytest.approx((2.0 / math.pi * math.atan(-0.1),))
         assert metrics["suite_metrics"]["sources"]["test"] == {
-            "binance": {"definition_version": 1, "start_timestamp_ms": 1704067200000},
-            "bybit": {"definition_version": 1, "start_timestamp_ms": 1704153600000},
+            "binance": {"definition_version": 2, "start_timestamp_ms": 1704067200000},
+            "bybit": {"definition_version": 2, "start_timestamp_ms": 1704153600000},
         }
         assert penalty == 0.0
         assert metrics["constraint_violation"] == 0.0
@@ -5712,7 +5712,7 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
 def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "objectives": {"cagr_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 0},
@@ -5752,7 +5752,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
 def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "objectives": {"cagr_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 99},
@@ -5841,7 +5841,7 @@ def test_result_recorder_all_results_write_failure_is_fatal():
                 {
                     "bot": {"long": {}, "short": {}},
                     "metrics": {
-                        "definition_version": 1,
+                        "definition_version": 2,
                         "objectives": {"cagr_fraction_strategy_equity": 0.5},
                         "constraint_violation": 0.0,
                     },
@@ -5862,7 +5862,7 @@ def test_result_recorder_preserves_unquantized_saved_param_values():
         target = target[part]
     original = float(target[path[-1]])
     target[path[-1]] = original + 0.000321
-    entry["metrics"] = {"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.1}}
+    entry["metrics"] = {"definition_version": 2, "objectives": {"cagr_fraction_strategy_equity": 0.1}}
     entry["optimize"]["scoring"] = ["cagr_fraction_strategy_equity"]
 
     with tempfile.TemporaryDirectory() as tmpdir:

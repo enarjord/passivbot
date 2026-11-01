@@ -360,7 +360,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     cfg = generated_template(get_expanded_config_prototype(), mode)
     contract = build_evaluation_contract(cfg)
     cfg[CONTRACT_CACHE_KEY] = deepcopy(contract)
-    assert contract["core_metric_definition_version"] == 1
+    assert contract["core_metric_definition_version"] == 2
     assert contract["implementation"]
     assert "hsl_engine" not in contract.get("live", {})
     block = (

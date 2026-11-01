@@ -113,7 +113,10 @@ dictionary retention and never supplies trading inputs or metric support. Preser
 native ordering at equal timestamps, immediate insolvency flags, and all lifecycle
 events. Report-only gaps indicate omitted idle periods, not fabricated observations.
 Executed-episode records use the same native owner, loss-only net cashflows and causal
-account-balance anchor as the core metric accumulator. Metrics-only optimizer runs
+account-balance anchor as the core metric accumulator. Actual HSL order fills retain
+their originating controller episode through later GREEN observations; this accounting
+identity never preserves trading permission. See `backtest_metrics.md` for execution
+attribution, exclusions and definition-version requirements. Metrics-only optimizer runs
 retain neither plot observations nor verbose rows.
 
 Released-v8 configs require explicit migration to config schema v9.0.0, including CLI mutations, overrides,

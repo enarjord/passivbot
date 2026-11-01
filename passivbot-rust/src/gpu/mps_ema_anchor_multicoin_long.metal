@@ -121,6 +121,7 @@ struct EmaMulticoinSideState {
     bool close_is_protective_reducer[MAX_COINS];
     bool close_is_unstuck_reducer[MAX_COINS];
     bool close_is_hsl_panic[MAX_COINS];
+    uint close_hsl_origin[MAX_COINS];
     bool selected[MAX_COINS];
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
@@ -265,14 +266,16 @@ inline void record_ema_multicoin_close_fill(
     if (is_hsl_panic && !at_bar_close) {
         if (coin_hsl_mode) {
             record_hsl_panic_fill(
-                side.coin_hsl[coin], net_pnl, account.balance
+                side.coin_hsl[coin], net_pnl, account.balance, side.close_hsl_origin[coin]
             );
         } else if (side.hsl.signal_mode == HSL_SIGNAL_UNIFIED
                    && opposite_hsl != nullptr && !side.hsl.hsl_owner) {
-            record_hsl_panic_fill(*opposite_hsl, net_pnl, account.balance);
+            record_hsl_panic_fill(
+                *opposite_hsl, net_pnl, account.balance, side.close_hsl_origin[coin]
+            );
         } else {
             record_hsl_panic_fill(
-                side.hsl, net_pnl, account.balance
+                side.hsl, net_pnl, account.balance, side.close_hsl_origin[coin]
             );
         }
     }
@@ -473,6 +476,7 @@ inline void init_ema_multicoin_side_state(
         side.close_is_protective_reducer[c] = false;
         side.close_is_unstuck_reducer[c] = false;
         side.close_is_hsl_panic[c] = false;
+        side.close_hsl_origin[c] = 0u;
 #if !PASSIVBOT_HSL_DISABLED
         side.coin_realized_pnl[c] = 0.0f;
         side.coin_hsl[c] = config.hsl_template;
@@ -1650,6 +1654,7 @@ inline void generate_ema_multicoin_side_orders(
         close_market[c] = false;
         secondary_close_market[c] = false;
         close_is_hsl_panic[c] = false;
+        side.close_hsl_origin[c] = 0u;
         contribution[c] = 0.0f;
         entry_candidate[c] = false;
         int coin_offset = c * COIN_COLS;
@@ -1915,6 +1920,7 @@ inline void generate_ema_multicoin_side_orders(
             side.close_is_protective_reducer[c] = false;
             close_is_unstuck_reducer[c] = false;
             close_is_hsl_panic[c] = true;
+            side.close_hsl_origin[c] = hsl_panic_order_origin(side.hsl, side.coin_hsl[c]);
         }
 #endif
         if (!(entry_qty[c] > 0.0f)) entry_market[c] = false;
@@ -2625,6 +2631,7 @@ inline bool process_ema_multicoin_side_fills(
                 close_is_protective_reducer[c] = false;
                 close_is_unstuck_reducer[c] = false;
                 close_is_hsl_panic[c] = false;
+                side.close_hsl_origin[c] = 0u;
             }
             executed_close = true;
         }
@@ -2734,6 +2741,7 @@ inline void clear_ema_multicoin_coin_orders(
     side.close_is_protective_reducer[coin] = false;
     side.close_is_unstuck_reducer[coin] = false;
     side.close_is_hsl_panic[coin] = false;
+    side.close_hsl_origin[coin] = 0u;
 }
 
 inline bool force_close_ema_multicoin_delisted_position(

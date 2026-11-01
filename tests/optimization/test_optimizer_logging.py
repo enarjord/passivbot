@@ -7,7 +7,7 @@ from pareto_store import ParetoStore
 def entry(index):
     return {
         "bot": {"long": {"param": index}, "short": {}},
-        "metrics": {"definition_version": 1, "objectives": {"pain_index_fraction_strategy_equity": index, "ulcer_index_fraction_strategy_equity": 101 - index},
+        "metrics": {"definition_version": 2, "objectives": {"pain_index_fraction_strategy_equity": index, "ulcer_index_fraction_strategy_equity": 101 - index},
                     "constraint_violation": 0.0},
     }
 
@@ -126,7 +126,7 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     def candidate(index, values, violation=0):
         result = entry(index)
         result["optimize"] = {"scoring": [spec.to_config() for spec in specs]}
-        result["metrics"] = {"definition_version": 1, "objectives": dict(zip((s.metric for s in specs), values)),
+        result["metrics"] = {"definition_version": 2, "objectives": dict(zip((s.metric for s in specs), values)),
                              "constraint_violation": violation}
         return result
     store = ParetoStore(str(tmp_path))

@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from config.metric_definitions import METRIC_DEFINITIONS
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs/ai/generated/metric_fields.md"
@@ -20,7 +21,7 @@ def render_reference():
         "Generated from `src/config/metric_definitions.py`; do not edit by hand.",
         "The Rust-owned core catalog supplies the 27 exact selectors for 26 quantities.",
         "This describes quantities, not objective direction, selector aliases, reductions or backend support.",
-        "Core definition version 1 owns values, clocks and status semantics; historical definitions require re-evaluation.",
+        f"Core definition version {CORE_METRIC_DEFINITION_VERSION} owns values, clocks and status semantics; historical definitions require re-evaluation.",
         "",
         "| Metric | Unit / denominator | Basis | Sampling / intrinsic aggregation | Scope / weighting | Sign / domain / notes |",
         "| --- | --- | --- | --- | --- | --- |",

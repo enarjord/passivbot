@@ -10,7 +10,7 @@ def test_sha256_file_returns_none_for_missing_path(tmp_path):
 
 def test_extract_metric_means_prefers_suite_aggregated_values():
     payload = {
-        "definition_version": 1,
+        "definition_version": 2,
         "stats": {
             "cagr_fraction_strategy_equity": {
                 "mean": 1.0,
@@ -20,7 +20,7 @@ def test_extract_metric_means_prefers_suite_aggregated_values():
             },
         },
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "metrics": {
                 "cagr_fraction_strategy_equity": {
                     "aggregated": 2.0,
@@ -42,7 +42,7 @@ def test_extract_metric_means_prefers_suite_aggregated_values():
 def test_extract_metric_means_reads_top_level_metrics_block():
     payload = {
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "stats": {
                 "cagr_fraction_strategy_equity": {
                     "mean": 0.5,
@@ -83,7 +83,7 @@ def test_repro_readers_preserve_infinite_and_unavailable_facts():
     from metrics_schema import encode_metric_values
 
     source = {
-        "metric_metadata": {"definition_version": 1, "observation_count": 12},
+        "metric_metadata": {"definition_version": 2, "observation_count": 12},
         "liquidated": False,
         **encode_metric_values({"omega_ratio_strategy_equity": math.inf}),
     }
@@ -128,7 +128,7 @@ def test_repro_reader_rejects_stale_metric_definitions():
 def test_suite_precedence_clears_replaced_unavailable_status():
     metrics = extract_metric_means(
         {
-            "definition_version": 1,
+            "definition_version": 2,
             "stats": {
                 "cagr_fraction_strategy_equity": {
                     "mean": None,
@@ -136,7 +136,7 @@ def test_suite_precedence_clears_replaced_unavailable_status():
                 }
             },
             "suite_metrics": {
-                "definition_version": 1,
+                "definition_version": 2,
                 "metrics": {"cagr_fraction_strategy_equity": {"aggregated": 0.5}},
             },
         }
@@ -166,7 +166,7 @@ def test_optimizer_replay_reads_current_evaluation_packet(monkeypatch):
             self.shared_btc_np = {}
 
         def evaluate(self, individual, overrides):
-            return build_evaluation_payload([-.2], 0, {"definition_version": 1,
+            return build_evaluation_payload([-.2], 0, {"definition_version": 2,
                 "stats": {"cagr_fraction_strategy_equity": {"mean": .2}}}, individual)
 
     monkeypatch.setattr(repro_harness, "format_approved_ignored_coins", noop)

@@ -34,7 +34,7 @@ def _write_artifact(
     (root / "analysis.json").write_text(
         json.dumps(
             {
-                "metric_metadata": {"definition_version": 1},
+                "metric_metadata": {"definition_version": 2},
                 "cagr_fraction_strategy_equity": 0.0011 if candidate else 0.001,
                 "drawdown_max_fraction_strategy_equity": 0.21 if candidate else 0.2,
                 "position_held_max_days": 12.0 if candidate else 10.0,
@@ -122,12 +122,12 @@ def test_identical_binary_and_csv_equity_do_not_report_parser_rounding_differenc
 def test_relative_metric_delta_uses_absolute_base_and_preserves_zero_sentinel():
     metrics = _metric_comparison(
         {
-            "definition_version": 1,
+            "definition_version": 2,
             "cagr_fraction_strategy_equity": -0.002,
             "drawdown_max_fraction_strategy_equity": 0.0,
         },
         {
-            "definition_version": 1,
+            "definition_version": 2,
             "cagr_fraction_strategy_equity": -0.001,
             "drawdown_max_fraction_strategy_equity": 0.1,
         },
@@ -255,11 +255,11 @@ def test_compare_backtests_cli_returns_two_for_incomplete_artifact(tmp_path, cap
 def test_metric_comparison_preserves_unavailable_and_infinite_endpoints():
     key = "loss_profit_ratio"
     base = {
-        "definition_version": 1,
+        "definition_version": 2,
         key: None,
         "metric_status": {key: {"status": "positive_infinity"}},
     }
-    finite = {"definition_version": 1, key: 0.5}
+    finite = {"definition_version": 2, key: 0.5}
     row = _metric_comparison(base, finite)[key]
     assert row["base"] is None and row["candidate"] == 0.5
     assert row["metric_status"]["base"]["status"] == "positive_infinity"
@@ -276,6 +276,6 @@ def test_metric_comparison_preserves_unavailable_and_infinite_endpoints():
 def test_metric_comparison_never_compares_stale_or_missing_definitions():
     key = "loss_profit_ratio"
     for base in ({key: 0.4}, {"definition_version": 0, key: 0.4}):
-        row = _metric_comparison(base, {"definition_version": 1, key: 0.5})[key]
+        row = _metric_comparison(base, {"definition_version": 2, key: 0.5})[key]
         assert row["comparison"] == "incomparable_definition"
         assert row["absolute_delta"] is None

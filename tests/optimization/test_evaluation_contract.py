@@ -196,6 +196,30 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
         _validate_resume_results(str(tmp_path), config)
 
 
+def test_previous_hsl_metric_definition_cannot_reuse_saved_or_cached_fitness(tmp_path):
+    import msgpack
+    from optimize import _resume_config_mismatches, _validate_resume_results
+    from optimization.evaluation_contract import (
+        CONTRACT_CACHE_KEY,
+        recorded_evaluation_contract,
+    )
+
+    config = _config()
+    old = _record(config)
+    old[CONTRACT_KEY]["core_metric_definition_version"] = 1
+    old["metrics"] = {"definition_version": 1, "objectives": {
+        "hsl_panic_episode_loss_max_fraction": 0.0,
+    }}
+    assert _resume_config_mismatches(old, config)
+    (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        _validate_resume_results(str(tmp_path), config)
+
+    config[CONTRACT_CACHE_KEY] = old[CONTRACT_KEY]
+    with pytest.raises(ValueError, match="stale metric semantics"):
+        recorded_evaluation_contract(config)
+
+
 @pytest.mark.parametrize("version", [1, 2, 3])
 def test_pre_shared_gate_contract_version_cannot_reuse_saved_fitness(tmp_path, version):
     import msgpack

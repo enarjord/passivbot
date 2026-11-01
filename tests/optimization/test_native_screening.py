@@ -73,7 +73,7 @@ def test_screened_offspring_use_only_full_survivor_fitness_and_records(monkeypat
             assert all(set(value["scenarios"]) == {"base", "stress"}
                        for value in record["suite_metrics"].values()
                        if isinstance(value, dict) and "scenarios" in value)
-            assert record["suite_metrics"]["definition_version"] == 1
+            assert record["suite_metrics"]["definition_version"] == 2
         completed = len(records)
         execute(base, SimpleNamespace(record=records.append), path, evaluator=suite, resume=True)
         assert len(records) == completed  # Completed checkpoints do not start another cohort.

@@ -27,7 +27,7 @@ def entry(value):
     return {
         "optimize": {"scoring": [OMEGA]},
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": encode_metric_values({OMEGA: value}),
             "constraint_violation": 0.0,
         },
@@ -69,7 +69,7 @@ def test_selection_distances_are_finite_with_true_infinity(method):
 def test_scenario_projection_and_limits_preserve_status():
     row = candidate(math.inf)
     row.entry["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["one", "two"],
         "metrics": {
             OMEGA: {
@@ -192,13 +192,13 @@ def test_selection_rejects_undefined_control_values(option, value):
 def test_numeric_result_metadata_cannot_become_an_objective():
     with pytest.raises(MetricAggregationError, match="objective mapping"):
         extract_objectives(
-            {"metrics": {"definition_version": 1, "constraint_violation": 0.0}}
+            {"metrics": {"definition_version": 2, "constraint_violation": 0.0}}
         )
     with pytest.raises(ValueError, match="unknown or retired"):
         extract_objectives(
             {
                 "metrics": {
-                    "definition_version": 1,
+                    "definition_version": 2,
                     "objectives": {"observation_count": 12},
                 }
             }

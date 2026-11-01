@@ -24,7 +24,7 @@ def _native_analysis(values=None, *, statuses=None, end=START + 120000):
         **(values or {}),
         "metric_status": statuses or {},
         "metric_metadata": {
-            "definition_version": 1, "start_timestamp_ms": START,
+            "definition_version": 2, "start_timestamp_ms": START,
             "actual_end_timestamp_ms": end, "intended_end_timestamp_ms": end,
             "observation_interval_ms": 60000, "year_days": 365.25,
         },

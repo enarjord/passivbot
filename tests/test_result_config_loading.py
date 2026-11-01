@@ -21,8 +21,8 @@ def result_record():
     config["backtest"].update(start_date="2024-01-01", end_date="2024-01-02")
     config["optimize"]["scoring"] = [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     config["backtest"]["coins"] = {"combined": ["BTC"]}
-    config["metrics"] = {"definition_version": 1, "objectives": {"cagr_fraction_strategy_equity": 0.001}}
-    config["optimizer_evaluation_contract"] = {"version": 11, "core_metric_definition_version": 1}
+    config["metrics"] = {"definition_version": 2, "objectives": {"cagr_fraction_strategy_equity": 0.001}}
+    config["optimizer_evaluation_contract"] = {"version": 11, "core_metric_definition_version": 2}
     return config
 
 

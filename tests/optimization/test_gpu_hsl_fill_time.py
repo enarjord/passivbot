@@ -81,7 +81,8 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     verify_loaded_runtime_extension()
     config, candles, markets, btc, timestamps = _recovered_panic_inputs(side, mode, strategy_kind)
     payload = build_backtest_payload(candles, markets, deepcopy(config), "bybit", btc,
-                                     timestamps, metrics_only=False, metric_requests=["gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count"])
+                                     timestamps, metrics_only=False, metric_requests=["gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count",
+                                                                                  "hsl_panic_episode_loss_max_fraction", "hsl_panic_episode_loss_mean_fraction"])
     fills, _, analysis = execute_backtest(payload, config)
     report = payload.hard_stop_plot_data["hsl"]
     assert report["summary"]["triggers"] > 0
@@ -92,10 +93,14 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     assert all(int(fill[0]) == 6 and int(fill[1]) == int(timestamps[6]) for fill in panic_fills)
     assert all(float(fill[3]) == float(fill[4]) == 0. and float(fill[5]) == 1024.
                and float(fill[9]).is_integer() and float(fill[10]).is_integer() for fill in fills)
-    # The controller retired its panic intent at the recovered pre-fill mark.
-    # A panic-tagged order alone does not make this an active HSL episode.
-    assert analysis["hsl_execution_episode_count"] == analysis["metric_metadata"]["hsl_execution_episode_count"] == 0
-    metrics = {"gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count"}
+    # Execution-price recovery retires further panic intent, but the fill still
+    # belongs to the HSL order that was actually submitted while RED.
+    assert analysis["hsl_execution_episode_count"] == analysis["metric_metadata"]["hsl_execution_episode_count"] == 1
+    assert report["summary"]["panic_close_fills"] == 1
+    assert len(report["execution_episodes"]) == 1
+    metrics = {"gross_turnover_ratio_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction", "hsl_execution_episode_count",
+               "hsl_panic_episode_loss_max_fraction", "hsl_panic_episode_loss_mean_fraction"}
+    assert analysis["hsl_panic_episode_loss_max_fraction"] == analysis["hsl_panic_episode_loss_mean_fraction"] == 0.0
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
         needed_metrics=metrics, factual_hsl=True)
@@ -104,3 +109,62 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     for name in metrics:
         expected = resolve_metric_value(analysis, name)
         assert actual[name] == pytest.approx(expected, abs=0., rel=8*np.finfo(float).eps), name
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
+@pytest.mark.parametrize("outcome", ["fee_red", "profit"])
+def test_recovered_hsl_order_keeps_causal_loss_across_gpu_chunks(side, mode, strategy_kind, outcome):
+    from optimization.gpu.service import SharedAccountReplay
+    from test_hsl_fill_attribution import HSL_METRICS, _run, recovered_panic_inputs
+
+    inputs = recovered_panic_inputs(side, mode, strategy_kind, outcome)
+    config, candles, markets, btc, timestamps = inputs
+    (_, _, expected), _ = _run(inputs)
+    assert expected["hsl_execution_episode_count"] == 1
+    assert expected["metric_metadata"]["hsl_trigger_count"] == (2 if outcome == "fee_red" else 1)
+    assert (expected["hsl_panic_episode_loss_max_fraction"] > 0.0) == (outcome == "fee_red")
+    # The small dispatch makes the submitted panic order cross a checkpoint.
+    # These shared shaders execute through Metal or CUDA on the available device.
+    for dispatch_budget in (500_000_000, 5):
+        replay = SharedAccountReplay(
+            config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+            exchange="bybit", batch_size=1, needed_metrics=HSL_METRICS,
+            max_dispatch_candidate_bars=dispatch_budget, factual_hsl=True,
+        )
+        actual = replay.evaluate_results([{}])[0]
+        assert actual.metadata["metric_metadata"]["hsl_execution_episode_count"] == 1
+        assert actual.metadata["metric_metadata"]["hsl_trigger_count"] == expected["metric_metadata"]["hsl_trigger_count"]
+        for name in HSL_METRICS:
+            assert actual.metrics[name] == pytest.approx(
+                expected[name], abs=0.0, rel=8 * np.finfo(np.float32).eps,
+            ), (name, dispatch_budget)
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
+def test_recovered_aggregate_pending_batch_keeps_one_gpu_episode(side, mode, strategy_kind):
+    from optimization.gpu.service import SharedAccountReplay
+    from test_hsl_fill_attribution import HSL_METRICS, _run, recovered_batch_inputs
+
+    inputs = recovered_batch_inputs(side, mode, strategy_kind)
+    config, candles, markets, btc, timestamps = inputs
+    (_, _, expected), _ = _run(inputs)
+    assert expected["hsl_execution_episode_count"] == 1
+    assert expected["metric_metadata"]["hsl_trigger_count"] == 2
+    assert expected["hsl_panic_episode_loss_max_fraction"] > 0.09
+    for dispatch_budget in (500_000_000, 5):
+        replay = SharedAccountReplay(
+            config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+            exchange="bybit", batch_size=1, needed_metrics=HSL_METRICS,
+            max_dispatch_candidate_bars=dispatch_budget, factual_hsl=True,
+        )
+        actual = replay.evaluate_results([{}])[0]
+        assert actual.metadata["metric_metadata"]["hsl_execution_episode_count"] == 1
+        assert actual.metadata["metric_metadata"]["hsl_trigger_count"] == 2
+        for name in HSL_METRICS:
+            assert actual.metrics[name] == pytest.approx(
+                expected[name], abs=0.0, rel=8 * np.finfo(np.float32).eps,
+            ), (name, dispatch_budget)

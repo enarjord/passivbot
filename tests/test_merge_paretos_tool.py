@@ -59,7 +59,7 @@ def _write_candidate(
             "bounds": bounds,
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"omega_ratio_strategy_equity": metric_a, "ulcer_index_fraction_strategy_equity": metric_b},
             "stats": {
                 "omega_ratio_strategy_equity": _metric_stats(metric_a),
@@ -92,7 +92,7 @@ def _write_nested_candidate(
             "bounds": bounds,
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"omega_ratio_strategy_equity": metric_a, "ulcer_index_fraction_strategy_equity": metric_b},
             "stats": {
                 "omega_ratio_strategy_equity": _metric_stats(metric_a),

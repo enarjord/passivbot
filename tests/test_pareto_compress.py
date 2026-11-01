@@ -32,7 +32,7 @@ def _write_candidate(
             ]
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {
                 "cagr_fraction_strategy_equity": adg_fraction,
                 "drawdown_max_fraction_strategy_equity": drawdown,

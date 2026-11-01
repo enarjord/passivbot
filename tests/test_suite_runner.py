@@ -958,14 +958,14 @@ def test_reduce_metrics_computes_stats():
         ScenarioResult(
             scenario=SuiteScenario("a", None, None, None, None),
             per_exchange={},
-            metrics={"definition_version": 1, "stats": {"cagr_fraction_strategy_equity": {"mean": 1.0, "min": 1.0, "max": 1.0, "std": 0.0}}},
+            metrics={"definition_version": 2, "stats": {"cagr_fraction_strategy_equity": {"mean": 1.0, "min": 1.0, "max": 1.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
         ScenarioResult(
             scenario=SuiteScenario("b", None, None, None, None),
             per_exchange={},
-            metrics={"definition_version": 1, "stats": {"cagr_fraction_strategy_equity": {"mean": 3.0, "min": 3.0, "max": 3.0, "std": 0.0}}},
+            metrics={"definition_version": 2, "stats": {"cagr_fraction_strategy_equity": {"mean": 3.0, "min": 3.0, "max": 3.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
@@ -1146,7 +1146,7 @@ def test_reduce_metrics_applies_configured_policy_to_canonical_holding_duration(
         ScenarioResult(
             scenario=SuiteScenario(str(days), None, None, None, None),
             per_exchange={},
-            metrics={"definition_version": 1, "stats": {
+            metrics={"definition_version": 2, "stats": {
                 "position_held_max_days": {"mean": days},
             }},
             elapsed_seconds=0.0, output_path=None,

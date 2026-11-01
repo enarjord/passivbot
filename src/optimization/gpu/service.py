@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from config.policy import validate_minimum_cost_filters
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 
 import copy
 from dataclasses import replace
@@ -526,7 +527,7 @@ def _gpu_proxy_execution_checkpoint_contract(
     )
     contract = {
         "version": 11,
-        "core_metric_definition_version": 1,
+        "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
         "side_activation_abi": 1,

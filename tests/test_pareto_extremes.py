@@ -13,7 +13,7 @@ def _make_candidate(w_values, violation=0.0):
     """Build a minimal candidate dict compatible with ParetoStore expectations."""
     return {
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": dict(w_values),
             "constraint_violation": violation,
         },
@@ -24,7 +24,7 @@ def _make_candidate(w_values, violation=0.0):
 def _make_adg_candidate(value, *, include_scoring=True):
     candidate = {
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"cagr_fraction_strategy_equity": value},
             "constraint_violation": 0.0,
         },
@@ -98,7 +98,7 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
             "short": {},
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"ulcer_index_fraction_strategy_equity": 0.5},
             "constraint_violation": 0.0,
         },
@@ -203,7 +203,7 @@ def test_pareto_store_rejects_scoring_basis_mismatch(tmp_path):
 def test_pareto_store_rejects_missing_objective_values(tmp_path):
     entry = {
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"ulcer_index_fraction_strategy_equity": None},
             "constraint_violation": 0.0,
         },
@@ -218,7 +218,7 @@ def test_pareto_store_rejects_missing_objective_values(tmp_path):
 def test_pareto_store_rejects_nan_objective_values(tmp_path):
     entry = {
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {"ulcer_index_fraction_strategy_equity": math.nan},
             "constraint_violation": 0.0,
         },

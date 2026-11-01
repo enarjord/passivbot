@@ -14,7 +14,7 @@ from tools.pareto_dash import load_pareto_dataframe
 def _checkpoint_config():
     from optimization.evaluation_contract import CONTRACT_CACHE_KEY, CONTRACT_VERSION
     return {"backtest": {}, "bot": {}, "optimize": {"objective_scenario": None}, CONTRACT_CACHE_KEY: {
-        "version": CONTRACT_VERSION, "core_metric_definition_version": 1, "implementation": {"test": "source-bound-fixture"},
+        "version": CONTRACT_VERSION, "core_metric_definition_version": 2, "implementation": {"test": "source-bound-fixture"},
     }}
 
 
@@ -85,7 +85,7 @@ class FakeEvaluator:
             tuple(objectives),
             0.0,
             {
-                "definition_version": 1,
+                "definition_version": 2,
                 "objectives": {
                     name: value for name, value in zip(self.config["optimize"]["scoring"], [x0, x1])
                 },

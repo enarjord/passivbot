@@ -130,7 +130,7 @@ def test_resume_detects_changed_canonical_execution_assumptions(field):
 
     config = get_template_config()
     contract = build_evaluation_contract(config)
-    assert contract["core_metric_definition_version"] == 1
+    assert contract["core_metric_definition_version"] == 2
     assert contract["implementation"]
     config[CONTRACT_CACHE_KEY] = deepcopy(contract)
     recorded = deepcopy(config)
