@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,
+  inspect requirements without fetching through `--plan`, and save preparation manifests.
+  Version candle-cache requests and normalize numeric gap tolerance so integer and float
+  spellings share one new cache identity; historical fitness and cache identities are not migrated.
+
 - Clean up Rust build warnings by updating age-admission PyO3 bindings, removing
   obsolete helpers and keeping test utilities out of production builds.
 

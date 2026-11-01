@@ -18,6 +18,7 @@ import numpy as np
 from backtest_universe import effective_backtest_approved_coins_by_side
 from config.access import get_optional_config_value, require_config_value
 from utils import date_to_ts, format_end_date, utc_ms
+from preparation_identity import CACHE_REQUEST_SCHEMA_VERSION, gap_tolerance_minutes
 
 
 HLCVS_MANIFEST_SCHEMA_VERSION = 1
@@ -297,14 +298,13 @@ def build_hlcvs_manifest(
         "config_hash": str(cache_hash),
         "built_at": utc_ms(),
         "requested": {
+            "cache_request_schema_version": CACHE_REQUEST_SCHEMA_VERSION,
             "exchange": exchange,
             "exchanges": list(require_config_value(config, "backtest.exchanges")),
             "start_ts": _ts_from_config_date(require_config_value(config, "backtest.start_date")),
             "end_ts": _ts_from_config_date(requested_end_date),
             "warmup_minutes": int(warmup_minutes),
-            "gap_tolerance_ohlcvs_minutes": require_config_value(
-                config, "backtest.gap_tolerance_ohlcvs_minutes"
-            ),
+            "gap_tolerance_ohlcvs_minutes": gap_tolerance_minutes(config),
             "ohlcv_source_dir": get_optional_config_value(config, "backtest.ohlcv_source_dir"),
             "volume_normalization": bool(
                 get_optional_config_value(config, "backtest.volume_normalization", True)

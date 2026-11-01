@@ -63,6 +63,19 @@ passivbot optimize configs/examples/default_trailing_martingale_long.json --suit
 passivbot optimize path/to/config.json -t path/to/anchor_configs -ft long.forager,long.risk
 ```
 
+Prepare the exact optimizer data request before starting search:
+
+```bash
+passivbot download path/to/config.json --for-optimize --plan
+passivbot download path/to/config.json --for-optimize --manifest prepared-inputs.json
+```
+
+The plan reads existing metadata only and leaves candle coverage and unresolved
+market identities explicitly unknown. Preparation uses the optimizer's suite and
+maximum searched warmup without evaluating candidates. The manifest records inputs;
+it is not saved fitness or an alternative to evaluator compatibility checks. See
+[`../../backtesting.md`](../../backtesting.md#pre-download-ohlcv) for offline preparation.
+
 When `-ft/--fine-tune-params` and `-t/--start` are used together, the start configs are
 fine-tune anchors: non-tuned optimizer-bound bot params are fixed from the selected anchor and
 only the fine-tune selectors are optimized. Runtime policy from the base config still wins, and

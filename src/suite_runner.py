@@ -1034,6 +1034,7 @@ async def prepare_master_datasets(
     prepared_universes: Optional[Dict[str, _PreparedScenarioUniverse]] = None,
     scenario_policy_config: Optional[Dict[str, Any]] = None,
     allow_internal_nan_gaps: bool = False,
+    force_refetch_gaps: bool = False,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
@@ -1054,6 +1055,8 @@ async def prepare_master_datasets(
 
     async def _prepare_dataset(config, exchange, assigned_scenarios):
         kwargs = {"allow_internal_nan_gaps": True} if allow_internal_nan_gaps else {}
+        if force_refetch_gaps:
+            kwargs["force_refetch_gaps"] = True
         if assigned_scenarios is not None:
             kwargs["inception_fact_coins"] = frozenset().union(
                 *(prepared_universes[scenario.label].inception_coins for scenario in assigned_scenarios)
