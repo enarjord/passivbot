@@ -93,9 +93,6 @@ async def main() -> None:
                         help="Optional target free VRAM for the conservative --plan estimate; no device probe.")
     parser.add_argument("--offline", type=str2bool, default=None, dest="backtest.offline",
                         help="Use only verified local data and metadata (y/n).")
-    parser.add_argument("--acquisition-mode", choices=("auto", "rest"), default=None,
-                        dest="backtest.acquisition_mode",
-                        help="Public acquisition route; validation and offline requirements are unchanged.")
     parser.add_argument(
         "--symbols",
         "-s",
@@ -172,7 +169,6 @@ async def main() -> None:
             "backtest.start_date",
             "backtest.end_date",
             "backtest.offline",
-            "backtest.acquisition_mode",
         },
     )
     config = prepare_config(
