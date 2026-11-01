@@ -211,6 +211,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "audit and repair v2 OHLCV catalog metadata (requires full install)",
         requires_full=True,
     ),
+    "data-cache": CommandSpec(
+        "tools.data_cache",
+        "export/import verified portable offline data caches (requires full install)",
+        requires_full=True,
+    ),
     "import-historical-data": CommandSpec(
         "tools.import_historical_data",
         "explicit offline import preserving source and current OHLCV rows (requires full install)",

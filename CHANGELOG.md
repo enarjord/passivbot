@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
+
 - Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,
   inspect requirements without fetching through `--plan`, and save preparation manifests.
   Version candle-cache requests and normalize numeric gap tolerance so integer and float
