@@ -469,14 +469,14 @@ def prune_shadowing_local_extensions() -> None:
 
 def maturin_develop_command() -> list[str]:
     if importlib.util.find_spec("maturin") is not None:
-        return [sys.executable, "-m", "maturin", "develop", "--release"]
+        return [sys.executable, "-m", "maturin", "develop", "--release", "--locked"]
 
     suffix = ".exe" if os.name == "nt" else ""
     venv_maturin = Path(sys.executable).with_name(f"maturin{suffix}")
     if venv_maturin.exists():
-        return [str(venv_maturin), "develop", "--release"]
+        return [str(venv_maturin), "develop", "--release", "--locked"]
 
-    return ["maturin", "develop", "--release"]
+    return ["maturin", "develop", "--release", "--locked"]
 
 
 def maturin_env() -> dict[str, str]:
