@@ -18,6 +18,7 @@ async def test_optimizer_freezes_same_routing_facts_on_cold_and_warm_preparation
 ):
     import optimize
     import utils
+    from optimization import warmup
 
     config = offline_cli_config(tmp_path, monkeypatch, "portfolio")
     expected_exchanges = ["binance"]
@@ -51,7 +52,7 @@ async def test_optimizer_freezes_same_routing_facts_on_cold_and_warm_preparation
         raise Captured
 
     monkeypatch.setattr(optimize, "load_markets", prepare_metadata, raising=False)
-    monkeypatch.setattr(optimize, "build_optimizer_data_config", capture)
+    monkeypatch.setattr(warmup, "build_optimizer_data_config", capture)
     monkeypatch.setattr(optimize.sys, "argv", [
         "optimize", str(path), "--suite", "y" if suite else "n",
     ])

@@ -74,8 +74,8 @@ jobs:
 
       - name: Run Rust tests
         working-directory: passivbot-rust
-        run: cargo test --no-default-features
+        run: cargo test --locked --no-default-features
 
       - name: Check Rust test targets with default features
         working-directory: passivbot-rust
-        run: cargo check --tests
+        run: cargo check --locked --tests

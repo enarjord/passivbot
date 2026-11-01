@@ -8,6 +8,14 @@ since the latest release tag; these features may already be available when insta
 
 - Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
 
+- Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,
+  inspect requirements without fetching through `--plan`, and save preparation manifests.
+  Version candle-cache requests and normalize numeric gap tolerance so integer and float
+  spellings share one new cache identity; historical fitness and cache identities are not migrated.
+
+- Lock Rust dependency resolution for native extension, package and CI builds so
+  separate checkouts use the same declared dependencies and stale locks fail visibly.
+
 - Clean up Rust build warnings by updating age-admission PyO3 bindings, removing
   obsolete helpers and keeping test utilities out of production builds.
 

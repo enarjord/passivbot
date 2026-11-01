@@ -390,6 +390,39 @@ passivbot download configs/examples/default_trailing_martingale_long.json
 passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
 ```
 
+The default command warms the base backtest request. For an optimizer, use
+`--for-optimize` to prepare its complete enabled suite, scenario-specific source
+requirements, fixed runtime source overrides, and maximum searched warmup through
+the same owners as `optimize`. This performs no candidate replay and produces no fitness:
+
+```shell
+passivbot download path/to/config.json --for-optimize --plan --target-cuda-free-gib 8
+passivbot download path/to/config.json --for-optimize --manifest prepared-inputs.json
+passivbot download path/to/config.json --for-optimize --offline y --manifest verified-inputs.json
+```
+
+`--plan` reads configuration and existing small metadata files without fetching,
+loading candle arrays, probing a GPU, or writing caches. It requires a current
+source-stamped Rust extension and fails without rebuilding when it is absent or stale.
+It reports declared date
+literals, resolved clocks, scenario sources, warmup, missing metadata and unresolved
+coverage. Dynamic universes remain unknown until owner resolution. The optional CUDA
+estimate uses the supplied free-memory budget and conservative declared identifier
+counts; it is not actual device admission and never changes dates, coins or precision.
+Without `--for-optimize`, the plan describes only the default base request.
+
+`--manifest` writes a report to the explicitly selected file. Completed optimizer
+preparation reports record the actual master cache directories and manifest hashes,
+ordered coins and scenario shapes. They are input provenance, not an evaluation
+contract or permission to reuse previous fitness. Offline preparation still requires
+genuine complete candle, listing and metadata evidence.
+
+Candle request schema 2 stores gap tolerance as a finite nonnegative minute quantity
+with one float representation. Consequently `120` and `120.0` select the same new
+content cache. Literal start-date spellings and authoritative list order remain
+distinct. Existing cache directories and saved evaluation identities are not renamed,
+rewritten or treated as equivalent fitness.
+
 ## Suite Runs
 
 Suite mode evaluates multiple scenario slices in one invocation. Configuration uses a flattened structure directly under `backtest`:

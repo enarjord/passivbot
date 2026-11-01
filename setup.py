@@ -68,7 +68,10 @@ setup(
     package_dir={"": "src"},
     py_modules=discover_py_modules(),
     rust_extensions=[
-        RustExtension("passivbot_rust", path="passivbot-rust/Cargo.toml", binding=Binding.PyO3)
+        RustExtension(
+            "passivbot_rust", path="passivbot-rust/Cargo.toml",
+            binding=Binding.PyO3, cargo_manifest_args=["--locked"],
+        )
     ],
     install_requires=LIVE_REQUIREMENTS,
     extras_require={
