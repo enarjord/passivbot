@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Stream large CUDA Trailing Martingale tick inputs in bounded time chunks and
+  compact one-minute hourly observations, allowing longer histories within the
+  existing memory guard while preserving continuous account state and replay values.
+
 - Verify an optional completed preparation manifest before optimizer evaluation and
   record input preparation plus the actual search algorithm, population and seed facts
   in new sessions, without changing fitness identity or backfilling legacy runs.

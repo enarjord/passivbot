@@ -1452,17 +1452,19 @@ class SharedAccountReplay:
         )
         from optimization.gpu.residency import (
             current_gpu_residency, prefer_streamed_ticks, discard_readonly_file_pages,
-            capture_mps_input_memory_budget,
+            capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
         )
-        if (input_memory_budget is None and gpu_device(torch) == "mps"
-                and current_gpu_residency() is not None):
-            input_memory_budget = capture_mps_input_memory_budget(torch)
+        device = gpu_device(torch)
+        if input_memory_budget is None and current_gpu_residency() is not None:
+            capture = (capture_mps_input_memory_budget if device == "mps"
+                       else capture_cuda_input_memory_budget)
+            input_memory_budget = capture(torch)
         stream_tick_inputs = bool(
             self.strategy_kind == "trailing_martingale" and self.temporal_chunking
-            and gpu_device(torch) == "mps" and current_gpu_residency() is not None
+            and device in {"mps", "cuda"} and current_gpu_residency() is not None
             and prepared_data_cache is not None
             and prefer_streamed_ticks(len(values), coin_count, input_memory_budget,
-                                      interval_ms=runs[0].interval_ms)
+                                      interval_ms=runs[0].interval_ms, device=device)
         )
         self.data = _prepared_multicoin_data(
             values,

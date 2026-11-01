@@ -385,6 +385,7 @@ def test_spilled_price_packing_never_allocates_whole_history(runtime, monkeypatc
     torch.float32, torch.int32, torch.int8 = np.float32, np.int32, np.int8
     torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
     torch.cuda.is_available = lambda: True
+    torch.cuda.mem_get_info = lambda: (1_000_000, 2_000_000)
     values = np.tile([101., 99., 100., 1.], (109, 3, 1))
     timestamps = np.arange(len(values), dtype=np.int64) * 60_000
     run = model.ProxyRun(1000, 0, 0, 0, 0, 0, 60_000, .05, 0, len(values) - 1)
@@ -416,6 +417,7 @@ def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monke
     torch.float32, torch.int32, torch.int8 = np.float32, np.int32, np.int8
     torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
     torch.cuda.is_available = lambda: True
+    torch.cuda.mem_get_info = lambda: (1_000_000, 2_000_000)
     values = np.tile([101., 99., 100., 1.], (29, 2, 1))
     values[-1, 0, 2] = 1e12
     timestamps = np.arange(len(values), dtype=np.int64) * 60_000

@@ -115,18 +115,24 @@ class NativeBacktestService:
         device = gpu_device()
         if self._required_device is not None and device != self._required_device:
             raise RuntimeError("CUDA backtest service requires an NVIDIA CUDA device")
-        if device == "mps" and self._input_memory_budget is None:
+        if self._input_memory_budget is None:
             import torch
-            from optimization.gpu.residency import capture_mps_input_memory_budget
-            self._input_memory_budget = capture_mps_input_memory_budget(torch)
+            from optimization.gpu.residency import (
+                capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
+            )
+            capture = (capture_mps_input_memory_budget if device == "mps"
+                       else capture_cuda_input_memory_budget)
+            self._input_memory_budget = capture(torch)
         if self._batch_tuner is not None and device == "mps":
             # Device selection stays on the owner, before prepared replay limits
             # create a controller and clamp its initial width.
             from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
             self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
         scope = metal_residency_scope if device == "mps" else cuda_residency_scope
+        memory_options = ({"input_memory_budget": self._input_memory_budget}
+                          if device == "cuda" else {})
         try:
-            with scope() as residency:
+            with scope(**memory_options) as residency:
                 self._residency = residency
                 yield
         finally:

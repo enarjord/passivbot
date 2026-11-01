@@ -184,7 +184,7 @@ For ordinary unsliced one-minute caches, GPU memory admission checks the NumPy h
 decoding the payload. Suites, explicit dataset slices and aggregated histories are checked after
 their effective dimensions are known, before price packing. These checks retain the device's
 existing invariant safety budget; they do not guarantee sufficient system RAM or include all
-candidate/driver scratch. Metal trailing-martingale replay keeps five strict integer tick arrays
+candidate/driver scratch. Metal and CUDA trailing-martingale replay keep five strict integer tick arrays
 on disk and uploads only each temporal replay range plus previous/next-candle context. The
 admitted footprint includes its maximum window. One-minute hourly ranges use lossless compact
 boundary rows with virtual access at their original indices; full bars and clamped
@@ -196,7 +196,14 @@ raw file pages receive an optional OS reclaim hint in both parent and worker map
 future reads remain valid. Large Metal device uploads copy bounded contiguous slices and
 release completed source pages, avoiding an additional active copy of the packed history.
 Startup upload waits bound source lifetime; normal replay synchronization is unchanged. This preserves
-the existing 45% safety budget and does not alter CUDA or other strategy layouts.
+the existing 45% safety budget. CUDA retains its signed-byte relation table, while
+other tick fields remain int32. Both devices choose resident inputs for smaller
+histories and streaming when it reduces memory and full inputs exceed the captured
+device or host allowance. The preference is frozen before history preparation and
+reused by cache-header admission and the owning replay worker. CUDA still checks
+actual free VRAM when activating each dataset. Streaming does not split the account
+into separate date scenarios: positions, balances, indicators and metric state
+continue across temporal replay chunks. Other strategy layouts are unchanged.
 Validation uses bounded conversion and mask buffers without changing
 accepted candle values or the first reported invalid location.
 
