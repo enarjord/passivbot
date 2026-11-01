@@ -57,7 +57,7 @@ class TestSuiteMetricsToStatsAggregate:
         }
         if aggregated_value is not None:
             payload["aggregated"] = aggregated_value
-        return {"suite_metrics": {"definition_version": 1, "metrics": {HOLD: payload}}}
+        return {"suite_metrics": {"definition_version": 2, "metrics": {HOLD: payload}}}
 
     def test_precomputed_aggregated_used_when_present(self):
         _, aggregate = _suite_metrics_to_stats(self._entry_with_metrics_format(200.0))
@@ -93,7 +93,7 @@ class TestAggregateMetricsConfig:
     def _make_results(self, metric_name, values):
         return [ScenarioResult(
             scenario=SuiteScenario(f"s{i}", None, None, None, None), per_exchange={},
-            metrics={"definition_version": 1, "stats": {metric_name: {"mean": value}}},
+            metrics={"definition_version": 2, "stats": {metric_name: {"mean": value}}},
             elapsed_seconds=0.0, output_path=None,
         ) for i, value in enumerate(values)]
 
@@ -267,8 +267,8 @@ class TestObjectivesNotDoubleCorrected:
         return {
             "backtest": {"reducer": self.AGGREGATE_CFG},
             "optimize": {"scoring": [{"metric": name, "goal": "max" if name == CAGR else "min"} for name in scoring_keys]},
-            "metrics": {"definition_version": 1, "objectives": dict(zip(scoring_keys, objective_values)), "constraint_violation": 0.0},
-            "suite_metrics": {"definition_version": 1, "metrics": rows},
+            "metrics": {"definition_version": 2, "objectives": dict(zip(scoring_keys, objective_values)), "constraint_violation": 0.0},
+            "suite_metrics": {"definition_version": 2, "metrics": rows},
         }
 
     def test_named_raw_objectives_are_not_double_corrected(self):

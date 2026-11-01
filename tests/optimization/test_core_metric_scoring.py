@@ -39,7 +39,7 @@ def evaluator(metrics=(CAGR,), limits=()):
 
 def source(values):
     return {
-        "metric_metadata": {"definition_version": 1},
+        "metric_metadata": {"definition_version": 2},
         "liquidated": False,
         **encode_metric_values(values),
     }

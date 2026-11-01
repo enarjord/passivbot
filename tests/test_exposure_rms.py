@@ -194,7 +194,7 @@ def test_rms_catalog_goals_and_selected_nonfinite_aggregation():
         assert default_objective_goal(name) == "min"
         assert DEFAULT_TOLERANCES[name].absolute == 1e-5
         assert DEFAULT_TOLERANCES[name].relative == 1e-4
-        source = {"metric_metadata": {"definition_version": 1}, name: 0.0}
+        source = {"metric_metadata": {"definition_version": 2}, name: 0.0}
         assert build_scenario_metrics({"venue": source}, required_metrics=[name])["stats"][name]["mean"] == 0.0
         source[name] = float("nan")
         with pytest.raises(MetricAggregationError, match="malformed finite metric"):
@@ -235,7 +235,7 @@ def test_utilization_objective_and_gross_exposure_limit_use_canonical_scorer():
     scorer = CanonicalResultScorer(evaluator)
     assert scorer.required_metrics("base") == {metric, limit}
     def source(values):
-        return {**values, "liquidated": False, "metric_metadata": {"definition_version": 1}}
+        return {**values, "liquidated": False, "metric_metadata": {"definition_version": 2}}
     low = scorer.score([], {"base": {"binance": source({metric: 0.2, limit: 0.4})}})
     high = scorer.score([], {"base": {"binance": source({metric: 0.3, limit: 0.6})}})
     assert high["constraint_violation"] > low["constraint_violation"]

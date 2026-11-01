@@ -79,7 +79,7 @@ class FakeService(GpuBacktestService):
             self.rows.extend(deepcopy(candidates))
             return [ReplayResult(metrics={name: 0.1 + row["long_entry_initial_qty_fraction"]
                                          for name in dataset.metrics}, liquidated=False,
-                                 metadata={"metric_status": {}, "metric_metadata": {"definition_version": 1}})
+                                 metadata={"metric_status": {}, "metric_metadata": {"definition_version": 2}})
                     for row in candidates]
         super().register_dataset(dataset_id, SimpleNamespace(evaluate=evaluate))
 

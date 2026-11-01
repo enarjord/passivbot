@@ -453,6 +453,7 @@ mod tests {
     }
     fn execution(price: f64) -> OrderFillExecution {
         OrderFillExecution {
+            hsl_origin: None,
             at_bar_close: false,
             price,
             fee_fraction: 0.001,
@@ -981,6 +982,9 @@ mod tests {
                     let exec = OrderFillExecution {
                         at_bar_close,
                         fee_fraction: 0.0,
+                        hsl_origin: if at_bar_close { None } else {
+                            bt.hsl_report.execution_origin((Some(side), Some(0)))
+                        },
                         ..execution(100.0)
                     };
                     let order = Order {

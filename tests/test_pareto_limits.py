@@ -86,7 +86,7 @@ def test_pareto_store_cli_retains_saved_infinite_objective(
     entry = {
         "optimize": {"scoring": [metric]},
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {
                 metric: None,
                 "metric_status": {metric: {"status": "positive_infinity"}},

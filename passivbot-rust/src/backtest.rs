@@ -377,6 +377,7 @@ pub struct OpenOrderBundle {
 pub struct BacktestOrder {
     pub order: Order,
     pub execution_type: orchestrator::ExecutionType,
+    pub(crate) hsl_origin: Option<hsl_report::ExecutionOrigin>,
 }
 
 #[derive(Default, Debug)]
@@ -447,6 +448,7 @@ struct OrderFillExecution {
     price: f64,
     fee_fraction: f64,
     liquidity: &'static str,
+    hsl_origin: Option<hsl_report::ExecutionOrigin>,
 }
 
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
@@ -2691,12 +2693,13 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         &mut self,
         pside: usize,
         idx: usize,
+        origin: Option<hsl_report::ExecutionOrigin>,
         net_pnl: f64,
         pre_fill_balance: f64,
     ) {
         let key = self.hsl_report_key(pside, idx);
         // Share the fill's raw causal balance, before any trading wallet update.
-        self.hsl_report.panic_fill(key, net_pnl, pre_fill_balance);
+        self.hsl_report.panic_fill(key, origin, net_pnl, pre_fill_balance);
     }
 
     fn update_equities(&mut self, k: usize) {
@@ -2934,6 +2937,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.record_hard_stop_panic_close_loss(
                 LONG,
                 idx,
+                exec.hsl_origin,
                 pnl + fee_paid,
                 core_pre_fill_balance,
             );
@@ -3055,6 +3059,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.record_hard_stop_panic_close_loss(
                 SHORT,
                 idx,
+                exec.hsl_origin,
                 pnl + fee_paid,
                 core_pre_fill_balance,
             );
@@ -3412,6 +3417,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     };
                     let exec = OrderFillExecution {
                         at_bar_close: true,
+                        hsl_origin: None,
                         price,
                         fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                         liquidity: "taker",
@@ -3433,6 +3439,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     };
                     let exec = OrderFillExecution {
                         at_bar_close: true,
+                        hsl_origin: None,
                         price,
                         fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                         liquidity: "taker",
@@ -3552,6 +3559,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 .market_fill_price(k, idx, &order.order)
                 .map(|price| OrderFillExecution {
                     at_bar_close: false,
+                    hsl_origin: order.hsl_origin,
                     price,
                     fee_fraction: self.exchange_params_list[idx].taker_fee_fraction,
                     liquidity: "taker",
@@ -3560,6 +3568,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         if self.order_filled(k, idx, &order.order) {
             return Some(OrderFillExecution {
                 at_bar_close: false,
+                hsl_origin: order.hsl_origin,
                 price: order.order.price,
                 fee_fraction: self.exchange_params_list[idx].maker_fee_fraction,
                 liquidity: "maker",
@@ -3679,9 +3688,19 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 price: o.price,
                 order_type: o.order_type,
             };
+            let side = if o.pside == orchestrator::PositionSide::Long { LONG } else { SHORT };
+            let hsl_origin = if matches!(
+                order.order_type, OrderType::ClosePanicLong | OrderType::ClosePanicShort
+            ) && self.hsl_action(side, o.symbol_idx) == crate::hsl_intent::Action::Panic {
+                Some(self.hsl_report.execution_origin(self.hsl_report_key(side, o.symbol_idx))
+                    .expect("HSL protective order requires its causal origin"))
+            } else {
+                None
+            };
             let bt_order = BacktestOrder {
                 order: order.clone(),
                 execution_type: o.execution_type,
+                hsl_origin,
             };
             match o.pside {
                 orchestrator::PositionSide::Long => {
@@ -5379,6 +5398,7 @@ mod tests {
                 order_type: OrderType::ClosePanicLong,
             },
             execution_type: orchestrator::ExecutionType::Market,
+            hsl_origin: None,
         });
 
         bt.check_for_fills(1).unwrap();
@@ -5465,6 +5485,7 @@ mod tests {
                 order_type: OrderType::ClosePanicLong,
             },
             execution_type: orchestrator::ExecutionType::Limit,
+            hsl_origin: None,
         });
 
         bt.check_for_fills(1).unwrap();
@@ -5647,6 +5668,7 @@ mod tests {
                 order_type: OrderType::EntryGridNormalLong,
             },
             execution_type: orchestrator::ExecutionType::Market,
+            hsl_origin: None,
         });
 
         bt.check_for_fills(1).unwrap();
@@ -5731,6 +5753,7 @@ mod tests {
                 order_type: OrderType::EntryGridNormalLong,
             },
             execution_type: orchestrator::ExecutionType::Limit,
+            hsl_origin: None,
         });
 
         bt.check_for_fills(1).unwrap();
@@ -5835,6 +5858,7 @@ mod tests {
                     order_type,
                 },
                 execution_type: orchestrator::ExecutionType::Limit,
+                hsl_origin: None,
             };
             assert!(bt.order_fill_execution(0, 0, &order).is_none());
             assert!(bt.order_fill_execution(1, 0, &order).is_none());
@@ -6158,6 +6182,7 @@ mod tests {
                 order_type: OrderType::CloseGridLong,
             },
             execution_type: orchestrator::ExecutionType::Limit,
+            hsl_origin: None,
         });
         bt.equity_tracking_active = true;
 
@@ -6705,6 +6730,7 @@ mod tests {
                 order_type,
             },
             execution_type: orchestrator::ExecutionType::Market,
+            hsl_origin: None,
         };
         bt.open_orders.long[0]
             .entries

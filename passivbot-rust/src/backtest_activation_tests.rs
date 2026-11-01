@@ -48,6 +48,7 @@ fn side_activation_backtest_blocks_resting_increases_but_fills_held_closes_witho
                 order_type: entry_kind,
             },
             execution_type: orchestrator::ExecutionType::Limit,
+            hsl_origin: None,
         });
         orders[0].closes.push(BacktestOrder {
             order: Order {
@@ -56,6 +57,7 @@ fn side_activation_backtest_blocks_resting_increases_but_fills_held_closes_witho
                 order_type: close_kind,
             },
             execution_type: orchestrator::ExecutionType::Limit,
+            hsl_origin: None,
         });
         assert!(!bt.trading_enabled.long && !bt.trading_enabled.short);
         bt.check_for_fills(1).unwrap();

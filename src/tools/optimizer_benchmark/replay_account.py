@@ -1,7 +1,7 @@
 """Ordinary-account confirmation from full outputs of either version's CPU runner.
 
 No native module or runner is imported here. Unversioned historical exports label
-close[k] with its candle open; core-v1 exports include their baseline and actual
+close[k] with its candle open; core-v1/v2 exports include their baseline and actual
 completed-close clocks. Explicit metadata selects the clock contract. Fill index,
 rather than timestamp alone, keeps next-bar opening fills out of the preceding
 close, except for a declared causal terminal observation at that opening clock.
@@ -113,10 +113,10 @@ def _account_observation_plan(
     if (
         not isinstance(metric_metadata, Mapping)
         or type(metric_metadata.get("definition_version")) is not int
-        or metric_metadata["definition_version"] != 1
+        or metric_metadata["definition_version"] not in {1, 2}
     ):
         raise ValueError(
-            "native account clock metadata requires explicit core definition version 1"
+            "native account clock metadata requires explicit core definition version 1 or 2"
         )
     required = {
         "start_timestamp_ms",
@@ -127,7 +127,7 @@ def _account_observation_plan(
     }
     missing = required - metric_metadata.keys()
     if missing:
-        raise ValueError(f"core-v1 account clock metadata is missing {sorted(missing)}")
+        raise ValueError(f"versioned core account clock metadata is missing {sorted(missing)}")
     expected = {
         "start_timestamp_ms": start,
         "intended_end_timestamp_ms": expected_end,
@@ -138,26 +138,26 @@ def _account_observation_plan(
     for field, value in expected.items():
         if _clock(metric_metadata[field], f"metric_metadata.{field}") != value:
             raise ValueError(
-                f"core-v1 account clock metadata {field} contradicts prepared coverage or native observations"
+                f"versioned core account clock metadata {field} contradicts prepared coverage or native observations"
             )
     if bootstrap_bar_indices:
         raise ValueError(
-            "core-v1 account artifacts include their evaluation baseline; legacy bootstrap rows are unsupported"
+            "versioned core account artifacts include their evaluation baseline; legacy bootstrap rows are unsupported"
         )
     if (
         indices[-1] > last_bar_index + 1
         or indices != list(range(first_bar_index, indices[-1] + 1))
     ):
         raise ValueError(
-            "core-v1 equity rows must be a contiguous prefix of the expected full grid including baseline"
+            "versioned core equity rows must be a contiguous prefix of the expected full grid including baseline"
         )
     if len(raw_times) < 2:
         raise ValueError(
-            "core-v1 account metrics require positive observed duration; no elapsed terminal interval can be invented"
+            "versioned core account metrics require positive observed duration; no elapsed terminal interval can be invented"
         )
     if values[0] != capital:
         raise ValueError(
-            "core-v1 native baseline must match frozen known-flat initial capital; rebasing is unsupported"
+            "versioned core native baseline must match frozen known-flat initial capital; rebasing is unsupported"
         )
     final_bar = indices[-1] - 1
     if execution_completed and not liquidated and final_bar != last_bar_index:
@@ -192,8 +192,8 @@ def _account_observation_plan(
         final_bar=final_bar,
         terminal_fill_bar=terminal_fill_bar,
         max_fill_bar=cutoffs[-1],
-        clock="core-v1: baseline and completed-close clocks; terminal opening uses preceding completed marks",
-        definition_version=1,
+        clock=f"core-v{metric_metadata['definition_version']}: baseline and completed-close clocks; terminal opening uses preceding completed marks",
+        definition_version=metric_metadata["definition_version"],
     )
 
 def metrics_from_native_replay(*, native_fills, native_equities, liquidated, execution_completed,
@@ -209,7 +209,7 @@ def metrics_from_native_replay(*, native_fills, native_equities, liquidated, exe
     pre-evaluation bootstrap rows must equal flat initial capital; their gap to
     activation is excluded from evaluation coverage, never filled synthetically. Missing
     marks of held inventory, unknown order-side attribution or omitted fills are
-    errors. Core-v1 metadata validates its included baseline and completed-close
+    errors. Core-v1/v2 metadata validates its included baseline and completed-close
     clocks. A completed liquidated replay can include a final opening only when
     the final fill proves its clock and depleted post-fill account balance;
     interrupted artifacts retain strict completed-close fill coverage. Absent
@@ -378,7 +378,7 @@ def cpu_confirmation_from_native(native_result, *, model, effective_config, inpu
     if not isinstance(analysis, Mapping) or type(analysis.get("liquidated")) is not bool:
         raise ValueError("native analysis must supply authoritative liquidation status")
     if "metric_metadata" in analysis and analysis["metric_metadata"] is None:
-        raise ValueError("present native account clock metadata must declare core definition version 1")
+        raise ValueError("present native account clock metadata must declare core definition version 1 or 2")
     metrics = metrics_from_native_replay(native_fills=native_result[0], native_equities=native_result[1],
                                          liquidated=analysis["liquidated"],
                                          metric_metadata=analysis.get("metric_metadata"), **replay_inputs)

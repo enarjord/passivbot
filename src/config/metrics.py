@@ -10,7 +10,7 @@ if not callable(getattr(_native, "get_core_metric_catalog", None)):
         "Rust extension lacks the versioned core metric catalog; rebuild the extension"
     )
 _catalog = _native.get_core_metric_catalog()
-CORE_METRIC_DEFINITION_VERSION = 1
+CORE_METRIC_DEFINITION_VERSION = 2
 if _catalog.get("definition_version") != CORE_METRIC_DEFINITION_VERSION:
     raise RuntimeError("Core metric definition mismatch; rebuild the Rust extension")
 _entries = _catalog.get("metrics")

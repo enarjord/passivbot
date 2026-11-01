@@ -319,7 +319,7 @@ def test_rejected_suite_metrics_never_fabricate_backtest_observations():
     ):
         assert flat == {}
         assert values == {}
-    assert payload["metrics"]["definition_version"] == 1
+    assert payload["metrics"]["definition_version"] == 2
     assert payload["metrics"]["fitness_status"] == "invalid"
     assert payload["metrics"]["backtest_performed"] is False
 
@@ -402,7 +402,7 @@ def test_prefilter_penalty_never_fabricates_or_rescores_objective_values():
     assert payload["fitness"] == (25, 25)
     assert payload["constraint_violation"] == 25
     assert payload["evaluation_vector"] == [1, 2]
-    assert payload["metrics"]["definition_version"] == 1
+    assert payload["metrics"]["definition_version"] == 2
     assert payload["metrics"]["fitness_status"] == "invalid"
     assert payload["metrics"]["objectives"] == {}
     assert payload["metrics"]["stats"] == {}

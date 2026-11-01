@@ -11,7 +11,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const CORE_METRIC_DEFINITION_VERSION: u32 = 1;
+pub const CORE_METRIC_DEFINITION_VERSION: u32 = 2;
 pub const YEAR_DAYS: f64 = 365.25;
 pub const DEFAULT_EW_HALF_LIFE_DAYS: f64 = 180.0;
 pub const DAY_MS: u64 = 86_400_000;

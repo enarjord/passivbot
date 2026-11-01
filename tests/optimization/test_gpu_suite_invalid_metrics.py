@@ -25,7 +25,7 @@ def evaluate(value, values):
     scorer = CanonicalResultScorer(value)
     return [scorer.score([index], {
         "synthetic": {"venue": {
-            METRIC: number, "liquidated": False, "metric_metadata": {"definition_version": 1},
+            METRIC: number, "liquidated": False, "metric_metadata": {"definition_version": 2},
         }},
     }) for index, number in enumerate(values)]
 
@@ -79,7 +79,7 @@ def test_raw_nonfinite_native_envelope_still_fails_as_malformed_output(invalid):
     pending = CandidateEvaluation("candidate", [], [slot], CanonicalResultScorer(make_suite()))
     with pytest.raises(RuntimeError, match="malformed metric values"):
         pending.add_result(BacktestResult("request", "dataset", {METRIC: invalid}, False,
-                                        {"metric_metadata": {"definition_version": 1}}))
+                                        {"metric_metadata": {"definition_version": 2}}))
     assert pending.pending_request_ids == ("request",)
 
 

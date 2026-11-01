@@ -146,7 +146,7 @@ def test_loss_profit_ratio_scoring_preserves_true_infinite_zero_profit_status():
     cfg = _make_config([], scoring=[{"goal": "min", "metric": "loss_profit_ratio"}])
     analysis = {"loss_profit_ratio": None,
                 "metric_status": {"loss_profit_ratio": {"status": "positive_infinity"}},
-                "metric_metadata": {"definition_version": 1}}
+                "metric_metadata": {"definition_version": 2}}
     flat = flatten_metric_stats(build_scenario_metrics({"combined": analysis}, required_metrics=["loss_profit_ratio"])["stats"])
     assert flat["loss_profit_ratio_mean"] is None
     scores, penalty = Evaluator({}, {}, {}, cfg).calc_fitness(flat)
@@ -235,9 +235,9 @@ def test_limit_can_use_median_stat_emitted_by_metric_schema():
     flat_stats = flatten_metric_stats(
         build_scenario_metrics(
             {
-                "binance": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 1.0, "metric_metadata": {"definition_version": 1}},
-                "bybit": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 5.0, "metric_metadata": {"definition_version": 1}},
-                "kucoin": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 100.0, "metric_metadata": {"definition_version": 1}},
+                "binance": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 1.0, "metric_metadata": {"definition_version": 2}},
+                "bybit": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 5.0, "metric_metadata": {"definition_version": 2}},
+                "kucoin": {"cagr_fraction_strategy_equity": 0.001, "fills_gap_max_days": 100.0, "metric_metadata": {"definition_version": 2}},
             }, reducers={"cagr_fraction_strategy_equity": {"mean"}, "fills_gap_max_days": {"median"}}
         )["stats"]
     )

@@ -18,7 +18,7 @@ OMEGA = "omega_ratio_strategy_equity"
 
 
 def source(**values):
-    return {"metric_metadata": {"definition_version": 1}, **values}
+    return {"metric_metadata": {"definition_version": 2}, **values}
 
 
 @pytest.mark.parametrize("value", [0.0, 3.0, -2.0, math.inf, -math.inf])
@@ -100,7 +100,7 @@ def test_reduce_raw_before_adapter_population_and_infinity_status_survive_flatte
 
 
 @pytest.mark.parametrize(
-    "metadata", [{}, {"definition_version": 0}, {"definition_version": 2}]
+    "metadata", [{}, {"definition_version": 0}, {"definition_version": 1}, {"definition_version": 3}]
 )
 def test_stale_or_missing_definition_rejected(metadata):
     with pytest.raises(MetricAggregationError, match="version"):

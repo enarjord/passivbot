@@ -27,7 +27,7 @@ def write_candidate(path, values=(0.02, 0.1, 2.0), *, layout="named"):
     entry = {"optimize": {"scoring": [spec.to_config() for spec in SPECS]}}
     if layout == "named":
         entry["metrics"] = {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": encode_metric_values(objectives),
         }
     elif layout == "legacy":
@@ -39,7 +39,7 @@ def write_candidate(path, values=(0.02, 0.1, 2.0), *, layout="named"):
         }
     elif layout == "suite":
         entry["suite_metrics"] = {
-            "definition_version": 1,
+            "definition_version": 2,
             "metrics": {
                 name: {
                     **encode_metric_values({"aggregated": value}),
@@ -264,7 +264,7 @@ def test_non_objective_metrics_missing_values_and_explicit_statistics(front):
     assert pareto_plot.select_metrics([METRICS[0], extra], data) == [METRICS[0], extra]
     with pytest.raises(ValueError, match="unavailable"):
         pareto_plot.select_metrics([METRICS[0], unavailable], data)
-    assert data["definition_version"] == 1
+    assert data["definition_version"] == 2
     json.dumps(data, allow_nan=False)
 
 
@@ -500,14 +500,14 @@ def test_support_metadata_is_not_exported_as_numeric_plot_columns(tmp_path):
     write_candidate(source)
     entry = json.loads(source.read_text())
     entry["metrics"].update(
-        metric_metadata={"definition_version": 1, "observation_count": 1234},
+        metric_metadata={"definition_version": 2, "observation_count": 1234},
         liquidated=False,
     )
     source.write_text(json.dumps(entry, allow_nan=False))
     _, candidates, specs = load_candidates(source)
     dataset = pareto_plot.build_dataset(candidates, specs)
     assert {metric["key"] for metric in dataset["metrics"]} == set(METRICS)
-    assert dataset["definition_version"] == 1
+    assert dataset["definition_version"] == 2
 
 
 def test_stale_definition_version_cannot_be_exported(tmp_path):

@@ -36,7 +36,7 @@ class Service:
             future.set_exception(failure)
         else:
             future.set_result(BacktestResult(request.request_id, request.dataset_id,
-                                            {"cagr_fraction_strategy_equity": 0.01, "drawdown_max_fraction_strategy_equity": 0.1}, False, metadata or {"metric_metadata": {"definition_version": 1}}))
+                                            {"cagr_fraction_strategy_equity": 0.01, "drawdown_max_fraction_strategy_equity": 0.1}, False, metadata or {"metric_metadata": {"definition_version": 2}}))
 
 
 def scorer():

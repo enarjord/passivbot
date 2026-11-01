@@ -46,7 +46,7 @@ def _write_candidate(
             ]
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": objectives,
             "stats": stats,
         },
@@ -82,7 +82,7 @@ def _write_suite_candidate(
             }
         },
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "aggregate": {
                 "stats": {
                     "cagr_fraction_strategy_equity": {
@@ -140,7 +140,7 @@ def _write_fill_suite_candidate(
             ]
         },
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "metrics": {
                 "cagr_fraction_strategy_equity": {
                     "stats": _metric_stats(adg_fraction),
@@ -192,9 +192,9 @@ def _write_scenario_candidate(
         }
     payload = {
         "optimize": {"scoring": scoring},
-        "metrics": {"definition_version": 1, "objectives": aggregate},
+        "metrics": {"definition_version": 2, "objectives": aggregate},
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "metrics": suite_metrics,
             "scenario_labels": list(scenarios),
         },
@@ -588,7 +588,7 @@ def test_ordinary_filter_uses_stored_legacy_suite_aggregate(tmp_path: Path):
         },
         "backtest": {"aggregate": {"default": "max"}},
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "aggregate": {
                 "aggregated": {
                     "cagr_fraction_strategy_equity": 0.8,
@@ -1122,9 +1122,9 @@ def test_scenario_selected_metrics_ignore_unrelated_undefined_quantity(tmp_path)
     short = "short_net_profit_contribution_fraction"
     payload = {
         "optimize": {"scoring": [cagr]},
-        "metrics": {"definition_version": 1, "objectives": {cagr: 0.4}},
+        "metrics": {"definition_version": 2, "objectives": {cagr: 0.4}},
         "suite_metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "scenario_labels": ["base"],
             "metrics": {
                 cagr: {

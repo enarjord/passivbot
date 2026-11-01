@@ -24,14 +24,14 @@ def test_dominance_prefers_lower_violation_and_better_objectives():
 
 def test_extract_objectives_respects_scoring_order():
     names = ["cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"]
-    entry = {"metrics": {"definition_version": 1, "objectives": dict(zip(reversed(names), [3., 2., 1.]))}}
+    entry = {"metrics": {"definition_version": 2, "objectives": dict(zip(reversed(names), [3., 2., 1.]))}}
     obj, keys = extract_objectives(entry, scoring_keys=names)
     assert obj == (1., 2., 3.)
     assert keys == names
 
 
 def test_extract_objectives_rejects_retired_metric_alias_keys():
-    entry = {"metrics": {"definition_version": 1, "objectives": {"adg_fraction": 0.1}}}
+    entry = {"metrics": {"definition_version": 2, "objectives": {"adg_fraction": 0.1}}}
     with pytest.raises(ValueError, match="unknown or retired"):
         extract_objectives(entry, scoring_keys=["adg_fraction"])
 

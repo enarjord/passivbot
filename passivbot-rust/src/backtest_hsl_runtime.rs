@@ -663,6 +663,7 @@ mod tests {
 
     fn execution(price: f64) -> OrderFillExecution {
         OrderFillExecution {
+            hsl_origin: None,
             at_bar_close: false,
             price,
             fee_fraction: 0.001,
@@ -1360,6 +1361,7 @@ mod tests {
                     );
                     let mut partial_exec = execution(adverse_price);
                     partial_exec.fee_fraction = 0.0;
+                    partial_exec.hsl_origin = bt.hsl_report.execution_origin(bt.hsl_report_key(side, 0));
                     if side == LONG {
                         bt.process_close_fill_long(2, 0, &partial, partial_exec)
                     } else {

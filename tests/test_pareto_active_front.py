@@ -18,7 +18,7 @@ def front(tmp_path):
                 {"metric": key, "goal": "max"}
                 for key in ("cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity")
             ]},
-            "metrics": {"definition_version": 1, "objectives": dict(zip(
+            "metrics": {"definition_version": 2, "objectives": dict(zip(
                 ("cagr_fraction_strategy_equity", "omega_ratio_strategy_equity", "sortino_ratio_strategy_equity"), values,
             )), "stats": {"pain_index_fraction_strategy_equity": {
                 key: 0.0 if key == "std" else values[0] + 101.0

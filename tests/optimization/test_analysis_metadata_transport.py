@@ -16,7 +16,7 @@ from optimization.native_results import CandidateEvaluation, ResultSlot
 
 def _metadata():
     return {"metric_status": {}, "metric_metadata": {
-        "definition_version": 1, "ew_half_life_days": 180.5,
+        "definition_version": 2, "ew_half_life_days": 180.5,
         "equity_observation_count": 30}}
 
 

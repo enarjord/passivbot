@@ -53,7 +53,7 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
     assert metrics["completed"] and not metrics["liquidated"]
     assert metrics["observed_end_ms"] == int(prepared["candle_timestamps_ms"][-2]) + 60000
     metadata = result[2]["metric_metadata"]
-    assert metadata["definition_version"] == metrics["native_equity_definition_version"] == 1
+    assert metadata["definition_version"] == metrics["native_equity_definition_version"] == 2
     assert metrics["sample_count"] == len(result[1]) == metadata["equity_observation_count"]
     assert result[1][0, 0] == metadata["start_timestamp_ms"] == prepared["candle_timestamps_ms"][2]
     assert result[1][0, 1] == params["starting_balance"]

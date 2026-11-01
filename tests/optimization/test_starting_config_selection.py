@@ -39,7 +39,7 @@ def _write_candidate(
             ]
         },
         "metrics": {
-            "definition_version": 1,
+            "definition_version": 2,
             "objectives": {
                 "cagr_fraction_strategy_equity": cagr_fraction,
                 "drawdown_max_fraction_strategy_equity": drawdown_mean,
@@ -264,7 +264,7 @@ def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
     artifact_path = pareto_dir / "suite_candidate.json"
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["base", "stress"],
         "metrics": {
             "cagr_fraction_strategy_equity": {
@@ -311,7 +311,7 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
     artifact_path = pareto_dir / "suite_candidate.json"
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["base", "stress"],
         "metrics": {
             "cagr_fraction_strategy_equity": {
@@ -361,7 +361,7 @@ def test_filtering_requires_every_active_scenario_observation(
     artifact_path = pareto_dir / "suite_candidate.json"
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["base", "stress"],
         "metrics": {
             "cagr_fraction_strategy_equity": {
@@ -409,7 +409,7 @@ def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Pat
     artifact_path = pareto_dir / "suite_candidate.json"
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "scenario_labels": ["base"],
         "metrics": {
             "cagr_fraction_strategy_equity": {
@@ -461,7 +461,7 @@ def test_filtering_rejects_suite_artifact_missing_effective_aggregate_stat(
     artifact_path = pareto_dir / "incomplete_suite_candidate.json"
     artifact = json.loads(artifact_path.read_text())
     artifact["suite_metrics"] = {
-        "definition_version": 1,
+        "definition_version": 2,
         "aggregate": {
             "aggregated": {
                 "cagr_fraction_strategy_equity": 0.002,

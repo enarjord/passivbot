@@ -1,4 +1,4 @@
-//! Observational HSL reporting. No field here is read by trading code.
+//! Observational HSL reporting. Order provenance never grants trading permission.
 use super::*;
 use crate::hsl_intent::{Action, LifecycleEvent};
 use crate::hsl_support::Output;
@@ -6,6 +6,13 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 pub(super) type Key = (Option<usize>, Option<usize>);
+
+/// Accounting provenance of an emitted HSL order, never execution permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionOrigin {
+    generation: u64,
+    trigger_timestamp_ms: i64,
+}
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Summary {
@@ -94,6 +101,8 @@ struct Scope {
     consumed: BTreeMap<(i64, &'static str), usize>,
     red: bool,
     exit_started: Option<i64>,
+    generation: u64,
+    panic_origin: Option<ExecutionOrigin>,
     panic_loss: f64,
     panic_balance: Option<f64>,
     execution_episode: Option<usize>,
@@ -295,6 +304,7 @@ impl Report {
             _ => {} // One unified event, without inventing two side controllers.
         }
         scope.exit_started = Some(now);
+        scope.generation = scope.generation.checked_add(1).expect("HSL origin overflow");
         scope.red = true;
         self.sequence += 1;
         if self.retain_events {
@@ -327,7 +337,7 @@ impl Report {
             Some(SHORT) => self.summary.restarts_short += 1,
             _ => {}
         }
-        Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
+        Self::retire_loss(scope, &mut self.execution_episodes, now);
         scope.exit_started = None;
         scope.red = false;
         self.sequence += 1;
@@ -360,7 +370,7 @@ impl Report {
                     self.trigger(key, now, Some(event.red_at), "reconstructed_red", scope);
                 }
                 scope.exit_started = None;
-                Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
+                Self::retire_loss(scope, &mut self.execution_episodes, now);
                 self.sequence += 1;
                 if self.retain_events {
                     self.events.push(Event {
@@ -403,12 +413,47 @@ impl Report {
             scope.panic_loss = 0.0;
         }
         if let Some(index) = scope.execution_episode.take() {
-            episodes[index].finished_timestamp_ms = Some(now);
+            episodes[index].finished_timestamp_ms.get_or_insert(now);
+        }
+        scope.panic_origin = None;
+    }
+
+    fn retire_loss(scope: &Scope, episodes: &mut [ExecutionEpisode], now: i64) {
+        if scope.panic_origin.is_some_and(|origin| origin.generation == scope.generation) {
+            if let Some(index) = scope.execution_episode {
+                episodes[index].finished_timestamp_ms.get_or_insert(now);
+            }
         }
     }
 
-    pub(super) fn panic_fill(&mut self, key: Key, net_pnl: f64, account_balance: f64) {
-        if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
+    pub(super) fn execution_origin(&self, key: Key) -> Option<ExecutionOrigin> {
+        let scope = self.scopes.get(&key)?;
+        scope.red.then_some(ExecutionOrigin {
+            generation: scope.generation,
+            trigger_timestamp_ms: scope.exit_started?,
+        })
+    }
+
+    pub(super) fn panic_fill(
+        &mut self,
+        key: Key,
+        origin: Option<ExecutionOrigin>,
+        net_pnl: f64,
+        account_balance: f64,
+    ) {
+        let Some(origin) = origin else { return; };
+        if let Some(scope) = self.scopes.get_mut(&key) {
+            let now = self.timestamp.expect("HSL fill requires an observation");
+            if scope.panic_origin != Some(origin) {
+                // Pending orders drain before another batch is emitted. One
+                // accumulator per controller therefore groups all late fills
+                // without retaining an unbounded map in metrics-only replay.
+                if let Some(previous) = scope.panic_origin {
+                    assert!(previous.generation < origin.generation, "unordered HSL origins");
+                }
+                Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
+                scope.panic_origin = Some(origin);
+            }
             let loss = (-net_pnl).max(0.0);
             self.summary.panic_close_fills += 1;
             self.summary.panic_fill_loss_sum_usd += loss;
@@ -418,7 +463,7 @@ impl Report {
                     self.execution_episodes.push(ExecutionEpisode {
                         side: key.0,
                         coin: key.1,
-                        trigger_timestamp_ms: scope.exit_started,
+                        trigger_timestamp_ms: Some(origin.trigger_timestamp_ms),
                         first_fill_timestamp_ms: self.timestamp,
                         finished_timestamp_ms: None,
                         fill_count: 0,
@@ -436,6 +481,11 @@ impl Report {
                     .account_balance_usd
                     .map(|balance| episode.loss_usd / balance)
                     .filter(|value| value.is_finite());
+                if origin.generation != scope.generation || !scope.red || scope.exit_started.is_none() {
+                    // A fill after retirement still belongs to its originating
+                    // stop. Its completion cannot precede the actual execution.
+                    episode.finished_timestamp_ms = Some(now);
+                }
             }
             scope.panic_loss += loss;
             scope.panic_balance.get_or_insert(account_balance);
@@ -448,7 +498,7 @@ impl Report {
         self.advance(now);
         if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
             if scope.exit_started.take().is_some() {
-                Self::finish_loss(&mut self.stats, scope, &mut self.execution_episodes, now);
+                Self::retire_loss(scope, &mut self.execution_episodes, now);
                 // A later same-bar fill may restore balance and permit replay.
                 // Do not report this already-observed flatten a second time.
                 scope.consumed.retain(|(t, _), _| *t == now);
@@ -727,8 +777,8 @@ mod tests {
             "bar_close",
             &output(120000, Action::Panic, vec![]),
         );
-        report.panic_fill(key, -25.0, 1000.0);
-        report.panic_fill(key, 10.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), -25.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), 10.0, 1000.0);
         report.observe(
             key,
             180000,
@@ -741,7 +791,7 @@ mod tests {
             "bar_close",
             &output(240000, Action::Normal, vec![]),
         );
-        report.panic_fill(key, -500.0, 1000.0); // An unrelated manual panic is not this HSL stop.
+        report.panic_fill(key, report.execution_origin(key), -500.0, 1000.0); // An unrelated manual panic is not this HSL stop.
         assert_eq!((report.summary.triggers, report.summary.restarts), (1, 1));
         assert_eq!(
             (report.summary.triggers_long, report.summary.restarts_long),
@@ -775,7 +825,7 @@ mod tests {
                 "bar_close",
                 &output(60000, Action::Panic, vec![]),
             );
-            report.panic_fill((None, None), -12.0, 1000.0);
+            report.panic_fill((None, None), report.execution_origin((None, None)), -12.0, 1000.0);
             report.observe(
                 (None, None),
                 120000,
@@ -907,8 +957,8 @@ mod tests {
             "bar_close",
             &output(60_000, Action::Panic, vec![event(60_000, "red", 60_000)]),
         );
-        report.panic_fill(key, -25.0, 1000.0);
-        report.panic_fill(key, 10.0, 900.0);
+        report.panic_fill(key, report.execution_origin(key), -25.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), 10.0, 900.0);
         report.advance(120_000);
         for _ in 0..2 {
             let core = report.core_summary(true);
@@ -943,7 +993,7 @@ mod tests {
             "bar_close",
             &output(360_000, Action::Panic, vec![event(360_000, "red", 360_000)]),
         );
-        report.panic_fill(key, -40.0, 800.0);
+        report.panic_fill(key, report.execution_origin(key), -40.0, 800.0);
         report.advance(420_000);
         for _ in 0..2 {
             // Snapshot metrics must not consume unfinished episodes.
@@ -1024,7 +1074,7 @@ mod tests {
                 "bar_close",
                 &output(120_000, Action::Panic, vec![]),
             );
-            report.panic_fill(key, -20.0, 1000.0);
+            report.panic_fill(key, report.execution_origin(key), -20.0, 1000.0);
             report.observed_flat(key, 180_000);
             report.observed_flat(key, 180_000);
             let mut events = zero_cooldown_events(180_000);
@@ -1061,7 +1111,7 @@ mod tests {
             "bar_close",
             &output(60_000, Action::Panic, events),
         );
-        report.panic_fill(key, -20.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), -20.0, 1000.0);
         report.observed_flat(key, 120_000);
         report.observed_flat(key, 120_000);
         let mut events = zero_cooldown_events(120_000);
@@ -1095,9 +1145,9 @@ mod tests {
         let mut report = Report::default();
         report.advance(0);
         report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
-        report.panic_fill(key, -100.0, 1000.0);
-        report.panic_fill(key, -100.0, 900.0);
-        report.panic_fill(key, -100.0, 800.0);
+        report.panic_fill(key, report.execution_origin(key), -100.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), -100.0, 900.0);
+        report.panic_fill(key, report.execution_origin(key), -100.0, 800.0);
         report.advance(60_000);
         let summary = report.core_summary(true);
         assert_eq!(summary.execution_episode_count, 1);
@@ -1120,8 +1170,8 @@ mod tests {
         let key = (Some(LONG), Some(0));
         let mut report = Report::default();
         report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
-        report.panic_fill(key, 0.0, 1000.0);
-        report.panic_fill(key, 10.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), 0.0, 1000.0);
+        report.panic_fill(key, report.execution_origin(key), 10.0, 1000.0);
         let open = report.core_summary(true);
         assert_eq!(open.execution_episode_count, 1);
         assert!(open.execution_episode_count_valid);
@@ -1131,11 +1181,69 @@ mod tests {
     }
 
     #[test]
+    fn pending_order_fills_retain_their_origin_through_recovery_and_retrigger() {
+        let key = (None, None);
+        for retain_events in [false, true] {
+            let mut report = Report::new(false, retain_events);
+            report.observe(key, 0, "bar_close", &output(0, Action::Panic, vec![]));
+            let first_origin = report.execution_origin(key).unwrap();
+            // All pending closes were emitted under this one controller origin.
+            report.panic_fill(key, Some(first_origin), -20.0, 1000.0);
+            report.observe(key, 60_000, "pre_fill", &output(60_000, Action::Normal, vec![]));
+            assert!(report.execution_origin(key).is_none());
+            report.panic_fill(key, Some(first_origin), -30.0, 980.0);
+            report.observe(key, 60_000, "post_fill", &output(60_000, Action::Panic, vec![]));
+            let second_origin = report.execution_origin(key).unwrap();
+            assert_ne!(first_origin, second_origin);
+            // Another pending order still belongs to the first origin, despite
+            // the new RED assessment after the preceding fill's fee.
+            report.panic_fill(key, Some(first_origin), 10.0, 950.0);
+            let old = report.core_summary(true);
+            assert_eq!(old.execution_episode_count, 1);
+            assert_eq!(old.episode_loss_fraction_sum, 0.05);
+            // A newly emitted order starts a distinct executed episode.
+            report.panic_fill(key, Some(second_origin), -40.0, 960.0);
+            let combined = report.core_summary(true);
+            assert_eq!(combined.execution_episode_count, 2);
+            assert_eq!(combined.episode_loss_fraction_sum, 0.05 + 40.0 / 960.0);
+            assert_eq!(combined.episode_loss_fraction_max, 0.05);
+            assert_eq!(report.summary.panic_close_fills, 4);
+            if retain_events {
+                assert_eq!(report.execution_episodes.len(), 2);
+                assert_eq!(report.execution_episodes[0].fill_count, 3);
+                assert_eq!(report.execution_episodes[0].trigger_timestamp_ms, Some(0));
+                assert_eq!(report.execution_episodes[0].finished_timestamp_ms, Some(60_000));
+                assert_eq!(report.execution_episodes[1].trigger_timestamp_ms, Some(60_000));
+                assert_eq!(report.execution_episodes[1].finished_timestamp_ms, None);
+            } else {
+                assert!(report.execution_episodes.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn unfilled_hsl_orders_and_unrelated_panic_fills_do_not_create_episodes() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::new(false, true);
+        report.observe(key, 0, "bar_close", &output(0, Action::Panic, vec![]));
+        let _cancelled_order = report.execution_origin(key).unwrap();
+        // An ordinary/manual/delisting fill has no HSL provenance, even during RED.
+        report.panic_fill(key, None, -100.0, 1000.0);
+        report.observe(key, 60_000, "bar_close", &output(60_000, Action::Normal, vec![]));
+        let metrics = report.core_summary(true);
+        assert_eq!(metrics.trigger_count, 1);
+        assert_eq!(metrics.execution_episode_count, 0);
+        assert_eq!(metrics.episode_loss_fraction_max, 0.0);
+        assert_eq!(report.summary.panic_close_fills, 0);
+        assert!(report.execution_episodes.is_empty());
+    }
+
+    #[test]
     fn invalid_episode_balance_is_not_floored_or_dropped() {
         let key = (Some(LONG), Some(0));
         let mut report = Report::default();
         report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
-        report.panic_fill(key, -10.0, 0.0);
+        report.panic_fill(key, report.execution_origin(key), -10.0, 0.0);
         report.observed_flat(key, 60_000);
         let summary = report.core_summary(true);
         assert!(!summary.episode_loss_valid);
@@ -1201,8 +1309,8 @@ mod tests {
                 "pre_fill",
                 &output(60_000, Action::Panic, vec![]),
             );
-            report.panic_fill(key, -100.0, 1000.0);
-            report.panic_fill(key, -50.0, 900.0);
+            report.panic_fill(key, report.execution_origin(key), -100.0, 1000.0);
+            report.panic_fill(key, report.execution_origin(key), -50.0, 900.0);
             report.observed_flat(key, 120_000);
         }
         let episode = &full.execution_episodes[0];

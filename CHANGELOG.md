@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Attribute executed HSL closes to their originating controller episode on CPU,
+  Metal and CUDA even when the signal recovers before fill accounting. Preserve
+  trading decisions, fills and equity while correcting execution counts and
+  fee-inclusive episode losses. Core metric definition version 2 requires fresh
+  evaluation of saved metrics and optimizer fitness.
+
 - Keep coins with no overlapping history inactive in backtest suite scenarios,
   instead of treating a missing edge candle as valid and failing replay.
 

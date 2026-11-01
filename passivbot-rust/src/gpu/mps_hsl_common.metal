@@ -71,6 +71,10 @@ struct HslState {
     float triggers;
     float restarts;
 
+    // Accounting provenance only. Pending protective orders retain this origin
+    // across later RED/GREEN observations; it never grants trading permission.
+    uint panic_generation;
+    uint panic_loss_origin;
     float panic_event_start_equity;
     float panic_event_loss;
     float panic_fill_loss_sum_usd;
@@ -165,10 +169,12 @@ inline void mirror_hsl(thread HslState& owner, thread HslState& view) {
     view.drawdown_ema = owner.drawdown_ema;
     view.sampled_drawdown_raw = owner.sampled_drawdown_raw;
     view.report_flat_minute = owner.report_flat_minute;
+    view.panic_generation = owner.panic_generation;
 }
 
-// Reporting only: finish one contiguous panic loss segment. GREEN cancels
-// panic intent, so a later RED starts a new loss denominator even before flat.
+// Reporting only: finish the preceding executed order-origin episode. Loss
+// accounting is delayed until the next origin executes or output is finalized,
+// so outstanding fills cannot be erased by a later permission observation.
 inline void finish_hsl_panic_loss(thread HslState& h) {
     if (h.panic_event_start_equity != -1.0f) {
         float ratio = h.panic_event_loss / h.panic_event_start_equity;
@@ -186,6 +192,8 @@ inline void finish_hsl_panic_loss(thread HslState& h) {
 // These counters never grant trading permission or retain a panic commitment.
 inline void begin_hsl_report(thread HslState& h, int minute, float score) {
     h.triggers = h.triggers < 16777216.0f ? h.triggers + 1.0f : NAN;
+    if (h.panic_generation < 4294967295u) ++h.panic_generation;
+    else h.panic_loss_drawdown_count = NAN;
 }
 
 inline void restart_hsl_report(thread HslState& h, int minute) {
@@ -219,7 +227,6 @@ inline void observe_hsl_event(
     h.sampled_drawdown_raw = h.hsl.raw;
     h.drawdown_ema = h.hsl.ema;
     h.red_active_now = h.hsl.action == 3;
-    if (terminal || (prior == 3 && !h.red_active_now)) finish_hsl_panic_loss(h);
     h.tier = h.red_active_now ? 3 : 0;
     h.halted = h.hsl.action == 1;
     bool reporting_red = prior != 0;
@@ -353,6 +360,14 @@ inline bool hsl_entry_allowed(thread HslState& pair) {
     return !controller.enabled || (controller.hsl_valid && controller.hsl.action == 0);
 }
 
+inline uint hsl_panic_order_origin(
+    thread const HslState& aggregate, thread const HslState& coin
+) {
+    // Unified views mirror their actual owner's generation, not its counters.
+    return aggregate.signal_mode == HSL_SIGNAL_COIN
+        ? coin.panic_generation : aggregate.panic_generation;
+}
+
 inline void observe_hsl(
     thread HslState& h, float balance, float realized, float upnl,
     bool exposed, int minute, bool terminal
@@ -429,6 +444,8 @@ inline HslState load_hsl(
     h.triggers = 0.0f;
     h.restarts = 0.0f;
 
+    h.panic_generation = 0u;
+    h.panic_loss_origin = 0u;
     h.panic_event_start_equity = -1.0f;
     h.panic_event_loss = 0.0f;
     h.panic_fill_loss_sum_usd = 0.0f;
@@ -640,10 +657,18 @@ inline bool update_dual_side_hsl(
 inline void record_hsl_panic_fill(
     thread HslState& h,
     float net_pnl,
-    float pre_fill_balance
+    float pre_fill_balance,
+    uint order_origin
 ) {
-    // Forced delist labels alone do not establish an HSL execution episode.
-    if (!h.enabled || !h.red_active_now) return;
+    if (!h.enabled) return;
+    if (order_origin == 0u) {
+        h.panic_loss_drawdown_count = NAN;
+        return;
+    }
+    if (h.panic_loss_origin != order_origin) {
+        finish_hsl_panic_loss(h);
+        h.panic_loss_origin = order_origin;
+    }
     if (h.panic_event_start_equity < 0.0f) {
         h.panic_event_start_equity = isfinite(pre_fill_balance) && pre_fill_balance > 0.0f
             ? pre_fill_balance : NAN;

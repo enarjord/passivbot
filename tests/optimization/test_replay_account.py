@@ -240,16 +240,18 @@ def core_artifacts():
     return fills, np.concatenate([baseline, equities])
 
 
-def test_core_clock_bridge_uses_included_baseline_and_matches_legacy_account_ruler():
+@pytest.mark.parametrize("definition_version", [1, 2])
+def test_core_clock_bridge_uses_included_baseline_and_matches_legacy_account_ruler(definition_version):
     from tools.optimizer_benchmark.account_metrics import SCORABLE_METRICS
     fills, equities = core_artifacts()
-    current = extract(fills=fills, equities=equities, metric_metadata=core_metadata())
+    metadata = {**core_metadata(), "definition_version": definition_version}
+    current = extract(fills=fills, equities=equities, metric_metadata=metadata)
     legacy = extract()
     for name in SCORABLE_METRICS:
         assert current[name] == pytest.approx(legacy[name]), name
     assert current["sample_count"] == len(equities) == legacy["sample_count"]
     assert current["observed_end_ms"] == 240000
-    assert current["native_equity_definition_version"] == 1
+    assert current["native_equity_definition_version"] == definition_version
     assert legacy["native_equity_definition_version"] is None
     # A current layout without its version metadata must not be guessed/rebased.
     with pytest.raises(ValueError, match="contiguous prefix"):
@@ -257,7 +259,7 @@ def test_core_clock_bridge_uses_included_baseline_and_matches_legacy_account_rul
 
 
 @pytest.mark.parametrize("field,value", [
-    ("definition_version", 2), ("definition_version", True),
+    ("definition_version", 3), ("definition_version", True),
     ("start_timestamp_ms", 60000), ("actual_end_timestamp_ms", 180000),
     ("intended_end_timestamp_ms", 300000), ("observation_interval_ms", 120000),
     ("equity_observation_count", 4),

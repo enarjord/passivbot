@@ -12,7 +12,7 @@ from optimize import Evaluator, SuiteEvaluator
 from suite_runner import ScenarioResult, SuiteScenario
 
 
-METADATA = {"metric_metadata": {"definition_version": 1}}
+METADATA = {"metric_metadata": {"definition_version": 2}}
 
 METRICS = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity")
 
