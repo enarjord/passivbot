@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
+
 - Clean up Rust build warnings by updating age-admission PyO3 bindings, removing
   obsolete helpers and keeping test utilities out of production builds.
 

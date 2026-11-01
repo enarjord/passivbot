@@ -83,6 +83,50 @@ runs also need inputs for candidate exchanges used in source selection and volum
 normalization. Copy a consistent cache snapshot while no downloader is writing it;
 SQLite catalog paths must refer to the copied chunks on the receiving machine.
 
+### Portable cache snapshots
+
+Use the offline `data-cache` tool to transfer a consistent cache snapshot instead of
+editing absolute SQLite chunk paths by hand:
+
+```bash
+passivbot tool data-cache export --cache-root caches --output /transfer/candle-bundle \
+  --exchange binance --exchange bybit \
+  --prepared-dataset combined__example_dataset
+passivbot tool data-cache import --bundle /transfer/candle-bundle --cache-root caches
+```
+
+`--prepared-dataset` is repeatable and takes an exact directory name under
+`caches/hlcvs_data/`; omit it to transfer only the selected raw store and metadata.
+The export copies every raw chunk for the selected exchanges, their market metadata,
+and existing listing/alias metadata. It checks chunk integrity under the store's locks,
+uses SQLite's backup API, and rejects a source that changes during the snapshot.
+All operations are offline and make no exchange requests.
+
+The versioned directory bundle stores catalog locations relative to the OHLCV root,
+with SHA-256 checksums and original file modification times. Import validates and stages
+all files before writing, resolves locations beneath the destination root, and merges
+catalog records in one transaction. Unrelated destination records remain intact.
+Existing artifacts and factual records must match exactly; metadata refresh times must
+also match. Conflicting data is refused rather than overwritten. For a newer candle tail
+or refreshed metadata, import into the `caches/` directory of a fresh working directory
+or checkout, and run preparation there. Current consumers then use that cache normally.
+The command does not redirect or modify a running job.
+
+Use an offline destination with no application readers or writers. The tool refuses
+locked chunks and rolls back installed files and database changes on an exception.
+An abrupt process or machine failure can leave unreferenced verified files; retrying the
+same bundle completes the import without overwriting existing facts. Do not use an
+incomplete destination until import succeeds. Directory bundles reject symlinks,
+path traversal, missing files, checksum changes, and unsupported artifact paths.
+
+A catalog copied previously with paths from another root requires an explicit
+`--legacy-ohlcv-root /original/caches/ohlcvs` on export. Only exact canonical chunk
+locations beneath that declared root are relocated; arbitrary basenames are not guessed.
+Prepared manifests, ordered memberships, candle bytes, source/listing facts, cache hashes,
+and historical fitness remain unchanged. A transfer is not proof of complete requested
+history: normal offline preparation still checks coverage, provenance, warmup, and
+compatibility. Missing listing metadata is never fabricated by this tool.
+
 Missing or incompatible metadata, incomplete candles, or unconfirmed range edges
 fail with an input/range diagnostic. Refresh those inputs on the connected machine
 and copy them again. Offline mode does not replace missing prices or silently shorten

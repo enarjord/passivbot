@@ -20,6 +20,13 @@
    missing bars in an eligible closed month selects the monthly archive. Eligible days with more
    than 1,000 missing bars select daily archives. Small gaps, recent days, archive failures, and
    any gaps remaining inside a successful archive are repaired through CCXT.
+   Explicit offline `data-cache` export/import provides a versioned portable snapshot.
+   Catalog locations are relative only inside the bundle; runtime catalog semantics stay
+   unchanged. Export uses a database backup and chunk locks and rejects changing sources.
+   Import verifies and stages artifacts before a catalog transaction, preserves source
+   facts and genuine refresh clocks, keeps unrelated target rows, and refuses conflicts.
+   It requires an offline destination; it does not switch caches for active consumers.
+   Existing prepared/cache/evaluation identities are not relabeled by relocation.
 3. Treat exchange-side late starts and early ends as coverage metadata, not local corruption.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
