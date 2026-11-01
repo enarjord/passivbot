@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Verify bounded source-leading candle unavailability with explicit public intervals and
+  a matching historical control, without treating missing candles as market inception
+  or changing coin-age facts. Unknown prefixes and incomplete offline proofs still fail closed.
+
 - Stream large CUDA Trailing Martingale tick inputs in bounded time chunks and
   compact one-minute hourly observations, allowing longer histories within the
   existing memory guard while preserving continuous account state and replay values.

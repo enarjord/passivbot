@@ -79,7 +79,23 @@ with a real candle in the launch timestamp's UTC minute. Contradictory older sou
 prevents confirmation. Missing or unsupported launch metadata leaves required history
 unavailable; neither REST nor archives may silently shorten the request.
 
-New preparation uses algorithm 10 and offline boundary proof version 2. Candle observations
+An administrative listing timestamp can precede the first published candle. For Binance and
+Bybit linear USDT sources, v2 preparation can verify a separate `leading_unavailable` fact:
+at most four explicit, closed requests of up to 1,000 minutes each must return successful
+empty candle lists from the published listing minute to the first cached candle. An adjacent
+one-minute historical control must return that exact source candle, including its canonical
+HLCV values. The versioned catalog fact retains source/symbol bindings, request and response
+content and hashes, the observation time, the independent listing bound, and prior gap notes.
+Missing pages, failed responses, conflicting controls or older contradictory source candles
+leave the prefix unverified. Earlier genuine rows are ordinary cache repairs, not absence proof.
+
+This attests only observed source-leading unavailability. It does not establish no trading,
+market inception or coin age, and does not rewrite those facts. A first row, archive 404, or
+retention observation alone remains insufficient; longer unknown prefixes are not waived by
+the bounded discovery budget. Offline use consumes a previously completed source-bound proof
+and performs no probes.
+
+New preparation uses algorithm 11 and offline boundary proof version 3. Candle observations
 remain intact. Offline use does not upgrade old gap notes, and older prepared proof versions
 cannot certify current coverage. Online revalidation can replace covered weak gap notes only
 after independent corroboration. Re-verify the raw cache online with independent source

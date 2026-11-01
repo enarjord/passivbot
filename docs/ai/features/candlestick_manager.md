@@ -42,12 +42,21 @@
    requires the matching contract's independently published Binance `onboardDate` or Bybit
    `launchTime` and a real candle in that timestamp's UTC minute. Older contradictory source history
    blocks confirmation. Unsupported or missing independent evidence leaves the edge unavailable.
+   When that administrative launch precedes the first source candle, Binance/Bybit linear USDT
+   preparation may separately attest observed `leading_unavailable` history: all explicit closed
+   intervals from the published launch minute to that candle must return successful empty lists,
+   with at most four 1,000-minute pages, followed by an adjacent positive historical control
+   matching the cached canonical HLCV row. Bind the versioned fact to venue, symbol, exact queries,
+   raw responses and hashes, launch bound, observation time and prior notes. Incomplete evidence,
+   changed controls or contradictory earlier candles fail closed. Genuine earlier rows repair
+   ordinary coverage. This is not market inception, no-trade proof or a coin-age update.
    Store current confirmation under versioned v2 catalog notes. Offline use leaves old
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
    may replace covered weak notes. Preserve the authored warmup start through local-store
    validation; cached first observations may not crop the request before validation.
-   Preparation algorithm 10 and offline proof
-   version 2 invalidate weak prepared-cache attestations without relabeling existing input facts.
+   Preparation algorithm 11 and offline proof version 3 invalidate older prepared-cache
+   attestations without relabeling existing input facts. Offline use consumes completed proof
+   without issuing discovery probes; cache-only requests cannot collect new evidence.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
 5. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.

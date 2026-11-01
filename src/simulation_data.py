@@ -83,7 +83,7 @@ def has_current_offline_proof(snapshot):
     return (isinstance(snapshot, dict)
             and type(snapshot.get("version")) is int and snapshot["version"] == 2
             and type(snapshot.get("boundary_proof_version")) is int
-            and snapshot["boundary_proof_version"] == 2)
+            and snapshot["boundary_proof_version"] == 3)
 
 
 @contextmanager
@@ -96,7 +96,7 @@ def simulation_data_policy(config):
     token = None
     try:
         if enabled and not is_offline():
-            token = _policy.set({"version": 2, "boundary_proof_version": 2, "metadata": {}, "ranges": []})
+            token = _policy.set({"version": 2, "boundary_proof_version": 3, "metadata": {}, "ranges": []})
         yield
     finally:
         if token is not None:
