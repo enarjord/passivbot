@@ -649,3 +649,31 @@ def test_catalog_created_after_preflight_is_never_deleted(tmp_path, monkeypatch)
         == "bybit"
     )
     assert catalog._connect().execute("SELECT count(*) FROM chunks").fetchone()[0] == 1
+
+
+def test_interrupted_new_catalog_initialization_can_retry(tmp_path, monkeypatch):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    export_cache(tmp_path / "source", bundle)
+    target = tmp_path / "target"
+    catalog_path = target / "ohlcvs/catalog.sqlite"
+    owner = data_cache.OhlcvCatalog
+
+    def interrupted_catalog(path, *args, **kwargs):
+        if Path(path) == catalog_path:
+            raise KeyboardInterrupt
+        return owner(path, *args, **kwargs)
+
+    monkeypatch.setattr(data_cache, "OhlcvCatalog", interrupted_catalog)
+    with pytest.raises(KeyboardInterrupt):
+        import_cache(bundle, target)
+    assert catalog_path.read_bytes() == b""
+    monkeypatch.setattr(data_cache, "OhlcvCatalog", owner)
+    assert import_cache(bundle, target)["installed_files"] > 0
+    assert (
+        owner(catalog_path)
+        ._connect()
+        .execute("SELECT count(*) FROM chunks")
+        .fetchone()[0]
+        == 1
+    )

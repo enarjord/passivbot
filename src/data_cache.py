@@ -667,7 +667,10 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
             target_db = cache_root / "ohlcvs/catalog.sqlite"
             _no_symlinks(target_db)
             existed = target_db.exists()
-            if existed:
+            # A prior process can die after exclusive reservation but before the
+            # owner creates the schema. A zero-byte catalog contains no facts;
+            # keep the trusted scratch schema and let the owner initialize it.
+            if existed and target_db.stat().st_size:
                 with _connect(target_db, readonly=True) as current:
                     current.backup(reference)
             reference.execute("BEGIN IMMEDIATE")
