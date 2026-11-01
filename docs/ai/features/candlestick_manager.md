@@ -36,7 +36,9 @@
    blocks confirmation. Unsupported or missing independent evidence leaves the edge unavailable.
    Store current confirmation under versioned v2 catalog notes. Offline use leaves old
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
-   may replace covered weak notes. Preparation algorithm 10 and offline proof
+   may replace covered weak notes. Preserve the authored warmup start through local-store
+   validation; cached first observations may not crop the request before validation.
+   Preparation algorithm 10 and offline proof
    version 2 invalidate weak prepared-cache attestations without relabeling existing input facts.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.

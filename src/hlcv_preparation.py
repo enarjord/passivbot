@@ -1463,10 +1463,9 @@ async def try_prepare_hlcvs_v2_local(
             if not om.has_coin(coin):
                 logging.info("[%s] v2 local skip missing coin %s", exchange, coin)
                 continue
-            first_ts_guess = _coerce_positive_ts(om.load_first_timestamp(coin)) or _coerce_positive_ts(first_timestamps_unified.get(coin))
-            if first_ts_guess is not None and first_ts_guess > end_ts:
-                continue
-            adjusted_start_ts = max(int(effective_start_ts), int(first_ts_guess or 0))
+            # Cached first observations may reflect retention, not inception.
+            # Preserve the authored request until source-bound range validation.
+            adjusted_start_ts = int(effective_start_ts)
 
             symbol = om.get_symbol(coin)
             rng = await _resolve_v2_store_range(
@@ -1612,30 +1611,31 @@ async def _resolve_v2_store_range(**kwargs):
             return None
         first_valid = int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
         if first_valid > start:
+            # Validate the original source prefix, not a later window selected
+            # by the existing internal-gap coverage policy.
+            source_first = first_valid
             if int(rng.timestamps[0]) > start:
                 earlier = kwargs["store"].read_range(exchange, "1m", symbol, start, first_valid - 60_000)
-                if earlier.valid.size and earlier.valid[0]:
-                    # Existing internal-gap window selection is coverage policy,
-                    # not a claim that the source began at the cropped window.
-                    return rng
-                if earlier.valid.any():
-                    return None
+                earlier_valid = np.flatnonzero(earlier.valid)
+                if earlier_valid.size:
+                    source_first = int(earlier.timestamps[int(earlier_valid[0])])
+            if source_first == start:
+                return rng
             proven_end = _confirmed_catalog_prefix_end(
-                kwargs["catalog"], exchange, symbol, start, first_valid - 60_000,
+                kwargs["catalog"], exchange, symbol, start, source_first - 60_000,
             )
-            if proven_end != first_valid:
+            if proven_end != source_first:
                 evidence = await _collect_first_timestamp_evidence(
                     om=kwargs["om"], exchange=exchange, coin=kwargs["coin"], symbol=symbol,
                 )
                 listing = _source_history_boundary(evidence)
-                if listing is None or first_valid != listing // 60_000 * 60_000:
+                if listing is None or source_first != listing // 60_000 * 60_000:
                     logging.warning("[%s] unverified leading history for %s; unavailable",
                                     exchange, symbol)
                     return None
-            if proven_end != first_valid:
                 kwargs["catalog"].mark_gap(
                     exchange=exchange, timeframe="1m", symbol=symbol, start_ts=start,
-                    end_ts=first_valid - 60_000, reason="pre_inception", persistent=True,
+                    end_ts=source_first - 60_000, reason="pre_inception", persistent=True,
                     retry_count=0, note="verified_source_history_boundary_v2",
                 )
         return rng

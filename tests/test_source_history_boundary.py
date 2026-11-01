@@ -204,3 +204,103 @@ async def test_older_genuine_rows_invalidate_a_later_catalog_boundary(tmp_path, 
             assert await hp._resolve_v2_store_range(**args) is None
     rng = raw.read_range("binance", "1m", SYMBOL, FIRST - 60_000, END)
     assert rng.valid.all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_kind", ["coin_only", "unified_observation"])
+@pytest.mark.parametrize("observed", [FIRST, END + 86_400_000])
+async def test_local_v2_request_is_not_cropped_by_unverified_first_observation(
+    tmp_path, monkeypatch, cache_kind, observed,
+):
+    from config.schema import get_expanded_config_prototype
+    from config.universe import set_side_universe_sources
+    from utils import ts_to_date
+    monkeypatch.chdir(tmp_path)
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
+    requested_end = START + 86_400_000
+    config["backtest"].update(start_date=ts_to_date(START), end_date=ts_to_date(requested_end))
+    set_side_universe_sources(config, "approved_coins", {"long": ["NEW"], "short": []})
+    set_side_universe_sources(config, "ignored_coins", {"long": [], "short": []})
+    class LocalManager:
+        cc = None
+        async def load_markets(self):
+            pass
+        def has_coin(self, coin):
+            return True
+        def load_first_timestamp(self, coin):
+            # A legacy coin-only guess must not even be consulted as authority.
+            return observed if cache_kind == "coin_only" else None
+        def get_symbol(self, coin):
+            return SYMBOL
+        async def aclose(self):
+            pass
+    async def first_timestamps(coins, exchange=None):
+        return {coin: observed if cache_kind == "unified_observation" else 0 for coin in coins}
+    seen = []
+    async def resolve(**kwargs):
+        seen.append((kwargs["start_ts"], kwargs["end_ts"]))
+        return None
+    monkeypatch.setattr(hp, "HLCVManager", lambda *args, **kwargs: LocalManager())
+    monkeypatch.setattr(hp, "compute_backtest_warmup_minutes", lambda config: 2)
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    monkeypatch.setattr(hp, "_resolve_v2_store_range", resolve)
+    # Older genuine rows already exist, including the authored warmup start.
+    # Even a weak observation beyond END must not skip their validation.
+    catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
+    raw = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
+    timestamps = np.arange(START - 120_000, requested_end + 60_000, 60_000, dtype=np.int64)
+    raw.write_rows("binance", "1m", SYMBOL, timestamps,
+        np.tile([101., 99., 100., 1.], (len(timestamps), 1)))
+    assert raw.read_range("binance", "1m", SYMBOL, START - 120_000, requested_end).valid.all()
+    assert await hp.try_prepare_hlcvs_v2_local(config, "binance") is None
+    assert seen == [(START - 120_000, requested_end)]
+
+
+@pytest.mark.asyncio
+async def test_independent_future_listing_limits_transport_without_inventing_coverage(tmp_path):
+    catalog, raw = store(tmp_path)
+    om = manager(listing=END + 86_400_000)
+    om.get_binance_archive_client = lambda: pytest.fail("known future listing needs no old archives")
+    rng = raw.read_range("binance", "1m", SYMBOL, START, END)
+    assert await hp._fetch_binance_archives_into_v2_store(
+        om=om, catalog=catalog, store=raw, exchange="binance", coin="NEW", symbol=SYMBOL,
+        timestamps=rng.timestamps, valid=rng.valid,
+    ) == 0
+    assert not raw.read_range("binance", "1m", SYMBOL, START, END).valid.any()
+    assert catalog.get_gaps("binance", "1m", SYMBOL, START, END) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proof", ["catalog", "independent", "unknown"])
+async def test_verified_listing_prefix_preserves_later_internal_gap_window(tmp_path, monkeypatch, proof):
+    catalog, raw = store(tmp_path)
+    first, later, end = START + 120_000, START + 7 * 60_000, START + 12 * 60_000
+    timestamps = START + np.array([2, 3, 7, 8, 9, 10, 11, 12], dtype=np.int64) * 60_000
+    raw.write_rows("binance", "1m", SYMBOL, timestamps,
+        np.tile([101., 99., 100., 1.], (len(timestamps), 1)))
+    catalog.mark_gap(exchange="binance", timeframe="1m", symbol=SYMBOL,
+        start_ts=START, end_ts=first - 60_000, reason="pre_inception", persistent=True,
+        retry_count=0, next_retry_at=4_102_444_800_000,
+        note="verified_source_history_boundary_v2" if proof == "catalog" else "old_observation")
+    catalog.mark_gap(exchange="binance", timeframe="1m", symbol=SYMBOL,
+        start_ts=START + 4 * 60_000, end_ts=later - 60_000, reason="internal_gap",
+        persistent=True, retry_count=0, next_retry_at=4_102_444_800_000, note="unavailable")
+    om = manager(listing=first if proof == "independent" else None)
+    async def first_timestamps(coins, exchange=None):
+        return {coin: first for coin in coins}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    result = await hp._resolve_v2_store_range(om=om, catalog=catalog, store=raw,
+        exchange="binance", coin="NEW", symbol=SYMBOL, start_ts=START, end_ts=end,
+        allow_remote_fetch=False, allow_partial_window=True,
+        local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    if proof == "unknown":
+        assert result is None
+    else:
+        assert result.timestamps[0] == later
+        assert result.timestamps[-1] == end
+        assert result.valid.all()
+        gaps = catalog.get_persistent_gaps("binance", "1m", SYMBOL, START, later)
+        assert any(gap.reason == "pre_inception" and gap.end_ts == first - 60_000
+                   and hp._pre_inception_gap_confirms_discovered_boundary(gap) for gap in gaps)
+        assert any(gap.reason == "internal_gap" for gap in gaps)
