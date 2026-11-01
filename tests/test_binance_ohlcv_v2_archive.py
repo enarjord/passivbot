@@ -322,3 +322,138 @@ async def test_archive_errors_are_logged_and_ccxt_repairs_range(tmp_path, monkey
         attempt for attempt in attempts if attempt.outcome == "archive_monthly_error"
     )
     assert "checksum failed" in monthly_attempt.note
+
+
+@pytest.mark.asyncio
+async def test_confirmed_source_boundary_skips_older_archive_periods(tmp_path, monkeypatch):
+    catalog, store = make_store(tmp_path)
+    start, boundary, end = ts("2024-01-01"), ts("2026-04-01"), ts("2026-04-15")
+    write_rows(store, np.arange(ts("2026-04-10"), end + MINUTE_MS, MINUTE_MS))
+    client = RecordingArchiveClient(lambda request: BinanceArchiveResult(request, "not_found"))
+
+    from types import SimpleNamespace
+    class SourceManager(ArchiveManager):
+        exchange = "binanceusdm"
+        cm = SimpleNamespace(_get_authoritative_start_ts=lambda symbol: boundary)
+        markets = {SYMBOL: {"id": "BTCUSDT", "symbol": SYMBOL,
+            "info": {"symbol": "BTCUSDT", "onboardDate": boundary}}}
+        def get_symbol(self, coin):
+            assert coin == "BTC"
+            return SYMBOL
+        def load_first_timestamp(self, coin):
+            return boundary
+
+    manager = SourceManager(client)
+    monkeypatch.setattr("hlcv_preparation.utc_ms", lambda: ts("2026-07-16"))
+    before = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    await _fetch_binance_archives_into_v2_store(
+        om=manager, catalog=catalog, store=store, exchange=EXCHANGE, coin="BTC", symbol=SYMBOL,
+        timestamps=before.timestamps, valid=before.valid,
+    )
+    requests = [request for batch in client.batches for request in batch]
+    assert requests
+    assert all(request.start_ts >= boundary for request in requests)
+    after = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    np.testing.assert_array_equal(after.valid, before.valid)
+    assert catalog.get_persistent_gaps(EXCHANGE, "1m", SYMBOL, start, end) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,error", [("not_found", None), ("error", "HTTP 451"), ("error", "timeout")])
+async def test_unknown_leading_prefix_has_finite_probes_without_inventing_coverage(tmp_path, monkeypatch, caplog, outcome, error):
+    from hlcv_preparation import _BINANCE_UNKNOWN_PREFIX_ARCHIVE_PROBES
+    catalog, store = make_store(tmp_path)
+    start, first, end = ts("2024-01-01"), ts("2026-04-10"), ts("2026-04-15")
+    write_rows(store, np.arange(first, end + MINUTE_MS, MINUTE_MS))
+    client = RecordingArchiveClient(lambda request: BinanceArchiveResult(request, outcome, error=error))
+    manager = ArchiveManager(client)
+    monkeypatch.setattr("hlcv_preparation.utc_ms", lambda: ts("2026-07-16"))
+    caplog.set_level("INFO")
+    before = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    for _ in range(2):
+        await _fetch_binance_archives_into_v2_store(
+            om=manager, catalog=catalog, store=store, exchange=EXCHANGE, coin="BTC", symbol=SYMBOL,
+            timestamps=before.timestamps, valid=before.valid,
+        )
+    prefix_requests = [request for batch in client.batches for request in batch if request.end_ts < first]
+    assert len(prefix_requests) == _BINANCE_UNKNOWN_PREFIX_ARCHIVE_PROBES
+    assert "bounded archive discovery" in caplog.text
+    after = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    np.testing.assert_array_equal(after.valid, before.valid)
+    assert catalog.get_persistent_gaps(EXCHANGE, "1m", SYMBOL, start, end) == []
+    attempts = catalog.list_fetch_attempts(EXCHANGE, "1m", SYMBOL, start, end)
+    assert all(item.outcome.endswith(outcome) for item in attempts)
+
+
+@pytest.mark.asyncio
+async def test_source_alias_mismatch_cannot_clip_archive_history(tmp_path, monkeypatch):
+    catalog, store = make_store(tmp_path)
+    start, end = ts("2026-04-01"), ts("2026-04-15")
+    client = RecordingArchiveClient(lambda request: BinanceArchiveResult(request, "not_found"))
+    class WrongSource(ArchiveManager):
+        exchange = "bybit"
+        def get_symbol(self, coin):
+            return SYMBOL
+        def load_first_timestamp(self, coin):
+            return ts("2026-04-10")
+    manager = WrongSource(client)
+    monkeypatch.setattr("hlcv_preparation.utc_ms", lambda: ts("2026-07-16"))
+    before = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    await _fetch_binance_archives_into_v2_store(
+        om=manager, catalog=catalog, store=store, exchange=EXCHANGE, coin="BTC", symbol=SYMBOL,
+        timestamps=before.timestamps, valid=before.valid,
+    )
+    assert client.batches[0][0].start_ts == start
+
+
+@pytest.mark.asyncio
+async def test_confirmed_catalog_prefix_skips_archives_without_timestamp_lookup(tmp_path, monkeypatch):
+    catalog, store = make_store(tmp_path)
+    start, boundary, end = ts("2024-01-01"), ts("2026-04-01"), ts("2026-04-15")
+    catalog.mark_gap(exchange=EXCHANGE, timeframe="1m", symbol=SYMBOL, start_ts=start,
+                     end_ts=boundary-MINUTE_MS, reason="pre_inception", persistent=True,
+                     retry_count=0, note="verified_source_history_boundary_v2")
+    client = RecordingArchiveClient(lambda request: BinanceArchiveResult(request, "not_found"))
+    manager = ArchiveManager(client)
+    monkeypatch.setattr("hlcv_preparation.utc_ms", lambda: ts("2026-07-16"))
+    before = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    await _fetch_binance_archives_into_v2_store(
+        om=manager, catalog=catalog, store=store, exchange=EXCHANGE, coin="BTC", symbol=SYMBOL,
+        timestamps=before.timestamps, valid=before.valid,
+    )
+    assert all(request.start_ts >= boundary for batch in client.batches for request in batch)
+
+
+@pytest.mark.asyncio
+async def test_coin_only_listing_timestamp_is_not_source_bound_archive_proof(tmp_path, monkeypatch):
+    catalog, store = make_store(tmp_path)
+    start, end = ts("2026-04-01"), ts("2026-04-15")
+    client = RecordingArchiveClient(lambda request: BinanceArchiveResult(request, "not_found"))
+    class CoinOnlyManager(ArchiveManager):
+        exchange = "binanceusdm"
+        cm = None
+        def get_symbol(self, coin):
+            return SYMBOL
+        def load_first_timestamp(self, coin):
+            return ts("2026-04-10")
+    monkeypatch.setattr("hlcv_preparation.utc_ms", lambda: ts("2026-07-16"))
+    before = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    await _fetch_binance_archives_into_v2_store(
+        om=CoinOnlyManager(client), catalog=catalog, store=store, exchange=EXCHANGE,
+        coin="BTC", symbol=SYMBOL, timestamps=before.timestamps, valid=before.valid,
+    )
+    assert client.batches[0][0].start_ts == start
+
+
+def test_older_real_candles_cannot_be_hidden_by_later_archive_boundary(tmp_path):
+    from types import SimpleNamespace
+    from hlcv_preparation import _binance_archive_source_boundary
+    catalog, store = make_store(tmp_path)
+    start, first, listing, end = ts("2026-04-01"), ts("2026-04-05"), ts("2026-04-10"), ts("2026-04-15")
+    write_rows(store, np.arange(first, end + MINUTE_MS, MINUTE_MS))
+    manager = SimpleNamespace(exchange="binanceusdm", get_symbol=lambda coin: SYMBOL,
+        markets={SYMBOL: {"id": "BTCUSDT", "symbol": SYMBOL,
+            "info": {"symbol": "BTCUSDT", "onboardDate": listing}}})
+    rng = store.read_range(EXCHANGE, "1m", SYMBOL, start, end)
+    assert _binance_archive_source_boundary(manager, catalog, EXCHANGE, "BTC", SYMBOL,
+        rng.timestamps, rng.valid) is None

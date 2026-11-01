@@ -141,6 +141,7 @@ def effective_setup_config(config, *, optimize=False) -> dict:
     filters = effective_minimum_cost_filters(runtime)
     backtest = deepcopy(effective["backtest"])
     for key in (
+        "acquisition_mode",
         "base_dir",
         "cache_dir",
         "coins",

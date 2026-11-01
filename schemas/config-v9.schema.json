@@ -10,6 +10,19 @@
         "backtest": {
           "type": "object",
           "properties": {
+            "acquisition_mode": {
+              "type": "string",
+              "default": "auto",
+              "description": "Public simulation candle transport; does not replace offline policy.",
+              "enum": [
+                "auto",
+                "rest"
+              ],
+              "x-passivbot-consumers": [
+                "backtest",
+                "optimize"
+              ]
+            },
             "balance_sample_divider": {
               "type": "integer",
               "default": 60,
@@ -18271,6 +18284,9 @@
         "backtest": {
           "$ref": "#/$defs/scenarioPatch:backtest"
         },
+        "backtest.acquisition_mode": {
+          "$ref": "#/$defs/config/properties/backtest/properties/acquisition_mode"
+        },
         "backtest.balance_sample_divider": {
           "$ref": "#/$defs/config/properties/backtest/properties/balance_sample_divider"
         },
@@ -20826,6 +20842,9 @@
     "scenarioPatch:backtest": {
       "type": "object",
       "properties": {
+        "acquisition_mode": {
+          "$ref": "#/$defs/config/properties/backtest/properties/acquisition_mode"
+        },
         "balance_sample_divider": {
           "$ref": "#/$defs/config/properties/backtest/properties/balance_sample_divider"
         },

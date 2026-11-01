@@ -1,5 +1,6 @@
 {
     "backtest": {
+        "acquisition_mode": "auto",
         "balance_sample_divider": 60,
         "base_dir": "backtests",
         "btc_collateral_target_ratio": 0.0,

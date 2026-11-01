@@ -10,6 +10,12 @@ since the latest release tag; these features may already be available when insta
   record input preparation plus the actual search algorithm, population and seed facts
   in new sessions, without changing fitness identity or backfilling legacy runs.
 
+- Bound archive discovery for unknown leading candle gaps, respect source-bound
+  history limits before archive scheduling, and support public REST-only simulation
+  acquisition without relaxing coverage checks or offline behavior. Simulation listing boundaries
+  now require independent venue/contract launch metadata rather than a first observed candle;
+  versioned preparation and offline proofs prevent reuse of older weak boundary attestations.
+
 - Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
 
 - Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,

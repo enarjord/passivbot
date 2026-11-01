@@ -323,6 +323,9 @@ def get_field_registry() -> FieldRegistry:
                     "backtest.filter_by_min_effective_cost",
                     "backtest.maker_fee_override_fraction", "backtest.taker_fee_override_fraction",
                 })
+    add("backtest.acquisition_mode", FieldType.STRING,
+        domain=FieldDomain(choices=("auto", "rest")),
+        description="Public simulation candle transport; does not replace offline policy.")
     for kind, paths in _NULLABLE_FIELDS.items():
         for path in paths:
             add(path, kind, nullable=True)
