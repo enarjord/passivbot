@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import replace
+import errno
 import hashlib
 import json
 import os
@@ -588,6 +589,14 @@ def _install_file(source: Path, target: Path) -> None:
     os.link(source, target)
 
 
+def _parent_permission_error(cache_root: Path) -> CacheTransferError:
+    return CacheTransferError(
+        "cache-root parent must be writable for the import lease and complete "
+        "preflight staging; choose a cache root with a writable parent: "
+        + str(cache_root.parent)
+    )
+
+
 def _import_cache(bundle: Path, cache_root: Path) -> dict:
     """Merge absent/identical artifacts only; conflicting facts are never overwritten.
 
@@ -600,10 +609,13 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
     if bundle.is_relative_to(cache_root) or cache_root.is_relative_to(bundle):
         raise CacheTransferError("bundle and destination must be disjoint")
     manifest, files = _validated_bundle(bundle)
-    cache_root.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".data-cache-import-", dir=cache_root.parent
-    ) as tmp:
+    try:
+        temporary = tempfile.TemporaryDirectory(
+            prefix=".data-cache-import-", dir=cache_root.parent
+        )
+    except PermissionError as exc:
+        raise _parent_permission_error(cache_root) from exc
+    with temporary as tmp:
         stage = Path(tmp)
         payload = stage / "payload"
         for name, source in files.items():
@@ -737,8 +749,22 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
                     os.close(descriptor)
                     local = Path(temporary_path)
                     publication_files.append(local)
-                    copied = _copy_stable(payload / _relative(name), local)
-                    if copied["sha256"] != manifest["files"][name]["sha256"]:
+                    disposable = payload / _relative(name)
+                    # Move only our disposable preflight copy; the original
+                    # bundle is never moved or modified.
+                    try:
+                        os.replace(disposable, local)
+                    except OSError as exc:
+                        if exc.errno != errno.EXDEV:
+                            raise
+                        _copy_stable(disposable, local)
+                        disposable.unlink()
+                    facts = manifest["files"][name]
+                    if (
+                        _sha(local) != facts["sha256"]
+                        or local.stat().st_size != facts["bytes"]
+                        or local.stat().st_mtime_ns != facts["mtime_ns"]
+                    ):
                         raise CacheTransferError(
                             "staged artifact changed during import"
                         )
@@ -817,16 +843,22 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
 def import_cache(bundle: Path, cache_root: Path) -> dict:
     """Serialize imports to one offline destination without replacing old facts."""
     cache_root = _root(cache_root)
-    cache_root.parent.mkdir(parents=True, exist_ok=True)
     lease = cache_root.parent / ("." + cache_root.name + ".data-cache-import.lock")
     _no_symlinks(lease)
     try:
-        with portalocker.Lock(str(lease), timeout=0, fail_when_locked=True):
-            return _import_cache(bundle, cache_root)
+        cache_root.parent.mkdir(parents=True, exist_ok=True)
+        lock = portalocker.Lock(str(lease), timeout=0, fail_when_locked=True)
+        lock.acquire()
+    except PermissionError as exc:
+        raise _parent_permission_error(cache_root) from exc
     except portalocker.exceptions.LockException as exc:
         raise CacheTransferError(
             "another import owns this destination; retry later"
         ) from exc
+    try:
+        return _import_cache(bundle, cache_root)
+    finally:
+        lock.release()
 
 
 def main(argv=None) -> int:

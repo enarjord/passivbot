@@ -115,9 +115,14 @@ or refreshed metadata, import into the `caches/` directory of a fresh working di
 or checkout, and run preparation there. Current consumers then use that cache normally.
 The command does not redirect or modify a running job.
 
-Use an offline destination with no application readers or writers. The tool refuses
-locked chunks and concurrent imports, and rolls back installed files and database
-changes on an exception. A new empty catalog and operational lock files can remain;
+Use an offline destination with no application readers or writers.
+Import requires a writable parent directory for the cache root, even when the cache
+itself is an existing writable mount: the import lease and complete preflight staging
+live in that parent. Choose a cache root beneath a writable directory if this prerequisite
+is not met. Individual artifact publication still stages on each target filesystem.
+
+The tool refuses locked chunks and concurrent imports, and rolls back installed files
+and database changes on an exception. A new empty catalog and operational lock files can remain;
 existing catalogs are never deleted during cleanup. An abrupt process or machine failure
 can leave unreferenced verified files; retrying the same bundle completes the import
 without overwriting existing facts. Do not use an

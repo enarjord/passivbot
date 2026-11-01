@@ -864,3 +864,109 @@ def test_bounded_destination_locks_still_reject_changed_existing_chunks(
         import_cache(bundle, target)
     assert not missing.exists()
     assert snapshot(target)["__catalog_rows__"] == rows_before
+
+
+def test_same_filesystem_publication_moves_only_disposable_stage(tmp_path, monkeypatch):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    manifest = export_cache(tmp_path / "source", bundle)
+    copy = data_cache._copy_stable
+    copies = []
+
+    def counted(source, target):
+        copies.append((source, target))
+        return copy(source, target)
+
+    monkeypatch.setattr(data_cache, "_copy_stable", counted)
+    import_cache(bundle, tmp_path / "target")
+    # Full preflight stages every bundle file once. Same-filesystem publication
+    # moves that disposable copy, without copying the whole history again.
+    assert len(copies) == len(manifest["files"])
+    for name, facts in manifest["files"].items():
+        original = bundle / "payload" / name
+        assert original.is_file()
+        assert data_cache._sha(original) == facts["sha256"]
+        assert original.stat().st_mtime_ns == facts["mtime_ns"]
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_cross_filesystem_staging_preserves_mtime_and_rollback(
+    tmp_path, monkeypatch, interrupted
+):
+    make_cache(tmp_path / "source")
+    bundle, target = tmp_path / "bundle", tmp_path / "target"
+    manifest = export_cache(tmp_path / "source", bundle)
+    replace = os.replace
+    install = data_cache._install_file
+    fallbacks = []
+
+    def separate_mount(source, destination):
+        if Path(destination).name.startswith(".data-cache-publish-"):
+            fallbacks.append(source)
+            raise OSError(errno.EXDEV, "fixture destination mount")
+        replace(source, destination)
+
+    installed = 0
+
+    def interrupted_install(source, destination):
+        nonlocal installed
+        install(source, destination)
+        installed += 1
+        if installed == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(data_cache.os, "replace", separate_mount)
+    if interrupted:
+        monkeypatch.setattr(data_cache, "_install_file", interrupted_install)
+        with pytest.raises(KeyboardInterrupt):
+            import_cache(bundle, target)
+        after = snapshot(target)
+        assert set(after) == {"__catalog_rows__"}
+        assert all(not rows for rows in after["__catalog_rows__"].values())
+    else:
+        import_cache(bundle, target)
+        for name, facts in manifest["files"].items():
+            if name != "ohlcvs/catalog.sqlite":
+                assert (target / name).stat().st_mtime_ns == facts["mtime_ns"]
+    assert fallbacks
+    assert all(not source.exists() for source in fallbacks)
+    assert not list(target.rglob(".data-cache-publish-*"))
+    assert all(
+        data_cache._sha(bundle / "payload" / name) == facts["sha256"]
+        for name, facts in manifest["files"].items()
+    )
+
+
+@pytest.mark.parametrize("stage", ["lease", "preflight"])
+def test_nonwritable_cache_parent_has_actionable_diagnostic(
+    tmp_path, monkeypatch, stage
+):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    export_cache(tmp_path / "source", bundle)
+    target = tmp_path / "target"
+    target.mkdir()
+    if stage == "lease":
+        owner_lock = portalocker.Lock
+
+        def denied(filename, *args, **kwargs):
+            if str(filename).endswith(".data-cache-import.lock"):
+                raise PermissionError("fixture nonwritable parent")
+            return owner_lock(filename, *args, **kwargs)
+
+        monkeypatch.setattr(data_cache.portalocker, "Lock", denied)
+    else:
+        owner_temp = data_cache.tempfile.TemporaryDirectory
+
+        def denied(*args, **kwargs):
+            if kwargs.get("prefix") == ".data-cache-import-":
+                raise PermissionError("fixture nonwritable parent")
+            return owner_temp(*args, **kwargs)
+
+        monkeypatch.setattr(data_cache.tempfile, "TemporaryDirectory", denied)
+    with pytest.raises(
+        CacheTransferError,
+        match="cache-root parent must be writable.*preflight staging",
+    ):
+        import_cache(bundle, target)
+    assert not snapshot(target)
