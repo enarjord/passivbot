@@ -84,6 +84,8 @@ async def prepare_suite_contexts(
     *,
     shared_array_manager,
     allow_internal_nan_gaps: bool = False,
+    force_refetch_gaps: bool = False,
+    preparation_report: dict | None = None,
 ) -> tuple[List[ScenarioEvalContext], Dict[str, Any]]:
     """Prepare datasets and configs for every optimizer suite scenario."""
 
@@ -190,7 +192,14 @@ async def prepare_suite_contexts(
         prepared_universes=prepared_universes,
         scenario_policy_config=base_config,
         allow_internal_nan_gaps=allow_internal_nan_gaps,
+        force_refetch_gaps=force_refetch_gaps,
     )
+    if preparation_report is not None:
+        from simulation_preparation import dataset_summary
+        preparation_report["datasets"] = [
+            dataset_summary(exchange, dataset.cache_dir, dataset.coins, len(dataset.timestamps))
+            for exchange, dataset in datasets.items()
+        ]
     available_coins = set()
     for dataset in datasets.values():
         available_coins.update(dataset.coins)
