@@ -34,8 +34,9 @@
    requires the matching contract's independently published Binance `onboardDate` or Bybit
    `launchTime` and a real candle in that timestamp's UTC minute. Older contradictory source history
    blocks confirmation. Unsupported or missing independent evidence leaves the edge unavailable.
-   Store current confirmation under versioned v2 catalog notes; old observation-only notes remain
-   intact but cannot satisfy strict offline coverage. Preparation algorithm 10 and offline proof
+   Store current confirmation under versioned v2 catalog notes. Offline use leaves old
+   observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
+   may replace covered weak notes. Preparation algorithm 10 and offline proof
    version 2 invalidate weak prepared-cache attestations without relabeling existing input facts.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.

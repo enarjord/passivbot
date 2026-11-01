@@ -79,9 +79,10 @@ with a real candle in the launch timestamp's UTC minute. Contradictory older sou
 prevents confirmation. Missing or unsupported launch metadata leaves required history
 unavailable; neither REST nor archives may silently shorten the request.
 
-New preparation uses algorithm 10 and offline boundary proof version 2. Old observations and
-gap records are preserved, but observation-only listing notes and older prepared proof versions
-cannot certify strict offline coverage. Re-verify the raw cache online with independent source
+New preparation uses algorithm 10 and offline boundary proof version 2. Candle observations
+remain intact. Offline use does not upgrade old gap notes, and older prepared proof versions
+cannot certify current coverage. Online revalidation can replace covered weak gap notes only
+after independent corroboration. Re-verify the raw cache online with independent source
 metadata, then copy the resulting candles, catalog and metadata for offline reuse. No new
 listing request is needed when current source-bound catalog proof already covers the prefix.
 
