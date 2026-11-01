@@ -64,13 +64,16 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         ownership.append(("mps", get_ident()))
         yield None
     @contextmanager
-    def cuda_scope():
+    def cuda_scope(*, input_memory_budget):
+        assert input_memory_budget == residency.CudaInputMemoryBudget(1, 1, 3)
         ownership.append(("cuda", get_ident()))
         yield None
     monkeypatch.setattr(runtime, "gpu_device", owner_device)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
     monkeypatch.setattr(residency, "capture_mps_input_memory_budget",
                         lambda _torch: residency.MpsInputMemoryBudget(1, 1))
+    monkeypatch.setattr(residency, "capture_cuda_input_memory_budget",
+                        lambda _torch: residency.CudaInputMemoryBudget(1, 1, 3))
     monkeypatch.setattr(residency, "metal_residency_scope", metal_scope)
     monkeypatch.setattr(residency, "cuda_residency_scope", cuda_scope)
     service = service_class(batch_size=setting, tuning_mode=mode, max_pending=max_pending,
