@@ -44,7 +44,7 @@ def _root(value: Path) -> Path:
     path = Path(value).absolute()
     if path.is_symlink():
         raise CacheTransferError("cache root must not be a symlink")
-    return path.parent.resolve() / path.name
+    return path.resolve()
 
 
 def _relative(value: str) -> Path:
@@ -436,7 +436,9 @@ def export_cache(
 
 def _validated_bundle(bundle: Path) -> tuple[dict, dict[str, Path]]:
     _no_symlinks(bundle)
-    manifest = json.loads((bundle / "manifest.json").read_text())
+    manifest_path = bundle / "manifest.json"
+    _no_symlinks(manifest_path)
+    manifest = json.loads(manifest_path.read_text())
     if (
         manifest.get("schema_version") != BUNDLE_VERSION
         or manifest.get("kind") != "passivbot-data-cache"
@@ -570,7 +572,7 @@ def _install_file(source: Path, target: Path) -> None:
     os.link(source, target)
 
 
-def import_cache(bundle: Path, cache_root: Path) -> dict:
+def _import_cache(bundle: Path, cache_root: Path) -> dict:
     """Merge absent/identical artifacts only; conflicting facts are never overwritten.
 
     Use an offline destination. Existing readers/writers are not redirected to a
@@ -708,6 +710,16 @@ def import_cache(bundle: Path, cache_root: Path) -> dict:
                                 "destination chunk is being written; retry later"
                             ) from exc
                         locked.add(lock)
+                    if not existed:
+                        try:
+                            fd = os.open(
+                                target_db, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+                            )
+                        except FileExistsError as exc:
+                            raise CacheTransferError(
+                                "destination catalog appeared during import; retry"
+                            ) from exc
+                        os.close(fd)
                     target_catalog = OhlcvCatalog(target_db)
                     dest = target_catalog._connect()
                     dest.execute("BEGIN IMMEDIATE")
@@ -733,9 +745,9 @@ def import_cache(bundle: Path, cache_root: Path) -> dict:
                         p.unlink()
                 if target_catalog is not None:
                     target_catalog._connect().close()
-                if not existed:
-                    for suffix in ("", "-wal", "-shm"):
-                        Path(str(target_db) + suffix).unlink(missing_ok=True)
+                # Never unlink a database on failure. Another application may
+                # have opened it or committed unrelated facts. An empty trusted
+                # catalog is harmless and a retry can complete the import.
                 for d in reversed(created_dirs):
                     try:
                         d.rmdir()
@@ -755,6 +767,21 @@ def import_cache(bundle: Path, cache_root: Path) -> dict:
         finally:
             incoming.close()
             reference.close()
+
+
+def import_cache(bundle: Path, cache_root: Path) -> dict:
+    """Serialize imports to one offline destination without replacing old facts."""
+    cache_root = _root(cache_root)
+    cache_root.parent.mkdir(parents=True, exist_ok=True)
+    lease = cache_root.parent / ("." + cache_root.name + ".data-cache-import.lock")
+    _no_symlinks(lease)
+    try:
+        with portalocker.Lock(str(lease), timeout=0, fail_when_locked=True):
+            return _import_cache(bundle, cache_root)
+    except portalocker.exceptions.LockException as exc:
+        raise CacheTransferError(
+            "another import owns this destination; retry later"
+        ) from exc
 
 
 def main(argv=None) -> int:

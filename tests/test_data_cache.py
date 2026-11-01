@@ -541,7 +541,9 @@ def test_interruption_after_link_does_not_leave_factual_files(tmp_path, monkeypa
     monkeypatch.setattr(data_cache, "_install_file", after_link)
     with pytest.raises(KeyboardInterrupt):
         import_cache(tmp_path / "bundle", tmp_path / "target")
-    assert not snapshot(tmp_path / "target")
+    after = snapshot(tmp_path / "target")
+    assert set(after) == {"__catalog_rows__"}
+    assert all(not rows for rows in after["__catalog_rows__"].values())
     monkeypatch.setattr(data_cache, "_install_file", install)
     assert import_cache(tmp_path / "bundle", tmp_path / "target")["installed_files"] > 0
 
@@ -597,3 +599,53 @@ def test_prepared_candidate_venues_are_required_even_if_not_selected_for_prices(
             exchanges=["binance"],
             prepared_datasets=["prepared-example"],
         )
+
+
+def test_bundle_manifest_symlink_is_rejected(tmp_path):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    export_cache(tmp_path / "source", bundle)
+    manifest = bundle / "manifest.json"
+    manifest.rename(tmp_path / "outside-manifest.json")
+    manifest.symlink_to(tmp_path / "outside-manifest.json")
+    with pytest.raises(CacheTransferError, match="symlink"):
+        import_cache(bundle, tmp_path / "target")
+    assert not (tmp_path / "target").exists()
+
+
+def test_concurrent_import_lease_refuses_second_import(tmp_path):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    export_cache(tmp_path / "source", bundle)
+    lease = tmp_path / ".target.data-cache-import.lock"
+    with portalocker.Lock(str(lease), timeout=0, fail_when_locked=True):
+        with pytest.raises(CacheTransferError, match="another import"):
+            import_cache(bundle, tmp_path / "target")
+    assert not (tmp_path / "target").exists()
+
+
+def test_catalog_created_after_preflight_is_never_deleted(tmp_path, monkeypatch):
+    make_cache(tmp_path / "source")
+    bundle = tmp_path / "bundle"
+    export_cache(tmp_path / "source", bundle)
+    merge = data_cache._merge_rows
+    called = 0
+
+    def creating_catalog(dest, incoming, root):
+        nonlocal called
+        merge(dest, incoming, root)
+        called += 1
+        if called == 1:
+            make_cache(root, exchange="bybit", symbol="ETH/USDT:USDT")
+
+    monkeypatch.setattr(data_cache, "_merge_rows", creating_catalog)
+    with pytest.raises(CacheTransferError, match="appeared during import"):
+        import_cache(bundle, tmp_path / "target")
+    catalog = OhlcvCatalog(tmp_path / "target/ohlcvs/catalog.sqlite")
+    assert (
+        catalog._connect()
+        .execute("SELECT exchange,symbol FROM chunks")
+        .fetchall()[0][0]
+        == "bybit"
+    )
+    assert catalog._connect().execute("SELECT count(*) FROM chunks").fetchone()[0] == 1

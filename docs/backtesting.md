@@ -113,9 +113,11 @@ or checkout, and run preparation there. Current consumers then use that cache no
 The command does not redirect or modify a running job.
 
 Use an offline destination with no application readers or writers. The tool refuses
-locked chunks and rolls back installed files and database changes on an exception.
-An abrupt process or machine failure can leave unreferenced verified files; retrying the
-same bundle completes the import without overwriting existing facts. Do not use an
+locked chunks and concurrent imports, and rolls back installed files and database
+changes on an exception. A new empty catalog and operational lock files can remain;
+existing catalogs are never deleted during cleanup. An abrupt process or machine failure
+can leave unreferenced verified files; retrying the same bundle completes the import
+without overwriting existing facts. Do not use an
 incomplete destination until import succeeds. Directory bundles reject symlinks,
 path traversal, missing files, checksum changes, and unsupported artifact paths.
 
