@@ -77,6 +77,30 @@ Legacy sessions without `session.json` keep their original seed policy. Fresh ru
 new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
 run IDs and canonical setup inputs are available in `session.json`.
 
+For a prepared or transferred dataset, require the download report at startup:
+
+```shell
+passivbot download path/to/config.json --for-optimize --manifest prepared-inputs.json
+passivbot optimize path/to/config.json --preparation-manifest prepared-inputs.json
+```
+
+The optimizer still loads and validates data through its normal owners. Before evaluating
+any candidate it compares the completed report's dataset manifest hashes, ordered coins,
+source row counts, scenario shapes, literal dates and reducer using typed equality. A plan,
+missing manifest hash or changed input fails the check. Cache directory locators may move
+and acquisition transport may differ; all other recorded input facts must match. This check
+is optional input provenance, never an exception to evaluation identity or fitness reuse.
+For standalone inputs, source rows describe the cached data before replay aggregation.
+
+Every new session records the actual preparation report and optional reference SHA in
+`session.json` metadata. These operational references do not enter the setup fingerprint;
+the existing evaluation contract remains authoritative for data, source and native identity.
+`search.json` records the constructed algorithm, actual population size, reference-direction
+count, RNG seed and number of projected starting individuals. This distinguishes `auto`
+from the algorithm it selected, and selected input files from usable individuals. It is an
+initial search record, not a completed-evaluation count. Resume preserves the original
+records; legacy sessions are not backfilled with inferred facts.
+
 Fresh GPU runs without `-t/--start` initialize every population member randomly, matching the
 CPU backends. The input config supplies fixed and non-optimized values but is not implicitly
 inserted as a candidate. Explicit starting configs remain supported, and `--resume` restores

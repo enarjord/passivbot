@@ -7,6 +7,25 @@ import numpy as np
 import pytest
 
 import session_artifacts as artifacts
+
+
+def test_search_manifest_records_actual_population_without_overwriting_initial_facts(tmp_path):
+    config = {"results_dir": str(tmp_path), "optimize": {
+        "backend": "gpu", "pymoo": {"algorithm": "auto"}, "seed": 19,
+    }}
+    algorithm = SimpleNamespace(pop_size=36, ref_dirs=np.zeros((36, 8)))
+    plan = {"algorithm_name": "nsga3", "requested_population_size": 10}
+    artifacts.record_optimizer_search(config, algorithm, plan, starting_individuals=17)
+    saved = json.loads((tmp_path / artifacts.SEARCH_MANIFEST).read_text())
+    assert saved["requested_algorithm"] == "auto"
+    assert saved["resolved_algorithm"] == "nsga3"
+    assert saved["requested_population_size"] == 10
+    assert saved["population_size"] == saved["reference_directions"] == 36
+    assert saved["seed"] == 19 and saved["starting_individuals"] == 17
+    before = (tmp_path / artifacts.SEARCH_MANIFEST).read_bytes()
+    with pytest.raises(FileExistsError):
+        artifacts.record_optimizer_search(config, algorithm, plan, starting_individuals=0)
+    assert (tmp_path / artifacts.SEARCH_MANIFEST).read_bytes() == before
 from config_utils import get_template_config
 from optimization.prepared_dataset_identity import materialized_dataset_identity
 

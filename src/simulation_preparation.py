@@ -256,7 +256,7 @@ async def prepare_optimizer_inputs(config: dict, *, force_refetch_gaps: bool = F
         _hlcvs = _btc = timestamps = None
         manager.cleanup()
     if not suite["enabled"]:
-        return describe_prepared_inputs(prepared, datasets=report["datasets"])
+        return describe_prepared_inputs(data_config, datasets=report["datasets"])
     return report
 
 

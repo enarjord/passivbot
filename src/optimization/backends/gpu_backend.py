@@ -316,6 +316,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         )
         algorithm = _build_algorithm(config=config, sampling=_build_random_sampling(base.bounds, population_size),
                                      bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan)
+        from session_artifacts import record_optimizer_search
+        record_optimizer_search(config, algorithm, population_plan, starting_individuals=len(starts))
         algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
         state = dict(backend="gpu", version=CHECKPOINT_VERSION, algorithm=algorithm,
                      phase="seeds" if starts else "idle", sequence=0, completed=0,

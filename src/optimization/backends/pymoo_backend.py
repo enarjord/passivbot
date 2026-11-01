@@ -695,6 +695,9 @@ def run_backend(
                 sig_digits=sig_digits,
                 population_plan=population_plan,
             )
+            from session_artifacts import record_optimizer_search
+            record_optimizer_search(config, algorithm, population_plan,
+                                    starting_individuals=len(starting_individuals))
             if starting_individuals:
                 seed_payloads = _evaluate_starting_individuals(
                     starting_individuals=starting_individuals,

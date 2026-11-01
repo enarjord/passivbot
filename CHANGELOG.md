@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Verify an optional completed preparation manifest before optimizer evaluation and
+  record input preparation plus the actual search algorithm, population and seed facts
+  in new sessions, without changing fitness identity or backfilling legacy runs.
+
 - Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,
   inspect requirements without fetching through `--plan`, and save preparation manifests.
   Version candle-cache requests and normalize numeric gap tolerance so integer and float

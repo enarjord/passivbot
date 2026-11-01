@@ -16,6 +16,7 @@ import numpy as np
 
 LAYOUT_VERSION = 2
 SESSION_MANIFEST = "session.json"
+SEARCH_MANIFEST = "search.json"
 _WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL"} | {
     f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
 }
@@ -233,6 +234,35 @@ def write_json(path, payload):
         + "\n",
         encoding="utf-8",
     )
+
+
+def record_optimizer_search(config, algorithm, population_plan, *, starting_individuals):
+    """Record resolved search facts for a new session, never restore fitness.
+
+    Called only for a new algorithm. Resume retains the original record, and
+    legacy sessions are not backfilled with facts inferred from current defaults.
+    """
+    directory = config.get("results_dir")
+    if directory is None:
+        return  # Algorithm construction is also used without a session in tools/tests.
+    ref_dirs = getattr(algorithm, "ref_dirs", None)
+    payload = {
+        "schema_version": 1,
+        "backend": config["optimize"]["backend"],
+        "requested_algorithm": config["optimize"]["pymoo"]["algorithm"],
+        "resolved_algorithm": population_plan["algorithm_name"],
+        "algorithm_class": type(algorithm).__name__,
+        "seed": config["optimize"].get("seed"),
+        "requested_population_size": population_plan["requested_population_size"],
+        "population_size": int(algorithm.pop_size),
+        "reference_directions": None if ref_dirs is None else int(len(ref_dirs)),
+        "starting_individuals": int(starting_individuals),
+        "scope": "Initial search construction, not evaluation counts or reusable fitness.",
+    }
+    # Exclusive creation preserves the initial facts if a caller accidentally
+    # tries to initialize an existing run rather than resume its checkpoint.
+    with (Path(directory) / SEARCH_MANIFEST).open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, indent=2, allow_nan=False) + "\n")
 
 
 def artifact_paths(directory, relative_to):
