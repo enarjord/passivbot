@@ -15,6 +15,9 @@ since the latest release tag; these features may already be available when insta
   Version candle-cache requests and normalize numeric gap tolerance so integer and float
   spellings share one new cache identity; historical fitness and cache identities are not migrated.
 
+- Lock Rust dependency resolution for native extension, package and CI builds so
+  separate checkouts use the same declared dependencies and stale locks fail visibly.
+
 - Clean up Rust build warnings by updating age-admission PyO3 bindings, removing
   obsolete helpers and keeping test utilities out of production builds.
 
