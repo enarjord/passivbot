@@ -33,14 +33,22 @@ repository's build lock, prunes shadow copies, and stamps the rebuilt artifact. 
 `maturin` build may leave an old source stamp beside a new binary, so do not suppress verification
 to make that artifact load.
 
+The application tracks `passivbot-rust/Cargo.lock` and pins its Rust toolchain in
+`rust-toolchain.toml`. Repository builds, package builds and CI use `--locked`: a missing or
+outdated dependency lock fails instead of resolving different dependencies on another machine.
+Update the lock deliberately with Cargo when changing dependencies, and commit it with the change.
+The Rust source fingerprint includes the lockfile; a dependency change therefore requires a fresh
+build and cannot reuse fitness from an incompatible evaluator. Platform-specific native artifact
+hashes can differ even when the declared source and dependency lock match.
+
 ## Rust Tests
 
 Default builds enable PyO3's `extension-module` feature. Plain Rust test binaries may fail to link
 under that feature, so use:
 
 ```bash
-cd passivbot-rust && cargo test --no-default-features && cd ..
-cd passivbot-rust && cargo check --tests && cd ..
+cd passivbot-rust && cargo test --locked --no-default-features && cd ..
+cd passivbot-rust && cargo check --locked --tests && cd ..
 ```
 
 The first runs Rust tests without extension linkage; the second preserves default-feature compile
