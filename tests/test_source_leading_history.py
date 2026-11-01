@@ -118,6 +118,41 @@ def test_malformed_or_out_of_query_candles_are_not_absence_evidence(row):
         proof.response_rows("bybit", "NEWUSDT", query, envelope("bybit", [row]))
 
 
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
+@pytest.mark.parametrize("value", [True, False, ["100"], ("100",), {"value": "100"}, None])
+@pytest.mark.parametrize("field", range(1, 6))
+def test_earlier_candle_fields_must_be_flat_numeric_scalars(exchange, value, field):
+    row = candle(START)
+    row[field] = value
+    query = proof.request(exchange, "NEWUSDT", START, START)
+    with pytest.raises(ValueError, match="numeric scalars"):
+        proof.response_rows(exchange, "NEWUSDT", query, envelope(exchange, [row]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
+@pytest.mark.parametrize("malformed", ["nested", "boolean"])
+async def test_malformed_matching_control_cannot_create_certificate(exchange, malformed):
+    if malformed == "nested":
+        row = [str(FIRST), ["100"], ["101"], ["99"], ["100"], ["3"]]
+        control_values = VALUES
+    else:
+        row = [str(FIRST), True, True, True, True, False]
+        control_values = np.asarray([1., 1., 1., 0.], dtype=np.float32)
+
+    async def fetch(query):
+        params = query["params"]
+        start = params.get("start", params.get("startTime"))
+        return envelope(exchange, [row] if start == FIRST else [])
+
+    with pytest.raises(ValueError, match="numeric scalars"):
+        await proof.collect(
+            exchange=exchange, symbol=SYMBOL, market_id="NEWUSDT", listing_timestamp=LISTING,
+            first_valid=FIRST, control_values=control_values, observed_at_ms=END + 60_000,
+            fetch=fetch,
+        )
+
+
 @pytest.mark.asyncio
 async def test_real_earlier_rows_are_returned_for_repair_without_certifying_absence():
     async def fetch(query):

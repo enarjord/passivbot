@@ -99,9 +99,12 @@ def response_rows(exchange, market_id, query, response):
             raise ValueError("Malformed leading history candle")
         if not isinstance(row[0], (str, int)):
             raise ValueError("Leading history candle timestamp must be an integer")
+        if any(type(value) not in (str, int, float) for value in row[1:6]):
+            raise ValueError("Leading history OHLCV fields must be numeric scalars")
         timestamp = int(row[0])
         values = np.asarray(row[1:6], dtype=np.float64)
-        if (timestamp % MINUTE_MS or not start <= timestamp <= end or timestamp in seen
+        if (values.shape != (5,) or timestamp % MINUTE_MS
+                or not start <= timestamp <= end or timestamp in seen
                 or not np.isfinite(values).all() or np.any(values[:4] <= 0) or values[4] < 0
                 or values[2] > values[1] or not values[2] <= values[0] <= values[1]
                 or not values[2] <= values[3] <= values[1]):
