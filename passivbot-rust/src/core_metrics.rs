@@ -233,6 +233,7 @@ impl MetricRequest {
     pub fn all() -> Self {
         Self((1 << METRIC_CATALOG.len()) - 1)
     }
+    #[cfg(test)]
     pub fn from_metrics(metrics: impl IntoIterator<Item = Metric>) -> Self {
         let mut request = Self::default();
         for metric in metrics {
@@ -254,9 +255,11 @@ impl MetricRequest {
     pub fn contains(self, metric: Metric) -> bool {
         self.0 & (1 << metric as u8) != 0
     }
+    #[cfg(test)]
     pub fn len(self) -> usize {
         self.0.count_ones() as usize
     }
+    #[cfg(test)]
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -281,15 +284,6 @@ impl MetricRequest {
     }
     pub fn needs_holding(self) -> bool {
         self.any(&[Metric::HoldingMax, Metric::HoldingTimeWeightedMean])
-    }
-    pub fn needs_hsl(self) -> bool {
-        self.any(&[
-            Metric::HslEpisodeLossMax,
-            Metric::HslEpisodeLossMean,
-            Metric::HslTriggersPerYear,
-            Metric::HslRedTime,
-            Metric::HslExecutionEpisodeCount,
-        ])
     }
 }
 
@@ -372,12 +366,6 @@ pub enum PositionSide {
     Short,
 }
 impl PositionSide {
-    pub fn index(self) -> usize {
-        match self {
-            Self::Long => 0,
-            Self::Short => 1,
-        }
-    }
     fn valid_size(self, size: f64) -> bool {
         size.is_finite()
             && match self {
@@ -859,6 +847,7 @@ pub struct CoreMetrics {
     exposure: ExposureStats,
 }
 impl CoreMetrics {
+    #[cfg(test)]
     pub fn new(
         request: MetricRequest,
         window: EvaluationWindow,
@@ -1056,9 +1045,6 @@ impl CoreMetrics {
             last_timestamp_ms: x.last_timestamp_ms,
         };
         Ok(state)
-    }
-    pub fn request(&self) -> MetricRequest {
-        self.request
     }
     pub fn observe_minute(&mut self, timestamp_ms: u64, strategy_equity: f64) {
         self.observe_equity(timestamp_ms, strategy_equity, false);

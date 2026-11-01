@@ -40,9 +40,9 @@ use utils::*;
 #[pyfunction]
 #[pyo3(signature = (now_ms, inception_ms, minimum_days))]
 fn coin_age_eligible(
-    now_ms: &PyAny,
-    inception_ms: Option<&PyAny>,
-    minimum_days: &PyAny,
+    now_ms: &Bound<'_, PyAny>,
+    inception_ms: Option<&Bound<'_, PyAny>>,
+    minimum_days: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
     let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
     let now_ms = python::age_timestamp_from_py(now_ms)?;
@@ -55,13 +55,13 @@ fn coin_age_eligible(
 #[pyfunction]
 #[pyo3(signature = (timestamps, inception_ms, minimum_days))]
 fn coin_age_first_eligible_index(
-    timestamps: Vec<&PyAny>,
-    inception_ms: Option<&PyAny>,
-    minimum_days: &PyAny,
+    timestamps: Vec<Bound<'_, PyAny>>,
+    inception_ms: Option<&Bound<'_, PyAny>>,
+    minimum_days: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
     let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
     let timestamps: Vec<u64> = timestamps
-        .into_iter()
+        .iter()
         .map(python::age_timestamp_from_py)
         .collect::<PyResult<_>>()?;
     let inception_ms = inception_ms

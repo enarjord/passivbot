@@ -453,6 +453,7 @@ struct OrderFillExecution {
 
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
+#[cfg(test)]
 pub type Backtest<'a> = BacktestEngine<'a, false>;
 
 pub struct BacktestEngine<'a, const ORGANILLO: bool> {

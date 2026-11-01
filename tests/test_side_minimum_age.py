@@ -255,6 +255,29 @@ def test_native_replay_index_rejects_malformed_or_unsorted_facts(times):
         pbr.coin_age_first_eligible_index(times, BASE, 1.0)
 
 
+@pytest.mark.parametrize("bad", [True, False, -1, 1.5, float("nan"), float("inf"), "1", 2**64])
+def test_native_age_endpoints_validate_scalar_timestamps_with_bound_arguments(bad):
+    import passivbot_rust as pbr
+
+    for now, inception in [(bad, BASE), (BASE, bad)]:
+        with pytest.raises((ValueError, TypeError, OverflowError)):
+            pbr.coin_age_eligible(now_ms=now, inception_ms=inception, minimum_days=0.0)
+    with pytest.raises((ValueError, TypeError, OverflowError)):
+        pbr.coin_age_first_eligible_index(
+            timestamps=[BASE], inception_ms=bad, minimum_days=0.0
+        )
+
+
+def test_native_age_bound_arguments_preserve_optional_and_sequence_inputs():
+    import passivbot_rust as pbr
+
+    assert pbr.coin_age_eligible(now_ms=BASE, inception_ms=None, minimum_days=0.0)
+    assert pbr.coin_age_first_eligible_index(
+        timestamps=(BASE, BASE + DAY // 2), inception_ms=BASE, minimum_days=0.5
+    ) == 1
+    assert pbr.coin_age_first_eligible_index([], None, 0.0) == 0
+
+
 @pytest.mark.parametrize("pair", [None, [], [0.0], [0.0, 0.0, 0.0], [True, 0.0], [0.0, float("nan")]])
 def test_native_backtest_requires_complete_valid_age_policy(pair):
     import passivbot_rust as pbr

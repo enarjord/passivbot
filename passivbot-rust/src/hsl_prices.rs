@@ -179,43 +179,6 @@ fn minute_prices_from_candles(
     project_selected(start, end, window, selected, reasons)
 }
 
-/// Simulator closes are already unique and ordered. Keep the same minute-grid
-/// carrying and diagnostics without candle transport, sorting, or arbitration.
-pub(crate) fn minute_prices_from_ordered_closes(
-    start: i64,
-    end: i64,
-    closes: &[(i64, f64)],
-) -> Result<Prices, String> {
-    let window = end
-        .checked_sub(start)
-        .filter(|v| (0..=MAX_WINDOW).contains(v))
-        .ok_or("invalid HSL price interval (maximum 90 days)")?;
-    let mut selected = Vec::with_capacity(closes.len());
-    let mut reasons = BTreeSet::new();
-    let mut previous = None;
-    for &(timestamp, close) in closes {
-        if previous.is_some_and(|t| t >= timestamp) {
-            return Err("HSL simulator closes must be unique and ordered".into());
-        }
-        previous = Some(timestamp);
-        if timestamp < start || timestamp > end {
-            continue;
-        }
-        if !close.is_finite() || close <= 0.0 {
-            reasons.insert("unusable_historical_candle".into());
-            continue;
-        }
-        selected.push(Price {
-            timestamp,
-            close,
-            resolution_minutes: 1,
-            source_end: timestamp,
-            carried: false,
-        });
-    }
-    project_selected(start, end, window, selected, reasons)
-}
-
 fn project_selected(
     start: i64,
     end: i64,
@@ -374,6 +337,43 @@ pub fn hsl_native_price_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Simulator closes are already unique and ordered. Keep the same minute-grid
+    /// carrying and diagnostics without candle transport, sorting, or arbitration.
+    fn minute_prices_from_ordered_closes(
+        start: i64,
+        end: i64,
+        closes: &[(i64, f64)],
+    ) -> Result<Prices, String> {
+        let window = end
+            .checked_sub(start)
+            .filter(|v| (0..=MAX_WINDOW).contains(v))
+            .ok_or("invalid HSL price interval (maximum 90 days)")?;
+        let mut selected = Vec::with_capacity(closes.len());
+        let mut reasons = BTreeSet::new();
+        let mut previous = None;
+        for &(timestamp, close) in closes {
+            if previous.is_some_and(|t| t >= timestamp) {
+                return Err("HSL simulator closes must be unique and ordered".into());
+            }
+            previous = Some(timestamp);
+            if timestamp < start || timestamp > end {
+                continue;
+            }
+            if !close.is_finite() || close <= 0.0 {
+                reasons.insert("unusable_historical_candle".into());
+                continue;
+            }
+            selected.push(Price {
+                timestamp,
+                close,
+                resolution_minutes: 1,
+                source_end: timestamp,
+                carried: false,
+            });
+        }
+        project_selected(start, end, window, selected, reasons)
+    }
 
     #[test]
     fn ordered_simulator_closes_preserve_general_projection() {

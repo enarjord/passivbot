@@ -17,6 +17,7 @@ pub struct MinimumCostFilter {
 }
 
 impl MinimumCostFilter {
+    #[cfg(test)]
     pub fn uniform(enabled: bool) -> Self {
         Self {
             long: enabled,
@@ -42,6 +43,7 @@ pub struct SideActivation {
 }
 
 impl SideActivation {
+    #[cfg(test)]
     pub const fn uniform(enabled: bool) -> Self {
         Self {
             long: enabled,
@@ -66,6 +68,7 @@ pub struct ForagerScoreHysteresis {
     pub short: f64,
 }
 
+#[cfg(test)]
 impl ForagerScoreHysteresis {
     pub const fn uniform(margin: f64) -> Self {
         Self {

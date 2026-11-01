@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Clean up Rust build warnings by updating age-admission PyO3 bindings, removing
+  obsolete helpers and keeping test utilities out of production builds.
+
 - Attribute executed HSL closes to their originating controller episode on CPU,
   Metal and CUDA even when the signal recovers before fill accounting. Preserve
   trading decisions, fills and equity while correcting execution counts and
