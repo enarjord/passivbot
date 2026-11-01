@@ -220,7 +220,7 @@ async def prepare_optimizer_inputs(config: dict, *, force_refetch_gaps: bool = F
     data_config = optimizer_data_config(prepared)
     suite = extract_suite_config(prepared, None)
     allow_nan = prepared["optimize"]["backend"] == "gpu"
-    report = describe_prepared_inputs(prepared, suite_config=suite)
+    report = describe_prepared_inputs(data_config, suite_config=suite)
     manager = SharedArrayManager(file_backed=True)
     contexts = []
     try:
