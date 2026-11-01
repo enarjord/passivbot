@@ -101,6 +101,12 @@ from the algorithm it selected, and selected input files from usable individuals
 initial search record, not a completed-evaluation count. Resume preserves the original
 records; legacy sessions are not backfilled with inferred facts.
 
+When preparing for an offline destination, fetch normally, then run
+`download --for-optimize --offline y --manifest prepared-inputs.json` on the source
+before exporting the cache and report. The first offline admission can add genuine
+coverage proof to the dataset manifest and change its hash. An earlier online report
+therefore cannot stand in for that completed offline verification.
+
 Fresh GPU runs without `-t/--start` initialize every population member randomly, matching the
 CPU backends. The input config supplies fixed and non-optimized values but is not implicitly
 inserted as a candidate. Explicit starting configs remain supported, and `--resume` restores
