@@ -544,7 +544,7 @@ def _with_metal_tick_windows(source):
 struct PassivbotTickWindow {
     constant int* values;
     int first_element;
-    int operator[](int absolute_index) const {
+    inline int operator[](int absolute_index) const {
         return values[absolute_index - first_element];
     }
 };
@@ -580,7 +580,7 @@ struct PassivbotHourlyRangeView {
     constant float* values;
     int coin_count;
     int start_minute_of_hour;
-    float operator[](int absolute_index) const {
+    inline float operator[](int absolute_index) const {
         const int k = absolute_index / coin_count;
         if (k <= 0 || (start_minute_of_hour + k) % 60 != 0) return -1.0f;
         const int hour = (start_minute_of_hour + k) / 60 - 1;
@@ -598,15 +598,16 @@ def _metal_tick_window_paths(data, *, device, supported, temporal):
         if paths:
             raise ValueError("GPU tick paths require the streamed-input contract")
         return {}
-    if device != "mps" or not supported or not temporal:
-        raise ValueError("Streamed GPU ticks require temporal Metal Trailing Martingale")
+    if device not in {"mps", "cuda"} or not supported or not temporal:
+        raise ValueError("Streamed GPU ticks require temporal Metal/CUDA Trailing Martingale")
     if len(paths) != len(_METAL_WINDOWED_TICKS):
         raise ValueError("Streamed GPU ticks require every tick input to be disk-backed")
     for name, width in _METAL_WINDOWED_TICKS:
         array = np.load(paths[name], mmap_mode="r", allow_pickle=False)
         try:
             shape = (int(data["n"]), int(data["n_coins"])) + ((2,) if width == 2 else ())
-            if array.shape != shape or array.dtype != np.int32 or not array.flags.c_contiguous:
+            dtype = np.int8 if device == "cuda" and name == "touch_min_qty_relation" else np.int32
+            if array.shape != shape or array.dtype != dtype or not array.flags.c_contiguous:
                 raise ValueError(f"Invalid streamed GPU tick array: {name}")
         finally:
             array._mmap.close()
@@ -620,11 +621,19 @@ def _metal_tick_window_bounds(begin, stop, available):
 
 
 @contextmanager
-def _metal_tick_window_arguments(kernel_args, paths, *, begin, stop, available):
+def _metal_tick_window_arguments(kernel_args, paths, *, begin, stop, available, device="mps"):
     """Keep mapped upload sources and device windows alive through the caller's sync."""
     if not paths:
         yield kernel_args, 0
         return
+    if device == "cuda":
+        with _cuda_tick_window_arguments(
+            kernel_args, paths, begin=begin, stop=stop, available=available,
+        ) as result:
+            yield result
+        return
+    if device != "mps":
+        raise ValueError("Unsupported streamed GPU input device")
     from optimization.gpu.residency import (
         _MpsUploadSource, _close_mps_upload_sources, _discard_completed_upload_pages,
         _mps_upload_quarantine_snapshot, _quarantine_mps_upload_sources,
@@ -666,6 +675,58 @@ def _metal_tick_window_arguments(kernel_args, paths, *, begin, stop, available):
                     # completed these immutable uploads. Advise only consumed
                     # pages of this window, including already-consumed overlap.
                     _release_mps_upload_sources_after_sync(pending)
+                    for source in sources:
+                        array = source.mapped
+                        row_bytes = int(np.prod(array.shape[1:])) * array.dtype.itemsize
+                        offset = int(array.offset) % mmap.ALLOCATIONGRANULARITY
+                        first_page = (offset + start * row_bytes) // mmap.PAGESIZE * mmap.PAGESIZE
+                        _discard_completed_upload_pages(array, end * row_bytes, first_page)
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                _close_mps_upload_sources(sources, preserve_error=failed)
+
+
+@contextmanager
+def _cuda_tick_window_arguments(kernel_args, paths, *, begin, stop, available):
+    """Own a bounded CUDA input window until the existing replay wait completes."""
+    from optimization.gpu.residency import (
+        _MpsUploadSource, _close_mps_upload_sources, _discard_completed_upload_pages,
+        _cuda_upload_quarantine_snapshot, _quarantine_cuda_upload_sources,
+        _release_cuda_upload_sources_after_sync, _synchronize_cuda_uploads,
+    )
+    import mmap
+
+    start, end = _metal_tick_window_bounds(begin, stop, available)
+    pending = _cuda_upload_quarantine_snapshot()
+    sources = []
+    arguments = list(kernel_args)
+    failed = quarantined = False
+    try:
+        for slot, (name, _width) in enumerate(_METAL_WINDOWED_TICKS, start=2):
+            # Default blocking copies preserve integer bytes; mappings stay owned
+            # through replay so interruption cannot release an in-flight source.
+            array = np.load(paths[name], mmap_mode="c", allow_pickle=False)
+            source = _MpsUploadSource(array)
+            sources.append(source)
+            source.destination = torch.as_tensor(array[start:end], device="cuda").contiguous()
+            arguments[slot] = source.destination
+        yield tuple(arguments), start
+    except BaseException:
+        failed = True
+        try:
+            _synchronize_cuda_uploads(torch)
+        except BaseException:
+            _quarantine_cuda_upload_sources(sources)
+            quarantined = True
+            logging.exception("CUDA input-window cleanup synchronization failed")
+        raise
+    finally:
+        if not quarantined:
+            try:
+                if not failed:
+                    _release_cuda_upload_sources_after_sync(pending)
                     for source in sources:
                         array = source.mapped
                         row_bytes = int(np.prod(array.shape[1:])) * array.dtype.itemsize
@@ -762,10 +823,10 @@ def _trailing_martingale_multicoin_shader_library(
     core_ew_half_life_days: float = 180.0,
 ):
     device = gpu_device(torch)
-    if metal_tick_windows and (device != "mps" or not temporal_chunking):
-        raise ValueError("Tick-window shaders require temporal Metal replay")
+    if metal_tick_windows and (device not in {"mps", "cuda"} or not temporal_chunking):
+        raise ValueError("Tick-window shaders require temporal GPU replay")
     if compact_hourly_ranges and not metal_tick_windows:
-        raise ValueError("Compact hourly shaders require Metal tick windows")
+        raise ValueError("Compact hourly shaders require streamed tick windows")
     import passivbot_rust
 
     source = _with_tm_loss_gate_disabled(
@@ -1241,7 +1302,7 @@ class _MulticoinReplayRunner:
                     or data.get("hourly_range_rows") != expected_rows
                     or tuple(self.hour_log_ranges.shape) != (expected_rows, self.n_coins)
                     or self.hour_log_ranges.dtype != torch.float32):
-                raise ValueError("Invalid compact hourly Metal input layout")
+                raise ValueError("Invalid compact hourly GPU input layout")
         self.coin_settings = data["coin_settings"]
         self._hourly_first_observed = data.get("hourly_first_observed")
         self._hourly_coin_ranges = data.get("hourly_coin_ranges")
@@ -1730,6 +1791,7 @@ class _MulticoinReplayRunner:
             started = time.perf_counter()
             with _metal_tick_window_arguments(
                 kernel_args, tick_paths, begin=begin_k, stop=completed_k, available=self.n,
+                device=self.bars.device.type,
             ) as (dispatch_args, input_start):
                 replay_range = torch.tensor(
                     [begin_k, completed_k, input_start] if tick_paths else [begin_k, completed_k],
@@ -1801,7 +1863,8 @@ class _MulticoinReplayRunner:
         if tick_paths:
             self._last_temporal_dispatch.update(
                 streamed_tick_inputs=True,
-                tick_window_bytes=min(self.n, chunk_bars + 2) * self.n_coins * 28,
+                tick_window_bytes=min(self.n, chunk_bars + 2) * self.n_coins
+                * (25 if self.bars.device.type == "cuda" else 28),
             )
         if profile_pipeline:
             launch_profile["dispatch_count"] = dispatch_count

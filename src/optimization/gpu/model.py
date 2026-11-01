@@ -1048,7 +1048,7 @@ def build_mps_multicoin_data(
     from optimization.gpu.residency import (
         check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_invariant_bytes,
         multicoin_resident_bytes, compact_hourly_rows,
-        current_gpu_residency, MetalSuiteResidency,
+        current_gpu_residency, MetalSuiteResidency, CudaSuiteResidency,
     )
     compact_hourly_ranges = bool(
         compact_hourly_ranges and stream_tick_inputs and include_hourly_ranges
@@ -1061,8 +1061,8 @@ def build_mps_multicoin_data(
         compact_hourly_ranges=compact_hourly_ranges,
         start_minute_of_hour=start_minute_of_hour,
     )
-    if stream_tick_inputs and (spill_dir is None or gpu_device(torch) != "mps"):
-        raise ValueError("Streamed tick inputs require disk-backed Metal preparation")
+    if stream_tick_inputs and (spill_dir is None or gpu_device(torch) not in {"mps", "cuda"}):
+        raise ValueError("Streamed tick inputs require disk-backed Metal or CUDA preparation")
     resident_bytes = multicoin_resident_bytes(
         candle_count, coin_count, device=gpu_device(torch),
         include_hourly_ranges=include_hourly_ranges, stream_tick_inputs=stream_tick_inputs,
@@ -1078,8 +1078,12 @@ def build_mps_multicoin_data(
             # A direct spill has no residency owner yet. Check the nominal
             # budget now; activation owns release and live availability checks.
             check_mps_invariant_memory(torch, resident_bytes, require_free=spill_dir is None)
-    elif spill_dir is None:
-        check_cuda_invariant_memory(torch, invariant_bytes)
+    elif gpu_device(torch) == "cuda":
+        residency = current_gpu_residency()
+        if spill_dir is not None and isinstance(residency, CudaSuiteResidency):
+            residency.check_preparation_memory(torch, resident_bytes)
+        else:
+            check_cuda_invariant_memory(torch, resident_bytes)
     first_hour_observed = np.full(coin_count, candle_count, dtype=np.int64)
     if spill_dir is not None:
         arrays, max_costs, first_hour_observed = _spill_multicoin_arrays(

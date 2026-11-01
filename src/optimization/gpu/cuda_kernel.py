@@ -30,6 +30,15 @@ template <typename To, typename From> __device__ inline To as_type(From value) {
     bits.from = value;
     return bits.to;
 }
+// The strict relation table is a signed byte on CUDA. Other tick windows
+// retain int32 storage, and both views preserve absolute replay indexing.
+struct PassivbotByteTickWindow {
+    const signed char* values;
+    int first_element;
+    __device__ inline int operator[](int absolute_index) const {
+        return values[absolute_index - first_element];
+    }
+};
 struct alignas(8) PBFloat2 {
     float x, y;
     PBFloat2() = default;
@@ -127,8 +136,13 @@ def cuda_source(
     # The multicoin input packer uses signed bytes for this ternary table.
     # Integer promotion preserves all strategy expressions and comparisons.
     source = re.sub(
-        r"\bconst int\*\s+touch_min_qty_relation\b",
-        "const signed char* touch_min_qty_relation",
+        r"\bconst int\*\s+((?:window_)?touch_min_qty_relation)\b",
+        r"const signed char* \1",
+        source,
+    )
+    source = re.sub(
+        r"\bPassivbotTickWindow\s+touch_min_qty_relation\b",
+        "PassivbotByteTickWindow touch_min_qty_relation",
         source,
     )
     source = re.sub(r"\bconstant\b", "constexpr", source)
@@ -166,7 +180,7 @@ class CudaShaderLibrary:
         for name, signature in re.findall(r"kernel\s+void\s+(\w+)\((.*?)\)\s*\{", source, re.S):
             self._byte_parameters[name] = {
                 index for index, argument in enumerate(signature.split(","))
-                if re.search(r"\bconstant\s+int\s*\*\s*touch_min_qty_relation\b", argument)
+                if re.search(r"\bconstant\s+int\s*\*\s*(?:window_)?touch_min_qty_relation\b", argument)
             }
             self._scalar_parameters[name] = {
                 index: match[1]

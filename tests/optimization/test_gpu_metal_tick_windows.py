@@ -105,7 +105,7 @@ def test_disk_input_contract_rejects_partial_wrong_dtype_and_unsupported_modes(h
     data = tick_data(tmp_path)
     check = helpers["_metal_tick_window_paths"]
     assert len(check(data, device="mps", supported=True, temporal=True)) == 5
-    for kwargs in (dict(device="cuda", supported=True, temporal=True),
+    for kwargs in (dict(device="cpu", supported=True, temporal=True),
                    dict(device="mps", supported=False, temporal=True),
                    dict(device="mps", supported=True, temporal=False)):
         with pytest.raises(ValueError, match="temporal Metal"):

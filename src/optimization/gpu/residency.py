@@ -90,6 +90,43 @@ def _synchronize_mps_uploads(torch):
     _release_mps_upload_sources_after_sync(pending)
 
 
+_cuda_upload_quarantine = []
+_cuda_upload_quarantine_lock = Lock()
+
+
+def _quarantine_cuda_upload_sources(sources):
+    with _cuda_upload_quarantine_lock:
+        _cuda_upload_quarantine.extend(sources)
+
+
+def _cuda_upload_quarantine_snapshot():
+    with _cuda_upload_quarantine_lock:
+        return tuple(_cuda_upload_quarantine)
+
+
+def _release_cuda_upload_sources_after_sync(pending):
+    """Only a confirmed wait may release sources of an interrupted CUDA copy."""
+    with _cuda_upload_quarantine_lock:
+        claimed = [source for source in pending
+                   if any(source is other for other in _cuda_upload_quarantine)]
+        _cuda_upload_quarantine[:] = [source for source in _cuda_upload_quarantine
+                                     if not any(source is other for other in claimed)]
+    for source in claimed:
+        try:
+            source.close()
+        except BaseException as exc:
+            _quarantine_cuda_upload_sources((source,))
+            if not isinstance(exc, Exception):
+                raise
+            logging.exception("Could not close a completed CUDA upload source")
+
+
+def _synchronize_cuda_uploads(torch):
+    pending = _cuda_upload_quarantine_snapshot()
+    torch.cuda.synchronize()
+    _release_cuda_upload_sources_after_sync(pending)
+
+
 def _discard_completed_upload_pages(array, completed_bytes, discarded_bytes=0):
     """Advise only complete consumed pages of an internal, unmodified mapping."""
     advise = getattr(array._mmap, "madvise", None)
@@ -142,8 +179,8 @@ def _cleanup_after_failure(cleanup, *args, **kwargs):
         logging.exception("GPU suite cleanup failed while handling an earlier exception")
 
 
-def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
-    free = int(torch.cuda.mem_get_info()[0])
+def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None, require_free=True):
+    free = int(torch.cuda.mem_get_info()[0]) if require_free or working_set is None else None
     budget = free if working_set is None else working_set
     if invariant_bytes > int(budget * 0.45):
         raise MemoryError(
@@ -151,7 +188,7 @@ def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
             f"GiB, above the 45% safety limit of {budget / 2**30:.2f} GiB "
             f"{'free VRAM' if working_set is None else 'initial free VRAM'}"
         )
-    if invariant_bytes > free:
+    if require_free and invariant_bytes > free:
         raise MemoryError(
             f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
             f"but only {free / 2**30:.2f} GiB VRAM is currently free"
@@ -182,8 +219,8 @@ def multicoin_invariant_bytes(candles, coins, *, device, include_hourly_ranges=T
     total = int(candles) * int(coins) * per_coin
     if include_hourly_ranges:
         if compact_hourly_ranges:
-            if device != "mps":
-                raise ValueError("Compact hourly GPU inputs require Metal")
+            if device not in {"mps", "cuda"}:
+                raise ValueError("Compact hourly GPU inputs require Metal or CUDA")
             return total + compact_hourly_rows(
                 candles, start_minute_of_hour=start_minute_of_hour,
             ) * int(coins) * 4
@@ -207,11 +244,11 @@ def multicoin_resident_bytes(candles, coins, *, device, include_hourly_ranges=Tr
                                     start_minute_of_hour=start_minute_of_hour)
     if not stream_tick_inputs:
         return full
-    if device != "mps":
-        raise ValueError("Streamed tick inputs require Metal")
+    if device not in {"mps", "cuda"}:
+        raise ValueError("Streamed tick inputs require Metal or CUDA")
     # Previous-touch and next-fill context add one row each to a replay window.
     from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_BARS
-    streamed_per_row = int(coins) * 28
+    streamed_per_row = int(coins) * (25 if device == "cuda" else 28)
     window_rows = min(int(candles), MPS_TM_MULTICOIN_CHUNK_BARS + 2)
     return full - int(candles) * streamed_per_row + window_rows * streamed_per_row
 
@@ -237,15 +274,37 @@ def capture_mps_input_memory_budget(torch):
     )
 
 
-def prefer_streamed_ticks(candles, coins, budget, *, interval_ms=None):
-    """Prefer resident Metal inputs when comfortable, streaming only if it saves RAM.
+@dataclass(frozen=True)
+class CudaInputMemoryBudget:
+    """Freeze CUDA transport preference and its original invariant allowance."""
+
+    device_bytes: int
+    host_bytes: int
+    initial_free_bytes: int
+
+
+def capture_cuda_input_memory_budget(torch):
+    """Capture CUDA and host headroom before history preparation touches pages."""
+    import psutil
+
+    free = int(torch.cuda.mem_get_info()[0])
+    available = int(psutil.virtual_memory().available)
+    return CudaInputMemoryBudget(
+        device_bytes=int(free * 0.45),
+        host_bytes=max(0, min(int(available * 0.7), available - 2**30)),
+        initial_free_bytes=free,
+    )
+
+
+def prefer_streamed_ticks(candles, coins, budget, *, interval_ms=None, device="mps"):
+    """Prefer resident inputs when comfortable, streaming only if it saves memory.
 
     This choice is pure and separate from live allocation admission. Reuse the
     same budget for header preflight and the effective prepared dataset.
     """
-    full = multicoin_invariant_bytes(candles, coins, device="mps")
+    full = multicoin_invariant_bytes(candles, coins, device=device)
     streamed = multicoin_resident_bytes(
-        candles, coins, device="mps", stream_tick_inputs=True,
+        candles, coins, device=device, stream_tick_inputs=True,
         compact_hourly_ranges=interval_ms == 60_000,
     )
     return streamed < full and full > min(budget.device_bytes, budget.host_bytes)
@@ -315,25 +374,39 @@ class CudaSuiteResidency:
     def _device_api(torch):
         return torch.cuda
 
-    def _check_memory(self, torch, invariant_bytes):
+    def _initial_working_set(self, torch):
         if self._working_set is None:
             self._working_set = int(torch.cuda.mem_get_info()[0])
-        check_cuda_invariant_memory(torch, invariant_bytes, working_set=self._working_set)
+        return self._working_set
+
+    def check_preparation_memory(self, torch, invariant_bytes):
+        # Preparation writes files while the previous scenario may remain on
+        # device. Activation releases it before checking live availability.
+        check_cuda_invariant_memory(
+            torch, invariant_bytes, working_set=self._initial_working_set(torch),
+            require_free=False,
+        )
+
+    def _check_memory(self, torch, invariant_bytes):
+        check_cuda_invariant_memory(
+            torch, invariant_bytes, working_set=self._initial_working_set(torch),
+        )
 
     def _synchronize(self, torch):
-        self._device_api(torch).synchronize()
+        _synchronize_cuda_uploads(torch)
 
     def _upload_file(self, torch, path):
         # Preserve CUDA's existing whole-file device-copy behavior.
         array = np.load(path, mmap_mode="c", allow_pickle=False)
         return torch.as_tensor(array, device=self.device).contiguous()
 
-    def __init__(self):
+    def __init__(self, *, input_memory_budget=None):
         self._directory = None
         self._entries = {}
         self._active = None
         self._active_owner = None
-        self._working_set = None
+        self._working_set = (None if input_memory_budget is None
+                             else input_memory_budget.initial_free_bytes)
         self._subset_arrays = []
 
     def _spill_directory(self):
@@ -455,9 +528,9 @@ class CudaSuiteResidency:
 
 
 @contextmanager
-def cuda_residency_scope():
+def cuda_residency_scope(*, input_memory_budget=None):
     """Own run-local packing/residency on the calling execution thread."""
-    residency = CudaSuiteResidency()
+    residency = CudaSuiteResidency(input_memory_budget=input_memory_budget)
     token = _current.set(residency)
     try:
         try:

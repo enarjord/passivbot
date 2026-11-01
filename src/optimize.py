@@ -3480,14 +3480,15 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, stream_tick_inputs=False,
     device = gpu_device(torch)
     if stream_tick_inputs and input_memory_budget is not None:
         stream_tick_inputs = prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
-                                                  interval_ms=60_000)
+                                                  interval_ms=60_000, device=device)
     required = multicoin_resident_bytes(shape[0], shape[1], device=device,
-        stream_tick_inputs=stream_tick_inputs and device == "mps",
-        compact_hourly_ranges=stream_tick_inputs and device == "mps")
+        stream_tick_inputs=stream_tick_inputs,
+        compact_hourly_ranges=stream_tick_inputs)
     if device == "mps":
         check_mps_invariant_memory(torch, required)
     else:
-        check_cuda_invariant_memory(torch, required)
+        check_cuda_invariant_memory(torch, required, working_set=(
+            None if input_memory_budget is None else input_memory_budget.initial_free_bytes))
 
 
 def _materialize_resolved_suite_dates(
@@ -4000,10 +4001,13 @@ async def main():
         if is_gpu:
             import torch
             from optimization.gpu.runtime import gpu_device
-            from optimization.gpu.residency import capture_mps_input_memory_budget
-            if gpu_device(torch) == "mps":
-                # Freeze a run-level preference before file-cache pages are read.
-                gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
+            from optimization.gpu.residency import (
+                capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
+            )
+            # Freeze a run-level preference before file-cache pages are read.
+            capture = (capture_mps_input_memory_budget if gpu_device(torch) == "mps"
+                       else capture_cuda_input_memory_budget)
+            gpu_input_memory_budget = capture(torch)
 
         # A header describes the actual replay only for unsliced, unaggregated
         # ordinary caches. Suites and explicit dataset overrides admit after
