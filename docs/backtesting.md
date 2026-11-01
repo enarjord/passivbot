@@ -95,7 +95,11 @@ retention observation alone remains insufficient; longer unknown prefixes are no
 the bounded discovery budget. Offline use consumes a previously completed source-bound proof
 and performs no probes.
 
-New preparation uses algorithm 11 and offline boundary proof version 3. Candle observations
+An unverified source remains ineligible for online combined selection; another approved source
+with verified data may still supply that coin. Unexpected selection-source parsing or integrity failures propagate
+instead of silently removing the coin. Forced sources and offline source failures remain strict.
+
+New preparation uses algorithm 12 and offline boundary proof version 3. Candle observations
 remain intact. Offline use does not upgrade old gap notes, and older prepared proof versions
 cannot certify current coverage. Online revalidation can replace covered weak gap notes only
 after independent corroboration. Re-verify the raw cache online with independent source

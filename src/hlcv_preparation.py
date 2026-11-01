@@ -42,6 +42,10 @@ class HlcvsDataIntegrityError(ValueError):
     pass
 
 
+class SourceHistoryUnavailable(ValueError):
+    """A source's required candle coverage remains unverified after repair."""
+
+
 def _pct_log(level: str, pct: int, msg: str, *args, **kwargs) -> None:
     """Log with percentage prefix: '12% | message here'."""
     pct_str = f"{pct:3d}%" if pct < 100 else "100%"
@@ -116,7 +120,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 11
+HLCV_PREPARATION_ALGORITHM_VERSION = 12
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -2008,7 +2012,16 @@ async def _resolve_v2_store_range_impl(
                             )
                             return partial_rng
                     overlapping_persistent_gaps = remaining_persistent_gaps
-                raise ValueError(
+                # A successful empty repair says only this source's required
+                # history is unavailable. Malformed result classifications keep
+                # their fatal error path and must not become source fallback.
+                failure_type = (
+                    SourceHistoryUnavailable
+                    if fetch_results and all(result.ok or result.reason == "empty"
+                                             for result in fetch_results)
+                    else ValueError
+                )
+                raise failure_type(
                     _format_stale_pre_inception_failure(
                         catalog=catalog,
                         exchange=exchange,
@@ -5446,9 +5459,7 @@ async def _resolve_combined_coin(
         except Exception as e:
             logging.error(f"Error processing coin {coin}: {e}")
             traceback.print_exc()
-            if plan.forced_exchange or is_offline():
-                raise
-            return None
+            raise
 
 
 async def _load_combined_coin_candidates(
@@ -5505,6 +5516,7 @@ async def _load_combined_coin_candidates(
 
     candidates: list[CombinedExchangeCandidate] = []
     for ex, result in zip(plan.candidate_exchanges, results):
+        source_unavailable = isinstance(result, SourceHistoryUnavailable)
         symbol = None
         try:
             symbol = om_dict[ex].get_symbol(plan.coin) if om_dict[ex].has_coin(plan.coin) else None
@@ -5513,32 +5525,37 @@ async def _load_combined_coin_candidates(
         if isinstance(result, Exception):
             if is_offline():
                 raise result
-            if ex in selection_exchange_set:
+            if source_unavailable:
+                logging.warning("%s: candle source %s has unverified history; unavailable",
+                                plan.coin, ex)
+                result = None
+            elif ex in selection_exchange_set:
                 raise RuntimeError(f"Exchange {ex} failed for coin {plan.coin}") from result
-            summary = _ineligible_combined_summary(
-                coin=plan.coin,
-                exchange=ex,
-                symbol=symbol,
-                reason=f"normalization_candidate_fetch_failed:{type(result).__name__}",
-                gap_class="unknown",
-                effective_start_ts=start_ts_by_exchange[ex],
-                end_ts=end_ts,
-            )
-            if candidate_report is not None:
-                candidate_report.append(summary.to_dict())
-            logging.warning(
-                "%s: optional normalization candidate %s failed (%s)",
-                plan.coin,
-                ex,
-                type(result).__name__,
-            )
-            continue
+            else:
+                summary = _ineligible_combined_summary(
+                    coin=plan.coin,
+                    exchange=ex,
+                    symbol=symbol,
+                    reason=f"normalization_candidate_fetch_failed:{type(result).__name__}",
+                    gap_class="unknown",
+                    effective_start_ts=start_ts_by_exchange[ex],
+                    end_ts=end_ts,
+                )
+                if candidate_report is not None:
+                    candidate_report.append(summary.to_dict())
+                logging.warning(
+                    "%s: optional normalization candidate %s failed (%s)",
+                    plan.coin,
+                    ex,
+                    type(result).__name__,
+                )
+                continue
         if result is None:
             summary = _ineligible_combined_summary(
                 coin=plan.coin,
                 exchange=ex,
                 symbol=symbol,
-                reason="unavailable",
+                reason="unverified_source_history" if source_unavailable else "unavailable",
                 gap_class="unknown",
                 effective_start_ts=start_ts_by_exchange[ex],
                 end_ts=end_ts,

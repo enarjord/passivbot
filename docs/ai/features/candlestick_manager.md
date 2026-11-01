@@ -54,7 +54,11 @@
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
    may replace covered weak notes. Preserve the authored warmup start through local-store
    validation; cached first observations may not crop the request before validation.
-   Preparation algorithm 11 and offline proof version 3 invalidate older prepared-cache
+   A known source-specific inability to verify history is unavailable input, distinct from a
+   parser or integrity failure. Online combined selection may retain another approved usable
+   source; forced-source and offline failures remain strict. Unexpected selection-source errors
+   propagate instead of silently removing an entire coin. Existing no-history filters are unchanged.
+   Preparation algorithm 12 and offline proof version 3 invalidate older prepared-cache
    attestations without relabeling existing input facts. Offline use consumes completed proof
    without issuing discovery probes; cache-only requests cannot collect new evidence.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,

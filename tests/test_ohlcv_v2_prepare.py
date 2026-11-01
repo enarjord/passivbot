@@ -11,6 +11,8 @@ import pytest
 from candlestick_manager import CANDLE_DTYPE, OhlcvFetchError, OhlcvTerminalEmptyPage
 from hlcv_preparation import (
     HLCVManager,
+    SourceHistoryUnavailable,
+    V2FetchResult,
     _dense_hlcv_frame_from_sparse_v2_range,
     _fetch_coin_range_into_v2_store,
     _resolve_v2_store_range,
@@ -1352,8 +1354,9 @@ async def test_resolve_v2_store_range_repairs_stale_pre_inception_gap(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_reason", ["empty", "invalid_timestamp_values", "conflicting_duplicate_timestamps"])
 async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_inception_gap(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, failure_reason
 ):
     monkeypatch.chdir(tmp_path)
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
@@ -1411,6 +1414,11 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
                 }
             )
 
+    if failure_reason != "empty":
+        async def malformed_repair(**kwargs):
+            return [V2FetchResult(False, failure_reason)]
+        monkeypatch.setattr("hlcv_preparation._fetch_invalid_windows_into_v2_store_results", malformed_repair)
+
     with pytest.raises(ValueError) as exc_info:
         await _resolve_v2_store_range(
             om=FakeManager(),
@@ -1426,6 +1434,7 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
             remote_fetch_log_label="v2 fetching missing range",
         )
 
+    assert isinstance(exc_info.value, SourceHistoryUnavailable) is (failure_reason == "empty")
     message = str(exc_info.value)
     assert "strict v2 HLCV repair failed for stale pre-inception gap" in message
     assert "coin=CC" in message
@@ -1536,6 +1545,7 @@ async def test_resolve_v2_store_range_keeps_unrepaired_stale_pre_inception_gap(
             remote_fetch_log_label="v2 fetching missing range",
         )
 
+    assert isinstance(exc_info.value, SourceHistoryUnavailable)
     assert "strict v2 HLCV repair failed for stale pre-inception gap" in str(exc_info.value)
     first_remaining = catalog.get_persistent_gaps(
         "binance", "1m", symbol, first_gap_start, first_gap_end
