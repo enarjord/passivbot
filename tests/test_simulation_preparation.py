@@ -117,6 +117,23 @@ def test_optimizer_plan_uses_owner_worst_case_warmup(tmp_path, monkeypatch):
     assert build_preparation_plan(config, for_optimize=True)["cases"][0]["warmup_minutes"] == expected
 
 
+@pytest.mark.parametrize("fixed", [
+    {"backtest.reducer.default": "max"},
+    {"backtest.reducer.default": "max", "backtest.suite_enabled": False},
+])
+def test_plan_uses_authored_suite_argument_not_fixed_runtime_data_view(tmp_path, monkeypatch, fixed):
+    deny_network(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    raw = source_config()
+    raw["backtest"].update(suite_enabled=True, scenarios=[{"label": "first"}, {"label": "second"}])
+    raw["optimize"]["fixed_runtime_overrides"] = fixed
+    result = build_preparation_plan(prepare_config(raw, verbose=False), for_optimize=True)
+    assert result["suite"]["enabled"] is True
+    assert result["suite"]["reducer"]["default"] == "mean"
+    assert [case["label"] for case in result["cases"]] == ["first", "second"]
+    assert not list(tmp_path.iterdir())
+
+
 def write_metadata(root):
     from procedures import FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION
     cache = root / "caches"
@@ -139,8 +156,13 @@ def write_metadata(root):
 
 
 @pytest.mark.asyncio
-async def test_optimizer_download_prepares_exact_suite_and_reuses_cache_offline(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fixed_overrides", [
+    {}, {"backtest.reducer.default": "max"}, {"backtest.acquisition_mode": "rest"},
+])
+async def test_optimizer_download_prepares_exact_suite_and_reuses_cache_offline(tmp_path, monkeypatch, fixed_overrides):
     import backtest
+    import optimize_suite
+    from simulation_data import acquisition_mode
     from ohlcv_catalog import OhlcvCatalog
     from ohlcv_store import OhlcvStore
     from utils import ts_to_date
@@ -149,6 +171,7 @@ async def test_optimizer_download_prepares_exact_suite_and_reuses_cache_offline(
     monkeypatch.chdir(tmp_path)
     write_metadata(tmp_path)
     raw = source_config()
+    raw["optimize"]["fixed_runtime_overrides"] = deepcopy(fixed_overrides)
     raw["backtest"].update(offline=True, start_date="2024-01-01", end_date="2024-01-03",
                           gap_tolerance_ohlcvs_minutes=0.0, suite_enabled=True, scenarios=[
                               {"label": "first", "end_date": "2024-01-02"},
@@ -160,8 +183,20 @@ async def test_optimizer_download_prepares_exact_suite_and_reuses_cache_offline(
     times = START + np.arange(-1, 2881, dtype=np.int64)*60000
     store.write_rows("binance", "1m", SYMBOL, times,
                      np.tile(np.array([101, 99, 100, 10], dtype=np.float32), (len(times), 1)))
+    owner = optimize_suite.prepare_master_datasets
+    observed_modes = []
+
+    async def observe_owner_mode(*args, **kwargs):
+        observed_modes.append(acquisition_mode())
+        return await owner(*args, **kwargs)
+
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", observe_owner_mode)
     report = await prepare_optimizer_inputs(config)
     assert report["consumer"] == "optimize"
+    assert report["suite"]["reducer"]["default"] == "mean"
+    expected_mode = fixed_overrides.get("backtest.acquisition_mode", "auto")
+    assert report["acquisition_mode"] == observed_modes[0] == expected_mode
+    assert config["backtest"]["acquisition_mode"] == "auto"
     assert [case["label"] for case in report["cases"]] == ["first", "second"]
     assert len(report["datasets"]) == 1
     assert report["datasets"][0]["ordered_coins"] == ["BTC"]
@@ -174,6 +209,8 @@ async def test_optimizer_download_prepares_exact_suite_and_reuses_cache_offline(
     monkeypatch.setattr(backtest, "prepare_hlcvs_combined", no_rebuild)
     again = await prepare_optimizer_inputs(config)
     assert report == again
+    assert observed_modes == [expected_mode, expected_mode]
+    assert acquisition_mode() == "auto"
     assert [p.name for p in Path("caches/hlcvs_data").iterdir()] == cache_dirs
 
 

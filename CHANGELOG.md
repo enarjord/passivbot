@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Verify an optional completed preparation manifest before optimizer evaluation and
+  record input preparation plus the actual search algorithm, population and seed facts
+  in new sessions, without changing fitness identity or backfilling legacy runs.
+
 - Bound archive discovery for unknown leading candle gaps, respect source-bound
   history limits before archive scheduling, and support public REST-only simulation
   acquisition without relaxing coverage checks or offline behavior. Simulation listing boundaries

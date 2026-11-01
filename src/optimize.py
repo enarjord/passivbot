@@ -433,6 +433,7 @@ def _register_exchange_data(
     timestamps_dict: dict,
     array_manager: SharedArrayManager,
     preserve_internal_nan_gaps: bool = False,
+    preparation_report: dict | None = None,
 ) -> tuple[list[str], dict]:
     """
     Register one exchange's prepared data into the optimizer's shared-memory
@@ -441,6 +442,11 @@ def _register_exchange_data(
     coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = (
         prepare_result
     )
+    if preparation_report is not None:
+        from simulation_preparation import dataset_summary
+        preparation_report["datasets"].append(
+            dataset_summary(exchange, cache_dir, coins, len(timestamps))
+        )
     _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
     config["backtest"]["coins"][exchange] = coins
     validate_optimizer_dataset_intervals(config, mss, exchange)
@@ -3765,10 +3771,16 @@ async def main():
         help="Replace optimize.limits with an empty list before applying any --limits/--limit entries.",
     )
     add_starting_config_selection_options(optimize_common_group)
+    optimize_common_group.add_argument(
+        "--preparation-manifest", type=str, default=None, metavar="PATH",
+        help="Require a completed download --for-optimize manifest to match owner-prepared inputs before evaluation.",
+    )
     add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    from preparation_provenance import load_preparation_reference, preparation_metadata
+    preparation_reference = load_preparation_reference(args.preparation_manifest)
     _validate_starting_config_selection_args(parser, args)
     polish_bounds_fraction = getattr(args, "polish_bounds_fraction", None)
     polish_bounds_mode = getattr(args, "polish_bounds_mode", "clamp")
@@ -4021,6 +4033,8 @@ async def main():
         reducer_cfg: Dict[str, Any] = {"default": "mean"}
         scenario_contexts: List[ScenarioEvalContext] = []
         suite_enabled = bool(suite_cfg.get("enabled"))
+        from simulation_preparation import describe_prepared_inputs, case_summary
+        preparation_report = describe_prepared_inputs(data_config, suite_config=suite_cfg)
 
         if suite_enabled:
             scenario_contexts, reducer_cfg = await prepare_suite_contexts(
@@ -4028,9 +4042,12 @@ async def main():
                 suite_cfg,
                 shared_array_manager=array_manager,
                 allow_internal_nan_gaps=allow_internal_nan_gaps,
+                preparation_report=preparation_report,
             )
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
+            preparation_report["cases"] = [case_summary(context) for context in scenario_contexts]
+            preparation_report["suite"]["reducer"] = deepcopy(reducer_cfg)
             _materialize_resolved_suite_dates(config, scenario_contexts)
             logging.info(
                 "Optimizer suite enabled with %d scenario(s)", len(scenario_contexts)
@@ -4123,6 +4140,7 @@ async def main():
                     timestamps_dict=timestamps_dict,
                     array_manager=array_manager,
                     preserve_internal_nan_gaps=allow_internal_nan_gaps,
+                    preparation_report=preparation_report,
                 )
                 candle_coins_dict[exchange] = tuple(coins)
                 exchange_preference = defaultdict(list)
@@ -4152,10 +4170,15 @@ async def main():
                         timestamps_dict=timestamps_dict,
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
+                        preparation_report=preparation_report,
                     )
                     candle_coins_dict[exchange] = tuple(source_coins)
         if not suite_enabled:
             _propagate_prepared_optimizer_universe(config, data_config)
+            preparation_report = describe_prepared_inputs(
+                data_config, datasets=preparation_report["datasets"], suite_config=suite_cfg
+            )
+        prepared_input_metadata = preparation_metadata(preparation_report, preparation_reference)
         refresh_optimizer_source_bindings(config)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
@@ -4226,6 +4249,7 @@ async def main():
                     "data_source": source,
                     **span_metadata,
                     "starting_configs": seed_identity,
+                    "preparation": prepared_input_metadata,
                 },
             )
             results_dir = str(directory)

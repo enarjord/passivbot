@@ -279,7 +279,8 @@ async def test_suite_cli_forwards_report_options_to_scenario_execution(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
+@pytest.mark.parametrize("suite,fixed_reducer", [(False, False), (True, False), (True, True)])
+async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, capsys, suite, fixed_reducer):
     from optimize import main
     import msgpack
 
@@ -295,6 +296,13 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
         compress_results_file=False,
         write_all_results=True,
     )
+    if suite:
+        set_side_universe_sources(cfg, "approved_coins", {"long": ["BTC"], "short": ["BTC"]})
+        cfg["backtest"].update(suite_enabled=True, scenarios=[{"label": "first"}, {"label": "second"}])
+    if fixed_reducer:
+        # The suite owner receives authored mean reduction even though the
+        # bounds-derived data view contains a different fixed runtime value.
+        cfg["optimize"]["fixed_runtime_overrides"] = {"backtest.reducer.default": "max"}
     # This tiny population tests checkpoint continuation, so require mutation
     # instead of allowing duplicate elimination to exhaust unchanged offspring.
     cfg["optimize"]["pymoo"]["shared"].update(
@@ -333,13 +341,37 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     )
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys, "argv", ["optimize", str(config_path), "--suite", "n"])
+    from config import prepare_config
+    from simulation_preparation import prepare_optimizer_inputs
+    import hashlib
+
+    preparation = await prepare_optimizer_inputs(prepare_config(cfg, verbose=False))
+    preparation_path = tmp_path / "prepared.json"
+    preparation_path.write_text(json.dumps(preparation))
+    assert not (tmp_path / "optimize_results").exists()
+    assert preparation["suite"]["enabled"] is suite
+    assert preparation["suite"]["reducer"]["default"] == "mean"
+    suite_flag = "y" if suite else "n"
+    monkeypatch.setattr(sys, "argv", ["optimize", str(config_path), "--suite", suite_flag,
+                                    "--preparation-manifest", str(preparation_path)])
     with pytest.raises(SystemExit) as finished:
         await main()
     assert finished.value.code == 0
     (result_file,) = (tmp_path / "optimize_results").rglob("all_results.bin")
     before = result_file.stat().st_size
     assert before > 0 and (result_file.parent / "checkpoint.pkl").exists()
+    session = json.loads((result_file.parent / "session.json").read_text())
+    assert session["preparation"]["reference_verified"] is True
+    assert session["preparation"]["report"] == preparation
+    assert session["preparation"]["requested_manifest_sha256"] == hashlib.sha256(preparation_path.read_bytes()).hexdigest()
+    assert "preparation" not in session["setup"]
+    search_path = result_file.parent / "search.json"
+    search_bytes = search_path.read_bytes()
+    search = json.loads(search_bytes)
+    assert search["resolved_algorithm"] == "nsga2"
+    assert search["algorithm_class"] == "NSGA2"
+    assert search["seed"] == 42 and search["population_size"] == 2
+    assert search["starting_individuals"] == 0
     with result_file.open("rb") as handle:
         records = list(msgpack.Unpacker(handle, raw=False))
     assert records
@@ -353,15 +385,26 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
             "optimize",
             str(config_path),
             "--suite",
-            "n",
+            suite_flag,
             "--resume",
             str(result_file.parent),
+            "--preparation-manifest",
+            str(preparation_path),
         ],
     )
     with pytest.raises(SystemExit) as finished:
         await main()
-    assert finished.value.code == 0
-    assert result_file.stat().st_size > before
+    if fixed_reducer:
+        # A verified data reference cannot waive the existing fitness guard:
+        # candidate reconstruction records max while the suite owner used mean.
+        # Correcting that separate recording contract requires fresh fitness.
+        assert finished.value.code == 1
+        assert "backtest.reducer" in capsys.readouterr().err
+        assert result_file.stat().st_size == before
+    else:
+        assert finished.value.code == 0
+        assert result_file.stat().st_size > before
+    assert search_path.read_bytes() == search_bytes
 
 
 def test_retired_deap_backend_is_rejected_before_offline_hsl_search():
