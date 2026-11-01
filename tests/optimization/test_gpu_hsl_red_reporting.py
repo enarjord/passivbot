@@ -62,6 +62,7 @@ kernel void red_reporting_probe(constant float* params, device HslNode* trees,
 def test_cooldown_reporting_changes_only_red_samples_in_real_replay(monkeypatch, strategy, mode):
     import passivbot_rust
     from optimization.gpu import mps_kernel
+    from optimization.gpu.core_metrics import observation_catalog
     from test_gpu_hsl_multicoin import make_proxy, raw
 
     getter_name = f"mps_{strategy}_multicoin_source_py"
@@ -89,7 +90,18 @@ def test_cooldown_reporting_changes_only_red_samples_in_real_replay(monkeypatch,
         assert (actual["hsl_tier_samples_red"] > previous["hsl_tier_samples_red"]).all()
         assert float((actual["hsl_triggers_long"] + actual["hsl_triggers_short"]).sum()) > 0
         for key in actual.keys() - {"hsl_tier_samples_red"}:
-            if isinstance(actual[key], torch.Tensor):
+            if key == "core_observations":
+                # The native packet also exports the deliberately changed RED
+                # duration. Every other observation must remain identical.
+                fields = observation_catalog()["fields"]
+                red = fields.index("hsl_red_steps")
+                unchanged = [i for i in range(len(fields)) if i != red]
+                assert (actual[key][:, red] > previous[key][:, red]).all()
+                torch.testing.assert_close(
+                    actual[key][:, unchanged], previous[key][:, unchanged],
+                    rtol=0, atol=0, equal_nan=True, msg=key,
+                )
+            elif isinstance(actual[key], torch.Tensor):
                 torch.testing.assert_close(actual[key], previous[key], rtol=0, atol=0,
                                            equal_nan=True, msg=key)
             else:

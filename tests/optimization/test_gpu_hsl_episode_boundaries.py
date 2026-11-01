@@ -1,4 +1,4 @@
-"""V9 panic-loss reporting stays observational across flat/GREEN/open endings."""
+"""Executed HSL order origins survive later permission and report observations."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.mark.parametrize("finish", ["flat", "green", "censored"])
-def test_panic_loss_report_finishes_segments_without_retaining_panic(finish):
+def test_panic_order_origin_survives_retirement_and_output_queries(finish):
     torch = pytest.importorskip("torch")
     if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
         pytest.skip("actual supported GPU required")
@@ -22,35 +22,34 @@ kernel void loss_report_probe(constant float* params, device float* output,
     HslState h = load_hsl(params, 0, 0);
     bind_hsl(h, nullptr, nullptr, 0, 0, 0, 0, true, true);
     observe_hsl_event(h, 1000, 0, -400, true, 1, false);
-    record_hsl_panic_fill(h, -10, 1000);
-    record_hsl_panic_fill(h, -15, 975);
+    uint origin = h.panic_generation;
+    record_hsl_panic_fill(h, -10, 1000, origin);
+    record_hsl_panic_fill(h, -15, 975, origin);
     if (finish == 0) {
         observe_hsl_event(h, 600, -400, 0, false, 2, true);
     } else if (finish == 1) {
         observe_hsl_event(h, 975, -25, 0, true, 2, false);
-    } else {
-        HslOutputAggregate report = init_hsl_output_aggregate(0, 0);
-        accumulate_hsl_output(report, h, false, 2);
-        output[8] = report.panic_loss_drawdown_sum;
-        output[9] = h.panic_event_loss;
-        report = init_hsl_output_aggregate(0, 0);
-        accumulate_hsl_output(report, h, false, 2);
-        output[10] = report.panic_loss_drawdown_count;
-        output[11] = h.panic_loss_drawdown_count;
-        finish_hsl_panic_loss(h);
     }
-    output[0] = h.panic_loss_drawdown_sum;
-    output[1] = h.panic_loss_drawdown_count;
+    HslOutputAggregate report = init_hsl_output_aggregate(0, 0);
+    accumulate_hsl_output(report, h, false, 2);
+    output[8] = report.panic_loss_drawdown_sum;
+    output[9] = h.panic_event_loss;
+    report = init_hsl_output_aggregate(0, 0);
+    accumulate_hsl_output(report, h, false, 2);
+    output[10] = report.panic_loss_drawdown_count;
+    output[11] = h.panic_loss_drawdown_count;
+    output[0] = report.panic_loss_drawdown_sum;
+    output[1] = report.panic_loss_drawdown_count;
     output[2] = h.hsl.action;
-    finish_hsl_panic_loss(h);
     observe_hsl_event(h, 975, -25, 0, true, 3, false);
     observe_hsl_event(h, 800, -25, -400, true, 4, false);
-    record_hsl_panic_fill(h, -40, 800);
-    finish_hsl_panic_loss(h);
-    output[3] = h.panic_loss_drawdown_sum / h.panic_loss_drawdown_count;
-    output[4] = h.panic_loss_drawdown_max;
-    output[5] = h.panic_loss_drawdown_sum;
-    output[6] = h.panic_loss_drawdown_count;
+    record_hsl_panic_fill(h, -40, 800, h.panic_generation);
+    report = init_hsl_output_aggregate(0, 0);
+    accumulate_hsl_output(report, h, false, 4);
+    output[3] = report.panic_loss_drawdown_sum / report.panic_loss_drawdown_count;
+    output[4] = report.panic_loss_drawdown_max;
+    output[5] = report.panic_loss_drawdown_sum;
+    output[6] = report.panic_loss_drawdown_count;
     output[7] = h.panic_fill_loss_sum_usd;
 }
 """
@@ -63,5 +62,4 @@ kernel void loss_report_probe(constant float* params, device float* output,
     assert values[:2] == pytest.approx([.025, 1])
     assert values[2] == {"flat": 1, "green": 0, "censored": 3}[finish]
     assert values[3:8] == pytest.approx([.0375, .05, .075, 2, 65])
-    if finish == "censored":
-        assert values[8:] == pytest.approx([.025, 25, 1, 0])
+    assert values[8:] == pytest.approx([.025, 25, 1, 0])
