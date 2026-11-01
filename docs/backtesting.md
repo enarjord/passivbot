@@ -106,6 +106,9 @@ The versioned directory bundle stores catalog locations relative to the OHLCV ro
 with SHA-256 checksums and original file modification times. Import validates and stages
 all files before writing, resolves locations beneath the destination root, and merges
 catalog records in one transaction. Unrelated destination records remain intact.
+Chunk locks are bounded rather than held for the whole history; final artifact and
+catalog fingerprints reject a changed snapshot. Publication stages each file beside
+its destination so mounted cache roots and artifact directories remain supported.
 Existing artifacts and factual records must match exactly; metadata refresh times must
 also match. Conflicting data is refused rather than overwritten. For a newer candle tail
 or refreshed metadata, import into the `caches/` directory of a fresh working directory
@@ -120,6 +123,8 @@ can leave unreferenced verified files; retrying the same bundle completes the im
 without overwriting existing facts. Do not use an
 incomplete destination until import succeeds. Directory bundles reject symlinks,
 path traversal, missing files, checksum changes, and unsupported artifact paths.
+Retries also recognize and complete an interrupted owner catalog schema without
+replacing existing rows; unknown or incompatible tables remain an error.
 
 A catalog copied previously with paths from another root requires an explicit
 `--legacy-ohlcv-root /original/caches/ohlcvs` on export. Only exact canonical chunk

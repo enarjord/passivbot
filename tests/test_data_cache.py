@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import gzip
+import errno
 import os
 import sqlite3
 import subprocess
@@ -677,3 +678,189 @@ def test_interrupted_new_catalog_initialization_can_retry(tmp_path, monkeypatch)
         .fetchone()[0]
         == 1
     )
+
+
+def test_many_chunks_transfer_with_low_descriptor_limit(tmp_path):
+    pytest.importorskip("resource")
+    source = tmp_path / "source"
+    for index in range(75):
+        catalog, _, _, _ = make_cache(source, symbol=f"COIN{index}/USDT:USDT")
+        catalog._connect().close()
+    code = """
+import resource
+import sys
+from pathlib import Path
+from data_cache import export_cache, import_cache
+soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+limit = 64 if hard == resource.RLIM_INFINITY else min(64, hard)
+resource.setrlimit(resource.RLIMIT_NOFILE, (limit, hard))
+root = Path(sys.argv[1])
+export_cache(root / 'source', root / 'bundle')
+import_cache(root / 'bundle', root / 'target')
+"""
+    subprocess.run([sys.executable, "-c", code, str(tmp_path)], check=True)
+    with sqlite3.connect(tmp_path / "target/ohlcvs/catalog.sqlite") as conn:
+        assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == 75
+
+
+def test_every_publication_is_staged_beside_its_target(tmp_path, monkeypatch):
+    make_cache(tmp_path / "source")
+    export_cache(tmp_path / "source", tmp_path / "bundle")
+    link = os.link
+    published = []
+
+    def mounted_link(source, target):
+        # Simulate independent mounts at artifact directories, without mounts or
+        # privileges. A root/parent staging directory would raise EXDEV here.
+        if Path(source).parent != Path(target).parent:
+            raise OSError(errno.EXDEV, "cross-device publication")
+        published.append(Path(target))
+        link(source, target)
+
+    monkeypatch.setattr(data_cache.os, "link", mounted_link)
+    assert import_cache(tmp_path / "bundle", tmp_path / "target")["installed_files"]
+    assert published
+    assert not list((tmp_path / "target").rglob(".data-cache-publish-*"))
+
+
+def test_partial_owner_schema_retry_preserves_existing_facts(tmp_path):
+    make_cache(tmp_path / "source")
+    export_cache(tmp_path / "source", tmp_path / "bundle")
+    target = tmp_path / "target/ohlcvs/catalog.sqlite"
+    target.parent.mkdir(parents=True)
+    canonical = OhlcvCatalog(":memory:")
+    sql = (
+        canonical._connect()
+        .execute("SELECT sql FROM sqlite_master WHERE name='symbols'")
+        .fetchone()[0]
+    )
+    canonical._connect().close()
+    with sqlite3.connect(target) as conn:
+        conn.execute(sql)
+        conn.execute(
+            "INSERT INTO symbols VALUES ('bybit','1m','OTHER/USDT:USDT',1,2,3)"
+        )
+    assert target.stat().st_size > 0
+    import_cache(tmp_path / "bundle", tmp_path / "target")
+    with sqlite3.connect(target) as conn:
+        assert conn.execute(
+            "SELECT first_ts,last_ts,updated_at FROM symbols WHERE exchange='bybit'"
+        ).fetchone() == (1, 2, 3)
+        assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == 1
+
+
+def test_unrecognized_partial_schema_is_not_repaired(tmp_path):
+    make_cache(tmp_path / "source")
+    export_cache(tmp_path / "source", tmp_path / "bundle")
+    target = tmp_path / "target/ohlcvs/catalog.sqlite"
+    target.parent.mkdir(parents=True)
+    with sqlite3.connect(target) as conn:
+        conn.execute("CREATE TABLE symbols(unrelated TEXT)")
+    before = target.read_bytes()
+    with pytest.raises(CacheTransferError, match="unsupported catalog schema"):
+        import_cache(tmp_path / "bundle", tmp_path / "target")
+    assert target.read_bytes() == before
+
+
+def test_overlapping_source_gaps_roundtrip_and_complete_a_partial_import(tmp_path):
+    catalog, _, start, _ = make_cache(tmp_path / "source")
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT:USDT",
+        start_ts=start + 120000,
+        end_ts=start + 240000,
+        reason="unknown",
+        persistent=True,
+        note="independent overlapping observation",
+    )
+    export_cache(tmp_path / "source", tmp_path / "bundle")
+    target = tmp_path / "target"
+    import_cache(tmp_path / "bundle", target)
+    assert (
+        snapshot(target)["__catalog_rows__"]["gaps"]
+        == snapshot(tmp_path / "source")["__catalog_rows__"]["gaps"]
+    )
+    with sqlite3.connect(target / "ohlcvs/catalog.sqlite") as conn:
+        conn.execute("DELETE FROM gaps WHERE end_ts=?", (start + 240000,))
+    import_cache(tmp_path / "bundle", target)
+    before = snapshot(target)
+    assert import_cache(tmp_path / "bundle", target)["installed_files"] == 0
+    assert snapshot(target) == before
+
+
+def test_foreign_destination_overlap_still_refuses_new_gap_facts(tmp_path):
+    catalog, _, start, _ = make_cache(tmp_path / "source")
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT:USDT",
+        start_ts=start + 120000,
+        end_ts=start + 240000,
+        reason="unknown",
+        persistent=True,
+        note="source extended observation",
+    )
+    export_cache(tmp_path / "source", tmp_path / "bundle")
+    target = tmp_path / "target"
+    import_cache(tmp_path / "bundle", target)
+    with sqlite3.connect(target / "ohlcvs/catalog.sqlite") as conn:
+        conn.execute("DELETE FROM gaps WHERE end_ts=?", (start + 240000,))
+    target_catalog = OhlcvCatalog(target / "ohlcvs/catalog.sqlite")
+    target_catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT:USDT",
+        start_ts=start + 200000,
+        end_ts=start + 300000,
+        reason="unknown",
+        persistent=True,
+        note="new destination observation",
+    )
+    before = snapshot(target)
+    with pytest.raises(CacheTransferError, match="overlaps incoming"):
+        import_cache(tmp_path / "bundle", target)
+    assert snapshot(target) == before
+
+
+def test_released_source_chunk_lock_does_not_hide_later_mutation(tmp_path, monkeypatch):
+    make_cache(tmp_path / "source")
+    copy = data_cache._copy_metadata
+
+    def changing(*args):
+        copy(*args)
+        body = next((tmp_path / "source/ohlcvs/data").rglob("04.npy"))
+        with body.open("r+b") as handle:
+            handle.seek(-1, 2)
+            handle.write(b"x")
+
+    monkeypatch.setattr(data_cache, "_copy_metadata", changing)
+    with pytest.raises(CacheTransferError, match="source chunks changed"):
+        export_cache(tmp_path / "source", tmp_path / "bundle")
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_bounded_destination_locks_still_reject_changed_existing_chunks(
+    tmp_path, monkeypatch
+):
+    make_cache(tmp_path / "source")
+    bundle, target = tmp_path / "bundle", tmp_path / "target"
+    export_cache(tmp_path / "source", bundle)
+    import_cache(bundle, target)
+    missing = target / "symbol_to_coin_map.json"
+    missing.unlink()
+    rows_before = snapshot(target)["__catalog_rows__"]
+    install = data_cache._install_file
+
+    def changing(source, destination):
+        install(source, destination)
+        body = next((target / "ohlcvs/data").rglob("04.npy"))
+        with body.open("r+b") as handle:
+            handle.seek(-1, 2)
+            handle.write(b"x")
+
+    monkeypatch.setattr(data_cache, "_install_file", changing)
+    with pytest.raises(CacheTransferError, match="destination changed"):
+        import_cache(bundle, target)
+    assert not missing.exists()
+    assert snapshot(target)["__catalog_rows__"] == rows_before

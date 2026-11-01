@@ -7,7 +7,7 @@ input identities remain the responsibility of their existing owners.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import json
@@ -103,7 +103,9 @@ def _table_info(conn: sqlite3.Connection, table: str):
     return [tuple(x) for x in conn.execute("PRAGMA table_info(" + table + ")")]
 
 
-def _validate_catalog(conn: sqlite3.Connection, reference: sqlite3.Connection) -> None:
+def _validate_catalog(
+    conn: sqlite3.Connection, reference: sqlite3.Connection, *, partial=False
+) -> None:
     objects = {
         (r[0], r[1])
         for r in conn.execute(
@@ -112,7 +114,8 @@ def _validate_catalog(conn: sqlite3.Connection, reference: sqlite3.Connection) -
             "AND name NOT LIKE 'sqlite_%'"
         )
     }
-    if objects != {(table, "table") for table in TABLES}:
+    expected = {(table, "table") for table in TABLES}
+    if (objects - expected) or (not partial and objects != expected):
         raise CacheTransferError("unsupported catalog objects")
     if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         raise CacheTransferError("invalid catalog integrity")
@@ -120,12 +123,39 @@ def _validate_catalog(conn: sqlite3.Connection, reference: sqlite3.Connection) -
         kind = conn.execute(
             "SELECT type FROM sqlite_master WHERE name=?", (table,)
         ).fetchone()
+        if kind is None and partial:
+            continue
         if (
             kind is None
             or kind[0] != "table"
             or _table_info(conn, table) != _table_info(reference, table)
         ):
             raise CacheTransferError("unsupported catalog schema: " + table)
+
+
+def _complete_catalog_snapshot(conn: sqlite3.Connection) -> None:
+    """Complete only recognized owner tables in a scratch destination snapshot."""
+    canonical = OhlcvCatalog(":memory:")._connect()
+    try:
+        _validate_catalog(conn, canonical, partial=True)
+        for table in TABLES:
+            if not _table_info(conn, table):
+                sql = canonical.execute(
+                    "SELECT sql FROM sqlite_master WHERE name=?", (table,)
+                ).fetchone()[0]
+                conn.execute(sql)
+        conn.commit()
+    finally:
+        canonical.close()
+
+
+@contextmanager
+def _chunk_lock(body: Path, role: str):
+    try:
+        with portalocker.Lock(str(body) + ".lock", timeout=0, fail_when_locked=True):
+            yield
+    except portalocker.exceptions.LockException as exc:
+        raise CacheTransferError(f"{role} chunk is being written; retry later") from exc
 
 
 def _chunk_relative(row: dict, field: str) -> Path:
@@ -326,27 +356,10 @@ def export_cache(
             files = {}
             observed = {}
             store = OhlcvStore(raw, OhlcvCatalog(catalog_path, read_only=True))
-            with ExitStack() as locks:
-                locked = set()
-                for row in rows:
-                    body = _source_chunk_path(row, "body_path", raw, legacy_ohlcv_roots)
-                    valid = _source_chunk_path(
-                        row, "valid_path", raw, legacy_ohlcv_roots
-                    )
-                    if body not in locked:
-                        try:
-                            locks.enter_context(
-                                portalocker.Lock(
-                                    str(body) + ".lock",
-                                    timeout=0,
-                                    fail_when_locked=True,
-                                )
-                            )
-                        except portalocker.exceptions.LockException as exc:
-                            raise CacheTransferError(
-                                "source chunk is being written; retry later"
-                            ) from exc
-                        locked.add(body)
+            for row in rows:
+                body = _source_chunk_path(row, "body_path", raw, legacy_ohlcv_roots)
+                valid = _source_chunk_path(row, "valid_path", raw, legacy_ohlcv_roots)
+                with _chunk_lock(body, "source"):
                     paths = MonthChunkPaths(body, valid)
                     chunk = replace(
                         ChunkRecord(**row), body_path=str(body), valid_path=str(valid)
@@ -372,39 +385,37 @@ def export_cache(
                             row["month"],
                         ),
                     )
-                _copy_metadata(cache_root, payload, chosen, files, observed)
-                prepared = []
-                for name in prepared_datasets:
-                    rel = _relative(name)
-                    if len(rel.parts) != 1:
-                        raise CacheTransferError(
-                            "prepared dataset must be a cache directory name"
-                        )
-                    directory = cache_root / "hlcvs_data" / rel
-                    _no_symlinks(directory)
-                    declared, names = _prepared_files(directory)
-                    _check_prepared_venues(declared, chosen)
-                    for child in directory.iterdir():
-                        _no_symlinks(child)
-                        if child.is_file() and child.name in names:
-                            dest = Path("hlcvs_data") / rel / child.name
-                            observed[child] = _fingerprint(child)
-                            files[dest.as_posix()] = _copy_stable(child, payload / dest)
-                        elif child.is_dir():
-                            raise CacheTransferError(
-                                "nested prepared dataset directories are unsupported"
-                            )
-                    _verify_prepared(payload / "hlcvs_data" / rel)
-                    prepared.append(name)
-                if any(
-                    before != _fingerprint(path) for path, before in observed.items()
-                ):
-                    raise CacheTransferError("source chunks changed during export")
-                if source.execute("PRAGMA data_version").fetchone()[0] != data_version:
+            _copy_metadata(cache_root, payload, chosen, files, observed)
+            prepared = []
+            for name in prepared_datasets:
+                rel = _relative(name)
+                if len(rel.parts) != 1:
                     raise CacheTransferError(
-                        "source catalog changed during export; retry later"
+                        "prepared dataset must be a cache directory name"
                     )
-                snapshot.commit()
+                directory = cache_root / "hlcvs_data" / rel
+                _no_symlinks(directory)
+                declared, names = _prepared_files(directory)
+                _check_prepared_venues(declared, chosen)
+                for child in directory.iterdir():
+                    _no_symlinks(child)
+                    if child.is_file() and child.name in names:
+                        dest = Path("hlcvs_data") / rel / child.name
+                        observed[child] = _fingerprint(child)
+                        files[dest.as_posix()] = _copy_stable(child, payload / dest)
+                    elif child.is_dir():
+                        raise CacheTransferError(
+                            "nested prepared dataset directories are unsupported"
+                        )
+                _verify_prepared(payload / "hlcvs_data" / rel)
+                prepared.append(name)
+            if any(before != _fingerprint(path) for path, before in observed.items()):
+                raise CacheTransferError("source chunks changed during export")
+            if source.execute("PRAGMA data_version").fetchone()[0] != data_version:
+                raise CacheTransferError(
+                    "source catalog changed during export; retry later"
+                )
+            snapshot.commit()
             mode = snapshot.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
             if mode != "delete":
                 raise CacheTransferError("could not finalize portable catalog snapshot")
@@ -511,6 +522,15 @@ def _validated_bundle(bundle: Path) -> tuple[dict, dict[str, Path]]:
 def _merge_rows(
     dest: sqlite3.Connection, incoming: sqlite3.Connection, cache_root: Path
 ) -> None:
+    # Overlapping observations can legitimately coexist in one owner snapshot.
+    # Only destination evidence absent from that snapshot can conflict with it.
+    incoming_gaps = {tuple(row) for row in incoming.execute("SELECT * FROM gaps")}
+    foreign_gaps = {}
+    for row in dest.execute("SELECT * FROM gaps"):
+        if tuple(row) not in incoming_gaps:
+            foreign_gaps.setdefault(
+                (row["exchange"], row["timeframe"], row["symbol"]), []
+            ).append(row)
     for table in TABLES:
         info = _table_info(dest, table)
         columns = [x[1] for x in info]
@@ -538,17 +558,13 @@ def _merge_rows(
                     )
                 continue
             if table == "gaps":
-                overlaps = dest.execute(
-                    "SELECT 1 FROM gaps WHERE exchange=? AND timeframe=? "
-                    "AND symbol=? AND end_ts>=? AND start_ts<=?",
-                    (
-                        row["exchange"],
-                        row["timeframe"],
-                        row["symbol"],
-                        row["start_ts"],
-                        row["end_ts"],
-                    ),
-                ).fetchone()
+                overlaps = any(
+                    gap["end_ts"] >= row["start_ts"]
+                    and gap["start_ts"] <= row["end_ts"]
+                    for gap in foreign_gaps.get(
+                        (row["exchange"], row["timeframe"], row["symbol"]), ()
+                    )
+                )
                 if overlaps:
                     raise CacheTransferError(
                         "existing gap evidence overlaps incoming facts"
@@ -673,6 +689,7 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
             if existed and target_db.stat().st_size:
                 with _connect(target_db, readonly=True) as current:
                     current.backup(reference)
+            _complete_catalog_snapshot(reference)
             reference.execute("BEGIN IMMEDIATE")
             try:
                 _merge_rows(reference, incoming, cache_root)
@@ -680,6 +697,7 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
                 reference.rollback()
             created_dirs = []
             installed = []
+            publication_files = []
             dest = None
             target_catalog = None
             try:
@@ -692,51 +710,73 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
                     for directory in reversed(missing):
                         directory.mkdir()
                         created_dirs.append(directory)
-                with ExitStack() as locks:
-                    locked = set()
-                    for row in incoming.execute(
-                        "SELECT * FROM chunks ORDER BY body_path"
-                    ):
-                        lock = cache_root / "ohlcvs" / _relative(row["body_path"])
-                        if lock in locked:
-                            continue
-                        try:
-                            locks.enter_context(
-                                portalocker.Lock(
-                                    str(lock) + ".lock",
-                                    timeout=0,
-                                    fail_when_locked=True,
-                                )
-                            )
-                        except portalocker.exceptions.LockException as exc:
+                if not existed:
+                    try:
+                        fd = os.open(
+                            target_db, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+                        )
+                    except FileExistsError as exc:
+                        raise CacheTransferError(
+                            "destination catalog appeared during import; retry"
+                        ) from exc
+                    os.close(fd)
+                target_catalog = OhlcvCatalog(target_db)
+                dest = target_catalog._connect()
+                dest.execute("BEGIN IMMEDIATE")
+                _merge_rows(dest, incoming, cache_root)
+                observed = dict(old)
+                remaining = set(absent)
+
+                def publish(name):
+                    target = cache_root / _relative(name)
+                    # A cache root or individual artifact directory may be a
+                    # mount point. Stage beside each final path, not its root.
+                    descriptor, temporary_path = tempfile.mkstemp(
+                        prefix=".data-cache-publish-", dir=target.parent
+                    )
+                    os.close(descriptor)
+                    local = Path(temporary_path)
+                    publication_files.append(local)
+                    copied = _copy_stable(payload / _relative(name), local)
+                    if copied["sha256"] != manifest["files"][name]["sha256"]:
+                        raise CacheTransferError(
+                            "staged artifact changed during import"
+                        )
+                    installed.append((target, local))
+                    _install_file(local, target)
+                    observed[target] = _fingerprint(target)
+                    remaining.remove(name)
+
+                chunk_names = []
+                for row in incoming.execute("SELECT * FROM chunks ORDER BY body_path"):
+                    names = [
+                        (Path("ohlcvs") / _relative(row[field])).as_posix()
+                        for field in ("body_path", "valid_path")
+                    ]
+                    chunk_names.append(names)
+                    with _chunk_lock(cache_root / _relative(names[0]), "destination"):
+                        for name in names:
+                            if name in remaining:
+                                publish(name)
+                for name in sorted(
+                    remaining, key=lambda n: (n.endswith("manifest.json"), n)
+                ):
+                    publish(name)
+                # Bounded locks plus complete final fingerprints detect a
+                # changed offline destination without retaining O(chunks) FDs.
+                for names in chunk_names:
+                    with _chunk_lock(cache_root / _relative(names[0]), "destination"):
+                        if any(
+                            _fingerprint(cache_root / _relative(name))
+                            != observed[cache_root / _relative(name)]
+                            for name in names
+                        ):
                             raise CacheTransferError(
-                                "destination chunk is being written; retry later"
-                            ) from exc
-                        locked.add(lock)
-                    if not existed:
-                        try:
-                            fd = os.open(
-                                target_db, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+                                "destination changed during import"
                             )
-                        except FileExistsError as exc:
-                            raise CacheTransferError(
-                                "destination catalog appeared during import; retry"
-                            ) from exc
-                        os.close(fd)
-                    target_catalog = OhlcvCatalog(target_db)
-                    dest = target_catalog._connect()
-                    dest.execute("BEGIN IMMEDIATE")
-                    _merge_rows(dest, incoming, cache_root)
-                    for name in sorted(
-                        absent, key=lambda n: (n.endswith("manifest.json"), n)
-                    ):
-                        target = cache_root / _relative(name)
-                        staged = payload / _relative(name)
-                        installed.append((target, staged))
-                        _install_file(staged, target)
-                    if any(_fingerprint(p) != before for p, before in old.items()):
-                        raise CacheTransferError("destination changed during import")
-                    dest.commit()
+                if any(_fingerprint(p) != before for p, before in observed.items()):
+                    raise CacheTransferError("destination changed during import")
+                dest.commit()
             except BaseException:
                 if dest is not None:
                     dest.rollback()
@@ -760,6 +800,8 @@ def _import_cache(bundle: Path, cache_root: Path) -> dict:
             finally:
                 if dest is not None:
                     dest.close()
+                for temporary in publication_files:
+                    temporary.unlink(missing_ok=True)
             return {
                 "schema_version": BUNDLE_VERSION,
                 "verified_files": len(files),
