@@ -107,6 +107,11 @@ before exporting the cache and report. The first offline admission can add genui
 coverage proof to the dataset manifest and change its hash. An earlier online report
 therefore cannot stand in for that completed offline verification.
 
+Configure suite reduction directly in `backtest.reducer`. A differing reducer in
+`optimize.fixed_runtime_overrides` can make recorded candidate configuration advertise
+a different reducer than the suite owner used and block resume. A verified preparation reference does not
+waive that existing fitness-compatibility guard or repair historical records.
+
 Fresh GPU runs without `-t/--start` initialize every population member randomly, matching the
 CPU backends. The input config supplies fixed and non-optimized values but is not implicitly
 inserted as a candidate. Explicit starting configs remain supported, and `--resume` restores

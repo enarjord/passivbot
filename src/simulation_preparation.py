@@ -117,10 +117,13 @@ def build_preparation_plan(config: dict, *, for_optimize: bool = False,
     # Reading explicit override files is allowed; market-symbol discovery is
     # deferred to preparation so planning cannot create alias-map caches.
     source = parse_overrides(config, verbose=False, symbol_normalizer=lambda value: value)
-    prepared = optimizer_data_config(source) if for_optimize else source
-    suite = extract_suite_config(prepared, None)
+    # Suite selection/reduction belongs to the authored execution config. Fixed
+    # runtime overrides affect the data view, not the suite argument passed to
+    # the optimizer's preparation owner.
+    suite = extract_suite_config(source, None)
     if for_optimize:
-        validate_optimizer_preparation(prepared, suite)
+        validate_optimizer_preparation(source, suite)
+    prepared = optimizer_data_config(source) if for_optimize else source
     scenarios = build_scenarios(suite, base_exchanges=prepared["backtest"]["exchanges"])[0] if suite["enabled"] else [None]
     cases = []
     exchanges = list(prepared["backtest"]["exchanges"])
@@ -217,16 +220,17 @@ async def prepare_optimizer_inputs(config: dict, *, force_refetch_gaps: bool = F
     data_config = optimizer_data_config(prepared)
     suite = extract_suite_config(prepared, None)
     allow_nan = prepared["optimize"]["backend"] == "gpu"
-    report = describe_prepared_inputs(prepared)
+    report = describe_prepared_inputs(prepared, suite_config=suite)
     manager = SharedArrayManager(file_backed=True)
     contexts = []
     try:
         with numpy_artifact_loader(manager.load_numpy_artifact):
             if suite["enabled"]:
-                contexts, _ = await prepare_suite_contexts(data_config, suite, shared_array_manager=manager,
+                contexts, reducer = await prepare_suite_contexts(data_config, suite, shared_array_manager=manager,
                                                          allow_internal_nan_gaps=allow_nan,
                                                          force_refetch_gaps=force_refetch_gaps,
                                                          preparation_report=report)
+                report["suite"]["reducer"] = deepcopy(reducer)
                 for context in contexts:
                     report["cases"].append(case_summary(context))
                     manager.discard_file_pages()
@@ -256,7 +260,7 @@ async def prepare_optimizer_inputs(config: dict, *, force_refetch_gaps: bool = F
         _hlcvs = _btc = timestamps = None
         manager.cleanup()
     if not suite["enabled"]:
-        return describe_prepared_inputs(data_config, datasets=report["datasets"])
+        return describe_prepared_inputs(data_config, datasets=report["datasets"], suite_config=suite)
     return report
 
 
@@ -278,10 +282,11 @@ def case_summary(context) -> dict:
             "rows": {exchange: len(context.timestamps[exchange]) for exchange in context.exchanges}}
 
 
-def describe_prepared_inputs(config: dict, *, datasets=(), scenario_contexts=()) -> dict:
+def describe_prepared_inputs(config: dict, *, datasets=(), scenario_contexts=(),
+                             suite_config=None) -> dict:
     """Shared report schema for download and existing optimizer session provenance."""
     from suite_runner import extract_suite_config
-    suite = extract_suite_config(config, None)
+    suite = extract_suite_config(config, None) if suite_config is None else suite_config
     datasets = deepcopy(list(datasets))
     cases = [case_summary(context) for context in scenario_contexts]
     if not suite["enabled"] and datasets:

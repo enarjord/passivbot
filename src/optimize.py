@@ -4034,7 +4034,7 @@ async def main():
         scenario_contexts: List[ScenarioEvalContext] = []
         suite_enabled = bool(suite_cfg.get("enabled"))
         from simulation_preparation import describe_prepared_inputs, case_summary
-        preparation_report = describe_prepared_inputs(data_config)
+        preparation_report = describe_prepared_inputs(data_config, suite_config=suite_cfg)
 
         if suite_enabled:
             scenario_contexts, reducer_cfg = await prepare_suite_contexts(
@@ -4047,6 +4047,7 @@ async def main():
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
             preparation_report["cases"] = [case_summary(context) for context in scenario_contexts]
+            preparation_report["suite"]["reducer"] = deepcopy(reducer_cfg)
             _materialize_resolved_suite_dates(config, scenario_contexts)
             logging.info(
                 "Optimizer suite enabled with %d scenario(s)", len(scenario_contexts)
@@ -4175,7 +4176,7 @@ async def main():
         if not suite_enabled:
             _propagate_prepared_optimizer_universe(config, data_config)
             preparation_report = describe_prepared_inputs(
-                data_config, datasets=preparation_report["datasets"]
+                data_config, datasets=preparation_report["datasets"], suite_config=suite_cfg
             )
         prepared_input_metadata = preparation_metadata(preparation_report, preparation_reference)
         refresh_optimizer_source_bindings(config)
