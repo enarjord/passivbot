@@ -74,7 +74,8 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
     captured = []
     source = authored_source()
     monkeypatch.setattr(ohlcv_download, "load_input_config", lambda _path: (source, "", deepcopy(source)))
-    async def prepared_only(config):
+    async def prepared_only(config, *, for_optimize=False):
+        assert for_optimize is False
         captured.append(config)
     monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", prepared_only)
     monkeypatch.setattr("sys.argv", ["download", "-s", "BTC", "--bot.short.universe.approved_coins", "ETH",
@@ -94,7 +95,8 @@ async def test_download_cli_decodes_directional_convenience_sources(monkeypatch,
     source = authored_source()
     captured = []
     monkeypatch.setattr(ohlcv_download, 'load_input_config', lambda _path: (source, '', deepcopy(source)))
-    async def prepared_only(config):
+    async def prepared_only(config, *, for_optimize=False):
+        assert for_optimize is False
         captured.append(config)
     monkeypatch.setattr(ohlcv_download, 'warm_ohlcv_caches', prepared_only)
     monkeypatch.setattr('sys.argv', ['download', flag, '{long: ["BTC"], short: ["ETH"]}'])
@@ -165,7 +167,8 @@ async def test_download_nullable_sources_preserve_input_and_source_authority(
     before = path.read_bytes()
     observed = []
 
-    async def inspect(config):
+    async def inspect(config, *, for_optimize=False):
+        assert for_optimize is False
         observed.append((resolve_universe_sources(config, field)[0], raw_side_universe_sources(config, field)))
 
     monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", inspect)
@@ -247,7 +250,8 @@ async def test_download_empty_source_or_explicit_side_null(monkeypatch, side_nul
     )
     observed = []
 
-    async def inspect(config):
+    async def inspect(config, *, for_optimize=False):
+        assert for_optimize is False
         observed.append(resolve_universe_sources(config, "approved_coins")[0])
 
     monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", inspect)
