@@ -224,7 +224,7 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     rust = main["jobs"]["rust"]
     assert rust["name"] == "Rust"
     assert [step["run"] for step in rust["steps"] if "run" in step] == [
-        "cargo test --no-default-features", "cargo check --tests",
+        "cargo test --locked --no-default-features", "cargo check --locked --tests",
     ]
     shards = shared["jobs"]["shards"]
     assert shards["timeout-minutes"] == "90"
