@@ -167,7 +167,7 @@ async def test_confirmed_listing_boundary_remains_usable(tmp_path, monkeypatch):
     catalog, store, ts = raw_store(tmp_path, mask)
     catalog.mark_gap(exchange="binance", timeframe="1m", symbol=SYMBOL,
                      start_ts=int(ts[0]), end_ts=int(ts[1]), reason="pre_inception",
-                     persistent=True, retry_count=0, note="discovered_first_candle_during_stale_repair")
+                     persistent=True, retry_count=0, note="corroborated_source_history_boundary_v2")
     with simulation_data_policy(OFFLINE):
         rng = await hp._resolve_v2_store_range(
             om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
@@ -241,6 +241,17 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     override = await prepare_hlcvs_mss(config, exchange)
     assert override[2]["__meta__"]["offline_snapshot"] == result[2]["__meta__"]["offline_snapshot"]
     np.testing.assert_equal(result[1], override[1])
+    # Even an integrity-valid explicit dataset must carry the current boundary
+    # proof, not an older presence-only offline attestation.
+    from copy import deepcopy
+    import backtest
+    old_mss = deepcopy(override[2])
+    old_mss["__meta__"]["offline_snapshot"]["version"] = 1
+    stale_override = (override[4], override[0], override[1], old_mss,
+                      override[3], override[5], override[6])
+    monkeypatch.setattr(backtest, "load_hlcvs_data_override", lambda *args: stale_override)
+    with pytest.raises(OfflineDataError, match="lacks verified offline coverage provenance"):
+        await prepare_hlcvs_mss(config, exchange)
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])
@@ -515,6 +526,10 @@ async def test_source_directory_prefix_requires_listing_provenance(tmp_path, mon
     cache = metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
     if confirmed:
+        market_path = cache / "binance/markets.json"
+        markets = json.loads(market_path.read_text())
+        markets[SYMBOL]["info"] = {"symbol": "BTCUSDT", "onboardDate": START+120000}
+        market_path.write_text(json.dumps(markets))
         for name, value in (
             ("first_ohlcv_timestamps_unified.json", START+120000),
             ("first_ohlcv_timestamps_unified_exchange_specific.json", {"binanceusdm": START+120000}),

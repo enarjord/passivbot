@@ -1,4 +1,7 @@
-from simulation_data import OfflineDataError, is_offline, require_online, simulation_data_scope, record_range, snapshot_file
+from simulation_data import (
+    OfflineDataError, acquisition_mode, is_offline, record_range, require_online,
+    simulation_data_scope, snapshot_file,
+)
 import asyncio
 from types import SimpleNamespace
 import json
@@ -113,7 +116,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 9
+HLCV_PREPARATION_ALGORITHM_VERSION = 10
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -422,6 +425,7 @@ class HLCVManager:
         ohlcv_source_dir: Optional[str] = None,
     ):
         self.exchange = to_ccxt_exchange_id(exchange)
+        self.acquisition_mode = acquisition_mode()
         self.quote = get_quote(self.exchange)
         self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
@@ -492,6 +496,7 @@ class HLCVManager:
                 # Backtest HLCV preparation may share the same cache directory as live trading.
                 # Force-disable disk retention here to avoid deleting shards created/needed by other processes.
                 max_disk_candles_per_symbol_per_tf=0,
+                archive_enabled=self.acquisition_mode == "auto",
             )
 
     async def aclose(self) -> None:
@@ -511,6 +516,8 @@ class HLCVManager:
 
     def get_binance_archive_client(self) -> BinanceOhlcvArchiveClient:
         require_online("Binance archive download")
+        if self.acquisition_mode != "auto" or acquisition_mode() != "auto":
+            raise ValueError("Binance archives are disabled by backtest.acquisition_mode='rest'")
         if self.binance_archive_client is None:
             self.binance_archive_client = BinanceOhlcvArchiveClient()
         return self.binance_archive_client
@@ -939,18 +946,19 @@ class HLCVManager:
             df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
             if df is not None and not df.empty:
                 requested_start_ts = start_ts
+                first_row_ts = int(df.timestamp.iloc[0])
+                if first_row_ts > start_ts:
+                    listing = await _corroborated_source_listing_boundary(self, self.exchange, coin, symbol)
+                    if listing is None or first_row_ts != listing // 60_000 * 60_000:
+                        message = (f"Unverified source directory prefix: {self.exchange}/{coin} "
+                                   f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}")
+                        if is_offline():
+                            raise OfflineDataError(message)
+                        logging.warning(message)
+                        return empty_df
+                    # Start at the independently confirmed listing minute.
+                    start_ts = first_row_ts
                 if is_offline():
-                    first_row_ts = int(df.timestamp.iloc[0])
-                    if first_row_ts > start_ts:
-                        inception = await get_first_timestamps_unified([coin], exchange=self.exchange)
-                        first_listing_ts = int(inception[coin])
-                        if abs(first_row_ts - first_listing_ts) > 60_000:
-                            raise OfflineDataError(
-                                f"Unverified source directory prefix: {self.exchange}/{coin} "
-                                f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}"
-                            )
-                        # Start at the confirmed listing; do not synthesize pre-listing prices.
-                        start_ts = first_row_ts
                     if int(df.timestamp.iloc[-1]) < end_ts:
                         raise OfflineDataError(
                             f"Incomplete source directory candles: {self.exchange}/{coin} "
@@ -1046,6 +1054,15 @@ class HLCVManager:
             return empty_df
 
         ts = real["ts"].astype(np.int64, copy=False)
+        if int(ts[0]) > start_ts:
+            listing = await _corroborated_source_listing_boundary(self, self.exchange, coin, symbol)
+            if listing is None or int(ts[0]) != listing // 60_000 * 60_000:
+                logging.warning(
+                    "[%s] unverified leading source history for %s (%s -> %s); unavailable",
+                    self.exchange, symbol, ts_to_date(start_ts), ts_to_date(int(ts[0])),
+                )
+                return empty_df
+            start_ts = int(ts[0])
         if ts.size > 1:
             is_tradfi_stock_perp = coin.startswith("xyz:") and self.tradfi_for_stock_perps
             gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
@@ -1588,10 +1605,40 @@ async def _resolve_v2_store_range(**kwargs):
         kwargs["allow_remote_fetch"] = False
         kwargs["allow_partial_window"] = False
     rng = await _resolve_v2_store_range_impl(**kwargs)
-    if not is_offline():
-        return rng
     exchange, symbol = kwargs["exchange"], kwargs["symbol"]
     start, end = kwargs["start_ts"], kwargs["end_ts"]
+    if not is_offline():
+        if rng is None or not rng.valid.any():
+            return None
+        first_valid = int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
+        if first_valid > start:
+            if int(rng.timestamps[0]) > start:
+                earlier = kwargs["store"].read_range(exchange, "1m", symbol, start, first_valid - 60_000)
+                if earlier.valid.size and earlier.valid[0]:
+                    # Existing internal-gap window selection is coverage policy,
+                    # not a claim that the source began at the cropped window.
+                    return rng
+                if earlier.valid.any():
+                    return None
+            proven_end = _confirmed_catalog_prefix_end(
+                kwargs["catalog"], exchange, symbol, start, first_valid - 60_000,
+            )
+            if proven_end != first_valid:
+                evidence = await _collect_first_timestamp_evidence(
+                    om=kwargs["om"], exchange=exchange, coin=kwargs["coin"], symbol=symbol,
+                )
+                listing = _source_history_boundary(evidence)
+                if listing is None or first_valid != listing // 60_000 * 60_000:
+                    logging.warning("[%s] unverified leading history for %s; unavailable",
+                                    exchange, symbol)
+                    return None
+            if proven_end != first_valid:
+                kwargs["catalog"].mark_gap(
+                    exchange=exchange, timeframe="1m", symbol=symbol, start_ts=start,
+                    end_ts=first_valid - 60_000, reason="pre_inception", persistent=True,
+                    retry_count=0, note="verified_source_history_boundary_v2",
+                )
+        return rng
     if rng is None:
         raise OfflineDataError(
             f"Offline candles unavailable: {exchange}/{kwargs['coin']} ({symbol}) "
@@ -1610,9 +1657,10 @@ async def _resolve_v2_store_range(**kwargs):
         cursor = left
         gaps = kwargs["catalog"].get_persistent_gaps(exchange, "1m", symbol, left, right)
         for gap in sorted(gaps, key=lambda g: g.start_ts):
-            if gap.reason == reason and int(gap.start_ts) <= cursor:
+            proven = reason != "pre_inception" or _pre_inception_gap_confirms_discovered_boundary(gap)
+            if gap.reason == reason and proven and int(gap.start_ts) <= cursor:
                 cursor = max(cursor, int(gap.end_ts) + 60_000)
-        if cursor <= right:
+        if cursor <= right or (reason == "pre_inception" and cursor != right + 60_000):
             raise OfflineDataError(
                 f"Unverified offline candle boundary: {exchange}/{kwargs['coin']} "
                 f"{ts_to_date(left)}..{ts_to_date(right)}; cache=caches/ohlcvs. "
@@ -1703,6 +1751,18 @@ async def _resolve_v2_store_range_impl(
     if rng.valid.all():
         return rng
     if _has_single_leading_invalid_prefix(rng):
+        first_valid_ts = int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
+        proven_end = _confirmed_catalog_prefix_end(
+            catalog, exchange, symbol, int(start_ts), first_valid_ts - 60_000,
+        )
+        if proven_end == first_valid_ts:
+            # Current proof already binds this exact source/range. Reusing it
+            # does not require a new metadata request or a new birthdate guess.
+            return _extract_single_valid_window(rng)
+        if is_offline():
+            # Preserve legacy evidence bytes. Offline reuse consumes a prior
+            # versioned verification; it does not upgrade observation-only notes.
+            return None
         first_ts_evidence = await _collect_first_timestamp_evidence(
             om=om, exchange=exchange, coin=coin, symbol=symbol
         )
@@ -1729,7 +1789,7 @@ async def _resolve_v2_store_range_impl(
                     reason="pre_inception",
                     persistent=True,
                     retry_count=0,
-                    note="authoritative_first_candle_boundary",
+                    note="verified_source_history_boundary_v2",
                 )
             logging.info(
                 "[%s] using authoritative pre-inception boundary for %s (%s -> %s)",
@@ -1756,19 +1816,13 @@ async def _resolve_v2_store_range_impl(
     )
     if overlapping_persistent_gaps:
         if all(str(gap.reason) == "pre_inception" for gap in overlapping_persistent_gaps):
-            partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
-            if partial_rng is not None:
-                logging.info(
-                    "[%s] using partial v2 local window for %s after pre-inception gap (%s -> %s)",
-                    exchange,
-                    coin,
-                    ts_to_date(int(partial_rng.timestamps[0])),
-                    ts_to_date(int(partial_rng.timestamps[-1])),
-                )
-                return partial_rng
             partial_rng = (
                 _extract_single_valid_window(rng)
                 if _pre_inception_gaps_confirm_discovered_boundary(overlapping_persistent_gaps)
+                and rng.valid.any()
+                and _confirmed_catalog_prefix_end(
+                    catalog, exchange, symbol, int(start_ts), int(end_ts)
+                ) == int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
                 else None
             )
             if partial_rng is not None:
@@ -1783,30 +1837,15 @@ async def _resolve_v2_store_range_impl(
             first_ts_evidence = await _collect_first_timestamp_evidence(
                 om=om, exchange=exchange, coin=coin, symbol=symbol
             )
-            partial_rng = (
-                _extract_single_valid_window(rng)
-                if _pre_inception_gaps_confirm_legacy_mirrored_boundary(
-                    rng, overlapping_persistent_gaps
-                )
-                else None
-            )
-            if partial_rng is not None:
-                logging.info(
-                    "[%s] using legacy mirrored v2 pre-inception boundary for %s (%s -> %s); keeping gap(s) eligible for scheduled retry",
-                    exchange,
-                    coin,
-                    ts_to_date(int(partial_rng.timestamps[0])),
-                    ts_to_date(int(partial_rng.timestamps[-1])),
-                )
-                return partial_rng
             retryable_pre_inception_gaps = [
                 gap for gap in overlapping_persistent_gaps if _gap_retry_due(gap, om)
             ]
             if (
                 allow_remote_fetch
                 and retryable_pre_inception_gaps
-                and _pre_inception_gaps_are_stale(
-                    overlapping_persistent_gaps, first_ts_evidence
+                and (
+                    _pre_inception_gaps_are_stale(overlapping_persistent_gaps, first_ts_evidence)
+                    or _source_history_boundary(first_ts_evidence) is not None
                 )
             ):
                 logging.info(
@@ -1855,7 +1894,7 @@ async def _resolve_v2_store_range_impl(
                                 reason="pre_inception",
                                 persistent=True,
                                 retry_count=0,
-                                note="discovered_first_candle_during_stale_repair",
+                                note="corroborated_source_history_boundary_v2",
                             )
                     rng = await _read_v2_range_repairing_corrupt_chunk(
                         om=om,
@@ -2307,18 +2346,8 @@ def _extract_authoritative_pre_inception_window(rng, first_ts_evidence: dict[str
     if not rng.valid[first_valid_idx:].all():
         return None
     first_valid_ts = int(rng.timestamps[first_valid_idx])
-    authoritative_keys = (
-        "cm_authoritative_start_ts",
-        "local_first_timestamp",
-        "unified_exchange_first_timestamp",
-    )
-    matching_authoritative_ts = [
-        int(first_ts_evidence[key])
-        for key in authoritative_keys
-        if key in first_ts_evidence
-        and abs(first_valid_ts - int(first_ts_evidence[key])) <= 60_000
-    ]
-    if not matching_authoritative_ts:
+    boundary = _source_history_boundary(first_ts_evidence)
+    if boundary is None or first_valid_ts != boundary // 60_000 * 60_000:
         return None
     return _extract_single_valid_window(rng)
 
@@ -2469,6 +2498,9 @@ async def _collect_first_timestamp_evidence(
     symbol: str,
 ) -> dict[str, int]:
     evidence: dict[str, int] = {}
+    listing = _venue_listing_boundary(om, exchange, coin, symbol)
+    if listing is not None:
+        evidence["venue_listing_timestamp"] = listing
     loader = getattr(om, "load_first_timestamp", None)
     if callable(loader):
         try:
@@ -2493,9 +2525,11 @@ async def _collect_first_timestamp_evidence(
                 exc,
             )
 
+    # Without independent launch metadata, another first-OHLCV query cannot
+    # resolve inception. Avoid turning unknown provenance into unbounded probes.
     for key, exchange_arg in (
-        ("unified_exchange_first_timestamp", to_ccxt_exchange_id(exchange)),
-        ("unified_global_first_timestamp", None),
+        [("unified_exchange_first_timestamp", to_ccxt_exchange_id(exchange))]
+        if listing is not None else []
     ):
         try:
             first_timestamps = await get_first_timestamps_unified([coin], exchange=exchange_arg)
@@ -2535,13 +2569,64 @@ def _pre_inception_gaps_are_stale(gaps, first_ts_evidence: dict[str, int]) -> bo
 
 
 _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES = {
-    "authoritative_first_candle_boundary",
-    "discovered_first_candle_during_stale_repair",
+    "verified_source_history_boundary_v2",
+    "corroborated_source_history_boundary_v2",
 }
 
-_LEGACY_MIRRORED_PRE_INCEPTION_BOUNDARY_NOTES = {
-    "mirrored_from_candlestick_manager",
-}
+
+def _venue_listing_boundary(om, exchange, coin, symbol):
+    """Return independently published contract launch metadata, never an OHLCV observation.
+
+    Only the two explicitly supported venue fields are interpreted. Market metadata
+    must already have been loaded by its owner; this helper performs no I/O.
+    """
+    venue = to_standard_exchange_name(str(exchange))
+    if to_standard_exchange_name(str(getattr(om, "exchange", ""))) != venue:
+        return None
+    resolver = getattr(om, "get_symbol", None)
+    if not callable(resolver) or resolver(coin) != symbol:
+        return None
+    markets = getattr(om, "markets", None)
+    market = markets.get(symbol) if isinstance(markets, dict) else None
+    if not isinstance(market, dict) or market.get("symbol") != symbol:
+        return None
+    info = market.get("info")
+    if not isinstance(info, dict) or info.get("symbol") != market.get("id"):
+        return None
+    field = {"binance": "onboardDate", "bybit": "launchTime"}.get(venue)
+    value = info.get(field) if field else None
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return None
+    return timestamp if timestamp > 0 else None
+
+
+async def _corroborated_source_listing_boundary(om, exchange, coin, symbol):
+    if _venue_listing_boundary(om, exchange, coin, symbol) is None:
+        return None
+    evidence = await _collect_first_timestamp_evidence(
+        om=om, exchange=exchange, coin=coin, symbol=symbol,
+    )
+    return _source_history_boundary(evidence)
+
+
+def _source_history_boundary(evidence):
+    # A retained OHLCV response, even when cached under the correct symbol,
+    # proves only observed availability. It cannot establish market inception.
+    listing = evidence.get("venue_listing_timestamp")
+    if listing is None:
+        return None
+    # A daily first-candle observation may be rounded to the launch day's start.
+    # An earlier day is contradictory evidence and must not be hidden.
+    listing_day = int(listing) // 86_400_000 * 86_400_000
+    if any(int(evidence[key]) < listing_day for key in (
+        "cm_authoritative_start_ts", "unified_exchange_first_timestamp",
+    ) if key in evidence):
+        return None
+    return int(listing)
 
 
 def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
@@ -2550,16 +2635,6 @@ def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
 
 def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
     return bool(gaps) and all(_pre_inception_gap_confirms_discovered_boundary(gap) for gap in gaps)
-
-
-def _pre_inception_gaps_confirm_legacy_mirrored_boundary(rng, gaps) -> bool:
-    if not bool(gaps) or not _has_single_leading_invalid_prefix(rng):
-        return False
-    accepted_notes = (
-        _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES
-        | _LEGACY_MIRRORED_PRE_INCEPTION_BOUNDARY_NOTES
-    )
-    return all(str(getattr(gap, "note", "") or "") in accepted_notes for gap in gaps)
 
 
 def _gap_retry_due(gap, om=None) -> bool:
@@ -2692,7 +2767,7 @@ async def _fetch_invalid_windows_into_v2_store_results(
     allow_pre_inception_prefix: bool = False,
 ) -> list[V2FetchResult]:
     results: list[V2FetchResult] = []
-    archive_capable = to_standard_exchange_name(exchange) == "binance" and callable(
+    archive_capable = _binance_archives_enabled(om, exchange) and callable(
         getattr(om, "get_binance_archive_client", None)
     )
     archive_rows = (
@@ -2890,6 +2965,87 @@ def _write_binance_archive_results(
     return rows_written
 
 
+def _binance_archives_enabled(om, exchange):
+    return (
+        to_standard_exchange_name(exchange) == "binance"
+        and acquisition_mode() == "auto"
+        and getattr(om, "acquisition_mode", "auto") == "auto"
+    )
+
+
+# Discovery limits transport work only. It never turns an unverified prefix
+# into confirmed pre-inception coverage or changes a candle validity bitmap.
+_BINANCE_UNKNOWN_PREFIX_ARCHIVE_PROBES = 4
+
+
+def _confirmed_catalog_prefix_end(catalog, exchange, symbol, start_ts, end_ts):
+    cursor = int(start_ts)
+    gaps = catalog.get_persistent_gaps(exchange, "1m", symbol, cursor, int(end_ts))
+    for gap in sorted(gaps, key=lambda item: item.start_ts):
+        if (gap.reason == "pre_inception"
+                and _pre_inception_gap_confirms_discovered_boundary(gap)
+                and int(gap.start_ts) <= cursor <= int(gap.end_ts)):
+            cursor = int(gap.end_ts) + 60_000
+    return cursor if cursor > int(start_ts) else None
+
+
+def _binance_archive_source_boundary(om, catalog, exchange, coin, symbol, timestamps, valid):
+    """Read existing source-specific proof; never refresh metadata here."""
+    candidates = []
+    listing = _venue_listing_boundary(om, exchange, coin, symbol)
+    if listing is not None:
+        candidates.append(listing)
+    proven_end = _confirmed_catalog_prefix_end(
+        catalog, exchange, symbol, int(timestamps[0]), int(timestamps[-1]),
+    )
+    if proven_end is not None:
+        candidates.append(proven_end)
+    if not candidates:
+        return None
+    # Older genuine candles contradict a later listing/proof. Leave this edge
+    # unknown rather than promoting the earliest local observation to inception.
+    boundary = min(candidates)
+    actual = np.flatnonzero(valid)
+    if actual.size and int(timestamps[int(actual[0])]) < boundary:
+        return None
+    return boundary
+
+
+def _bound_unknown_prefix_archive_requests(om, exchange, symbol, timestamps, valid, requests,
+                                          *, boundary, coin):
+    if boundary is not None:
+        return requests
+    actual = np.flatnonzero(valid)
+    if not actual.size or int(actual[0]) == 0:
+        # An entirely absent dataset is ordinary bulk acquisition; a leading
+        # edge is identified only when an existing suffix anchors it.
+        return requests
+    prefix_end = int(timestamps[int(actual[0])]) - 60_000
+    key = (exchange, symbol, int(timestamps[0]), prefix_end)
+    used_by_prefix = getattr(om, "_archive_prefix_probes", None)
+    if used_by_prefix is None:
+        used_by_prefix = {}
+        om._archive_prefix_probes = used_by_prefix
+    used = int(used_by_prefix.get(key, 0))
+    selected = []
+    skipped = 0
+    for request in requests:
+        if int(request.end_ts) <= prefix_end:
+            if used >= _BINANCE_UNKNOWN_PREFIX_ARCHIVE_PROBES:
+                skipped += 1
+                continue
+            used += 1
+        selected.append(request)
+    used_by_prefix[key] = used
+    if skipped:
+        logging.info(
+            "[%s] bounded archive discovery for %s: skipped=%d prefix_probes=%d; "
+            "unverified leading history still requires REST validation",
+            exchange, coin, skipped, used,
+        )
+    return selected
+
+
 async def _fetch_binance_archives_into_v2_store(
     *,
     om: HLCVManager,
@@ -2901,7 +3057,7 @@ async def _fetch_binance_archives_into_v2_store(
     timestamps: np.ndarray,
     valid: np.ndarray,
 ) -> int:
-    if to_standard_exchange_name(exchange) != "binance":
+    if not _binance_archives_enabled(om, exchange):
         return 0
     get_client = getattr(om, "get_binance_archive_client", None)
     if not callable(get_client):
@@ -2909,13 +3065,24 @@ async def _fetch_binance_archives_into_v2_store(
     if len(timestamps) == 0 or bool(np.asarray(valid, dtype=np.bool_).all()):
         return 0
 
+    require_online("Binance archive acquisition")
+    boundary = _binance_archive_source_boundary(
+        om, catalog, exchange, coin, symbol, timestamps, valid,
+    )
+    plan_start = 0 if boundary is None else int(np.searchsorted(timestamps, boundary, side="left"))
+    if plan_start >= len(timestamps):
+        return 0
     now_ms = utc_ms()
     symbol_code = symbol_to_archive_code(symbol)
     monthly_requests, _ = plan_binance_archive_requests(
-        timestamps,
-        valid,
+        timestamps[plan_start:],
+        valid[plan_start:],
         symbol_code=symbol_code,
         now_ms=now_ms,
+    )
+    monthly_requests = _bound_unknown_prefix_archive_requests(
+        om, exchange, symbol, timestamps, valid, monthly_requests,
+        boundary=boundary, coin=coin,
     )
     client = get_client()
     total_rows_written = 0
@@ -2959,9 +3126,10 @@ async def _fetch_binance_archives_into_v2_store(
         int(timestamps[0]),
         int(timestamps[-1]),
     )
+    daily_start = 0 if boundary is None else int(np.searchsorted(refreshed.timestamps, boundary, side="left"))
     _, daily_requests = plan_binance_archive_requests(
-        refreshed.timestamps,
-        refreshed.valid,
+        refreshed.timestamps[daily_start:],
+        refreshed.valid[daily_start:],
         symbol_code=symbol_code,
         now_ms=now_ms,
         monthly_min_missing_candles=sys.maxsize,
@@ -2972,6 +3140,10 @@ async def _fetch_binance_archives_into_v2_store(
             for request in daily_requests
             if request.period_key[:7] not in successful_months
         ]
+    daily_requests = _bound_unknown_prefix_archive_requests(
+        om, exchange, symbol, timestamps, valid, daily_requests,
+        boundary=boundary, coin=coin,
+    )
 
     if daily_requests:
         started = time.perf_counter()
@@ -3297,7 +3469,7 @@ async def _fetch_coin_range_into_v2_store(
     allow_pre_inception_prefix: bool = False,
     clear_valid_range_ms: tuple[int, int] | None = None,
 ) -> V2FetchResult:
-    if to_standard_exchange_name(exchange) != "binance" or not callable(
+    if not _binance_archives_enabled(om, exchange) or not callable(
         getattr(om, "get_binance_archive_client", None)
     ):
         return await _fetch_coin_range_via_ccxt_into_v2_store(
@@ -3415,6 +3587,12 @@ async def _fetch_coin_range_via_ccxt_into_v2_store(
         om.update_timestamp_range(start_ts, end_ts)
     else:
         om.update_date_range(start_ts, end_ts)
+    boundary_before_fetch = None
+    if allow_pre_inception_prefix:
+        evidence = await _collect_first_timestamp_evidence(
+            om=om, exchange=exchange, coin=coin, symbol=symbol,
+        )
+        boundary_before_fetch = _source_history_boundary(evidence)
     fetch_started = time.perf_counter()
     previous_attempts = catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)
     attempt = len(previous_attempts) + 1
@@ -3768,6 +3946,8 @@ async def _fetch_coin_range_via_ccxt_into_v2_store(
         allow_pre_inception_prefix
         and leading_missing_bars > gap_tolerance_bars
         and trailing_missing_bars == 0
+        and boundary_before_fetch is not None
+        and int(ts[0]) == boundary_before_fetch // interval_ms * interval_ms
     )
     leading_unavailable = leading_missing_bars > gap_tolerance_bars and not pre_inception_prefix_boundary
     if leading_unavailable:

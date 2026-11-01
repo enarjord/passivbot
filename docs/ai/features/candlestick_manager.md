@@ -20,7 +20,23 @@
    missing bars in an eligible closed month selects the monthly archive. Eligible days with more
    than 1,000 missing bars select daily archives. Small gaps, recent days, archive failures, and
    any gaps remaining inside a successful archive are repaired through CCXT.
+   Simulation-only `backtest.acquisition_mode=rest` skips both archive owners without
+   changing validation, coverage or dates; `auto` retains the tiered transport. The policy is
+   task-local and does not change live acquisition or waive offline no-network admission.
+   Archive scheduling clips only to independently published source/symbol launch metadata or
+   current confirmed catalog history boundaries. A known suffix with an unverified prefix gets at most four archive probes wholly
+   within that prefix per source/range/preparation; remaining history still requires strict REST
+   repair. Archive absence/errors never create confirmed pre-inception facts. Fully missing
+   datasets remain normal bulk acquisition, not an inferred listing edge.
 3. Treat exchange-side late starts and early ends as coverage metadata, not local corruption.
+   For simulation leading edges, a first returned candle, retry count, archive 404, retention-limited
+   response, or legacy `authoritative_start_ts` name does not prove market inception. Confirmation
+   requires the matching contract's independently published Binance `onboardDate` or Bybit
+   `launchTime` and a real candle in that timestamp's UTC minute. Older contradictory source history
+   blocks confirmation. Unsupported or missing independent evidence leaves the edge unavailable.
+   Store current confirmation under versioned v2 catalog notes; old observation-only notes remain
+   intact but cannot satisfy strict offline coverage. Preparation algorithm 10 and offline proof
+   version 2 invalidate weak prepared-cache attestations without relabeling existing input facts.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
 5. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.

@@ -212,6 +212,12 @@ def _format_config_change_message(
 
 Path = Tuple[str, ...]  # ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_base_fraction")
 FIELD_RUNTIME_RULES = {
+    "backtest.acquisition_mode": {
+        "owner": "backtest",
+        "consumed_by": {"backtest", "optimize"},
+        "cli_exposed_on": {"backtest", "optimize"},
+        "help_group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+    },
     "backtest.offline": {
         "owner": "backtest",
         "consumed_by": {"backtest", "optimize"},
@@ -1353,6 +1359,16 @@ RESERVED_CLI_ARGS = {
             "optimize": "Date Range",
         },
         "help": "Backtest candle interval in minutes.",
+    },
+    "backtest.acquisition_mode": {
+        "visible": ["--acquisition-mode"],
+        "hidden": ["--backtest.acquisition_mode"],
+        "type": str,
+        "choices": ("auto", "rest"),
+        "metavar": "MODE",
+        "commands": {"backtest", "optimize"},
+        "group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+        "help": "Public candle transport: auto uses archive tiers with REST repair; rest skips archives.",
     },
     "backtest.offline": {
         "visible": ["--offline"],

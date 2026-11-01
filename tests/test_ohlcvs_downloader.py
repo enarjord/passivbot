@@ -324,3 +324,18 @@ async def test_compute_exchange_volume_ratios_simple(monkeypatch):
     # Pair order follows (ex0, ex1) as constructed; exA < exB
     assert ("exA", "exB") in ratios
     assert ratios[("exA", "exB")] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "rest"])
+async def test_download_cli_forwards_acquisition_mode(monkeypatch, mode):
+    from config.schema import get_template_config
+    config = get_template_config()
+    monkeypatch.setattr("sys.argv", ["download", "--acquisition-mode", mode])
+    monkeypatch.setattr(ohlcv_download, "load_input_config", lambda path: (config, None, None))
+    seen = []
+    async def warm(prepared):
+        seen.append(prepared["backtest"]["acquisition_mode"])
+    monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", warm)
+    await ohlcv_download.main()
+    assert seen == [mode]

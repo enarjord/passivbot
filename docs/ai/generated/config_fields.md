@@ -14,6 +14,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `backtest.acquisition_mode` | string | `"auto"` | — | —; backtest, optimize | — | — | `auto`, `rest` | python |
 | `backtest.balance_sample_divider` | integer | `60` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.base_dir` | string | `"backtests"` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.btc_collateral_target_ratio` | float | `0.0` | ratio / current BTC market value plus USD cash, excluding unrealized trading PnL | —; backtest, optimize | — | — | — | python |

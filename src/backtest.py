@@ -5,6 +5,7 @@ _BACKTEST_IMPORT_STARTED = time.perf_counter()
 from simulation_data import (
     OfflineDataError,
     is_offline,
+    has_current_offline_proof,
     simulation_data_scope,
     data_manifest,
 )
@@ -2258,10 +2259,13 @@ async def prepare_hlcvs_mss(
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = (
             override_result
         )
-        if is_offline() and not mss.get("__meta__", {}).get("offline_snapshot"):
+        if is_offline() and not has_current_offline_proof(
+            mss.get("__meta__", {}).get("offline_snapshot")
+        ):
             release_materialized_payload(hlcvs)
             raise OfflineDataError(
-                "Offline dataset override lacks verified offline coverage provenance. "
+                "Offline dataset override lacks verified offline coverage provenance "
+                "(boundary proof version 2 required). "
                 "Prepare it once from raw caches using --offline y without --hlcvs-data-dir."
             )
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
@@ -2302,10 +2306,12 @@ async def prepare_hlcvs_mss(
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = (
                 result
             )
-            if is_offline() and not mss.get("__meta__", {}).get("offline_snapshot"):
+            if is_offline() and not has_current_offline_proof(
+                mss.get("__meta__", {}).get("offline_snapshot")
+            ):
                 release_materialized_payload(hlcvs)
                 raise OfflineDataError(
-                    "Prepared cache lacks offline coverage provenance; verifying raw caches"
+                    "Prepared cache lacks current offline boundary provenance; verifying raw caches"
                 )
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)

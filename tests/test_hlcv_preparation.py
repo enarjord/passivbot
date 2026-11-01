@@ -1947,8 +1947,9 @@ class TestPrepareHLCVSCombined:
 
 
 @pytest.mark.asyncio
-async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persistent_prefix_gap(
-    tmp_path,
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_fetch_data_for_coin_and_exchange_requires_current_prefix_proof(
+    tmp_path, confirmed,
 ):
     class FakeManager:
         def has_coin(self, coin):
@@ -1987,7 +1988,7 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         reason="pre_inception",
         persistent=True,
         retry_count=3,
-        note="test_prefix_gap",
+        note="verified_source_history_boundary_v2" if confirmed else "test_prefix_gap",
     )
 
     result = await hp.fetch_data_for_coin_and_exchange(
@@ -2001,6 +2002,9 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         use_v2_local=True,
     )
 
+    if not confirmed:
+        assert result is None
+        return
     assert result is not None
     ex, df, coverage_count, gap_count, total_volume = result
     assert ex == "binanceusdm"

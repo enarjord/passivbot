@@ -55,6 +55,36 @@ venue's cache before downloading. Offline preparation uses local inputs only and
 fails if no candidate supplies the required benchmark. Changing the selected BTC
 source can change BTC-denominated metrics and simulations using BTC collateral.
 
+## Public candle acquisition
+
+`backtest.acquisition_mode` selects simulation candle transport. The default `"auto"`
+uses eligible Binance monthly/daily archives and repairs remaining gaps through public REST.
+Set it to `"rest"` (or pass `--acquisition-mode rest` to download/backtest/optimize) to skip archives
+without changing coverage, price validation, or the requested dates. Both modes use existing
+local candles first and use public unauthenticated endpoints only when online preparation
+needs missing inputs. The setting has no live-trading effect and does not override `offline`.
+
+Archive planning respects confirmed venue/symbol history boundaries. When a local suffix
+has an unverified leading prefix, archive discovery is limited to four requests wholly
+inside that prefix per source/range during one preparation. Remaining missing history goes
+through the existing strict REST repair path. An archive 404 or request error is not proof
+of pre-inception coverage; unresolved required history still fails preparation. An entirely
+missing dataset remains ordinary bulk acquisition rather than an inferred listing edge.
+
+A first returned candle may reflect API retention, not a market's birthdate. Confirming a
+leading boundary requires independently published metadata for the same venue and contract:
+Binance [`onboardDate`](https://developers.binance.info/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data)
+or Bybit [`launchTime`](https://bybit-exchange.github.io/docs/v5/market/instrument), together
+with a real candle in the launch timestamp's UTC minute. Contradictory older source history
+prevents confirmation. Missing or unsupported launch metadata leaves required history
+unavailable; neither REST nor archives may silently shorten the request.
+
+New preparation uses algorithm 10 and offline boundary proof version 2. Old observations and
+gap records are preserved, but observation-only listing notes and older prepared proof versions
+cannot certify strict offline coverage. Re-verify the raw cache online with independent source
+metadata, then copy the resulting candles, catalog and metadata for offline reuse. No new
+listing request is needed when current source-bound catalog proof already covers the prefix.
+
 ## Offline preparation
 
 Set `backtest.offline: true`, or pass `--offline y`, for backtests and optimization
