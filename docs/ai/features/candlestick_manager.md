@@ -28,6 +28,14 @@
    within that prefix per source/range/preparation; remaining history still requires strict REST
    repair. Archive absence/errors never create confirmed pre-inception facts. Fully missing
    datasets remain normal bulk acquisition, not an inferred listing edge.
+
+   Explicit offline `data-cache` export/import provides a versioned portable snapshot.
+   Catalog locations are relative only inside the bundle; runtime catalog semantics stay
+   unchanged. Export uses a database backup and chunk locks and rejects changing sources.
+   Import verifies and stages artifacts before a catalog transaction, preserves source
+   facts and genuine refresh clocks, keeps unrelated target rows, and refuses conflicts.
+   It requires an offline destination; it does not switch caches for active consumers.
+   Existing prepared/cache/evaluation identities are not relabeled by relocation.
 3. Treat exchange-side late starts and early ends as coverage metadata, not local corruption.
    For simulation leading edges, a first returned candle, retry count, archive 404, retention-limited
    response, or legacy `authoritative_start_ts` name does not prove market inception. Confirmation

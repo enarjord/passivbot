@@ -1528,6 +1528,8 @@ def check_keys(dict0, dict1):
 
 
 def get_cache_hash(config, exchange):
+    from preparation_identity import CACHE_REQUEST_SCHEMA_VERSION, gap_tolerance_minutes
+
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     data_coins = effective_backtest_data_coins(config)
     minimum_coin_age = {side: minimum_coin_age_days(config, side) for side in POSITION_SIDES}
@@ -1564,15 +1566,14 @@ def get_cache_hash(config, exchange):
                 symbol = None
             resolved_market_identities.append((venue, str(coin), symbol))
     to_hash = {
+        "cache_request_schema_version": CACHE_REQUEST_SCHEMA_VERSION,
         "coins": data_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
         "start_date": require_config_value(config, "backtest.start_date"),
         "exchange": exchanges_cfg if exchange == "combined" else exchange,
         "minimum_coin_age_days": minimum_coin_age,
         "age_admission_contract": 1,
-        "gap_tolerance_ohlcvs_minutes": require_config_value(
-            config, "backtest.gap_tolerance_ohlcvs_minutes"
-        ),
+        "gap_tolerance_ohlcvs_minutes": gap_tolerance_minutes(config),
         "ohlcv_source_dir": config.get("backtest", {}).get("ohlcv_source_dir"),
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,

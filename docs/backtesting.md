@@ -114,6 +114,62 @@ runs also need inputs for candidate exchanges used in source selection and volum
 normalization. Copy a consistent cache snapshot while no downloader is writing it;
 SQLite catalog paths must refer to the copied chunks on the receiving machine.
 
+### Portable cache snapshots
+
+Use the offline `data-cache` tool to transfer a consistent cache snapshot instead of
+editing absolute SQLite chunk paths by hand:
+
+```bash
+passivbot tool data-cache export --cache-root caches --output /transfer/candle-bundle \
+  --exchange binance --exchange bybit \
+  --prepared-dataset combined__example_dataset
+passivbot tool data-cache import --bundle /transfer/candle-bundle --cache-root caches
+```
+
+`--prepared-dataset` is repeatable and takes an exact directory name under
+`caches/hlcvs_data/`; omit it to transfer only the selected raw store and metadata.
+The export copies every raw chunk for the selected exchanges, their market metadata,
+and existing listing/alias metadata. It checks chunk integrity under the store's locks,
+uses SQLite's backup API, and rejects a source that changes during the snapshot.
+All operations are offline and make no exchange requests.
+
+The versioned directory bundle stores catalog locations relative to the OHLCV root,
+with SHA-256 checksums and original file modification times. Import validates and stages
+all files before writing, resolves locations beneath the destination root, and merges
+catalog records in one transaction. Unrelated destination records remain intact.
+Chunk locks are bounded rather than held for the whole history; final artifact and
+catalog fingerprints reject a changed snapshot. Publication stages each file beside
+its destination so mounted cache roots and artifact directories remain supported.
+Existing artifacts and factual records must match exactly; metadata refresh times must
+also match. Conflicting data is refused rather than overwritten. For a newer candle tail
+or refreshed metadata, import into the `caches/` directory of a fresh working directory
+or checkout, and run preparation there. Current consumers then use that cache normally.
+The command does not redirect or modify a running job.
+
+Use an offline destination with no application readers or writers.
+Import requires a writable parent directory for the cache root, even when the cache
+itself is an existing writable mount: the import lease and complete preflight staging
+live in that parent. Choose a cache root beneath a writable directory if this prerequisite
+is not met. Individual artifact publication still stages on each target filesystem.
+
+The tool refuses locked chunks and concurrent imports, and rolls back installed files
+and database changes on an exception. A new empty catalog and operational lock files can remain;
+existing catalogs are never deleted during cleanup. An abrupt process or machine failure
+can leave unreferenced verified files; retrying the same bundle completes the import
+without overwriting existing facts. Do not use an
+incomplete destination until import succeeds. Directory bundles reject symlinks,
+path traversal, missing files, checksum changes, and unsupported artifact paths.
+Retries also recognize and complete an interrupted owner catalog schema without
+replacing existing rows; unknown or incompatible tables remain an error.
+
+A catalog copied previously with paths from another root requires an explicit
+`--legacy-ohlcv-root /original/caches/ohlcvs` on export. Only exact canonical chunk
+locations beneath that declared root are relocated; arbitrary basenames are not guessed.
+Prepared manifests, ordered memberships, candle bytes, source/listing facts, cache hashes,
+and historical fitness remain unchanged. A transfer is not proof of complete requested
+history: normal offline preparation still checks coverage, provenance, warmup, and
+compatibility. Missing listing metadata is never fabricated by this tool.
+
 Missing or incompatible metadata, incomplete candles, or unconfirmed range edges
 fail with an input/range diagnostic. Refresh those inputs on the connected machine
 and copy them again. Offline mode does not replace missing prices or silently shorten
@@ -369,6 +425,39 @@ approved-coin selection flow as the backtester, but stops after preparing cache 
 passivbot download configs/examples/default_trailing_martingale_long.json
 passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
 ```
+
+The default command warms the base backtest request. For an optimizer, use
+`--for-optimize` to prepare its complete enabled suite, scenario-specific source
+requirements, fixed runtime source overrides, and maximum searched warmup through
+the same owners as `optimize`. This performs no candidate replay and produces no fitness:
+
+```shell
+passivbot download path/to/config.json --for-optimize --plan --target-cuda-free-gib 8
+passivbot download path/to/config.json --for-optimize --manifest prepared-inputs.json
+passivbot download path/to/config.json --for-optimize --offline y --manifest verified-inputs.json
+```
+
+`--plan` reads configuration and existing small metadata files without fetching,
+loading candle arrays, probing a GPU, or writing caches. It requires a current
+source-stamped Rust extension and fails without rebuilding when it is absent or stale.
+It reports declared date
+literals, resolved clocks, scenario sources, warmup, missing metadata and unresolved
+coverage. Dynamic universes remain unknown until owner resolution. The optional CUDA
+estimate uses the supplied free-memory budget and conservative declared identifier
+counts; it is not actual device admission and never changes dates, coins or precision.
+Without `--for-optimize`, the plan describes only the default base request.
+
+`--manifest` writes a report to the explicitly selected file. Completed optimizer
+preparation reports record the actual master cache directories and manifest hashes,
+ordered coins and scenario shapes. They are input provenance, not an evaluation
+contract or permission to reuse previous fitness. Offline preparation still requires
+genuine complete candle, listing and metadata evidence.
+
+Candle request schema 2 stores gap tolerance as a finite nonnegative minute quantity
+with one float representation. Consequently `120` and `120.0` select the same new
+content cache. Literal start-date spellings and authoritative list order remain
+distinct. Existing cache directories and saved evaluation identities are not renamed,
+rewritten or treated as equivalent fitness.
 
 ## Suite Runs
 

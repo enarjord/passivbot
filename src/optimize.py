@@ -3456,38 +3456,9 @@ def _materialize_suite_run_contract(
     validate_forager_weight_search(config)
 
 
-def _run_gpu_preparation_preflight(
-    config: Dict[str, Any], suite_cfg: Mapping[str, Any]
-) -> None:
-    """Validate effective GPU contracts before historical preparation or device imports."""
-
-    if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
-        return
-    from config.gpu import resolve_gpu_screening, resolve_gpu_sizing, validate_gpu_backtest_config
-    from optimization.warmup import _apply_config_overrides
-
-    effective_config = deepcopy(config)
-    _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
-    if effective_config['bot']["portfolio"]['strategy_kind'] != config['bot']["portfolio"]['strategy_kind']:
-        raise ValueError("fixed_runtime_overrides may not change bot.portfolio.strategy_kind")
-    validate_gpu_backtest_config(effective_config)
-    for field in ("batch_size", "max_dispatch_candidate_bars"):
-        resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
-    screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
-    if suite_cfg.get("enabled"):
-        scenarios, _reducer_cfg = build_scenarios(
-            dict(suite_cfg),
-            base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
-        )
-        unknown = set(screening["scenarios"]) - {scenario.label for scenario in scenarios}
-        if unknown:
-            raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
-        for scenario in scenarios:
-            scenario_config = deepcopy(effective_config)
-            _apply_config_overrides(scenario_config, dict(scenario.overrides or {}))
-            validate_gpu_backtest_config(scenario_config)
-    elif screening["scenarios"]:
-        raise ValueError("GPU screening.scenarios requires a scenario suite")
+def _run_gpu_preparation_preflight(config: Dict[str, Any], suite_cfg: Mapping[str, Any]) -> None:
+    from simulation_preparation import validate_optimizer_preparation
+    validate_optimizer_preparation(config, suite_cfg)
 
 
 def _gpu_cached_input_preflight(path, shape, dtype, *, stream_tick_inputs=False, input_memory_budget=None):
@@ -3995,7 +3966,8 @@ async def main():
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config
         freeze_config(config)
-    data_config = build_optimizer_data_config(config)
+    from simulation_preparation import optimizer_data_config
+    data_config = optimizer_data_config(config)
     if not suite_cfg.get("enabled"):
         validate_simulation_config(data_config, resolved=True)
     allow_internal_nan_gaps = (

@@ -370,6 +370,37 @@ def test_source_fingerprint_tracks_rust_owned_metal_assets(tmp_path: Path):
     assert first != second
 
 
+def test_dependency_lock_changes_source_fingerprint_and_invalidates_stamp(tmp_path: Path):
+    root = tmp_path / "passivbot-rust"
+    root.mkdir()
+    (root / "Cargo.toml").write_text("[package]\nname='test'\n")
+    lock = root / "Cargo.lock"
+    lock.write_text("version = 4\n# dependency set one\n")
+    first = source_fingerprint(root)
+    compiled = tmp_path / "passivbot_rust.abi3.so"
+    compiled.write_bytes(b"compiled artifact")
+    write_source_stamp(compiled, first)
+
+    lock.write_text("version = 4\n# dependency set two\n")
+    second = source_fingerprint(root)
+
+    assert first != second
+    assert extension_needs_rebuild(compiled, latest_source_mtime(root), second)
+
+
+@pytest.mark.parametrize("provider", ["module", "venv", "path"])
+def test_all_maturin_build_routes_require_locked_dependencies(tmp_path: Path, monkeypatch, provider):
+    interpreter = tmp_path / "python"
+    monkeypatch.setattr(rust_utils.sys, "executable", str(interpreter))
+    monkeypatch.setattr(rust_utils.importlib.util, "find_spec", lambda name: object() if provider == "module" else None)
+    if provider == "venv":
+        (tmp_path / ("maturin.exe" if rust_utils.os.name == "nt" else "maturin")).touch()
+
+    command = rust_utils.maturin_develop_command()
+
+    assert command[-3:] == ["develop", "--release", "--locked"]
+
+
 def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_path: Path):
     compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
     compiled.write_text("binary")
