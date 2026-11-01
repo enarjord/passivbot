@@ -57,6 +57,16 @@ def _minimal_bot_config(approved_coins):
     }
 
 
+
+def _bind_listing_metadata(manager_type, exchange, symbol, boundary):
+    """Synthetic independently published launch metadata, separate from candles."""
+    native_id = symbol.split("/")[0] + "USDT"
+    field = "onboardDate" if exchange == "binance" else "launchTime"
+    manager_type.exchange = exchange
+    manager_type.markets = {symbol: {"id": native_id, "symbol": symbol,
+        "info": {"symbol": native_id, field: str(boundary)}}}
+    manager_type.get_symbol = lambda self, coin: symbol
+
 @pytest.mark.asyncio
 async def test_fetch_coin_range_into_v2_store_preserves_intraday_end(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
@@ -215,7 +225,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_sparse_within_tolerance(tm
 
 
 @pytest.mark.asyncio
-async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_tolerance(tmp_path):
+async def test_fetch_preserves_sparse_edge_but_tolerance_does_not_prove_listing(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
     start_ts = month_start_ts(2026, 4)
@@ -272,8 +282,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_toleran
         local_hit_log_label="test local hit",
         remote_fetch_log_label="test remote fetch",
     )
-    assert resolved is not None
-    np.testing.assert_array_equal(resolved.valid, np.array([False, True, True]))
+    assert resolved is None  # internal-gap tolerance cannot verify a leading boundary
 
 
 @pytest.mark.asyncio
@@ -484,12 +493,7 @@ async def test_resolve_v2_store_range_retries_mixed_sparse_tail_before_partial(t
     )
 
     assert manager.fetch_calls == 2
-    assert rng is not None
-    np.testing.assert_array_equal(
-        rng.timestamps,
-        np.array([start_ts + 3 * 60_000, start_ts + 4 * 60_000], dtype=np.int64),
-    )
-    assert rng.valid.all()
+    assert rng is None  # the missing prefix remains unverified after tail retry
     attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     assert "unconfirmed_short_tail_return" in (attempts[-2].note or "")
     assert "confirmed_short_tail_return" in (attempts[-1].note or "")
@@ -714,7 +718,7 @@ async def test_fetch_coin_range_into_v2_store_does_not_persist_gaps_on_fetch_fai
 
 
 @pytest.mark.asyncio
-async def test_fetch_coin_range_into_v2_store_accepts_leading_unavailable_prefix(tmp_path):
+async def test_fetch_retains_leading_unavailable_rows_without_qualifying_the_prefix(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
     start_ts = month_start_ts(2026, 4)
@@ -774,11 +778,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_leading_unavailable_prefix
         local_hit_log_label="test local hit",
         remote_fetch_log_label="test remote fetch",
     )
-    assert resolved is not None
-    np.testing.assert_array_equal(
-        resolved.valid,
-        np.array([True]),
-    )
+    assert resolved is None
 
 
 def test_dense_hlcv_frame_from_sparse_v2_range_preserves_invalid_rows():
@@ -1588,7 +1588,7 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
-        return {coin: int(start) for coin in coins}
+        return {coin: int(first) for coin in coins}
 
     monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
 
@@ -1615,6 +1615,8 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
                 }
             )
 
+    _bind_listing_metadata(FakeManager, "binance", symbol, first)
+
     rng = await _resolve_v2_store_range(
         om=FakeManager(),
         catalog=catalog,
@@ -1638,7 +1640,7 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
     prefix_gaps = catalog.get_persistent_gaps("binance", "1m", symbol, int(start), int(first - 60_000))
     assert len(prefix_gaps) == 1
     assert prefix_gaps[0].reason == "pre_inception"
-    assert prefix_gaps[0].note == "discovered_first_candle_during_stale_repair"
+    assert prefix_gaps[0].note == "corroborated_source_history_boundary_v2"
     repaired_gaps = catalog.get_persistent_gaps("binance", "1m", symbol, int(first), int(end))
     assert repaired_gaps == []
 
@@ -1679,7 +1681,7 @@ async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
-        return {coin: int(requested_start) for coin in coins}
+        return {coin: int(first) for coin in coins}
 
     monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
 
@@ -1709,6 +1711,8 @@ async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
                 }
             )
 
+    _bind_listing_metadata(FakeManager, "binance", symbol, first)
+
     first_rng = await _resolve_v2_store_range(
         om=FakeManager(),
         catalog=catalog,
@@ -1732,7 +1736,7 @@ async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
     assert len(prefix_gaps) == 1
     assert prefix_gaps[0].start_ts == int(requested_start)
     assert prefix_gaps[0].end_ts == int(first - 60_000)
-    assert prefix_gaps[0].note == "discovered_first_candle_during_stale_repair"
+    assert prefix_gaps[0].note == "corroborated_source_history_boundary_v2"
     prior_gaps = catalog.get_persistent_gaps(
         "binance", "1m", symbol, int(stale_gap_start), int(requested_start - 60_000)
     )
@@ -1807,7 +1811,7 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
-        return {coin: int(start) for coin in coins}
+        return {coin: int(first) for coin in coins}
 
     monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
 
@@ -1827,6 +1831,8 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
             raise AssertionError("authoritative local boundary should not fetch remote data")
 
     caplog.set_level("INFO")
+    _bind_listing_metadata(FakeManager, "bybit", symbol, first)
+
     rng = await _resolve_v2_store_range(
         om=FakeManager(),
         catalog=catalog,
@@ -1849,7 +1855,7 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
     assert prefix_gaps[0].start_ts == int(start)
     assert prefix_gaps[0].end_ts == int(first - 60_000)
     assert prefix_gaps[0].reason == "pre_inception"
-    assert prefix_gaps[0].note == "authoritative_first_candle_boundary"
+    assert prefix_gaps[0].note == "verified_source_history_boundary_v2"
     suffix_gaps = catalog.get_persistent_gaps("bybit", "1m", symbol, int(first), int(end))
     assert suffix_gaps == []
     assert any(
@@ -1890,7 +1896,7 @@ async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_u
         retry_count=3,
         last_attempt_at=0,
         next_retry_at=4102444800000,
-        note="authoritative_first_candle_boundary",
+        note="verified_source_history_boundary_v2",
     )
     catalog.mark_gap(
         exchange="bybit",
@@ -1903,7 +1909,7 @@ async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_u
         retry_count=3,
         last_attempt_at=0,
         next_retry_at=4102444800000,
-        note="authoritative_first_candle_boundary",
+        note="verified_source_history_boundary_v2",
     )
 
     class FakeManager:
@@ -1942,7 +1948,7 @@ async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_u
 
 
 @pytest.mark.asyncio
-async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
+async def test_resolve_v2_store_range_rejects_legacy_mirrored_leading_boundary(
     monkeypatch, tmp_path, caplog
 ):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
@@ -1990,7 +1996,7 @@ async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
 
         async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
             self.fetch_calls += 1
-            raise AssertionError("legacy mirrored leading boundary should not fetch remote data")
+            return pd.DataFrame()
 
     manager = FakeManager()
     caplog.set_level("INFO")
@@ -2007,19 +2013,10 @@ async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
         local_hit_log_label="v2 local hit",
         remote_fetch_log_label="v2 fetching missing range",
     )
-
-    assert rng is not None
-    np.testing.assert_array_equal(rng.timestamps, timestamps)
-    assert rng.valid.all()
+    assert rng is None
     assert manager.fetch_calls == 0
     gaps = catalog.get_persistent_gaps("bybit", "1m", symbol, int(start), int(first - 60_000))
-    assert len(gaps) == 1
-    assert gaps[0].note == "mirrored_from_candlestick_manager"
-    assert any(
-        "[bybit] using legacy mirrored v2 pre-inception boundary for SOL" in rec.message
-        for rec in caplog.records
-    )
-
+    assert any(gap.note == "mirrored_from_candlestick_manager" for gap in gaps)
 
 @pytest.mark.asyncio
 async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundary_repair(
@@ -2056,7 +2053,7 @@ async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundar
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
-        return {coin: int(start) for coin in coins}
+        return {coin: int(first) for coin in coins}
 
     monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
 
@@ -2081,6 +2078,8 @@ async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundar
                     "volume": values[:, 3],
                 }
             )
+
+    _bind_listing_metadata(FakeManager, "binance", symbol, first)
 
     rng = await _resolve_v2_store_range(
         om=FakeManager(),

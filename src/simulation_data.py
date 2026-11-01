@@ -14,6 +14,18 @@ class OfflineDataError(ValueError):
 
 
 _policy = ContextVar("simulation_data_policy", default=None)
+_acquisition_mode = ContextVar("simulation_acquisition_mode", default="auto")
+
+
+def normalize_acquisition_mode(value):
+    if value not in ("auto", "rest"):
+        raise ValueError("backtest.acquisition_mode must be one of ['auto', 'rest']")
+    return value
+
+
+def acquisition_mode():
+    """Public-data transport policy, independent of verified candle identity."""
+    return _acquisition_mode.get()
 
 
 def is_offline():
@@ -66,19 +78,30 @@ def data_manifest():
     return json.loads(json.dumps(state)) if state is not None else None
 
 
+def has_current_offline_proof(snapshot):
+    """Old presence-only snapshots cannot attest the current boundary contract."""
+    return (isinstance(snapshot, dict)
+            and type(snapshot.get("version")) is int and snapshot["version"] == 2
+            and type(snapshot.get("boundary_proof_version")) is int
+            and snapshot["boundary_proof_version"] == 2)
+
+
 @contextmanager
 def simulation_data_policy(config):
     enabled = config.get("backtest", {}).get("offline", False)
     if not isinstance(enabled, bool):
         raise ValueError("backtest.offline must be a boolean")
-    if not enabled or is_offline():
-        yield
-        return
-    token = _policy.set({"version": 1, "metadata": {}, "ranges": []})
+    mode = normalize_acquisition_mode(config.get("backtest", {}).get("acquisition_mode", "auto"))
+    acquisition_token = _acquisition_mode.set(mode)
+    token = None
     try:
+        if enabled and not is_offline():
+            token = _policy.set({"version": 2, "boundary_proof_version": 2, "metadata": {}, "ranges": []})
         yield
     finally:
-        _policy.reset(token)
+        if token is not None:
+            _policy.reset(token)
+        _acquisition_mode.reset(acquisition_token)
 
 
 def simulation_data_scope(func):

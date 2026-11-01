@@ -115,6 +115,11 @@ async def main() -> None:
         metavar="CSV_OR_PATH",
         help="Ignored coins. CSV, a JSON/HJSON per-side object or a JSON coin list file. An empty value or null clears ignores, including null in a per-side object.",
     )
+    parser.add_argument(
+        "--acquisition-mode", dest="backtest.acquisition_mode", choices=("auto", "rest"),
+        default=None, metavar="MODE",
+        help="Public candle transport: auto uses archive tiers with REST repair; rest skips archives.",
+    )
     for side in ("long", "short"):
         parser.add_argument(
             f"--bot.{side}.universe.minimum_coin_age_days", type=float,
@@ -166,6 +171,7 @@ async def main() -> None:
             'bot.long.universe.minimum_coin_age_days',
             'bot.short.universe.minimum_coin_age_days',
             "backtest.exchanges",
+            "backtest.acquisition_mode",
             "backtest.start_date",
             "backtest.end_date",
             "backtest.offline",

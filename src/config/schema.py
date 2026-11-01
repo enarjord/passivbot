@@ -46,6 +46,7 @@ def _build_template_config():
         {
             "config_version": CONFIG_SCHEMA_VERSION,
             "backtest": {
+                "acquisition_mode": "auto",
                 "reducer": {"default": "mean"},
                 "balance_sample_divider": 60,
                 "base_dir": "backtests",

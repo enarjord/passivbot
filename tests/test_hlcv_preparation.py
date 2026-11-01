@@ -827,7 +827,7 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("inception", [None, 0.0, 1_704_067_200_000])
+@pytest.mark.parametrize("inception", [None, 0.0, 1_704_067_200_000, 1_704_153_600_000])
 async def test_prepare_hlcvs_internal_retains_pre_age_warmup_and_unknown_facts(
     sample_config, monkeypatch, inception,
 ):
@@ -1947,8 +1947,9 @@ class TestPrepareHLCVSCombined:
 
 
 @pytest.mark.asyncio
-async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persistent_prefix_gap(
-    tmp_path,
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_fetch_data_for_coin_and_exchange_requires_current_prefix_proof(
+    tmp_path, confirmed,
 ):
     class FakeManager:
         def has_coin(self, coin):
@@ -1987,7 +1988,7 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         reason="pre_inception",
         persistent=True,
         retry_count=3,
-        note="test_prefix_gap",
+        note="verified_source_history_boundary_v2" if confirmed else "test_prefix_gap",
     )
 
     result = await hp.fetch_data_for_coin_and_exchange(
@@ -2001,6 +2002,9 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         use_v2_local=True,
     )
 
+    if not confirmed:
+        assert result is None
+        return
     assert result is not None
     ex, df, coverage_count, gap_count, total_volume = result
     assert ex == "binanceusdm"
@@ -2307,10 +2311,11 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
     )
 
 
-def test_plan_combined_coin_retains_unknown_inception_history_for_rust_admission():
+@pytest.mark.parametrize("observed", [None, 0.0, 1_750_000_000_000, 1_900_000_000_000])
+def test_plan_combined_coin_retains_authored_history_for_rust_admission(observed):
     plan = hp._plan_combined_coin(
         coin="NEW", base_start_ts=1_700_000_000_000, end_ts=1_800_000_000_000,
-        first_timestamps_unified={"NEW": 0.0}, tradfi_for_stock_perps=False,
+        first_timestamps_unified={"NEW": observed}, tradfi_for_stock_perps=False,
         forced_sources={}, exchanges_to_consider=["bybit", "hyperliquid"],
     )
     assert plan.effective_start_ts == 1_700_000_000_000

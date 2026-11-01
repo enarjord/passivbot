@@ -127,6 +127,10 @@ def validate_config(
         raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
+    from simulation_data import normalize_acquisition_mode
+    config["backtest"]["acquisition_mode"] = normalize_acquisition_mode(
+        config["backtest"].get("acquisition_mode", "auto")
+    )
     validate_limit_order_fill_buffer_fraction(
         config["backtest"]["limit_order_fill_buffer_fraction"]
     )
