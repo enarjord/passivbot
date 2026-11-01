@@ -68,29 +68,12 @@ pub struct Output {
     pub episodes: usize,
 }
 
-/// Normalize only selected pairs to one bounded minute grid. Source-resolution
-/// projection is already Rust-owned; these observations retain that causal cut.
-/// Whole-scope absence remains sparse: never make a fictitious flat minute tape.
-pub(crate) fn normalize(
-    snapshot: &mut Snapshot,
-    reasons: &mut BTreeSet<String>,
-) -> Result<bool, String> {
-    normalize_inner(snapshot, reasons, false)
-}
-
+/// Normalize selected pairs to one bounded minute grid, keeping whole-scope absence sparse.
 /// The continuity ledger has already admitted every row against its own actual
 /// receipt clock. A later correction can improve an older bootstrap prefix.
 pub(crate) fn normalize_admitted(
     snapshot: &mut Snapshot,
     reasons: &mut BTreeSet<String>,
-) -> Result<bool, String> {
-    normalize_inner(snapshot, reasons, true)
-}
-
-fn normalize_inner(
-    snapshot: &mut Snapshot,
-    reasons: &mut BTreeSet<String>,
-    admitted: bool,
 ) -> Result<bool, String> {
     let window = snapshot
         .now
@@ -119,15 +102,7 @@ fn normalize_inner(
             .prices
             .iter()
             .filter(|(t, p)| {
-                snapshot.start <= **t
-                    && **t
-                        <= if admitted {
-                            snapshot.now
-                        } else {
-                            snapshot.now.min(pair.prices_at)
-                        }
-                    && p.is_finite()
-                    && **p > 0.0
+                snapshot.start <= **t && **t <= snapshot.now && p.is_finite() && **p > 0.0
             })
             .map(|(t, p)| (*t, *p))
             .collect();

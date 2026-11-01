@@ -28,7 +28,6 @@ fn coefficients(span: f64) -> Result<(f32, f32), String> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
-    pub slow_alpha: f32,
     pub slow_beta: f32,
     pub fast_alpha: f32,
     pub fast_beta: f32,
@@ -43,14 +42,13 @@ impl Policy {
         drawdown_threshold_fraction: f64,
         cooldown_ms: i64,
     ) -> Result<Self, String> {
-        let (slow_alpha, slow_beta) = coefficients(memory_ema_span_minutes)?;
+        let (_, slow_beta) = coefficients(memory_ema_span_minutes)?;
         let (fast_alpha, fast_beta) = coefficients(drawdown_fraction_ema_span_minutes)?;
         let threshold = number(drawdown_threshold_fraction, "HSL threshold")?;
         if !(0.0..=1.0).contains(&threshold) || cooldown_ms < 0 {
             return Err("invalid v9 HSL threshold or cooldown".into());
         }
         Ok(Self {
-            slow_alpha,
             slow_beta,
             fast_alpha,
             fast_beta,
@@ -376,10 +374,6 @@ impl RealizedMemory {
     pub fn drawdown(&self) -> f64 {
         self.d as f64
     }
-
-    pub fn allowance(&self, balance: f64, effective_fraction: f64) -> Result<f64, String> {
-        allowance(balance, effective_fraction, self.drawdown())
-    }
 }
 
 pub fn allowance(balance: f64, effective_fraction: f64, drawdown: f64) -> Result<f64, String> {
@@ -455,7 +449,7 @@ mod tests {
         assert_eq!(loss_then_gain.drawdown(), 0.0);
 
         // Neither consumer mutates D or contributes a second spendable budget.
-        let gate = gain_then_loss.allowance(1000.0, 0.05).unwrap();
+        let gate = allowance(1000.0, 0.05, gain_then_loss.drawdown()).unwrap();
         let unstuck = allowance_for(1000.0, 0.01, 2.0, 40.0).unwrap();
         assert_eq!(gate, 0.05_f32.mul_add(1040.0, -40.0) as f64);
         assert_eq!(unstuck, 0.0);
@@ -593,7 +587,7 @@ mod tests {
         b.advance_to(60_000).unwrap();
         assert_eq!(b.drawdown(), 5.0);
         assert_eq!(
-            b.allowance(95.0, 0.1).unwrap() as f32,
+            allowance(95.0, 0.1, b.drawdown()).unwrap() as f32,
             0.1_f32.mul_add(100.0, -5.0)
         );
     }

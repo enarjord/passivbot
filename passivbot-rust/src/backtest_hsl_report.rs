@@ -492,34 +492,6 @@ impl Report {
         }
     }
 
-    /// A real fill can prove flat even when account liquidation prevents replay.
-    /// This completes diagnostic execution accounting, not trading permission.
-    pub(super) fn observed_flat(&mut self, key: Key, now: i64) {
-        self.advance(now);
-        if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
-            if scope.exit_started.take().is_some() {
-                Self::retire_loss(scope, &mut self.execution_episodes, now);
-                // A later same-bar fill may restore balance and permit replay.
-                // Do not report this already-observed flatten a second time.
-                scope.consumed.retain(|(t, _), _| *t == now);
-                *scope.consumed.entry((now, "flat")).or_insert(0) += 1;
-                scope.watermark = Some(now);
-                self.sequence += 1;
-                if self.retain_events {
-                    self.events.push(Event {
-                        sequence: self.sequence,
-                        observed_at: now,
-                        side: key.0,
-                        coin: key.1,
-                        kind: "flat",
-                        reconstructed_at: Some(now),
-                        reason: "liquidating_account_flat",
-                    });
-                }
-            }
-        }
-    }
-
     pub(super) fn core_summary(&self, enabled: bool) -> crate::core_metrics::HslSummary {
         let mut stats = self.stats.clone();
         for scope in self.scopes.values() {
@@ -594,16 +566,6 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
         &self.hsl_report.trace
     }
 
-    #[cfg(test)]
-    pub fn hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
-        let Some(mut value) = self.hsl_report_metadata()? else {
-            return Ok(None);
-        };
-        value["samples"] = serde_json::to_value(self.hsl_samples()).map_err(|e| e.to_string())?;
-        value["events"] = serde_json::to_value(self.hsl_events()).map_err(|e| e.to_string())?;
-        Ok(Some(value))
-    }
-
     pub(super) fn hsl_report_key(&self, side: usize, coin: usize) -> Key {
         match self
             .backtest_params
@@ -659,6 +621,15 @@ mod tests {
                 signal_ema_fraction: Some(0.1),
             })
             .collect()
+    }
+
+    // Flatness reaches reporting through the same native lifecycle envelope as replay.
+    fn flat_output(now: i64) -> Output {
+        output(
+            now,
+            Action::Halted,
+            zero_cooldown_events(now)[1..2].to_vec(),
+        )
     }
 
     #[test]
@@ -1057,7 +1028,7 @@ mod tests {
         );
     }
     #[test]
-    fn event_only_report_preserves_zero_cooldown_and_liquidation_sequences() {
+    fn event_only_report_preserves_zero_cooldown_and_flat_lifecycle_sequences() {
         let key = (None, None);
         let mut detailed = Report::new(true, true);
         let mut compact = Report::new(false, true);
@@ -1075,8 +1046,8 @@ mod tests {
                 &output(120_000, Action::Panic, vec![]),
             );
             report.panic_fill(key, report.execution_origin(key), -20.0, 1000.0);
-            report.observed_flat(key, 180_000);
-            report.observed_flat(key, 180_000);
+            report.observe(key, 180_000, "scope_flat", &flat_output(180_000));
+            report.observe(key, 180_000, "scope_flat", &flat_output(180_000));
             let mut events = zero_cooldown_events(180_000);
             events.remove(0);
             report.observe(
@@ -1100,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn fill_proven_flat_is_not_recounted_by_later_replay() {
+    fn repeated_flat_lifecycle_is_not_recounted_by_later_replay() {
         let mut report = Report::new(true, true);
         let key = (None, None);
         let mut events = zero_cooldown_events(60_000);
@@ -1112,8 +1083,8 @@ mod tests {
             &output(60_000, Action::Panic, events),
         );
         report.panic_fill(key, report.execution_origin(key), -20.0, 1000.0);
-        report.observed_flat(key, 120_000);
-        report.observed_flat(key, 120_000);
+        report.observe(key, 120_000, "scope_flat", &flat_output(120_000));
+        report.observe(key, 120_000, "scope_flat", &flat_output(120_000));
         let mut events = zero_cooldown_events(120_000);
         events.remove(0);
         for _ in 0..2 {
@@ -1154,7 +1125,7 @@ mod tests {
         assert!((summary.episode_loss_fraction_max - 0.3).abs() < 1e-12);
         assert!((summary.episode_loss_fraction_sum - 0.3).abs() < 1e-12);
         assert_eq!(report.core_summary(true).execution_episode_count, 1);
-        report.observed_flat(key, 60_000);
+        report.observe(key, 60_000, "scope_flat", &flat_output(60_000));
         assert_eq!(report.core_summary(true).execution_episode_count, 1);
         report.observe(
             key,
@@ -1176,7 +1147,7 @@ mod tests {
         assert_eq!(open.execution_episode_count, 1);
         assert!(open.execution_episode_count_valid);
         assert_eq!(open.episode_loss_fraction_sum, 0.0);
-        report.observed_flat(key, 60_000);
+        report.observe(key, 60_000, "scope_flat", &flat_output(60_000));
         assert_eq!(report.core_summary(true).execution_episode_count, 1);
     }
 
@@ -1244,7 +1215,7 @@ mod tests {
         let mut report = Report::default();
         report.observe(key, 0, "pre_fill", &output(0, Action::Panic, vec![]));
         report.panic_fill(key, report.execution_origin(key), -10.0, 0.0);
-        report.observed_flat(key, 60_000);
+        report.observe(key, 60_000, "scope_flat", &flat_output(60_000));
         let summary = report.core_summary(true);
         assert!(!summary.episode_loss_valid);
         assert_eq!(summary.execution_episode_count, 1);
@@ -1311,7 +1282,7 @@ mod tests {
             );
             report.panic_fill(key, report.execution_origin(key), -100.0, 1000.0);
             report.panic_fill(key, report.execution_origin(key), -50.0, 900.0);
-            report.observed_flat(key, 120_000);
+            report.observe(key, 120_000, "scope_flat", &flat_output(120_000));
         }
         let episode = &full.execution_episodes[0];
         assert_eq!(episode.trigger_timestamp_ms, Some(60_000));

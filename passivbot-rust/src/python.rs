@@ -1159,7 +1159,7 @@ mod tests {
     fn native_side_activation_requires_exact_boolean_pair() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
-            assert!(side_activation_from_dict(PyDict::new(py)).is_err());
+            assert!(side_activation_from_dict(PyDict::new_bound(py).as_gil_ref()).is_err());
             for value in [
                 serde_json::json!({}),
                 serde_json::json!({"long": true}),
@@ -1168,18 +1168,18 @@ mod tests {
                 serde_json::json!({"long": "false", "short": false}),
                 serde_json::json!({"long": null, "short": false}),
             ] {
-                let dict = PyDict::new(py);
+                let dict = PyDict::new_bound(py);
                 dict.set_item("side_activation", json_value_to_py(py, &value).unwrap())
                     .unwrap();
-                assert!(side_activation_from_dict(dict).is_err());
+                assert!(side_activation_from_dict(dict.as_gil_ref()).is_err());
             }
-            let dict = PyDict::new(py);
-            let pair = PyDict::new(py);
+            let dict = PyDict::new_bound(py);
+            let pair = PyDict::new_bound(py);
             pair.set_item("long", true).unwrap();
             pair.set_item("short", false).unwrap();
             dict.set_item("side_activation", pair).unwrap();
             assert_eq!(
-                side_activation_from_dict(dict).unwrap(),
+                side_activation_from_dict(dict.as_gil_ref()).unwrap(),
                 crate::types::SideActivation {
                     long: true,
                     short: false,
@@ -1959,7 +1959,7 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
     })
 }
 
-pub(crate) fn age_timestamp_from_py(value: &PyAny) -> PyResult<u64> {
+pub(crate) fn age_timestamp_from_py(value: &Bound<'_, PyAny>) -> PyResult<u64> {
     if value.is_instance_of::<pyo3::types::PyBool>()
         || !value.is_instance_of::<pyo3::types::PyLong>()
     {
@@ -1970,7 +1970,7 @@ pub(crate) fn age_timestamp_from_py(value: &PyAny) -> PyResult<u64> {
     value.extract::<u64>()
 }
 
-pub(crate) fn minimum_age_days_from_py(value: &PyAny) -> PyResult<f64> {
+pub(crate) fn minimum_age_days_from_py(value: &Bound<'_, PyAny>) -> PyResult<f64> {
     if value.is_instance_of::<pyo3::types::PyBool>() {
         return Err(PyValueError::new_err(
             "minimum_coin_age_days must be a finite nonnegative number",
@@ -1982,15 +1982,15 @@ pub(crate) fn minimum_age_days_from_py(value: &PyAny) -> PyResult<f64> {
 }
 
 fn minimum_age_pair_from_dict(dict: &PyDict) -> PyResult<[f64; 2]> {
-    let values: Vec<&PyAny> = extract_value(dict, "minimum_coin_age_days")?;
+    let values: Vec<Bound<'_, PyAny>> = extract_value(dict, "minimum_coin_age_days")?;
     if values.len() != 2 {
         return Err(PyValueError::new_err(
             "minimum_coin_age_days requires long/short values",
         ));
     }
     Ok([
-        minimum_age_days_from_py(values[0])?,
-        minimum_age_days_from_py(values[1])?,
+        minimum_age_days_from_py(&values[0])?,
+        minimum_age_days_from_py(&values[1])?,
     ])
 }
 
@@ -2171,9 +2171,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         minimum_coin_age_days: minimum_age_pair_from_dict(dict)?,
         inception_timestamps_ms: match dict.get_item("inception_timestamps_ms")? {
             Some(item) => item
-                .extract::<Vec<Option<&PyAny>>>()?
+                .extract::<Vec<Option<Bound<'_, PyAny>>>>()?
                 .into_iter()
-                .map(|value| value.map(age_timestamp_from_py).transpose())
+                .map(|value| value.as_ref().map(age_timestamp_from_py).transpose())
                 .collect::<PyResult<_>>()?,
             None => Vec::new(),
         },

@@ -47,17 +47,6 @@ impl CurrencySum {
             index += 1;
         }
     }
-    pub fn subtract(&mut self, other: &Self) {
-        for i in 0..WORDS {
-            Self::add_word(&mut self.positive, i, other.negative[i]);
-            Self::add_word(&mut self.negative, i, other.positive[i]);
-        }
-    }
-    pub fn difference(&self, other: &Self, reasons: &mut BTreeSet<String>) -> f64 {
-        let mut result = self.clone();
-        result.subtract(other);
-        result.value(reasons)
-    }
     pub fn value(&self, reasons: &mut BTreeSet<String>) -> f64 {
         // Preserve visibility when gross accumulated magnitudes exceed f64 range,
         // even if their exact difference is representable.
@@ -123,17 +112,17 @@ impl CurrencySum {
     }
 }
 
-pub(crate) fn currency_sum(values: &[f64], reasons: &mut BTreeSet<String>) -> f64 {
-    let mut total = CurrencySum::new();
-    for &value in values {
-        total.add(value);
-    }
-    total.value(reasons)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn currency_sum(values: &[f64], reasons: &mut BTreeSet<String>) -> f64 {
+        let mut total = CurrencySum::new();
+        for &value in values {
+            total.add(value);
+        }
+        total.value(reasons)
+    }
     #[test]
     fn nested_cancellation_retains_every_scale_and_subnormal() {
         let mut total = CurrencySum::new();
