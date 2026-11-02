@@ -50,6 +50,11 @@
    raw responses and hashes, launch bound, observation time and prior notes. Incomplete evidence,
    changed controls or contradictory earlier candles fail closed. Genuine earlier rows repair
    ordinary coverage. This is not market inception, no-trade proof or a coin-age update.
+   Raw online, remote-enabled resolution honors catalog retry deadlines and forced gap refresh;
+   failure cannot fall through to the old proof. Offline/cache-only reuse performs no probes.
+   A forced refresh accepts the exact proof collected during that preparation, while genuine
+   expiry still requires retry. Immutable prepared-cache reuse retains its recorded snapshot;
+   explicit forced gap refresh bypasses that automatic cache before raw revalidation.
    Store current confirmation under versioned v2 catalog notes. Offline use leaves old
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
    may replace covered weak notes. Preserve the authored warmup start through local-store

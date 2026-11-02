@@ -3,6 +3,7 @@ from simulation_data import (
     simulation_data_scope, snapshot_file,
 )
 import asyncio
+import hashlib
 from types import SimpleNamespace
 import json
 import logging
@@ -1644,6 +1645,7 @@ async def _resolve_v2_store_range(**kwargs):
             proven_end = _confirmed_catalog_prefix_end(
                 kwargs["catalog"], exchange, symbol, start, source_first - 60_000,
                 om=kwargs["om"], coin=kwargs["coin"], control_values=source_control,
+                allow_remote_fetch=kwargs["allow_remote_fetch"],
             )
             if proven_end != source_first:
                 evidence = await _collect_first_timestamp_evidence(
@@ -1688,6 +1690,7 @@ async def _resolve_v2_store_range(**kwargs):
         if reason == "pre_inception" and _confirmed_catalog_prefix_end(
             kwargs["catalog"], exchange, symbol, left, right,
             om=kwargs["om"], coin=kwargs["coin"], control_values=rng.values[int(valid_indices[0])],
+            allow_remote_fetch=False,
         ) == right + 60_000:
             continue
         cursor = left
@@ -1791,6 +1794,7 @@ async def _resolve_v2_store_range_impl(
         proven_end = _confirmed_catalog_prefix_end(
             catalog, exchange, symbol, int(start_ts), first_valid_ts - 60_000,
             om=om, coin=coin, control_values=rng.values[int(np.flatnonzero(rng.valid)[0])],
+            allow_remote_fetch=allow_remote_fetch,
         )
         if proven_end == first_valid_ts:
             # Current proof already binds this exact source/range. Reusing it
@@ -1873,6 +1877,7 @@ async def _resolve_v2_store_range_impl(
                 and rng.valid.any()
                 and _confirmed_catalog_prefix_end(
                     catalog, exchange, symbol, int(start_ts), int(end_ts), om=om, coin=coin,
+                    allow_remote_fetch=allow_remote_fetch,
                 ) == int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
                 else None
             )
@@ -3101,18 +3106,24 @@ async def _verify_source_leading_unavailable(
          "reason": gap.reason, "note": gap.note}
         for gap in old if gap.note
     ]
+    proof_note = note(proof)
     catalog.mark_gap(
         exchange=exchange, timeframe="1m", symbol=symbol, start_ts=fact_start,
         end_ts=int(first_valid_ts) - 60_000, reason="leading_unavailable", persistent=True,
-        retry_count=0, note=note(proof),
+        retry_count=0, note=proof_note,
     )
+    verified = getattr(om, "_leading_history_verified_notes", None)
+    if verified is None:
+        verified = om._leading_history_verified_notes = set()
+    verified.add((exchange, symbol, hashlib.sha256(proof_note.encode()).hexdigest()))
     logging.info("[%s] verified bounded source-leading unavailability for %s (%s -> %s); not inception",
                  exchange, symbol, ts_to_date(int(listing)), ts_to_date(int(first_valid_ts)))
     return "verified"
 
 
 def _confirmed_catalog_prefix_end(catalog, exchange, symbol, start_ts, end_ts, *,
-                                  om=None, coin=None, control_values=None):
+                                  om=None, coin=None, control_values=None,
+                                  allow_remote_fetch=False):
     cursor = int(start_ts)
     gaps = catalog.get_persistent_gaps(exchange, "1m", symbol, cursor, int(end_ts))
     for gap in sorted(gaps, key=lambda item: item.start_ts):
@@ -3126,6 +3137,14 @@ def _confirmed_catalog_prefix_end(catalog, exchange, symbol, start_ts, end_ts, *
                     and (om is None or _venue_listing_boundary(om, exchange, coin, symbol)
                          == proof["published_listing_timestamp_ms"])
                     and boundary == int(end_ts) + 60_000):
+                if allow_remote_fetch and not is_offline() and _gap_retry_due(gap, om):
+                    key = (exchange, symbol, hashlib.sha256(gap.note.encode()).hexdigest())
+                    # Force refresh applies to preexisting facts, not the exact
+                    # proof just collected in this preparation. Real expiry is
+                    # still due even if the owner happens to remain alive.
+                    if (_gap_retry_due(gap)
+                            or key not in getattr(om, "_leading_history_verified_notes", ())):
+                        continue
                 cursor = boundary
         if (gap.reason == "pre_inception"
                 and _pre_inception_gap_confirms_discovered_boundary(gap)
@@ -3142,7 +3161,7 @@ def _binance_archive_source_boundary(om, catalog, exchange, coin, symbol, timest
         candidates.append(listing)
     proven_end = _confirmed_catalog_prefix_end(
         catalog, exchange, symbol, int(timestamps[0]), int(timestamps[-1]),
-        om=om, coin=coin,
+        om=om, coin=coin, allow_remote_fetch=not is_offline(),
     )
     if proven_end is not None:
         candidates.append(proven_end)

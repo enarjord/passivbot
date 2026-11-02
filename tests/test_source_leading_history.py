@@ -196,6 +196,112 @@ def cached(tmp_path, exchange):
     return catalog, store
 
 
+def expire(catalog, exchange):
+    gap = catalog.get_persistent_gaps(exchange, "1m", SYMBOL, START, FIRST - 60_000)[0]
+    catalog.mark_gap(exchange=exchange, timeframe="1m", symbol=SYMBOL,
+        start_ts=gap.start_ts, end_ts=gap.end_ts, reason=gap.reason, persistent=True,
+        retry_count=gap.retry_count, last_attempt_at=gap.last_attempt_at,
+        next_retry_at=0, note=gap.note)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
+@pytest.mark.parametrize("refresh", ["not_due", "expired", "forced"])
+async def test_online_raw_resolution_honors_retry_and_accepts_just_refreshed_proof(
+    tmp_path, monkeypatch, exchange, refresh,
+):
+    catalog, store = cached(tmp_path, exchange)
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    args = dict(catalog=catalog, store=store, exchange=exchange, coin="NEW", symbol=SYMBOL,
+                start_ts=START, end_ts=END, allow_remote_fetch=True,
+                local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    assert await hp._resolve_v2_store_range(om=owner(exchange), **args) is not None
+    if refresh == "expired":
+        expire(catalog, exchange)
+    fresh_owner = owner(exchange)
+    fresh_owner.force_refetch_gaps = refresh == "forced"
+    result = await hp._resolve_v2_store_range(om=fresh_owner, **args)
+    assert result.timestamps[0] == FIRST and result.valid.all()
+    assert len(fresh_owner.calls) == (0 if refresh == "not_due" else 3)
+    gap = catalog.get_persistent_gaps(exchange, "1m", SYMBOL, START, FIRST - 60_000)[0]
+    assert not hp._gap_retry_due(gap)
+    if refresh == "forced":
+        # This exercises inner refresh plus outer wrapper admission. The exact
+        # new proof is accepted, without a second refresh loop or old-fact reuse.
+        assert len(fresh_owner._leading_history_verified_notes) == 1
+        expire(catalog, exchange)
+        assert hp._confirmed_catalog_prefix_end(
+            catalog, exchange, SYMBOL, START, FIRST - 60_000, om=fresh_owner,
+            coin="NEW", control_values=VALUES, allow_remote_fetch=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["offline", "cache_only"])
+async def test_expired_certificate_remains_available_without_remote_refresh(
+    tmp_path, monkeypatch, mode,
+):
+    catalog, store = cached(tmp_path, "bybit")
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    args = dict(catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+                start_ts=START, end_ts=END, allow_remote_fetch=True,
+                local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    assert await hp._resolve_v2_store_range(om=owner("bybit"), **args) is not None
+    expire(catalog, "bybit")
+    fresh_owner = owner("bybit")
+    fresh_owner.force_refetch_gaps = True
+    async def no_network(*args, **kwargs): pytest.fail("cache-only reuse must not probe")
+    fresh_owner.fetch_leading_history_page = no_network
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", no_network)
+    args["allow_remote_fetch"] = False
+    with simulation_data_policy({"backtest": {"offline": mode == "offline"}}):
+        result = await hp._resolve_v2_store_range(om=fresh_owner, **args)
+    assert result.timestamps[0] == FIRST and result.valid.all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forced", [False, True])
+async def test_failed_due_refresh_cannot_fall_back_to_old_certificate(tmp_path, monkeypatch, forced):
+    catalog, store = cached(tmp_path, "bybit")
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    args = dict(catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+                start_ts=START, end_ts=END, allow_remote_fetch=True,
+                local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    assert await hp._resolve_v2_store_range(om=owner("bybit"), **args) is not None
+    if not forced:
+        expire(catalog, "bybit")
+    old_note = catalog.get_persistent_gaps("bybit", "1m", SYMBOL, START, FIRST - 60_000)[0].note
+    fresh_owner = owner("bybit", mode="mismatch")
+    fresh_owner.force_refetch_gaps = forced
+    async def no_ordinary_repair(**kwargs): return None
+    monkeypatch.setattr(hp, "_fetch_invalid_windows_into_v2_store", no_ordinary_repair)
+    assert await hp._resolve_v2_store_range(om=fresh_owner, **args) is None
+    assert len(fresh_owner.calls) == 3
+    assert catalog.get_persistent_gaps("bybit", "1m", SYMBOL, START, FIRST - 60_000)[0].note == old_note
+
+
+@pytest.mark.asyncio
+async def test_explicit_force_refetch_bypasses_automatic_prepared_cache(tmp_path, monkeypatch):
+    import backtest
+    from config.schema import get_expanded_config_prototype
+    monkeypatch.chdir(tmp_path)
+    config = get_expanded_config_prototype()
+    config["backtest"]["offline"] = False
+    calls = []
+    def forbidden_cache(*args, **kwargs): pytest.fail("force refetch must bypass prepared cache")
+    async def raw_preparation(config, exchange, *, force_refetch_gaps):
+        calls.append((exchange, force_refetch_gaps))
+        raise ValueError("raw preparation reached")
+    monkeypatch.setattr(backtest, "load_hlcvs_data_override", lambda *args: None)
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", forbidden_cache)
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", raw_preparation)
+    with pytest.raises(ValueError, match="raw preparation reached"):
+        await backtest.prepare_hlcvs_mss(config, "binance", force_refetch_gaps=True)
+    assert calls == [("binance", True)]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exchange", ["binance", "bybit"])
 async def test_verified_source_absence_reuses_offline_without_inception_or_network(

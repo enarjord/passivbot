@@ -92,8 +92,13 @@ leave the prefix unverified. Earlier genuine rows are ordinary cache repairs, no
 This attests only observed source-leading unavailability. It does not establish no trading,
 market inception or coin age, and does not rewrite those facts. A first row, archive 404, or
 retention observation alone remains insufficient; longer unknown prefixes are not waived by
-the bounded discovery budget. Offline use consumes a previously completed source-bound proof
-and performs no probes.
+the bounded discovery budget. Raw online preparation honors the catalog retry deadline and
+forced gap refresh before reusing this observed-unavailability fact. A failed refresh cannot
+reuse the old proof. Offline and cache-only use consume previously completed proof without probes.
+
+Already materialized, integrity-verified prepared caches retain their historical input snapshot;
+ordinary cache reuse does not promise periodic source rediscovery. An explicit forced gap refresh
+bypasses the automatic prepared cache and revalidates raw source coverage.
 
 An unverified source remains ineligible for online combined selection; another approved source
 with verified data may still supply that coin. Unexpected selection-source parsing or integrity failures propagate
