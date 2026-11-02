@@ -2266,7 +2266,7 @@ async def prepare_hlcvs_mss(
             release_materialized_payload(hlcvs)
             raise OfflineDataError(
                 "Offline dataset override lacks verified offline coverage provenance "
-                "(boundary proof version 2 required). "
+                "(boundary proof version 3 required). "
                 "Prepare it once from raw caches using --offline y without --hlcvs-data-dir."
             )
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)

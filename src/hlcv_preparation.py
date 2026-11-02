@@ -3,6 +3,7 @@ from simulation_data import (
     simulation_data_scope, snapshot_file,
 )
 import asyncio
+import hashlib
 from types import SimpleNamespace
 import json
 import logging
@@ -40,6 +41,10 @@ from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 class HlcvsDataIntegrityError(ValueError):
     pass
+
+
+class SourceHistoryUnavailable(ValueError):
+    """A source's required candle coverage remains unverified after repair."""
 
 
 def _pct_log(level: str, pct: int, msg: str, *args, **kwargs) -> None:
@@ -116,7 +121,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 10
+HLCV_PREPARATION_ALGORITHM_VERSION = 12
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -521,6 +526,20 @@ class HLCVManager:
         if self.binance_archive_client is None:
             self.binance_archive_client = BinanceOhlcvArchiveClient()
         return self.binance_archive_client
+
+    async def fetch_leading_history_page(self, symbol, query):
+        """Fetch one explicit public source-history interval without pagination guesses."""
+        require_online(f"bounded leading candle history {self.exchange}/{symbol}")
+        self.load_cc()
+        assert self.cm is not None
+        venue = to_standard_exchange_name(self.exchange)
+        expected = {"binance": "fapiPublicGetKlines", "bybit": "publicGetV5MarketKline"}.get(venue)
+        if expected is None or query.get("method") != expected or self.get_symbol(symbol.split("/", 1)[0]) != symbol:
+            raise ValueError("Leading history probe source does not match the market owner")
+        async with self.cm._acquire_fetch_lock(symbol, "1m"):
+            await self.cm._apply_rate_limit_backoff()
+            await self.cm._apply_remote_fetch_spacing(symbol=symbol, tf="1m")
+            return await getattr(self.cc, expected)(query["params"])
 
     def close(self) -> None:
         """Best-effort sync close for CandlestickManager resources."""
@@ -1614,15 +1633,19 @@ async def _resolve_v2_store_range(**kwargs):
             # Validate the original source prefix, not a later window selected
             # by the existing internal-gap coverage policy.
             source_first = first_valid
+            source_control = rng.values[int(np.flatnonzero(rng.valid)[0])]
             if int(rng.timestamps[0]) > start:
                 earlier = kwargs["store"].read_range(exchange, "1m", symbol, start, first_valid - 60_000)
                 earlier_valid = np.flatnonzero(earlier.valid)
                 if earlier_valid.size:
                     source_first = int(earlier.timestamps[int(earlier_valid[0])])
+                    source_control = earlier.values[int(earlier_valid[0])]
             if source_first == start:
                 return rng
             proven_end = _confirmed_catalog_prefix_end(
                 kwargs["catalog"], exchange, symbol, start, source_first - 60_000,
+                om=kwargs["om"], coin=kwargs["coin"], control_values=source_control,
+                allow_remote_fetch=kwargs["allow_remote_fetch"],
             )
             if proven_end != source_first:
                 evidence = await _collect_first_timestamp_evidence(
@@ -1630,6 +1653,16 @@ async def _resolve_v2_store_range(**kwargs):
                 )
                 listing = _source_history_boundary(evidence)
                 if listing is None or source_first != listing // 60_000 * 60_000:
+                    verified = kwargs["allow_remote_fetch"] and await _verify_source_leading_unavailable(
+                        om=kwargs["om"], catalog=kwargs["catalog"], store=kwargs["store"],
+                        exchange=exchange, coin=kwargs["coin"], symbol=symbol,
+                        start_ts=start, first_valid_ts=source_first,
+                        control_values=source_control,
+                    )
+                    if verified == "repaired":
+                        return await _resolve_v2_store_range(**kwargs)
+                    if verified == "verified":
+                        return rng
                     logging.warning("[%s] unverified leading history for %s; unavailable",
                                     exchange, symbol)
                     return None
@@ -1654,6 +1687,12 @@ async def _resolve_v2_store_range(**kwargs):
     if last_valid < end:
         omitted_edges.append((last_valid + 60_000, end, "trailing_unavailable"))
     for left, right, reason in omitted_edges:
+        if reason == "pre_inception" and _confirmed_catalog_prefix_end(
+            kwargs["catalog"], exchange, symbol, left, right,
+            om=kwargs["om"], coin=kwargs["coin"], control_values=rng.values[int(valid_indices[0])],
+            allow_remote_fetch=False,
+        ) == right + 60_000:
+            continue
         cursor = left
         gaps = kwargs["catalog"].get_persistent_gaps(exchange, "1m", symbol, left, right)
         for gap in sorted(gaps, key=lambda g: g.start_ts):
@@ -1754,6 +1793,8 @@ async def _resolve_v2_store_range_impl(
         first_valid_ts = int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
         proven_end = _confirmed_catalog_prefix_end(
             catalog, exchange, symbol, int(start_ts), first_valid_ts - 60_000,
+            om=om, coin=coin, control_values=rng.values[int(np.flatnonzero(rng.valid)[0])],
+            allow_remote_fetch=allow_remote_fetch,
         )
         if proven_end == first_valid_ts:
             # Current proof already binds this exact source/range. Reusing it
@@ -1799,6 +1840,20 @@ async def _resolve_v2_store_range_impl(
                 ts_to_date(int(authoritative_rng.timestamps[-1])),
             )
             return authoritative_rng
+        leading_result = allow_remote_fetch and await _verify_source_leading_unavailable(
+            om=om, catalog=catalog, store=store, exchange=exchange, coin=coin, symbol=symbol,
+            start_ts=start_ts, first_valid_ts=first_valid_ts,
+            control_values=rng.values[int(np.flatnonzero(rng.valid)[0])],
+        )
+        if leading_result == "repaired":
+            return await _resolve_v2_store_range_impl(
+                om=om, catalog=catalog, store=store, exchange=exchange, coin=coin, symbol=symbol,
+                start_ts=start_ts, end_ts=end_ts, allow_remote_fetch=allow_remote_fetch,
+                allow_partial_window=allow_partial_window, local_hit_log_label=local_hit_log_label,
+                remote_fetch_log_label=remote_fetch_log_label,
+            )
+        if leading_result == "verified":
+            return _extract_single_valid_window(rng)
     if _range_has_tolerable_internal_sparse_gaps(
         rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
     ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
@@ -1821,7 +1876,8 @@ async def _resolve_v2_store_range_impl(
                 if _pre_inception_gaps_confirm_discovered_boundary(overlapping_persistent_gaps)
                 and rng.valid.any()
                 and _confirmed_catalog_prefix_end(
-                    catalog, exchange, symbol, int(start_ts), int(end_ts)
+                    catalog, exchange, symbol, int(start_ts), int(end_ts), om=om, coin=coin,
+                    allow_remote_fetch=allow_remote_fetch,
                 ) == int(rng.timestamps[int(np.flatnonzero(rng.valid)[0])])
                 else None
             )
@@ -1961,7 +2017,16 @@ async def _resolve_v2_store_range_impl(
                             )
                             return partial_rng
                     overlapping_persistent_gaps = remaining_persistent_gaps
-                raise ValueError(
+                # A successful empty repair says only this source's required
+                # history is unavailable. Malformed result classifications keep
+                # their fatal error path and must not become source fallback.
+                failure_type = (
+                    SourceHistoryUnavailable
+                    if fetch_results and all(result.ok or result.reason == "empty"
+                                             for result in fetch_results)
+                    else ValueError
+                )
+                raise failure_type(
                     _format_stale_pre_inception_failure(
                         catalog=catalog,
                         exchange=exchange,
@@ -2978,10 +3043,110 @@ def _binance_archives_enabled(om, exchange):
 _BINANCE_UNKNOWN_PREFIX_ARCHIVE_PROBES = 4
 
 
-def _confirmed_catalog_prefix_end(catalog, exchange, symbol, start_ts, end_ts):
+async def _verify_source_leading_unavailable(
+    *, om, catalog, store, exchange, coin, symbol, start_ts, first_valid_ts, control_values,
+):
+    """Observe a bounded source gap without promoting it to inception or no trading."""
+    from source_leading_history import collect, plan, note, prior_gap_provenance, MAX_PROBE_ATTEMPTS
+
+    listing = _venue_listing_boundary(om, exchange, coin, symbol)
+    fetch = getattr(om, "fetch_leading_history_page", None)
+    if listing is None or not callable(fetch) or control_values is None:
+        return False
+    evidence = await _collect_first_timestamp_evidence(
+        om=om, exchange=exchange, coin=coin, symbol=symbol,
+    )
+    if _source_history_boundary(evidence) != listing:
+        return False
+    market = om.markets[symbol]
+    try:
+        plan(exchange, market["id"], int(listing), int(first_valid_ts))
+    except ValueError:
+        return False  # This transport budget does not waive longer unknown history.
+    key = (exchange, symbol, int(start_ts))
+    attempted = getattr(om, "_leading_history_probes", None)
+    if attempted is None:
+        attempted = om._leading_history_probes = {}
+    source_boundaries = [boundary for source, boundaries in attempted.items()
+                         if source[:2] == key[:2] for boundary in boundaries]
+    if (len(source_boundaries) >= MAX_PROBE_ATTEMPTS
+            or (source_boundaries and int(first_valid_ts) >= min(source_boundaries))):
+        return False
+    # Genuine earlier rows may move the first-valid boundary. Permit a bounded
+    # monotonic continuation, but never loop at the same or a later boundary.
+    attempted.setdefault(key, []).append(int(first_valid_ts))
+
+    async def public_page(query):
+        return await fetch(symbol, query)
+
+    try:
+        proof, earlier = await collect(
+            exchange=exchange, symbol=symbol, market_id=market["id"],
+            listing_timestamp=int(listing), first_valid=int(first_valid_ts),
+            control_values=control_values, observed_at_ms=int(time.time() * 1000),
+            fetch=public_page,
+        )
+    except Exception as exc:
+        logging.warning("[%s] bounded leading history proof unavailable for %s: %s",
+                        exchange, symbol, type(exc).__name__)
+        return False  # A failed proof supplies neither candles nor boundary facts.
+    if earlier:
+        store.write_rows(
+            exchange, "1m", symbol, np.asarray([row[0] for row in earlier], dtype=np.int64),
+            np.asarray([row[1] for row in earlier], dtype=np.float32),
+        )
+        # Actual rows repair ordinary coverage. An incomplete observation never
+        # creates an absence certificate or expands a first-candle boundary.
+        for timestamp, _values in earlier:
+            catalog.clear_gap_range(exchange=exchange, timeframe="1m", symbol=symbol,
+                                    start_ts=timestamp, end_ts=timestamp,
+                                    reason="leading_unavailable")
+        return "repaired"
+    if proof is None:
+        return False
+    fact_start = min(int(start_ts), int(listing) // 60_000 * 60_000)
+    old = catalog.get_persistent_gaps(exchange, "1m", symbol, fact_start, int(first_valid_ts) - 60_000)
+    proof["previous_gap_provenance"] = prior_gap_provenance(old)
+    proof_note = note(proof)
+    catalog.mark_gap(
+        exchange=exchange, timeframe="1m", symbol=symbol, start_ts=fact_start,
+        end_ts=int(first_valid_ts) - 60_000, reason="leading_unavailable", persistent=True,
+        retry_count=0, note=proof_note,
+    )
+    verified = getattr(om, "_leading_history_verified_notes", None)
+    if verified is None:
+        verified = om._leading_history_verified_notes = set()
+    verified.add((exchange, symbol, hashlib.sha256(proof_note.encode()).hexdigest()))
+    logging.info("[%s] verified bounded source-leading unavailability for %s (%s -> %s); not inception",
+                 exchange, symbol, ts_to_date(int(listing)), ts_to_date(int(first_valid_ts)))
+    return "verified"
+
+
+def _confirmed_catalog_prefix_end(catalog, exchange, symbol, start_ts, end_ts, *,
+                                  om=None, coin=None, control_values=None,
+                                  allow_remote_fetch=False):
     cursor = int(start_ts)
     gaps = catalog.get_persistent_gaps(exchange, "1m", symbol, cursor, int(end_ts))
     for gap in sorted(gaps, key=lambda item: item.start_ts):
+        if gap.reason == "leading_unavailable" and int(gap.start_ts) <= cursor <= int(gap.end_ts):
+            from source_leading_history import from_note, validates
+            boundary = int(gap.end_ts) + 60_000
+            proof = from_note(gap.note)
+            if (validates(proof, exchange=exchange, symbol=symbol, first_valid=boundary,
+                          control_values=control_values)
+                    and int(gap.start_ts) <= proof["published_listing_timestamp_ms"] // 60_000 * 60_000
+                    and (om is None or _venue_listing_boundary(om, exchange, coin, symbol)
+                         == proof["published_listing_timestamp_ms"])
+                    and boundary == int(end_ts) + 60_000):
+                if allow_remote_fetch and not is_offline() and _gap_retry_due(gap, om):
+                    key = (exchange, symbol, hashlib.sha256(gap.note.encode()).hexdigest())
+                    # Force refresh applies to preexisting facts, not the exact
+                    # proof just collected in this preparation. Real expiry is
+                    # still due even if the owner happens to remain alive.
+                    if (_gap_retry_due(gap)
+                            or key not in getattr(om, "_leading_history_verified_notes", ())):
+                        continue
+                cursor = boundary
         if (gap.reason == "pre_inception"
                 and _pre_inception_gap_confirms_discovered_boundary(gap)
                 and int(gap.start_ts) <= cursor <= int(gap.end_ts)):
@@ -2997,6 +3162,7 @@ def _binance_archive_source_boundary(om, catalog, exchange, coin, symbol, timest
         candidates.append(listing)
     proven_end = _confirmed_catalog_prefix_end(
         catalog, exchange, symbol, int(timestamps[0]), int(timestamps[-1]),
+        om=om, coin=coin, allow_remote_fetch=not is_offline(),
     )
     if proven_end is not None:
         candidates.append(proven_end)
@@ -5313,9 +5479,7 @@ async def _resolve_combined_coin(
         except Exception as e:
             logging.error(f"Error processing coin {coin}: {e}")
             traceback.print_exc()
-            if plan.forced_exchange or is_offline():
-                raise
-            return None
+            raise
 
 
 async def _load_combined_coin_candidates(
@@ -5372,6 +5536,7 @@ async def _load_combined_coin_candidates(
 
     candidates: list[CombinedExchangeCandidate] = []
     for ex, result in zip(plan.candidate_exchanges, results):
+        source_unavailable = isinstance(result, SourceHistoryUnavailable)
         symbol = None
         try:
             symbol = om_dict[ex].get_symbol(plan.coin) if om_dict[ex].has_coin(plan.coin) else None
@@ -5380,32 +5545,37 @@ async def _load_combined_coin_candidates(
         if isinstance(result, Exception):
             if is_offline():
                 raise result
-            if ex in selection_exchange_set:
+            if source_unavailable:
+                logging.warning("%s: candle source %s has unverified history; unavailable",
+                                plan.coin, ex)
+                result = None
+            elif ex in selection_exchange_set:
                 raise RuntimeError(f"Exchange {ex} failed for coin {plan.coin}") from result
-            summary = _ineligible_combined_summary(
-                coin=plan.coin,
-                exchange=ex,
-                symbol=symbol,
-                reason=f"normalization_candidate_fetch_failed:{type(result).__name__}",
-                gap_class="unknown",
-                effective_start_ts=start_ts_by_exchange[ex],
-                end_ts=end_ts,
-            )
-            if candidate_report is not None:
-                candidate_report.append(summary.to_dict())
-            logging.warning(
-                "%s: optional normalization candidate %s failed (%s)",
-                plan.coin,
-                ex,
-                type(result).__name__,
-            )
-            continue
+            else:
+                summary = _ineligible_combined_summary(
+                    coin=plan.coin,
+                    exchange=ex,
+                    symbol=symbol,
+                    reason=f"normalization_candidate_fetch_failed:{type(result).__name__}",
+                    gap_class="unknown",
+                    effective_start_ts=start_ts_by_exchange[ex],
+                    end_ts=end_ts,
+                )
+                if candidate_report is not None:
+                    candidate_report.append(summary.to_dict())
+                logging.warning(
+                    "%s: optional normalization candidate %s failed (%s)",
+                    plan.coin,
+                    ex,
+                    type(result).__name__,
+                )
+                continue
         if result is None:
             summary = _ineligible_combined_summary(
                 coin=plan.coin,
                 exchange=ex,
                 symbol=symbol,
-                reason="unavailable",
+                reason="unverified_source_history" if source_unavailable else "unavailable",
                 gap_class="unknown",
                 effective_start_ts=start_ts_by_exchange[ex],
                 end_ts=end_ts,

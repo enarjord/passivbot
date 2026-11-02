@@ -46,6 +46,16 @@ def test_normalization_does_not_alias_dates_order_or_fractional_policy(monkeypat
     assert backtest.get_cache_hash(order, "combined") != base
 
 
+def test_offline_preparation_and_online_reuse_have_the_same_candle_request_key(monkeypatch):
+    monkeypatch.setattr(backtest, "coin_to_symbol", lambda coin, *a, **kw: coin + '/USDT:USDT')
+    online = config(120)
+    offline = deepcopy(online)
+    online["backtest"]["offline"] = False
+    offline["backtest"]["offline"] = True
+    assert backtest.get_cache_hash(offline, "combined") == backtest.get_cache_hash(online, "combined")
+    assert online["backtest"]["offline"] is False
+
+
 @pytest.mark.parametrize("value", [True, '120', -1, float('nan'), float('inf')])
 def test_gap_tolerance_rejects_invalid_required_input(value):
     with pytest.raises(ValueError, match="finite nonnegative"):

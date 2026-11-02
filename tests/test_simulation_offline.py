@@ -237,6 +237,16 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     monkeypatch.setattr("backtest.prepare_hlcvs_combined", no_rebuild)
     again = await prepare_hlcvs_mss(config, exchange)
     np.testing.assert_equal(result[1], again[1])
+    # Offline materialization is reusable by the original online preparation
+    # route without rebuilding raw sources or changing the verified arrays.
+    config["backtest"]["offline"] = False
+    online = await prepare_hlcvs_mss(config, exchange)
+    assert online[4] == result[4]
+    assert online[2] == result[2]
+    np.testing.assert_equal(result[1], online[1])
+    np.testing.assert_equal(result[5], online[5])
+    np.testing.assert_equal(result[6], online[6])
+    config["backtest"]["offline"] = True
     config["backtest"]["hlcvs_data_dir"] = str(result[4])
     override = await prepare_hlcvs_mss(config, exchange)
     assert override[2]["__meta__"]["offline_snapshot"] == result[2]["__meta__"]["offline_snapshot"]
@@ -250,7 +260,7 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     stale_override = (override[4], override[0], override[1], old_mss,
                       override[3], override[5], override[6])
     monkeypatch.setattr(backtest, "load_hlcvs_data_override", lambda *args: stale_override)
-    with pytest.raises(OfflineDataError, match="lacks verified offline coverage provenance"):
+    with pytest.raises(OfflineDataError, match="boundary proof version 3 required"):
         await prepare_hlcvs_mss(config, exchange)
 
 

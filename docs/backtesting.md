@@ -79,7 +79,37 @@ with a real candle in the launch timestamp's UTC minute. Contradictory older sou
 prevents confirmation. Missing or unsupported launch metadata leaves required history
 unavailable; neither REST nor archives may silently shorten the request.
 
-New preparation uses algorithm 10 and offline boundary proof version 2. Candle observations
+An administrative listing timestamp can precede the first published candle. For Binance and
+Bybit linear USDT sources, v2 preparation can verify a separate `leading_unavailable` fact:
+at most four explicit, closed requests of up to 1,000 minutes each must return successful
+empty candle lists from the published listing minute to the first cached candle. An adjacent
+one-minute historical control must return that exact source candle, including its canonical
+HLCV values. The versioned catalog fact retains source/symbol bindings, request and response
+content and hashes, the observation time, the independent listing bound, and bounded prior-gap
+provenance: a count and aggregate digest plus up to eight dated note-hash summaries. Previous
+certificates are referenced by digest rather than recursively embedded.
+Missing pages, failed responses, conflicting controls or older contradictory source candles
+leave the prefix unverified. Earlier genuine rows are ordinary cache repairs, not absence proof.
+After repair, the same owner may continue only at a strictly earlier first-valid boundary, with
+at most four proof attempts per source/symbol/preparation across requested ranges. Remaining
+unknown history stays unavailable when that transport budget is exhausted.
+
+This attests only observed source-leading unavailability. It does not establish no trading,
+market inception or coin age, and does not rewrite those facts. A first row, archive 404, or
+retention observation alone remains insufficient; longer unknown prefixes are not waived by
+the bounded discovery budget. Raw online preparation honors the catalog retry deadline and
+forced gap refresh before reusing this observed-unavailability fact. A failed refresh cannot
+reuse the old proof. Offline and cache-only use consume previously completed proof without probes.
+
+Already materialized, integrity-verified prepared caches retain their historical input snapshot;
+ordinary cache reuse does not promise periodic source rediscovery. An explicit forced gap refresh
+bypasses the automatic prepared cache and revalidates raw source coverage.
+
+An unverified source remains ineligible for online combined selection; another approved source
+with verified data may still supply that coin. Unexpected selection-source parsing or integrity failures propagate
+instead of silently removing the coin. Forced sources and offline source failures remain strict.
+
+New preparation uses algorithm 12 and offline boundary proof version 3. Candle observations
 remain intact. Offline use does not upgrade old gap notes, and older prepared proof versions
 cannot certify current coverage. Online revalidation can replace covered weak gap notes only
 after independent corroboration. Re-verify the raw cache online with independent source
