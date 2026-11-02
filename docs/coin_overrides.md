@@ -197,6 +197,11 @@ config with inline patches:
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 ```
 
+Saved optimizer and backtest results can be supplied directly, either inline or wrapped under
+`config`, as single-coin inputs or the master config. Recognized result metadata, including
+resolved `backtest.coins` and cache paths, is removed before normal config validation. Approved
+coins still come from the authored universe policy; unknown config fields remain errors.
+
 Each input must validate as a current config, approve exactly one coin across its long/short lists,
 reject the `all` sentinel, and contain no existing `coin_overrides`, including in nested-current
 input. Files and coins are processed deterministically, with the alphabetically first filename

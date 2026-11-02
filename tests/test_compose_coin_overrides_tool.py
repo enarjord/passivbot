@@ -49,6 +49,93 @@ def _write(path: Path, config: dict) -> None:
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
+def _result_record(config: dict, *, wrapped: bool) -> dict:
+    record = deepcopy(config)
+    # Recorded dataset membership must not replace authored approved-coin policy.
+    record["backtest"]["coins"] = {"combined": ["XRP"]}
+    record["backtest"]["cache_dir"] = {"combined": "caches/hlcvs_data/result"}
+    record["metrics"] = {"objectives": {"cagr_fraction_strategy_equity": 0.1}}
+    record["optimizer_evaluation_contract"] = {"version": 11}
+    return {"config": record, "analysis": {}} if wrapped else record
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("result_master", [False, True])
+def test_cli_composes_saved_results_like_authored_configs(
+    tmp_path: Path, wrapped: bool, result_master: bool
+):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    for coin, cooldown in (("BTC", 3.5), ("ETH", 7.25)):
+        config = _single_coin_config(coin)
+        config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = cooldown
+        _write(inputs / f"{coin}.json", config)
+    master_path = tmp_path / "master.json"
+    master = _single_coin_config("SOL")
+    master["backtest"]["start_date"] = "2023-01-01"
+    master["optimize"]["iters"] = 100
+    _write(master_path, master)
+    expected, _ = compose_directory(
+        inputs, master_config=master_path, include_backtest_optimize=True,
+        override_params="bot.long,bot.short",
+    )
+
+    for path in [*sorted(inputs.iterdir()), *([master_path] if result_master else [])]:
+        config = json.loads(path.read_text())
+        _write(path, _result_record(config, wrapped=wrapped))
+    sources = {path: path.read_bytes() for path in [*inputs.iterdir(), master_path]}
+    output = tmp_path / "composed.json"
+
+    assert main([
+        str(inputs), str(output), "--master-config", str(master_path),
+        "--include-backtest-optimize", "--override-params", "bot.long,bot.short",
+    ]) == 0
+
+    composed = json.loads(output.read_text())
+    assert composed == expected
+    assert require_side_universe_sources(composed, "approved_coins") == {
+        "long": ["BTC", "ETH"], "short": ["BTC", "ETH"],
+    }
+    assert "coins" not in composed["backtest"]
+    assert "cache_dir" not in composed["backtest"]
+    assert "metrics" not in composed
+    assert "optimizer_evaluation_contract" not in composed
+    assert all(path.read_bytes() == original for path, original in sources.items())
+
+
+@pytest.mark.parametrize("role", ["input", "master"])
+@pytest.mark.parametrize("invalid", ["unknown_field", "coin_overrides", "unmarked_coins"])
+def test_result_loading_keeps_composition_validation_strict(
+    tmp_path: Path, capsys, role: str, invalid: str
+):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    first_path = inputs / "BTC.json"
+    master_path = tmp_path / "master.json"
+    for path, coin in ((first_path, "BTC"), (inputs / "ETH.json", "ETH"), (master_path, "SOL")):
+        _write(path, _single_coin_config(coin))
+    target = first_path if role == "input" else master_path
+    config = json.loads(target.read_text())
+    if invalid == "unknown_field":
+        config["backtest"]["unknown_field"] = 1
+        error = "config.backtest.unknown_field is an unknown configuration field"
+    elif invalid == "coin_overrides":
+        config["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 4}}}}
+        error = "must not contain coin_overrides"
+    else:
+        config["backtest"]["coins"] = {"combined": ["BTC"]}
+        error = "config.backtest.coins is an unknown configuration field"
+    _write(target, config if invalid == "unmarked_coins" else _result_record(config, wrapped=True))
+    original = target.read_bytes()
+    output = tmp_path / "composed.json"
+
+    assert main([str(inputs), str(output), "--master-config", str(master_path)]) == 2
+
+    assert error in capsys.readouterr().err
+    assert not output.exists()
+    assert target.read_bytes() == original
+
+
 def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path: Path):
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")

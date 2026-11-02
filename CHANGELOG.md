@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow `compose-coin-overrides` to load saved optimizer and backtest results directly
+  as single-coin inputs or master configs, removing known result metadata before strict validation.
+
 - Verify bounded source-leading candle unavailability with explicit public intervals and
   a matching historical control, without treating missing candles as market inception
   or changing coin-age facts. Unknown prefixes and incomplete offline proofs still fail closed.
