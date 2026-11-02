@@ -177,7 +177,9 @@ def _side_coin_lists(config: dict, key: str, *, path: Path) -> dict[str, list[st
 
 
 def _load_config_source(path: Path, *, role: str) -> ConfigSource:
-    source, base_config_path, raw_snapshot = load_input_config(str(path), log_info=False)
+    source, base_config_path, raw_snapshot = load_input_config(
+        str(path), log_info=False, allow_result_records=True,
+    )
     if not isinstance(source, dict):
         raise TypeError(f"{path}: configuration root must be an object")
     if source.get("coin_overrides"):
