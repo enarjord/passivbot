@@ -3047,7 +3047,7 @@ async def _verify_source_leading_unavailable(
     *, om, catalog, store, exchange, coin, symbol, start_ts, first_valid_ts, control_values,
 ):
     """Observe a bounded source gap without promoting it to inception or no trading."""
-    from source_leading_history import collect, plan, note
+    from source_leading_history import collect, plan, note, prior_gap_provenance, MAX_PROBE_ATTEMPTS
 
     listing = _venue_listing_boundary(om, exchange, coin, symbol)
     fetch = getattr(om, "fetch_leading_history_page", None)
@@ -3066,10 +3066,15 @@ async def _verify_source_leading_unavailable(
     key = (exchange, symbol, int(start_ts))
     attempted = getattr(om, "_leading_history_probes", None)
     if attempted is None:
-        attempted = om._leading_history_probes = set()
-    if key in attempted:
+        attempted = om._leading_history_probes = {}
+    source_boundaries = [boundary for source, boundaries in attempted.items()
+                         if source[:2] == key[:2] for boundary in boundaries]
+    if (len(source_boundaries) >= MAX_PROBE_ATTEMPTS
+            or (source_boundaries and int(first_valid_ts) >= min(source_boundaries))):
         return False
-    attempted.add(key)
+    # Genuine earlier rows may move the first-valid boundary. Permit a bounded
+    # monotonic continuation, but never loop at the same or a later boundary.
+    attempted.setdefault(key, []).append(int(first_valid_ts))
 
     async def public_page(query):
         return await fetch(symbol, query)
@@ -3101,11 +3106,7 @@ async def _verify_source_leading_unavailable(
         return False
     fact_start = min(int(start_ts), int(listing) // 60_000 * 60_000)
     old = catalog.get_persistent_gaps(exchange, "1m", symbol, fact_start, int(first_valid_ts) - 60_000)
-    proof["previous_gap_notes"] = [
-        {"start_ts": int(gap.start_ts), "end_ts": int(gap.end_ts),
-         "reason": gap.reason, "note": gap.note}
-        for gap in old if gap.note
-    ]
+    proof["previous_gap_provenance"] = prior_gap_provenance(old)
     proof_note = note(proof)
     catalog.mark_gap(
         exchange=exchange, timeframe="1m", symbol=symbol, start_ts=fact_start,

@@ -47,9 +47,13 @@
    intervals from the published launch minute to that candle must return successful empty lists,
    with at most four 1,000-minute pages, followed by an adjacent positive historical control
    matching the cached canonical HLCV row. Bind the versioned fact to venue, symbol, exact queries,
-   raw responses and hashes, launch bound, observation time and prior notes. Incomplete evidence,
+   raw responses and hashes, launch bound, observation time and bounded prior-note provenance
+   (count, aggregate digest and at most eight dated note-hash summaries, never nested certificates). Incomplete evidence,
    changed controls or contradictory earlier candles fail closed. Genuine earlier rows repair
    ordinary coverage. This is not market inception, no-trade proof or a coin-age update.
+   After genuine row repair, continuation requires a strictly earlier first-valid boundary and
+   shares a maximum four attempts per owner/source/symbol across ranges. Unchanged/later boundaries
+   do not restart probing; budget exhaustion preserves rows and leaves unknown coverage unavailable.
    Raw online, remote-enabled resolution honors catalog retry deadlines and forced gap refresh;
    failure cannot fall through to the old proof. Offline/cache-only reuse performs no probes.
    A forced refresh accepts the exact proof collected during that preparation, while genuine

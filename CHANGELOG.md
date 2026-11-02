@@ -13,6 +13,8 @@ since the latest release tag; these features may already be available when insta
   unverified history; unexpected selection-source errors propagate instead of silently dropping coins.
   Raw online verification respects catalog retry deadlines and forced refresh; offline/cache-only
   proof reuse and verified prepared input snapshots remain available.
+  Prior proof provenance stays bounded, and genuine earlier-row repairs permit only bounded,
+  monotonic continuation of remaining source-history verification.
 
 - Stream large CUDA Trailing Martingale tick inputs in bounded time chunks and
   compact one-minute hourly observations, allowing longer histories within the

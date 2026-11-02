@@ -85,9 +85,14 @@ at most four explicit, closed requests of up to 1,000 minutes each must return s
 empty candle lists from the published listing minute to the first cached candle. An adjacent
 one-minute historical control must return that exact source candle, including its canonical
 HLCV values. The versioned catalog fact retains source/symbol bindings, request and response
-content and hashes, the observation time, the independent listing bound, and prior gap notes.
+content and hashes, the observation time, the independent listing bound, and bounded prior-gap
+provenance: a count and aggregate digest plus up to eight dated note-hash summaries. Previous
+certificates are referenced by digest rather than recursively embedded.
 Missing pages, failed responses, conflicting controls or older contradictory source candles
 leave the prefix unverified. Earlier genuine rows are ordinary cache repairs, not absence proof.
+After repair, the same owner may continue only at a strictly earlier first-valid boundary, with
+at most four proof attempts per source/symbol/preparation across requested ranges. Remaining
+unknown history stays unavailable when that transport budget is exhausted.
 
 This attests only observed source-leading unavailability. It does not establish no trading,
 market inception or coin age, and does not rewrite those facts. A first row, archive 404, or

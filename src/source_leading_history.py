@@ -14,6 +14,8 @@ import numpy as np
 MINUTE_MS = 60_000
 MAX_PAGE_MINUTES = 1000
 MAX_PREFIX_PAGES = 4
+MAX_PROBE_ATTEMPTS = 4
+MAX_PRIOR_GAP_SUMMARIES = 8
 PROOF_KIND = "source_leading_unavailable"
 PROOF_VERSION = 1
 
@@ -30,6 +32,31 @@ def _json(value):
 
 def _digest(value):
     return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
+def prior_gap_provenance(gaps):
+    """Retain bounded prior-fact references, never recursively escaped proofs."""
+    digest = hashlib.sha256()
+    count = 0
+    summaries = []
+    for gap in gaps:
+        if not gap.note:
+            continue
+        if not isinstance(gap.note, str):
+            raise ValueError("Prior source history notes must be text")
+        summary = {
+            "start_ts": int(gap.start_ts), "end_ts": int(gap.end_ts),
+            "reason": str(gap.reason),
+            "note_sha256": hashlib.sha256(gap.note.encode()).hexdigest(),
+        }
+        encoded = _json(summary).encode()
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        count += 1
+        summaries.append(summary)
+        if len(summaries) > MAX_PRIOR_GAP_SUMMARIES:
+            summaries.pop(0)
+    return {"count": count, "sha256": digest.hexdigest(), "summaries": summaries}
 
 
 def request(exchange, market_id, start, end, *, control=False):

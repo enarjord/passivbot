@@ -3,6 +3,7 @@
 from copy import deepcopy
 from contextlib import asynccontextmanager
 import json
+import hashlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -304,6 +305,174 @@ async def test_explicit_force_refetch_bypasses_automatic_prepared_cache(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exchange", ["binance", "bybit"])
+async def test_many_proof_refreshes_keep_bounded_nonrecursive_prior_references(tmp_path, monkeypatch, exchange):
+    catalog, store = cached(tmp_path, exchange)
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    previous_note = "confirmed_by_v2_fetch"
+    sizes = []
+    for _ in range(20):
+        om = owner(exchange)
+        om.force_refetch_gaps = True
+        result = await hp._resolve_v2_store_range(
+            om=om, catalog=catalog, store=store, exchange=exchange, coin="NEW", symbol=SYMBOL,
+            start_ts=START, end_ts=END, allow_remote_fetch=True,
+            local_hit_log_label="hit", remote_fetch_log_label="fetch")
+        assert result.valid.all() and len(om.calls) == 3
+        current_note = catalog.get_persistent_gaps(exchange, "1m", SYMBOL, START, FIRST - 60_000)[0].note
+        observation = proof.from_note(current_note)
+        assert "previous_gap_notes" not in observation
+        prior = observation["previous_gap_provenance"]
+        assert prior["count"] == 1
+        assert prior["summaries"][0]["note_sha256"] == hashlib.sha256(previous_note.encode()).hexdigest()
+        assert proof.validates(observation, exchange=exchange, symbol=SYMBOL, first_valid=FIRST)
+        sizes.append(len(current_note))
+        previous_note = current_note
+    assert max(sizes) < 8192 and max(sizes) - min(sizes) < 128
+
+
+@pytest.mark.asyncio
+async def test_oversized_legacy_note_is_digest_only_in_new_proof(tmp_path, monkeypatch):
+    catalog, store = cached(tmp_path, "bybit")
+    old_note = 'legacy"\\' * 100_000
+    catalog.mark_gap(exchange="bybit", timeframe="1m", symbol=SYMBOL,
+        start_ts=START, end_ts=FIRST - 60_000, reason="leading_unavailable", persistent=True,
+        note=old_note)
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    assert await hp._verify_source_leading_unavailable(
+        om=owner("bybit"), catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+        start_ts=START, first_valid_ts=FIRST, control_values=VALUES) == "verified"
+    current_note = catalog.get_persistent_gaps("bybit", "1m", SYMBOL, START, FIRST - 60_000)[0].note
+    assert len(current_note) < 8192
+    prior = proof.from_note(current_note)["previous_gap_provenance"]
+    assert prior["summaries"][0]["note_sha256"] == hashlib.sha256(old_note.encode()).hexdigest()
+
+
+def test_prior_gap_provenance_bounds_summaries_and_covers_all_note_digests():
+    gaps = [SimpleNamespace(start_ts=START + i * 60_000, end_ts=START + i * 60_000,
+                            reason="leading_unavailable", note=f"legacy-{i}") for i in range(100)]
+    result = proof.prior_gap_provenance(gaps)
+    assert result["count"] == 100
+    assert len(result["summaries"]) == proof.MAX_PRIOR_GAP_SUMMARIES
+    assert result == proof.prior_gap_provenance(gaps)
+    assert result["sha256"] != proof.prior_gap_provenance(gaps[1:])["sha256"]
+    assert result["sha256"] != proof.prior_gap_provenance(list(reversed(gaps)))["sha256"]
+    gaps[0].note = b"invalid note type"
+    with pytest.raises(ValueError, match="must be text"):
+        proof.prior_gap_provenance(gaps)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
+@pytest.mark.parametrize("forced", [False, True])
+async def test_earlier_row_repair_can_certify_remaining_prefix_with_same_owner(
+    tmp_path, monkeypatch, exchange, forced,
+):
+    catalog, store = cached(tmp_path, exchange)
+    om = owner(exchange)
+    om.force_refetch_gaps = forced
+    earlier = FIRST - 60_000
+    async def fetch(symbol, query):
+        om.calls.append(deepcopy(query))
+        params = query["params"]
+        start = params.get("start", params.get("startTime"))
+        end = params.get("end", params.get("endTime"))
+        return envelope(exchange, [candle(earlier)] if start <= earlier <= end else [])
+    om.fetch_leading_history_page = fetch
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    result = await hp._resolve_v2_store_range(
+        om=om, catalog=catalog, store=store, exchange=exchange, coin="NEW", symbol=SYMBOL,
+        start_ts=START, end_ts=END, allow_remote_fetch=True,
+        local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    np.testing.assert_array_equal(result.timestamps, np.arange(earlier, END + 60_000, 60_000))
+    assert result.valid.all() and len(om.calls) == 5
+    assert list(om._leading_history_probes.values()) == [[FIRST, earlier]]
+    gap = catalog.get_persistent_gaps(exchange, "1m", SYMBOL, START, earlier - 60_000)[0]
+    assert proof.validates(proof.from_note(gap.note), exchange=exchange, symbol=SYMBOL,
+                           first_valid=earlier, control_values=VALUES)
+    assert om.load_first_timestamp("NEW") == FIRST
+
+
+@pytest.mark.asyncio
+async def test_repeated_one_row_progress_is_bounded_and_retains_genuine_repairs(tmp_path, monkeypatch):
+    catalog, store = cached(tmp_path, "bybit")
+    om = owner("bybit")
+    current_first = FIRST
+    async def fetch(symbol, query):
+        nonlocal current_first
+        om.calls.append(deepcopy(query))
+        params = query["params"]
+        earlier = current_first - 60_000
+        if params["start"] <= earlier <= params["end"]:
+            current_first = earlier
+            return envelope("bybit", [candle(earlier)])
+        return envelope("bybit", [])
+    om.fetch_leading_history_page = fetch
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    result = await hp._resolve_v2_store_range(
+        om=om, catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+        start_ts=START, end_ts=END, allow_remote_fetch=True,
+        local_hit_log_label="hit", remote_fetch_log_label="fetch")
+    assert result is None
+    attempts = list(om._leading_history_probes.values())[0]
+    assert attempts == [FIRST - i * 60_000 for i in range(proof.MAX_PROBE_ATTEMPTS)]
+    assert len(om.calls) == 2 * proof.MAX_PROBE_ATTEMPTS
+    raw = store.read_range("bybit", "1m", SYMBOL, current_first, END)
+    assert raw.valid.all() and current_first == FIRST - proof.MAX_PROBE_ATTEMPTS * 60_000
+    assert not any(proof.validates(proof.from_note(gap.note), exchange="bybit", symbol=SYMBOL,
+                                  first_valid=current_first) for gap in
+                   catalog.get_persistent_gaps("bybit", "1m", SYMBOL, START, current_first - 60_000))
+
+
+@pytest.mark.asyncio
+async def test_unchanged_or_later_boundary_cannot_restart_probe_in_same_owner(tmp_path, monkeypatch):
+    catalog, store = cached(tmp_path, "bybit")
+    om = owner("bybit", mode="mismatch")
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    args = dict(om=om, catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+                start_ts=START, first_valid_ts=FIRST, control_values=VALUES)
+    assert await hp._verify_source_leading_unavailable(**args) is False
+    for start, first in ((START, FIRST), (START - 60_000, FIRST), (START, FIRST + 60_000)):
+        assert await hp._verify_source_leading_unavailable(**dict(args, start_ts=start, first_valid_ts=first)) is False
+    assert len(om.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_continuation_budget_is_shared_across_start_range_keys(tmp_path, monkeypatch):
+    catalog, store = cached(tmp_path, "bybit")
+    om = owner("bybit")
+    current_first = FIRST
+    async def fetch(symbol, query):
+        nonlocal current_first
+        om.calls.append(deepcopy(query))
+        earlier = current_first - 60_000
+        if query["params"]["start"] <= earlier <= query["params"]["end"]:
+            current_first = earlier
+            return envelope("bybit", [candle(earlier)])
+        return envelope("bybit", [])
+    om.fetch_leading_history_page = fetch
+    async def first_timestamps(*args, **kwargs): return {"NEW": FIRST}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps)
+    for index in range(proof.MAX_PROBE_ATTEMPTS):
+        assert await hp._verify_source_leading_unavailable(
+            om=om, catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+            start_ts=START - index * 60_000, first_valid_ts=current_first,
+            control_values=VALUES) == "repaired"
+    assert await hp._verify_source_leading_unavailable(
+        om=om, catalog=catalog, store=store, exchange="bybit", coin="NEW", symbol=SYMBOL,
+        start_ts=START - proof.MAX_PROBE_ATTEMPTS * 60_000, first_valid_ts=current_first,
+        control_values=VALUES) is False
+    assert len(om._leading_history_probes) == proof.MAX_PROBE_ATTEMPTS
+    assert len(om.calls) == 2 * proof.MAX_PROBE_ATTEMPTS
+    assert store.read_range("bybit", "1m", SYMBOL, current_first, END).valid.all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
 async def test_verified_source_absence_reuses_offline_without_inception_or_network(
     tmp_path, monkeypatch, exchange,
 ):
@@ -320,7 +489,9 @@ async def test_verified_source_absence_reuses_offline_without_inception_or_netwo
     gaps = catalog.get_persistent_gaps(exchange, "1m", SYMBOL, START, FIRST - 60_000)
     assert all(gap.reason == "leading_unavailable" for gap in gaps)
     attested = proof.from_note(gaps[0].note)
-    assert attested["previous_gap_notes"][0]["note"] == "confirmed_by_v2_fetch"
+    prior = attested["previous_gap_provenance"]
+    assert prior["count"] == 1
+    assert prior["summaries"][0]["note_sha256"] == hashlib.sha256(b"confirmed_by_v2_fetch").hexdigest()
     assert hp._venue_listing_boundary(om, exchange, "NEW", SYMBOL) == LISTING
     async def no_network(*args, **kwargs): pytest.fail("offline proof reuse must not fetch")
     om.fetch_leading_history_page = no_network
