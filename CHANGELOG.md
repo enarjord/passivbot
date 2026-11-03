@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let `migrate-config-v9 --best-effort` report and remove redundant backtest coin
+  snapshots from plain v8 configs and discard known runtime metadata from saved results,
+  including referenced coin files.
+
 - Allow `compose-coin-overrides` to load saved optimizer and backtest results directly
   as single-coin inputs or master configs, removing known result metadata before strict validation.
 

@@ -235,7 +235,9 @@ are emitted as choices are made, including before a later validation failure.
 | `restart_after_red_policy="never"` | Remove it and adopt finite cooldown plus ordinary admission gates |
 | Retired `we_excess_allowance_mode="bounded"` | Remove selector; retain the bounded allowance contract (`legacy_raw` still fails) |
 | Active realized-loss gate | Adopt independent decaying realized memory and report each effective context |
-| Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract`, and recognized hydration metadata | Remove obsolete result/cache snapshots before inference; discard derived `backtest.coins`/`cache_dir` only for recognized result records |
+| Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract`, and recognized hydration metadata | Remove obsolete result/cache snapshots before inference; discard known runtime fields from recognized result records |
+| Plain v8 config with a `backtest.coins` snapshot | Remove an empty snapshot or one where every exchange list matches the explicit common `live.approved_coins` list or both explicit side lists, ignoring order, when there are no authored coin ignores. Keep scenario coin selections. If the match cannot be verified, check the intended selection and remove the snapshot explicitly |
+| Plain v8 config with `backtest.cache_dir` | Remove an empty map or a cache path map keyed to the verified redundant snapshot |
 | DEAP backend | Switch to pymoo, retain authored shared policy, approximate missing operator fields from old controls or canonical pymoo defaults |
 
 Explicit `--lookback-ema-span-minutes`, `--memory-span` and
@@ -295,7 +297,10 @@ report files are never overwritten. Dry run writes no config or backup; an expli
 requested report may still be written. In-place replacement requires `--in-place` and
 creates a backup, by default `input.pre-v9-backup.json`; `--backup` selects another path.
 Parsing, policy, validation and serialization failures leave the input unchanged.
-Already canonical final-v9 input is idempotent; retuning it is an explicit config edit.
+Already canonical final-v9 input is idempotent. With `--best-effort`, recognized v9
+saved results can also be exported as configs by removing and reporting their runtime
+and result metadata. During v8 conversion, the same allowlist applies to saved-result
+metadata in referenced coin files before their policy is validated.
 
 Reload the output through the normal loader and backtest the exact intended dates, fees,
 market data and scenarios. Freshly evaluate every optimizer seed; old fitness and incompatible

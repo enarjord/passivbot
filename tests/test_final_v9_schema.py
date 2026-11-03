@@ -752,7 +752,11 @@ def test_best_effort_already_v9_is_a_noop_without_guesses():
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(wrapped, caplog):
     config = v8_config()
-    config["backtest"].update(coins={"bybit": ["AAA"]}, cache_dir={"bybit": "old-cache"})
+    config["backtest"].update(coins={"bybit": ["AAA"]}, cache_dir={"bybit": "old-cache"},
+                              cm_debug_level=1, cm_progress_log_interval_seconds=5,
+                              cm_remote_fetch_bar=False)
+    config["disable_plotting"] = True
+    config["_hlcvs_dataset_override_meta"] = {"source": "old-dataset"}
     config["optimizer_evaluation_contract"] = {"live": {"pnls_max_lookback_days": 99.0}}
     config["metrics"] = {"adg_strategy_eq_w": 0.01}
     config["suite_metrics"] = {"aggregate": {"old": 0.01}}
@@ -763,7 +767,10 @@ def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(w
     assert "optimizer_evaluation_contract" not in result.config
     assert "metrics" not in result.config and "suite_metrics" not in result.config
     assert "coins" not in result.config["backtest"] and "cache_dir" not in result.config["backtest"]
-    for key in ("optimizer_evaluation_contract", "metrics", "suite_metrics", "backtest.coins", "backtest.cache_dir"):
+    for key in ("optimizer_evaluation_contract", "metrics", "suite_metrics", "disable_plotting",
+                "_hlcvs_dataset_override_meta", "backtest.coins", "backtest.cache_dir",
+                "backtest.cm_debug_level", "backtest.cm_progress_log_interval_seconds",
+                "backtest.cm_remote_fetch_bar"):
         path = "config." + key if wrapped else key
         assert any(item["path"] == path and item["new"] is None and item.get("best_effort")
                    for item in result.changes)
@@ -771,10 +778,132 @@ def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(w
     assert "optimizer_evaluation_contract.live.pnls_max_lookback_days" not in caplog.text
 
 
-def test_best_effort_does_not_discard_authored_backtest_coins():
+@pytest.mark.parametrize("approved,snapshot", [
+    (["BTC"], {"combined": ["ETH"]}),
+    ({"long": ["BTC"], "short": ["ETH"]}, {"combined": ["BTC", "ETH"]}),
+    ({"long": ["BTC"]}, {"combined": ["BTC"]}),
+    (["all"], {"combined": ["all"]}),
+    (["BTC,ETH"], {"combined": ["BTC,ETH"]}),
+    (["approvals.json"], {"combined": ["approvals.json"]}),
+    (["BTC", "approvals.json"], {"combined": ["BTC", "approvals.json"]}),
+    ("approvals.json", {"combined": ["BTC"]}),
+    ([], {"combined": []}),
+    (["BTC"], {"combined": "BTC"}),
+    (["BTC"], {"combined": ["BTC"], "bybit": ["ETH"]}),
+])
+def test_best_effort_rejects_unverifiable_backtest_coins(approved, snapshot):
     config = v8_config()
-    config["backtest"]["coins"] = {"bybit": ["AAA"]}
-    with pytest.raises(ValueError, match="backtest.coins is an unknown"):
+    config["live"]["approved_coins"] = approved
+    config["backtest"]["coins"] = snapshot
+    with pytest.raises(ValueError, match=r"backtest\.coins.*could not be verified as redundant"):
+        migrate(config, best_effort=True)
+
+
+def test_best_effort_cli_discards_redundant_backtest_snapshot(tmp_path, caplog):
+    config = v8_config()
+    config["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": ["ETH", "BTC"]}
+    config["backtest"]["scenarios"] = [{"label": "subset", "coins": ["ETH"]}]
+    expected = migrate(config, best_effort=True).config
+    snapshot = {"combined": ["ETH", "BTC"]}
+    config["backtest"]["coins"] = snapshot
+    config["backtest"]["cache_dir"] = {"combined": "old-cache"}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps(config))
+    original = source.read_bytes()
+
+    assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
+    assert json.loads(target.read_text()) == expected
+    assert source.read_bytes() == original
+    drops = [item for item in json.loads(report.read_text())["changes"]
+             if item["path"] == "backtest.coins"]
+    assert len(drops) == 1
+    assert drops[0]["old"] == snapshot and drops[0]["new"] is None and drops[0]["best_effort"]
+    assert "[best-effort] backtest.coins:" in caplog.text
+    assert "[best-effort] backtest.cache_dir:" in caplog.text
+    config["backtest"].pop("cache_dir")
+    with pytest.raises(ValueError, match=r"backtest\.coins is an unknown"):
+        migrate(config, memory_span_minutes=43200.0, acknowledge_search_backend_change=True)
+
+
+def test_best_effort_core_accepts_shared_approval_list_with_redundant_snapshot():
+    config = v8_config()
+    config["live"]["approved_coins"] = ["BTC", "ETH"]
+    config["backtest"]["coins"] = {"combined": ["ETH", "BTC"]}
+    result = migrate_v8_to_v9(config, best_effort=True)
+    assert "coins" not in result.config["backtest"]
+    assert config["backtest"]["coins"] == {"combined": ["ETH", "BTC"]}
+
+
+def test_best_effort_keeps_ambiguous_singleton_file_binding(tmp_path):
+    config = v8_config()
+    (tmp_path / "BTC").write_text('["ETH"]')
+    config["live"]["approved_coins"] = ["BTC"]
+    config["backtest"]["coins"] = {"combined": ["BTC"]}
+    with pytest.raises(ValueError, match="could not be verified as redundant"):
+        migrate(config, best_effort=True, base_config_path=str(tmp_path / "source.json"))
+
+
+def test_best_effort_keeps_snapshot_when_authored_ignores_can_change_membership():
+    config = v8_config()
+    config["live"].update(approved_coins=["BTC"], ignored_coins=["BTC"])
+    config["backtest"]["coins"] = {"combined": ["BTC"]}
+    with pytest.raises(ValueError, match="could not be verified as redundant"):
+        migrate(config, best_effort=True)
+
+
+def test_best_effort_discards_empty_preparation_metadata():
+    config = v8_config()
+    expected = migrate(config, best_effort=True).config
+    config["backtest"].update(coins={}, cache_dir={})
+    result = migrate(config, best_effort=True)
+    assert result.config == expected
+    drops = {item["path"] for item in result.changes if item["old"] == {} and item["new"] is None}
+    assert {"backtest.coins", "backtest.cache_dir"} <= drops
+
+
+def test_best_effort_cli_extracts_wrapped_v9_result(tmp_path):
+    config = migrate(v8_config(), best_effort=True).config
+    saved = deepcopy(config)
+    saved["backtest"]["coins"] = {"combined": ["BTC"]}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps({"config": saved, "analysis": {}}))
+
+    assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
+    assert json.loads(target.read_text()) == config
+    migration_report = json.loads(report.read_text())
+    assert migration_report["source_version"] == config["config_version"]
+    assert {item["path"] for item in migration_report["changes"]} == {"analysis", "config.backtest.coins"}
+    with pytest.raises(ValueError, match=r"backtest\.coins is an unknown"):
+        migrate(saved, best_effort=True)
+    with pytest.raises(ValueError, match=r"backtest\.coins is an unknown"):
+        migrate({"config": saved}, best_effort=True)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_best_effort_cleans_referenced_coin_result(tmp_path, wrapped):
+    config = v8_config()
+    source = tmp_path / "source.json"
+    coin_file = tmp_path / "coin.json"
+    config["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
+    patch = {"bot": {"long": {"hsl": {"enabled": False}}}}
+    coin_file.write_text(json.dumps(patch))
+    expected = migrate(config, best_effort=True, base_config_path=str(source)).config
+    saved = {**patch, "backtest": {"coins": {"combined": ["AAA"]}}, "disable_plotting": True}
+    coin_file.write_text(json.dumps({"config": saved, "analysis": {}} if wrapped else
+                                    {**saved, "analysis": {}}))
+    original = coin_file.read_bytes()
+
+    result = migrate(config, best_effort=True, base_config_path=str(source))
+    assert result.config == expected
+    assert coin_file.read_bytes() == original
+    assert any(item["path"] == "coin_overrides.AAA.override_config_path::backtest.coins"
+               and item["best_effort"] for item in result.changes)
+
+
+def test_best_effort_unmarked_backtest_runtime_flag_still_fails():
+    config = v8_config()
+    config["backtest"]["cm_debug_level"] = 1
+    with pytest.raises(ValueError, match=r"backtest\.cm_debug_level is an unknown"):
         migrate(config, best_effort=True)
 
 
