@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Speed up `migrate-config-v9` validation of scenario-heavy configs with inline coin
+  strategy overrides and show progress during slow conversions.
+
 - Let `migrate-config-v9 --best-effort` report and remove redundant backtest coin
   snapshots from plain v8 configs and discard known runtime metadata from saved results,
   including referenced coin files.

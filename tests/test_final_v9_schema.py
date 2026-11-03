@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import math
+from threading import Event
 
 import pytest
 
@@ -23,6 +24,48 @@ def v8_config():
         config["bot"][side]["forager"]["volume_drop_pct"] = 0.25
         config["optimize"]["bounds"][side]["forager"]["volume_drop_pct"] = [0.1, 0.5]
     return config
+
+
+def test_slow_migration_reports_current_stage_on_stderr(monkeypatch):
+    from tools import migrate_config_v9
+
+    reported = Event()
+    messages = []
+
+    class ProgressStream:
+        def write(self, message):
+            messages.append(message)
+            if "validating scenario 2/3 (backtest)" in message:
+                reported.set()
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(migrate_config_v9, "_PROGRESS_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(migrate_config_v9.sys, "stderr", ProgressStream())
+    with migrate_config_v9._slow_migration_progress() as progress:
+        progress("validating scenario 2/3 (backtest)")
+        assert reported.wait(timeout=3)
+    assert any(message.startswith("Migration still running") for message in messages)
+
+
+@pytest.mark.parametrize("fixed", [False, True])
+def test_migration_reuses_scenario_validation_only_without_optimizer_transforms(fixed):
+    config = get_template_config()
+    config["backtest"]["scenarios"] = [
+        {"label": "one", "overrides": {"bot.long.risk.max_positions": 3}},
+        {"label": "two", "overrides": {"bot.long.risk.max_positions": 5}},
+    ]
+    if fixed:
+        config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.max_positions": 4}
+    stages = []
+    result = migrate(config, _progress=stages.append)
+    assert len(result.config["backtest"]["scenarios"]) == 2
+    assert [stage for stage in stages if stage.startswith("validating scenario")] == [
+        f"validating scenario {index}/2 ({base})"
+        for index in (1, 2)
+        for base in (("backtest", "optimizer") if fixed else ("backtest",))
+    ]
 
 
 def test_canonical_defaults_and_sparse_defaults_load():
