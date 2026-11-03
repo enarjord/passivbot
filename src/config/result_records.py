@@ -7,6 +7,11 @@ RESULT_METADATA_KEYS = frozenset({
     "analysis", "metrics", "suite_metrics", "optimizer_anchor",
     "optimizer_evaluation_contract",
 })
+RESULT_RUNTIME_ROOT_KEYS = ("disable_plotting", "_hlcvs_dataset_override_meta")
+RESULT_RUNTIME_BACKTEST_KEYS = (
+    "coins", "cache_dir", "cm_debug_level",
+    "cm_progress_log_interval_seconds", "cm_remote_fetch_bar",
+)
 
 
 def extract_result_config(source: dict, *, allow_unmarked_wrapper: bool = False) -> dict:
@@ -34,12 +39,9 @@ def extract_result_config(source: dict, *, allow_unmarked_wrapper: bool = False)
     for key in RESULT_METADATA_KEYS:
         payload.pop(key, None)
     if result_record:
-        for key in ("disable_plotting", "_hlcvs_dataset_override_meta"):
+        for key in RESULT_RUNTIME_ROOT_KEYS:
             payload.pop(key, None)
         if isinstance(payload.get("backtest"), dict):
-            for key in (
-                "coins", "cache_dir", "cm_debug_level",
-                "cm_progress_log_interval_seconds", "cm_remote_fetch_bar",
-            ):
+            for key in RESULT_RUNTIME_BACKTEST_KEYS:
                 payload["backtest"].pop(key, None)
     return payload

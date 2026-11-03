@@ -240,10 +240,20 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             continue
         context = deepcopy(result)
         context.setdefault("live", {})["base_config_path"] = base_config_path
-        loaded = _unwrap_override_document(
-            load_override_config(context, coin, config_loader=load_raw_config),
-            source=f"coin_overrides.{coin}.override_config_path", allow_legacy=True,
-        )
+        document = load_override_config(context, coin, config_loader=load_raw_config)
+        file_path = f"coin_overrides.{coin}.override_config_path"
+        loaded = _unwrap_override_document(document, source=file_path, allow_legacy=True)
+        if best_effort:
+            from config.migrations.best_effort_v9 import remove_result_metadata
+            from config.result_records import RESULT_METADATA_KEYS
+
+            remove_result_metadata(
+                loaded, changes, wrapped=isinstance(document.get("config"), dict)
+                and ("bot" in document["config"] or "live" in document["config"])
+                and not RESULT_METADATA_KEYS.isdisjoint(document),
+                path_prefix=f"{_change_prefix}{file_path}::", recognized_only=True,
+                log_prefix="" if _emit_guesses else None,
+            )
         # Keep all raw aliases until authorization has been checked. Later
         # explicit file/inline enablement wins over inherited facts; conflicting
         # spellings inside the winning layer remain ambiguous.
@@ -453,7 +463,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             record_envelope_metadata(source, inferred_changes)
         payload = deepcopy(payload)
         remove_result_metadata(payload, inferred_changes, wrapped=wrapped,
-                               path_prefix="config." if wrapped else "")
+                               path_prefix="config." if wrapped else "",
+                               base_config_path=base_config_path)
     if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION and memory_span_minutes is None:
         from config.migrations.best_effort_v9 import infer_memory_span
 
@@ -466,7 +477,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             )
     if payload.get("config_version") == V9_SCHEMA_VERSION:
         transformed = migrate_v8_to_v9(
-            payload, base_config_path=base_config_path, memory_span_minutes=memory_span_minutes,
+            source if "bot" not in source else payload,
+            base_config_path=base_config_path, memory_span_minutes=memory_span_minutes,
             memory_span_choices=memory_span_choices,
             acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
             acknowledge_search_backend_change=acknowledge_search_backend_change,
@@ -736,7 +748,8 @@ def main(argv=None):
             base_config_path=str(args.input_config.resolve()), best_effort=args.best_effort,
         )
         rendered = json_dumps_streamlined(result.config, allow_nan=False) + "\n"
-        report = dict(source_version=source.get("config_version"), target_version=V9_SCHEMA_VERSION,
+        report = dict(source_version=source.get("config", source).get("config_version"),
+                      target_version=V9_SCHEMA_VERSION,
                       changes=result.changes, warnings=list(result.warnings))
         report_rendered = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.diff:

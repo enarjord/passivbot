@@ -263,6 +263,22 @@ def migrate_v8_to_v9(
     match = _VERSION.fullmatch(version.strip()) if isinstance(version, str) else None
     if match is None or tuple(map(int, match.groups()))[0] not in {8, 9}:
         raise ValueError("migrate-config-v9 requires versioned v8 or final canonical v9")
+    inferred_changes = []
+    if best_effort and not _coin_patch:
+        from .best_effort_v9 import record_envelope_metadata, remove_result_metadata
+        from config.result_records import RESULT_METADATA_KEYS
+
+        wrapped = payload is not source
+        wrapped_result = wrapped and (
+            version != V9_SCHEMA_VERSION or not RESULT_METADATA_KEYS.isdisjoint(source)
+            or not RESULT_METADATA_KEYS.isdisjoint(result)
+        )
+        if wrapped_result:
+            record_envelope_metadata(source, inferred_changes)
+        remove_result_metadata(
+            result, inferred_changes, wrapped=wrapped_result, path_prefix="config." if wrapped else "",
+            base_config_path=base_config_path, recognized_only=version == V9_SCHEMA_VERSION,
+        )
     if version == V9_SCHEMA_VERSION:
         require_v9_runtime_config(result)
         from config.authored import validate_authored_config
@@ -277,7 +293,7 @@ def migrate_v8_to_v9(
             raise ValueError("memory-span choices do not apply to an already-v9 configuration")
         if metric_replacements:
             raise ValueError("metric replacements apply only to versioned v8 migration")
-        return MigrationResult(result, [], ())
+        return MigrationResult(result, inferred_changes, ())
     is_v8 = int(match[1]) == 8
     if not is_v8:
         raise ValueError("migrate-config-v9 supports versioned v8 and final canonical v9 only")
@@ -286,15 +302,6 @@ def migrate_v8_to_v9(
             raise ValueError(f"{path} is not a released-v8 field; activation is chosen and reported by migration")
     from .final_v9 import reject_v8_alias_conflicts
 
-    inferred_changes = []
-    if best_effort and not _coin_patch:
-        from .best_effort_v9 import record_envelope_metadata, remove_result_metadata
-
-        wrapped = payload is not source
-        if wrapped:
-            record_envelope_metadata(source, inferred_changes)
-        remove_result_metadata(result, inferred_changes, wrapped=wrapped,
-                               path_prefix="config." if wrapped else "")
     reject_v8_alias_conflicts(result)
     # Default hydration cannot authorize removing an explicitly null restart
     # policy: that audit needs the original authored enablement facts.
