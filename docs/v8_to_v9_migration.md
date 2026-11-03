@@ -292,6 +292,9 @@ files are materialized in the output and remain unchanged on disk.
 
 ## Output, rollback and validation
 
+During slow conversions, the CLI reports the current validation stage on stderr
+after five seconds and every five seconds thereafter.
+
 Without an output argument the tool writes `input.v9.json`. Existing output, backup and
 report files are never overwritten. Dry run writes no config or backup; an explicitly
 requested report may still be written. In-place replacement requires `--in-place` and

@@ -1,13 +1,17 @@
 """Explicit offline v8 to final-v9 migration, with a diff and atomic private output."""
 
 from argparse import ArgumentParser
+from contextlib import contextmanager
 from copy import deepcopy
 import difflib
 import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
+from threading import Event, Thread
+from time import monotonic
 
 from config.migrations.v9 import (
     MigrationResult, V9_SCHEMA_VERSION, _hsl_enablement_facts, _require_gate_ack,
@@ -18,6 +22,33 @@ from json_utils import json_dumps_streamlined
 
 
 from config.access import get_optional_config_value
+
+_PROGRESS_INTERVAL_SECONDS = 5.0
+
+
+@contextmanager
+def _slow_migration_progress():
+    stage = "converting configuration"
+    started = monotonic()
+    finished = Event()
+
+    def update(message):
+        nonlocal stage
+        stage = message
+
+    def report():
+        while not finished.wait(_PROGRESS_INTERVAL_SECONDS):
+            sys.stderr.write(f"Migration still running ({monotonic() - started:.0f}s) — {stage}\n")
+            sys.stderr.flush()
+
+    reporter = Thread(target=report, daemon=True)
+    reporter.start()
+    try:
+        yield update
+    finally:
+        finished.set()
+        reporter.join()
+
 
 def _released_path_context(config):
     """Resolve v8 selectors under their released active strategy, without aliases in loading."""
@@ -442,7 +473,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_never_removal=False,
             acknowledge_realized_loss_gate_memory_change=False,
             acknowledge_search_backend_change=False, metric_replacements=None,
-            acknowledge_metric_formula_change=False, base_config_path="", best_effort=False):
+            acknowledge_metric_formula_change=False, base_config_path="", best_effort=False,
+            _progress=None):
     """Transform and canonically validate root, files and every effective scenario."""
     from config import prepare_config
     from config.gpu import validate_hsl_gpu_inputs
@@ -451,6 +483,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     from config_utils import strip_config_metadata
     from optimizer_overrides import optimizer_overrides
 
+    progress = _progress or (lambda _: None)
     payload = source.get("config", source) if isinstance(source, dict) else source
     if not isinstance(payload, dict):
         raise TypeError("configuration must be a mapping")
@@ -611,26 +644,35 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     normalize_universe_source_bindings(transformed.config, base_config_path=base_config_path,
                                        on_change=binding_change,
                                        released_wrapped_files=payload.get("config_version") != V9_SCHEMA_VERSION)
+    progress("validating root config and coin overrides")
     prepared = prepare_config(
         transformed.config, verbose=False, target="canonical", runtime=None,
         base_config_path=base_config_path,
     )
-    prepared = parse_overrides(prepared, verbose=False)
-    optimized_base = deepcopy(prepared)
-    _set_patch(optimized_base, prepared["optimize"].get("fixed_runtime_overrides", {}))
+    prepared = parse_overrides(prepared, verbose=False, _prepared_inline_validation=True)
+    fixed = prepared["optimize"].get("fixed_runtime_overrides", {})
     overrides = prepared["optimize"].get("enable_overrides", [])
-    optimized_base = optimizer_overrides(overrides, optimized_base, None)
-    for side in ("long", "short"):
-        optimized_base = optimizer_overrides(overrides, optimized_base, side)
-    optimized_base = prepare_config(optimized_base, verbose=False, base_config_path=base_config_path)
-    effective_configs = [prepared, optimized_base]
-    for scenario in prepared["backtest"].get("scenarios", []):
-        for base in (prepared, optimized_base):
+    bases = [("backtest", prepared)]
+    if fixed or overrides:
+        progress("validating optimizer configuration")
+        optimized_base = deepcopy(prepared)
+        _set_patch(optimized_base, fixed)
+        optimized_base = optimizer_overrides(overrides, optimized_base, None)
+        for side in ("long", "short"):
+            optimized_base = optimizer_overrides(overrides, optimized_base, side)
+        optimized_base = prepare_config(optimized_base, verbose=False, base_config_path=base_config_path)
+        bases.append(("optimizer", optimized_base))
+    effective_configs = [base for _, base in bases]
+    scenarios = prepared["backtest"].get("scenarios", [])
+    for index, scenario in enumerate(scenarios, 1):
+        for name, base in bases:
+            progress(f"validating scenario {index}/{len(scenarios)} ({name})")
             effective = deepcopy(base)
             _set_patch(effective, scenario.get("overrides"), scenario=True)
             effective_configs.append(parse_overrides(prepare_config(
                 effective, verbose=False, base_config_path=base_config_path,
-            ), verbose=False))
+            ), verbose=False, _prepared_inline_validation=True))
+    progress("validating GPU settings and preparing export")
     for effective in effective_configs:
         if effective["optimize"].get("backend") == "gpu":
             validate_hsl_gpu_inputs(effective)
@@ -738,15 +780,17 @@ def main(argv=None):
         source = load_raw_config(str(args.input_config))
         if args.input_config.resolve() != source_path or args.input_config.read_bytes() != original_bytes:
             raise ValueError("input changed while it was being read; retry migration")
-        result = migrate(
-            source, memory_span_minutes=args.lookback_ema_span_minutes,
-            memory_span_choices=choices, acknowledge_never_removal=args.acknowledge_never_removal,
-            acknowledge_realized_loss_gate_memory_change=args.acknowledge_realized_loss_gate_memory_change,
-            acknowledge_search_backend_change=args.acknowledge_search_backend_change,
-            metric_replacements=replacements,
-            acknowledge_metric_formula_change=args.acknowledge_metric_formula_change,
-            base_config_path=str(args.input_config.resolve()), best_effort=args.best_effort,
-        )
+        with _slow_migration_progress() as progress:
+            result = migrate(
+                source, memory_span_minutes=args.lookback_ema_span_minutes,
+                memory_span_choices=choices, acknowledge_never_removal=args.acknowledge_never_removal,
+                acknowledge_realized_loss_gate_memory_change=args.acknowledge_realized_loss_gate_memory_change,
+                acknowledge_search_backend_change=args.acknowledge_search_backend_change,
+                metric_replacements=replacements,
+                acknowledge_metric_formula_change=args.acknowledge_metric_formula_change,
+                base_config_path=str(args.input_config.resolve()), best_effort=args.best_effort,
+                _progress=progress,
+            )
         rendered = json_dumps_streamlined(result.config, allow_nan=False) + "\n"
         report = dict(source_version=source.get("config", source).get("config_version"),
                       target_version=V9_SCHEMA_VERSION,

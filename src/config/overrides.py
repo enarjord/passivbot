@@ -22,6 +22,7 @@ from .field_policies import (
 )
 from .shared_bot import BOT_GROUP_FIELD_MAP, canonicalize_shared_bot_side
 from .strategy import (
+    DEFAULT_STRATEGY_KIND,
     TRAILING_GRID_V7_FLAT_ONLY_KEYS,
     get_strategy_param_keys,
     normalize_strategy_kind,
@@ -469,6 +470,63 @@ def _validate_patch_leaf_types(
         )
 
 
+def _validate_prepared_strategy_coin_patch(config, patch, *, coin, origin):
+    """Validate local pins whose dependencies are covered by the isolated base.
+
+    Active strategy pins use the same field catalog and normalization as full
+    preparation. A base cooldown pin cannot change the optimizer's floor,
+    ceiling, or modifier checks. All other patches take the full merged path.
+    """
+    from .bot_inheritance import get_bot_policy
+    from .entry_cooldown import validate_entry_cooldown
+    from .hsl import validate_override_paths
+    from .strategy import build_runtime_strategy_side
+
+    policy = get_bot_policy(config)
+    optimize = config["optimize"]
+    strategy = config["bot"]["portfolio"]["strategy_kind"]
+    if (
+        policy is None or strategy != DEFAULT_STRATEGY_KIND
+        or optimize.get("fixed_params") or optimize.get("fixed_runtime_overrides")
+        or optimize.get("enable_overrides")
+    ):
+        return None
+    leaves = list(_iter_patch_leaves(patch))
+    if any(
+        len(path) < 4 or path[0] != "bot" or path[1] not in {"long", "short"}
+        or not (
+            path[2:4] == ("strategy", strategy)
+            or path[2:] == ("entry_cooldown", "base_duration_minutes")
+        )
+        for path, _ in leaves
+    ):
+        return None
+
+    normalized = {}
+    try:
+        validate_override_paths(config, patch)
+        for side, side_patch in patch.get("bot", {}).items():
+            policy.catalog.validate_tree(side_patch, ("bot", side))
+            if "entry_cooldown" in side_patch:
+                cooldown = {**config["bot"][side]["entry_cooldown"], **side_patch["entry_cooldown"]}
+                validate_entry_cooldown(cooldown, path=f"bot.{side}.entry_cooldown")
+            strategy_patch = side_patch.get("strategy", {}).get(strategy)
+            normalized_strategy = build_runtime_strategy_side(
+                config["bot"][side], strategy_kind=strategy, pside=side, override_side=strategy_patch,
+            ) if strategy_patch else {}
+            for path, value in _iter_patch_leaves(side_patch, ("bot", side)):
+                if path[2] == "strategy":
+                    value = _get_nested_value(normalized_strategy, path[4:], default=_MISSING)
+                    if value is _MISSING:
+                        raise ValueError(f"normalization lost {'.'.join(path)}")
+                set_nested_value_safe(normalized, list(path), value, create_missing=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise type(exc)(
+            f"coin_overrides.{coin} produces an invalid config after {origin}: {exc}"
+        ) from exc
+    return normalized
+
+
 def _validate_effective_coin_config(
     config: dict,
     patch: dict,
@@ -522,7 +580,6 @@ def _validate_effective_coin_config(
     validation_input = normalization_template(get_expanded_config_prototype(), effective)
     nested_update(validation_input, effective)
     effective = validation_input
-    canonical_base = deepcopy(effective)
     for root in ("bot", "live"):
         if root in patch:
             effective_patch = deepcopy(patch[root])
@@ -832,6 +889,7 @@ def parse_overrides(
     verbose=True,
     override_loader: Callable[[dict, str], dict] | None = None,
     symbol_normalizer: Callable[[str], str] | None = None,
+    _prepared_inline_validation=False,
 ):
     if override_loader is None:
         override_loader = load_override_config
@@ -857,6 +915,7 @@ def parse_overrides(
     hsl_signal_mode = normalize_hsl_signal_mode(
         result["bot"]["portfolio"]["hsl"]["scope"]
     )
+    isolated_base_validated = False
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
         loaded = override_loader(result, coin)
@@ -906,12 +965,28 @@ def parse_overrides(
             parsed_overrides,
             inline_patch,
         )
-        parsed_overrides = _validate_effective_coin_config(
-            result,
-            parsed_overrides,
-            coin=coin,
-            origin="file and inline precedence resolution",
-        )
+        origin = "file and inline precedence resolution"
+        validated = None
+        if _prepared_inline_validation and not loaded and not overrides.get("override_config_path"):
+            validated = _validate_prepared_strategy_coin_patch(
+                result, parsed_overrides, coin=coin, origin=origin,
+            )
+            if validated is not None and not isolated_base_validated:
+                try:
+                    # Preserve validation of the single-coin context with its
+                    # scenario/coin maps removed. If isolation exposes a
+                    # difference, let each original merged check adjudicate it.
+                    _validate_effective_coin_config(result, {}, coin=coin, origin=origin)
+                except (KeyError, TypeError, ValueError):
+                    _prepared_inline_validation = False
+                    validated = None
+                else:
+                    isolated_base_validated = True
+        if validated is None:
+            validated = _validate_effective_coin_config(
+                result, parsed_overrides, coin=coin, origin=origin,
+            )
+        parsed_overrides = validated
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         log_config_message(
             verbose,

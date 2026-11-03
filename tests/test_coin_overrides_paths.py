@@ -8,12 +8,57 @@ import pytest
 import config_utils
 from config.schema import get_expanded_config_prototype
 from config.load import prepare_config
-from config.overrides import load_override_config
+from config.overrides import load_override_config, parse_overrides
 
 
 def _write_config(path, cfg):
     with open(path, "w") as f:
         json.dump(cfg, f, indent=2)
+
+
+def test_prepared_inline_validation_matches_full_coin_validation(monkeypatch):
+    from config import overrides
+
+    cfg = get_expanded_config_prototype()
+    cfg["coin_overrides"] = {
+        "BTC": {"bot": {"long": {
+            "strategy": {"trailing_martingale": {"entry": {"ema_gate_mode": " Initial "}}},
+            "entry_cooldown": {"base_duration_minutes": 12.5},
+        }}},
+        "ETH": {"bot": {"short": {
+            "strategy": {"trailing_martingale": {"close": {"threshold_base_fraction": 0.045}}},
+        }}},
+        "SOL": {"bot": {"long": {"entry_cooldown": {"min_duration_minutes": 5}}}},
+    }
+    prepared = prepare_config(cfg, verbose=False)
+    expected = parse_overrides(prepared, verbose=False)["coin_overrides"]
+    original = overrides._validate_effective_coin_config
+    full_checks = []
+
+    def record_full_check(config, patch, **kwargs):
+        full_checks.append((kwargs["coin"], bool(patch)))
+        return original(config, patch, **kwargs)
+
+    monkeypatch.setattr(overrides, "_validate_effective_coin_config", record_full_check)
+    actual = parse_overrides(prepared, verbose=False, _prepared_inline_validation=True)
+    assert actual["coin_overrides"] == expected
+    assert expected["BTC"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_gate_mode"] == "initial"
+    assert full_checks == [("BTC", False), ("SOL", True)]
+
+
+@pytest.mark.parametrize("patch,match", [
+    ({"entry_cooldown": {"base_duration_minutes": -1}}, r"base_duration_minutes.*nonnegative"),
+    ({"strategy": {"trailing_martingale": {"entry": {"ema_gate_mode": "invalid"}}}},
+     r"ema_gate_mode must be one of"),
+    ({"entry_cooldown": {"min_duration_minutes": 5, "max_duration_minutes": 1}},
+     r"max_duration_minutes must be finite and >= min_duration_minutes"),
+])
+def test_prepared_inline_validation_preserves_invalid_coin_errors(patch, match):
+    prepared = prepare_config(get_expanded_config_prototype(), verbose=False)
+    prepared["coin_overrides"] = {"BTC": {"bot": {"long": patch}}}
+    for scoped in (False, True):
+        with pytest.raises(ValueError, match=match):
+            parse_overrides(prepared, verbose=False, _prepared_inline_validation=scoped)
 
 
 def test_override_path_resolves_relative_to_base_config(tmp_path):
