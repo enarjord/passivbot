@@ -87,6 +87,11 @@ class ParetoCandidate:
     aggregated_values: Dict[str, float]
     scenario: Optional[str] = None
     file_sha256: str | None = None
+    source_filename: str | None = None
+
+    @property
+    def filename(self) -> str:
+        return self.source_filename or self.path.name
 
 
 @dataclass(frozen=True)
@@ -661,7 +666,7 @@ def project_candidates_to_scenario(
         if missing:
             raise ValueError(
                 f"Scenario {label!r} is missing scoring metric(s) {missing} "
-                f"in {candidate.path.name}."
+                f"in {candidate.filename}."
             )
         projected.append(
             ParetoCandidate(
@@ -672,6 +677,7 @@ def project_candidates_to_scenario(
                 aggregated_values=values,
                 scenario=label,
                 file_sha256=candidate.file_sha256,
+                source_filename=candidate.source_filename,
             )
         )
     return projected
@@ -762,7 +768,8 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     baseline_metrics: Optional[List[str]] = None
 
     for entry_path in json_paths:
-        contents = entry_path.read_bytes()
+        resolved_path = entry_path.resolve()
+        contents = resolved_path.read_bytes()
         entry = json.loads(contents)
         if not isinstance(entry, Mapping):
             continue
@@ -796,12 +803,13 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
 
         candidates.append(
             ParetoCandidate(
-                path=entry_path,
+                path=resolved_path,
                 entry=entry,
                 objectives=objectives,
                 stats_flat=stats_flat,
                 aggregated_values=aggregated_values,
                 file_sha256=hashlib.sha256(contents).hexdigest(),
+                source_filename=entry_path.name,
             )
         )
 
@@ -900,7 +908,7 @@ def _raw_objective_matrix(
     if undefined.size:
         row, col = undefined[0]
         raise ValueError(
-            f"undefined objective {active_specs[col].metric!r} in {candidates[row].path.name}"
+            f"undefined objective {active_specs[col].metric!r} in {candidates[row].filename}"
         )
     return raw
 
@@ -996,8 +1004,8 @@ def _ranked_rows(
             {
                 "rank": rank,
                 "score": float(score_vector[int(idx)]),
-                "file": candidate.path.name,
-                "hash": candidate.path.stem,
+                "file": candidate.filename,
+                "hash": Path(candidate.filename).stem,
                 "objectives": {
                     metric: float(_resolve_candidate_metric_value(candidate, metric))
                     for metric in active_metrics
@@ -1088,7 +1096,7 @@ def _resolve_limit_value(
         if requested_reducer != "mean":
             raise ValueError(
                 f"Scenario {candidate.scenario!r} stores one mean value per metric; "
-                f"limit reducer={requested_reducer!r} is unavailable for {candidate.path.name}."
+                f"limit reducer={requested_reducer!r} is unavailable for {candidate.filename}."
             )
     reducer = basis.reducer
     if "reducer" not in entry:
@@ -1196,7 +1204,7 @@ def filter_candidates_with_limits(
                 available = _format_available_limit_metrics(candidate)
                 raise ValueError(
                     f"Limit metric {metric!r} could not be resolved for "
-                    f"{candidate.path.name}. Available metrics: {available}"
+                    f"{candidate.filename}. Available metrics: {available}"
                 )
             if _limit_rejects(entry, value):
                 rejected = True
@@ -1217,7 +1225,7 @@ def _select_knee(
         score = 0.0
         scores = np.array([score], dtype=float)
         mode = "single_candidate"
-        anchor_files: list[str] = [candidates[0].path.name]
+        anchor_files: list[str] = [candidates[0].filename]
     else:
         anchor_indices = [int(np.argmax(utilities[:, j])) for j in range(n_obj)]
         unique_anchor_indices = list(dict.fromkeys(anchor_indices))
@@ -1239,7 +1247,7 @@ def _select_knee(
             idx = int(np.argmax(scores))
             score = float(scores[idx])
             mode = "maximin_fallback"
-        anchor_files = [candidates[i].path.name for i in unique_anchor_indices]
+        anchor_files = [candidates[i].filename for i in unique_anchor_indices]
     ranking_order = list(np.argsort(-scores, kind="stable"))
     candidate = candidates[idx]
     return SelectionResult(
@@ -1481,7 +1489,7 @@ def _selection_sensitivity(
             idx = np.argmin(distances)
         else:  # Utility and linear outranking have the same ordering.
             idx = np.argmax(_weighted_totals(coordinates, scenario_weights))
-        return candidates[int(idx)].path.name
+        return candidates[int(idx)].filename
 
     checks: list[dict[str, Any]] = []
     if weight_fraction is not None:
@@ -1531,7 +1539,7 @@ def _selection_sensitivity(
         "weight_transfer_fraction": weight_fraction,
         "target_step_scales": target_scale,
         "check_count": len(checks),
-        "changed_check_count": sum(check["winner"] != result.candidate.path.name for check in checks),
+        "changed_check_count": sum(check["winner"] != result.candidate.filename for check in checks),
         "checks": checks,
     }
 
@@ -1605,7 +1613,7 @@ def select_candidate(
             row, col = nonfinite[0]
             raise ValueError(
                 f"Fixed-scale selection requires a finite {active_metrics[col]!r} "
-                f"value in {candidates[row].path.name}."
+                f"value in {candidates[row].filename}."
             )
         directions = np.array([1.0 if spec.goal == "max" else -1.0 for spec in active_specs])
         scales = np.array([scale_map[metric] for metric in active_metrics])
@@ -1677,7 +1685,7 @@ def format_selection_result(
     result: SelectionResult,
     record: Mapping[str, Any],
 ) -> str:
-    selected_filename = result.candidate.path.name
+    selected_filename = result.candidate.filename
     score_label, score_value = _score_label_and_value(result)
     selected_display_path = _display_path(result.candidate.path)
     backtest_command = f"passivbot backtest {selected_display_path}"
@@ -1972,7 +1980,7 @@ def _prepare_filtered_output(
         raise FileExistsError(f"Filtered output directory already exists: {unresolved_output}")
     output = unresolved_output.resolve()
     _validate_output_path(output, pareto_dir, directory=True)
-    names = [candidate.path.name for candidate in candidates]
+    names = [candidate.filename for candidate in candidates]
     folded_names = [name.casefold() for name in names]
     if len(folded_names) != len(set(folded_names)):
         raise ValueError("Filtered members contain duplicate filenames.")
@@ -1993,7 +2001,7 @@ def _verify_export_digest(candidate: ParetoCandidate, copied_file: Path) -> None
     with copied_file.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != candidate.file_sha256:
-        raise ValueError(f"Pareto candidate changed after loading: {candidate.path.name}")
+        raise ValueError(f"Pareto candidate changed after loading: {candidate.filename}")
 
 
 def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
@@ -2046,11 +2054,11 @@ def _stage_filtered(
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
     try:
         for candidate in candidates:
-            destination = stage / candidate.path.name
+            destination = stage / candidate.filename
             if destination.exists():
                 raise ValueError(
                     f"Filtered member filename collides on the destination filesystem: "
-                    f"{candidate.path.name}"
+                    f"{candidate.filename}"
                 )
             shutil.copyfile(candidate.path, destination)
             _verify_export_digest(candidate, destination)
@@ -2061,8 +2069,8 @@ def _stage_filtered(
             "retained_count": len(candidates),
             "scenario": scenario,
             "applied_limits": _json_ready(active_limits),
-            "selected_member": selected.path.name,
-            "members": [candidate.path.name for candidate in candidates],
+            "selected_member": selected.filename,
+            "members": [candidate.filename for candidate in candidates],
         }
         manifest_path = stage / FILTERED_SELECTION_MANIFEST
         if manifest_path.exists():
@@ -2236,7 +2244,7 @@ def build_selection_record(
     )
     loaded_candidates = evaluation.selection_candidates
     fingerprints = [
-        (candidate.path.name, candidate.file_sha256) for candidate in loaded_candidates
+        (candidate.filename, candidate.file_sha256) for candidate in loaded_candidates
     ]
     candidate_set_hash = hashlib.sha256(
         json.dumps(fingerprints, ensure_ascii=True, separators=(",", ":")).encode("ascii")
@@ -2287,8 +2295,8 @@ def build_selection_record(
             if key in details
         },
         "selected": {
-            "file": result.candidate.path.name,
-            "hash": result.candidate.path.stem,
+            "file": result.candidate.filename,
+            "hash": Path(result.candidate.filename).stem,
             "file_sha256": result.candidate.file_sha256,
             "score": float(result.score),
             "objectives": result.objective_values,

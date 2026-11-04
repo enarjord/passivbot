@@ -661,7 +661,7 @@ def test_selection_replay_evidence_is_embedded_as_inert_data(front, tmp_path, ca
     assert evidence.read_bytes() == original
 
 
-def test_selection_distinguishes_symlinked_candidates_with_the_same_target_basename(tmp_path):
+def test_selection_distinguishes_symlinked_candidates_with_the_same_target_basename(tmp_path, capsys):
     front = tmp_path / "pareto"
     front.mkdir()
     for name, values in (("first", (0.2, 0.3, 5.0)), ("second", (0.4, 0.1, 2.0))):
@@ -676,3 +676,11 @@ def test_selection_distinguishes_symlinked_candidates_with_the_same_target_basen
     data = read_payload(output.read_text())
     assert data["names"] == ["first.json", "second.json"]
     assert data["selection"]["selected"]["file"] == "second.json"
+    capsys.readouterr()
+    assert cli_main(["tool", "pareto", str(front), "--weight", f"{METRICS[0]}=4", "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["selected"]["file"] == "second.json"
+    assert record["selected"]["path"] == str(tmp_path / "second" / "candidate.json")
+    assert {row["file"]: row["path"] for row in record["top_candidates"]} == {
+        f"{name}.json": str(tmp_path / name / "candidate.json") for name in ("first", "second")
+    }

@@ -156,7 +156,7 @@ def build_dataset(
         metrics.append(metric)
     return dict(
         definition_version=CORE_METRIC_DEFINITION_VERSION,
-        names=[candidate.path.name for candidate in candidates],
+        names=[candidate.filename for candidate in candidates],
         metrics=metrics,
     )
 
