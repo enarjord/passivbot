@@ -320,7 +320,12 @@ batch setting enables service-owned batch tuning in `auto`/`refresh` mode. A pos
 explicit setting disables width tuning; `tuning_mode: "off"` uses a fixed ceiling of 64
 when no width is supplied. These are dispatch ceilings, also bounded by prepared work
 and history-scratch limits. CPU candidate admission is bounded by its population window,
-independently of GPU widths; the service bounds its own queued-plus-running requests.
+independently of GPU widths. With automatic width, the optimizer lets the service admit
+all scenario/exchange requests for that candidate window when they exceed its default
+1,024 queued-plus-running requests. The window includes seed demand and is capped at
+1,024 candidates. A full evaluation has one request per prepared scenario/exchange pair
+regardless of how many execution variants are registered. Dispatch and device-memory
+ceilings apply independently. Fixed width and tuning-off modes use the default request cap.
 Legacy exact-worker, drift-probe, validation and screened-seed controls do not apply.
 
 Request accumulation adapts independently of width in `auto`/`refresh` mode. The

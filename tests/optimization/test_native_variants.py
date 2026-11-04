@@ -95,6 +95,50 @@ def test_exact_last_scenario_policy_deduplicates_fixed_views_and_preserves_slots
             assert screen.effective_key == on.effective_key != off.effective_key
 
 
+@pytest.mark.parametrize("population,batch_size,mode,request_capacity,width", [
+    (256, None, "auto", 1280, 1024),
+    (2048, None, "refresh", 5120, 1024),
+    (256, 32, "auto", 1024, 32),
+    (256, None, "off", 1024, 64),
+])
+def test_suite_admission_counts_requests_instead_of_registered_execution_variants(
+    monkeypatch, tmp_path, population, batch_size, mode, request_capacity, width,
+):
+    from optimization.backends import gpu_backend
+    from optimization.gpu import native
+
+    native_service = native.NativeBacktestService
+    guard_cpu(monkeypatch)
+    # Construct the real service, but stop before the first device submission.
+    monkeypatch.setattr(native, "NativeBacktestService", native_service)
+
+    class StopBeforeEvaluation(Exception):
+        pass
+
+    def inspect(self):
+        assert len(self.registry.bindings) == 10
+        assert self.registry.requests_per_candidate == 5
+        assert self.session.max_candidates == min(population, 1024)
+        executor = self.session.service._executor
+        assert executor.max_pending == request_capacity
+        assert executor.batch_size == width
+        assert executor._thread is None
+        raise StopBeforeEvaluation
+
+    monkeypatch.setattr(gpu_backend._Search, "evaluate_population", inspect)
+    with managed_arrays() as manager:
+        base = variable_base(manager)
+        base.config["optimize"].update(population_size=population, iters=population)
+        base.config["optimize"]["gpu"].update(batch_size=batch_size, tuning_mode=mode)
+        prototype = contexts(base, base.timestamps["binance"], lazy=True)[0]
+        prepared = [SimpleNamespace(**dict(vars(prototype), label=f"scenario_{index}"))
+                    for index in range(5)]
+        suite = optimize.SuiteEvaluator(base, prepared, {"default": "mean"})
+        with pytest.raises(StopBeforeEvaluation):
+            execute(base, SimpleNamespace(record=lambda _: pytest.fail("unexpected result")),
+                    tmp_path / "checkpoint.pkl", evaluator=suite)
+
+
 def test_unprepared_continuous_static_changes_still_fail_before_submission(monkeypatch):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:

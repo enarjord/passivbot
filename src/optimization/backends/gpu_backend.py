@@ -343,17 +343,21 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         input_owner = getattr(base, "shared_array_manager", None)
         if getattr(input_owner, "file_backed", False):
             memory_options["on_inputs_prepared"] = input_owner.discard_file_pages
-        service = NativeBacktestService(batch_size=batch_size, **memory_options,
-                                     max_dispatch_candidate_bars=dispatch_budget,
-                                     interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
         # Seed survival waits for the complete seed cohort, so its available
         # work is independent of the later evolutionary population size. Keep
         # admission bounded while allowing the service to fill wider batches.
         population_window = max(2, min(population_size, 1024))
         seed_count = len(state["population"]) if state["phase"] == "seeds" else 0
+        candidate_window = max(population_window, min(seed_count, 1024))
+        service = NativeBacktestService(
+            batch_size=batch_size, **memory_options,
+            max_dispatch_candidate_bars=dispatch_budget,
+            interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"),
+            auto_request_capacity=candidate_window * registry.requests_per_candidate,
+        )
         session = NativeEvaluationSession(
             service, registry.scorer,
-            max_candidates=max(population_window, min(seed_count, 1024)),
+            max_candidates=candidate_window,
         )
         search = _Search(state=state, session=session, registry=registry, recorder=recorder,
                          template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
