@@ -114,6 +114,8 @@ class BatchController:
     not replace the physical ceiling or the no-argument ``can_grow`` guard.
     A long window can finish with fewer sustained, expensive observations;
     callers that omit it retain the normal sample and duration requirements.
+    Largest-count comparisons require a measured change in dispatch capacity
+    before accepting a new width.
     """
 
     def __init__(
@@ -266,11 +268,17 @@ class BatchController:
         if self.baseline is not None:
             old_width, old_rate = self.baseline
             self.baseline = None
+            shrinking = self.width < old_width
             # Callers may require throughput preservation in both directions;
             # generic tuning retains its legacy plateau/growth thresholds.
-            ratio = (self.shrink_min_rate_ratio if self.width < old_width
-                     else self.growth_min_rate_ratio)
-            accepted = rate >= old_rate * ratio
+            ratio = self.shrink_min_rate_ratio if shrinking else self.growth_min_rate_ratio
+            effective = True
+            if self.rate_aggregation == "largest_count":
+                # A narrower trial must actually reach its new cap. A wider
+                # trial must dispatch more rows than the old cap allowed.
+                effective = (self.last_comparison_count == self.width if shrinking
+                             else self.last_comparison_count > old_width)
+            accepted = effective and rate >= old_rate * ratio
             if accepted:
                 log_tokens("GPU auto-tune accepted |", [
                     f"batch={self.width}", f"candidates/s={rate:.3f}",
@@ -285,11 +293,12 @@ class BatchController:
                 log_tokens("GPU auto-tune retained |", [
                     f"batch={old_width}", f"trial_batch={self.width}",
                     f"candidates/s={old_rate:.3f}", f"trial_candidates/s={rate:.3f}",
-                    "reason=insufficient_gain",
+                    "reason=insufficient_gain" if effective else "reason=width_effect_unobserved",
                     *self._comparison_tokens("trial_"),
                 ])
                 self.width = old_width
-                self.direction *= -1
+                if effective:
+                    self.direction *= -1
                 self.cooldown = 3
             return True
         self.save(self.width, rate, evidence_seconds)
@@ -319,8 +328,14 @@ class BatchController:
                 return True
             # A bounded producer may never queue enough work for growth. Try a
             # smaller allocation using subsequent real requests instead.
-            self.direction = -1
             trial = max(1, self.width // 2)
+        if (self.rate_aggregation == "largest_count"
+                and self.last_comparison_count <= trial < self.width):
+            # Wait for a warm batch that the narrower width would split.
+            # Below the ceiling, give returning demand a chance to grow.
+            self.direction = 1 if self.width < self.ceiling else -1
+            return True
+        self.direction = -1 if trial < self.width else 1
         self.baseline = (self.width, rate)
         self.width = trial
         log_tokens("GPU auto-tune trial |", [

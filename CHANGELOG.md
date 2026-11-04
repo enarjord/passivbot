@@ -311,6 +311,9 @@ since the latest release tag; these features may already be available when insta
   bounded shorter evidence windows. Metal starts within its prepared replay ceiling
   and checks available system RAM before growing the batch.
 
+- Skip automatic GPU width reductions that would fit every observed warm batch.
+  Retain the prior width when trial batches lack evidence that the width changed dispatch size.
+
 - Let GPU request batching learn from the first completed replay and wait for declared
   CPU preparation across cold starts, with finite accumulation deadlines and prompt sealing.
 

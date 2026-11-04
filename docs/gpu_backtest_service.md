@@ -400,11 +400,12 @@ RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Mi
 or invalid OS telemetry denies a growth trial without failing completed replay work.
 A growth trial is bounded by the largest compatible demand observed in that evidence
 window, so it can try an intermediate
-width when demand is less than twice the current width. This demand bound does not raise
-the prepared physical ceiling. When growth is blocked, the service
-can probe a smaller width using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
-screening or a bounded producer from indefinitely starving the tuner of evidence or
-smaller-width experiments. Tuning submits no extra simulations and never changes precision
+width when demand is less than twice the current width. The prepared physical ceiling
+still applies. The service probes a smaller width only after a warm batch exceeded the
+proposed width. To earn acceptance, the smaller trial must fill its width, or the larger
+trial must dispatch more candidates than the previous width could hold. An underfilled
+trial that cannot demonstrate the width change rolls back and can retry after cooldown.
+Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
 fresh. Persistent advisory calibration, richer workload classes, residency budgets and
 further CPU/evolution cadence experiments remain development work. This policy does not
