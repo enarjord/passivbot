@@ -9,6 +9,7 @@ import time
 import numpy as np
 import threading
 import logging
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
@@ -20,6 +21,7 @@ from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats, encode_metric_values
 from pareto_core import (
+    PARETO_FILENAME_PREFIX_LENGTH,
     compute_ideal,
     crowding_distances,
     dominates_with_violation,
@@ -279,7 +281,8 @@ class ParetoStore:
                     f"Pareto entry has non-finite constraint violation: {violation!r}"
                 )
 
-            # ───────────── NEW: dedupe on the objective vector ──────────────
+            dominated = []
+            # The same objective vector keeps the entry with the lower violation.
             existing_hash = self._objective_lookup.get(obj)
             if existing_hash:
                 existing_violation = self._violations.get(existing_hash, 0.0)
@@ -289,13 +292,11 @@ class ParetoStore:
                         obj,
                     )
                     return False
-                else:
-                    # replace existing entry with higher violation
-                    self._remove_from_front(existing_hash)
-            # ────────────────────────────────────────────────────────────────
+                dominated.append(existing_hash)
 
-            dominated = []
             for idx in self._front:
+                if idx == existing_hash:
+                    continue
                 front_obj = self._objectives[idx]
                 front_violation = self._violations.get(idx, 0.0)
                 if dominates_with_violation(
@@ -314,11 +315,10 @@ class ParetoStore:
                     objective_specs=self.scoring_specs,
                 ):
                     dominated.append(idx)
+            self._persist_entry(h, entry, source_path=source_path)
             for idx in dominated:
                 self._remove_from_front(idx)
 
-            # add new member
-            self._persist_entry(h, entry, source_path=source_path)
             self._objectives[h] = obj
             self._violations[h] = violation
             self._front.append(h)
@@ -550,35 +550,56 @@ class ParetoStore:
             pass
 
     def _persist_entry(self, hash_id: str, entry: dict, *, source_path: str | None = None) -> None:
-        if source_path is None:
-            path = os.path.join(self.pareto_dir, f"{hash_id}.json")
-            tmp = path + ".tmp"
-            with open(tmp, "w") as f:
-                f.write(
-                    json_dumps_streamlined(
-                        entry,
-                        indent=4,
-                        max_inline=72,
-                        separators=(",", ":"),
-                    )
-                )
-            os.replace(tmp, path)
-        else:
+        if source_path is not None and os.path.exists(source_path):
             path = source_path
-            if not os.path.exists(path):
-                tmp = path + ".tmp"
-                with open(tmp, "w") as f:
-                    f.write(
-                        json_dumps_streamlined(
-                            entry,
-                            indent=4,
-                            max_inline=72,
-                            separators=(",", ":"),
-                        )
-                    )
-                os.replace(tmp, path)
+        else:
+            path = self._publish_entry(hash_id, entry, source_path=source_path)
         self._entries[hash_id] = path
         self._loaded_files.add(path)
+
+    def _publish_entry(self, hash_id: str, entry: dict, *, source_path: str | None) -> str:
+        if source_path is None:
+            directory = self.pareto_dir
+            paths = (
+                os.path.join(directory, f"{hash_id[:length]}.json")
+                for length in range(PARETO_FILENAME_PREFIX_LENGTH, len(hash_id) + 1, 8)
+            )
+        else:
+            directory = os.path.dirname(source_path) or "."
+            paths = (source_path,)
+
+        with tempfile.TemporaryDirectory(prefix=".pareto-", dir=directory) as staging_dir:
+            temporary = Path(staging_dir) / "entry.tmp"
+            temporary.write_text(
+                json_dumps_streamlined(entry, indent=4, max_inline=72, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            for path in paths:
+                if source_path is None and path in self._loaded_files:
+                    # A tracked path may still be pruned even if its file disappeared.
+                    continue
+                try:
+                    # Publish complete bytes without replacing an occupied name.
+                    os.link(temporary, path)
+                except FileExistsError:
+                    if not os.path.isfile(path):
+                        continue
+                    try:
+                        with open(path, encoding="utf-8") as existing:
+                            if calc_hash(json.load(existing)) == hash_id:
+                                return path
+                    except (
+                        FileNotFoundError,
+                        IsADirectoryError,
+                        PermissionError,
+                        ValueError,
+                        RecursionError,
+                    ):
+                        # An unreadable occupant still reserves its name.
+                        continue
+                else:
+                    return path
+        raise FileExistsError(f"No available Pareto filename for SHA-256 {hash_id}")
 
     def _delete_entry_file(self, hash_id: str) -> None:
         path = self._entries.pop(hash_id, None)

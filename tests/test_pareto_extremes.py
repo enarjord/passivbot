@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import json
 
@@ -228,3 +229,133 @@ def test_pareto_store_rejects_nan_objective_values(tmp_path):
 
     with pytest.raises(ValueError, match="malformed"):
         store.add_entry(entry)
+
+
+def test_pareto_store_keeps_legacy_filename_and_full_entry_identity(tmp_path):
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    legacy = _make_candidate({
+        "cagr_fraction_strategy_equity": 1.0,
+        "ulcer_index_fraction_strategy_equity": 0.5,
+    })
+    new = _make_candidate({
+        "cagr_fraction_strategy_equity": 2.0,
+        "ulcer_index_fraction_strategy_equity": 1.0,
+    })
+    legacy_hash = calc_hash(legacy)
+    new_hash = calc_hash(new)
+    legacy_path = pareto_dir / f"{legacy_hash}.json"
+    legacy_bytes = json.dumps(legacy, indent=2).encode()
+    legacy_path.write_bytes(legacy_bytes)
+
+    store = ParetoStore(str(tmp_path))
+    assert store.add_entry(new)
+    new_path = pareto_dir / f"{new_hash[:24]}.json"
+    assert json.loads(new_path.read_bytes()) == new
+    assert legacy_path.read_bytes() == legacy_bytes
+
+    resumed = ParetoStore(str(tmp_path))
+    assert not resumed.add_entry(legacy)
+    assert not resumed.add_entry(new)
+    assert set(resumed._entries) == {legacy_hash, new_hash}
+    assert set(pareto_dir.iterdir()) == {legacy_path, new_path}
+
+
+def test_pareto_store_extends_colliding_name_without_overwriting_an_untracked_file(
+    tmp_path, monkeypatch
+):
+    store = ParetoStore(str(tmp_path))
+    original = _make_candidate({
+        "cagr_fraction_strategy_equity": 1.0,
+        "ulcer_index_fraction_strategy_equity": 0.5,
+    })
+    new = _make_candidate({
+        "cagr_fraction_strategy_equity": 2.0,
+        "ulcer_index_fraction_strategy_equity": 1.0,
+    })
+    original_hash = calc_hash(original)
+    new_hash = original_hash[:24] + calc_hash(new)[24:]
+
+    def collision_hash(entry):
+        return new_hash if entry == new else calc_hash(entry)
+
+    monkeypatch.setattr("pareto_store.calc_hash", collision_hash)
+    pareto_dir = tmp_path / "pareto"
+    original_path = pareto_dir / f"{original_hash[:24]}.json"
+    original_bytes = json.dumps(original, indent=2).encode()
+    link = os.link
+
+    def publish_after_competitor(source, destination):
+        if destination == str(original_path):
+            original_path.write_bytes(original_bytes)
+        link(source, destination)
+
+    # The short path is claimed by another writer just before publication.
+    with monkeypatch.context() as m:
+        m.setattr("pareto_store.os.link", publish_after_competitor)
+        assert store.add_entry(new)
+    new_path = pareto_dir / f"{new_hash[:32]}.json"
+    assert json.loads(new_path.read_bytes()) == new
+    assert original_path.read_bytes() == original_bytes
+    store.flush_now()
+    assert set(pareto_dir.iterdir()) == {original_path, new_path}
+
+    resumed = ParetoStore(str(tmp_path))
+    assert set(resumed._entries) == {original_hash, new_hash}
+    assert not resumed.add_entry(new)
+    assert resumed.add_entry(_make_candidate({
+        "cagr_fraction_strategy_equity": 3.0,
+        "ulcer_index_fraction_strategy_equity": 1.0,
+    }))
+    assert not new_path.exists()
+    assert original_path.read_bytes() == original_bytes
+
+
+def test_pareto_store_reuses_existing_file_with_same_full_hash(tmp_path):
+    store = ParetoStore(str(tmp_path))
+    entry = _make_adg_candidate(1.0)
+    path = tmp_path / "pareto" / f"{calc_hash(entry)[:24]}.json"
+    original_bytes = json.dumps(entry).encode()
+    path.write_bytes(original_bytes)
+
+    assert store.add_entry(entry)
+    assert store.get_front() == [entry]
+    assert path.read_bytes() == original_bytes
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_pareto_store_keeps_previous_front_when_publication_fails(tmp_path, monkeypatch):
+    store = ParetoStore(str(tmp_path))
+    objective = {"ulcer_index_fraction_strategy_equity": 0.5}
+    original = _make_candidate(objective, violation=1.0)
+    better = _make_candidate(objective, violation=0.0)
+    assert store.add_entry(original)
+    pareto_dir = tmp_path / "pareto"
+    original_path = pareto_dir / f"{calc_hash(original)[:24]}.json"
+
+    def reject_link(*args, **kwargs):
+        raise PermissionError("publication denied")
+
+    with monkeypatch.context() as m:
+        m.setattr("pareto_store.os.link", reject_link)
+        with pytest.raises(PermissionError, match="publication denied"):
+            store.add_entry(better)
+
+    assert store.get_front() == [original]
+    assert list(pareto_dir.iterdir()) == [original_path]
+    assert store.add_entry(better)
+    assert store.get_front() == [better]
+    assert not original_path.exists()
+
+
+def test_pareto_store_skips_occupied_prefix_with_unreadable_json(tmp_path):
+    store = ParetoStore(str(tmp_path))
+    entry = _make_adg_candidate(1.0)
+    digest = calc_hash(entry)
+    path = tmp_path / "pareto" / f"{digest[:24]}.json"
+    occupant = '{"int":' + "9" * 5000 + "}"
+    path.write_text(occupant, encoding="utf-8")
+
+    assert store.add_entry(entry)
+    assert path.read_text(encoding="utf-8") == occupant
+    assert json.loads(path.with_name(f"{digest[:32]}.json").read_bytes()) == entry

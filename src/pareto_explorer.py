@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import textwrap
@@ -37,6 +38,7 @@ from metrics_schema import (
     require_metric_definition,
     flatten_metric_stats,
 )
+from pareto_core import PARETO_FILENAME_PREFIX_LENGTH
 from pareto_qualification import load_qualification, qualification_for_candidates
 
 
@@ -1685,6 +1687,7 @@ def format_selection_result(
     result: SelectionResult,
     record: Mapping[str, Any],
 ) -> str:
+    labels = record["candidate_labels"]
     selected_filename = result.candidate.filename
     score_label, score_value = _score_label_and_value(result)
     selected_display_path = _display_path(result.candidate.path)
@@ -1714,7 +1717,7 @@ def format_selection_result(
             ("Applied limits", str(len(active_limits))),
             ("Method", result.method),
             (score_label, score_value),
-            ("Selected file", selected_filename),
+            ("Selected file", labels.get(selected_filename, selected_filename)),
             ("Selected path", selected_display_path),
         ]
     )
@@ -1763,8 +1766,9 @@ def format_selection_result(
         lines.append(f"Knee mode: {knee_mode}")
     anchor_files = result.details.get("anchor_files")
     if isinstance(anchor_files, list) and anchor_files:
+        anchor_labels = [labels.get(name, name) for name in anchor_files]
         lines.append(
-            f"Anchor files ({len(anchor_files)}): {_summarize_anchor_files([str(item) for item in anchor_files])}"
+            f"Anchor files ({len(anchor_labels)}): {_summarize_anchor_files(anchor_labels)}"
         )
     lines.extend(_selection_rationale_lines(result))
     selected_utilities = result.details.get("selected_utilities")
@@ -1829,7 +1833,8 @@ def format_selection_result(
         headers.extend(metrics)
         top_rows = []
         for row in shortlist:
-            columns = [f"#{row['rank']}", row["file"], f"{row['score']:.6f}"]
+            filename = row["file"]
+            columns = [f"#{row['rank']}", labels.get(filename, filename), f"{row['score']:.6f}"]
             if result.method == "aspiration":
                 columns.append(f"{row['secondary_score']:.6f}")
             if result.method != "lexicographic":
@@ -1858,8 +1863,8 @@ def format_selection_result(
                 description = f"set {check['metric']} target to {check['target']:.6g}"
             changed.setdefault(winner, description)
         for winner, description in changed.items():
-            lines.append(f"  - {winner} wins if you {description}.")
-    lines.extend(_format_qualification(record["qualification"], shortlist))
+            lines.append(f"  - {labels.get(winner, winner)} wins if you {description}.")
+    lines.extend(_format_qualification(record["qualification"], shortlist, labels))
     return "\n".join(lines)
 
 
@@ -1871,14 +1876,16 @@ def _format_record_metric(metrics: Mapping[str, Any], metric: str) -> str:
 
 
 def _format_qualification(
-    qualification: Mapping[str, Any] | None, shortlist: Sequence[Mapping[str, Any]]
+    qualification: Mapping[str, Any] | None,
+    shortlist: Sequence[Mapping[str, Any]],
+    labels: Mapping[str, str],
 ) -> list[str]:
     if qualification is None:
         return ["Qualification evidence: no native CPU replay evidence attached."]
 
     lines = [f"Qualification evidence: Rust CPU {qualification['engine_sha256']}"]
     subjects = [
-        (row["file"], qualification["candidates"].get(row["file_sha256"]))
+        (labels.get(row["file"], row["file"]), qualification["candidates"].get(row["file_sha256"]))
         for row in shortlist
     ]
     if "incumbent" in qualification:
@@ -2226,6 +2233,30 @@ def _objective_deltas(
     return deltas
 
 
+def _candidate_labels(candidates: Sequence[ParetoCandidate]) -> dict[str, str]:
+    """Abbreviate legacy full hashes while keeping the displayed filenames distinct."""
+    filenames = {candidate.filename for candidate in candidates}
+    groups: dict[str, list[str]] = {}
+    for filename in sorted(filenames):
+        if re.fullmatch(r"[0-9a-f]{64}\.json", filename):
+            prefix = filename[:PARETO_FILENAME_PREFIX_LENGTH]
+            groups.setdefault(prefix, []).append(filename)
+
+    labels = {}
+    for group in groups.values():
+        for filename in group:
+            for width in range(PARETO_FILENAME_PREFIX_LENGTH, 64):
+                prefix = filename[:width]
+                label = f"{prefix}.json"
+                if label in filenames:
+                    continue
+                if any(other != filename and other.startswith(prefix) for other in group):
+                    continue
+                labels[filename] = label
+                break
+    return labels
+
+
 def build_selection_record(
     evaluation: SelectionEvaluation, args: argparse.Namespace
 ) -> dict[str, Any]:
@@ -2271,6 +2302,7 @@ def build_selection_record(
         "schema_version": SELECTION_RECORD_VERSION,
         "metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "candidate_set_sha256": candidate_set_hash,
+        "candidate_labels": _candidate_labels(loaded_candidates),
         "loaded_count": len(loaded_candidates),
         "retained_count": len(evaluation.filtered_candidates),
         "active_front_count": len(evaluation.active_front),

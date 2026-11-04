@@ -10,6 +10,9 @@ since the latest release tag; these features may already be available when insta
   closest point on the plotted axes. Add fixed raw scales, directional aspiration targets,
   preference sensitivity, and a versioned ranking record with optional native CPU replay evidence.
 
+- Use 24-character hash prefixes for new Pareto result filenames, with longer names on collision.
+  Show the same names in the CLI and HTML viewer and abbreviate older names without renaming files.
+
 - Speed up `migrate-config-v9` validation of scenario-heavy configs with inline coin
   strategy overrides and show progress during slow conversions.
 

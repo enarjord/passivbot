@@ -92,14 +92,21 @@ function axisRange(metric, goal, dimensions) {
 }
 const escapeHtml = text => String(text).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const formatValue = value => finite(value) ? Number(value.toPrecision(8)).toString() : "unavailable";
+function candidateLabel(record, filename) {
+    return record?.candidate_labels?.[filename] ?? filename;
+}
 function plotSpec(dataset, axes, goals, limits) {
     const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
     const view = computeView(dataset, axes, goals, limits), is3d = axes.length === 3;
     const columns = axes.map(key => view.indices.map(row => metrics.get(key).values[row]));
     const hover = axes.map((key, i) => `${escapeHtml(metrics.get(key).label)}: %{${"xyz"[i]}:.8g}`).join("<br>");
+    const candidateHover = filename => {
+        const label = candidateLabel(dataset.selection, filename);
+        return [escapeHtml(label), label === filename ? "" : "<br>File: " + escapeHtml(filename)];
+    };
     const points = {type:is3d ? "scatter3d" : "scatter", mode:"markers", name:"Candidates", showlegend:false,
-        x:columns[0], y:columns[1], text:view.indices.map(row => escapeHtml(dataset.names[row])),
-        hovertemplate:"<b>%{text}</b><br>" + hover + "<extra></extra>",
+        x:columns[0], y:columns[1], customdata:view.indices.map(row => candidateHover(dataset.names[row])),
+        hovertemplate:"<b>%{customdata[0]}</b>%{customdata[1]}<br>" + hover + "<extra></extra>",
         marker:{size:is3d ? 5 : 9, opacity:0.85, color:columns[axes.length-1], colorscale:"Viridis",
             cmin:metrics.get(axes.at(-1)).min, cmax:metrics.get(axes.at(-1)).max,
             line:{width:0.4,color:"white"}}};
@@ -113,9 +120,9 @@ function plotSpec(dataset, axes, goals, limits) {
         const values = axes.map(key => metrics.get(key).values[view.selected]);
         const chosen = {type:points.type, name:"Closest on plotted axes", mode:is3d ? "markers+text" : "markers",
             x:[values[0]], y:[values[1]], showlegend:true,
-            customdata:[escapeHtml(dataset.names[view.selected])],
+            customdata:[candidateHover(dataset.names[view.selected])],
             marker:{symbol:is3d ? "circle" : "star",size:is3d ? 6 : 20,color:"#f4ae2b",line:{color:"#704907",width:1.5}},
-            hovertemplate:"<b>Closest on plotted axes: %{customdata}</b><br>" + hover + "<extra></extra>"};
+            hovertemplate:"<b>Closest on plotted axes: %{customdata[0]}</b>%{customdata[1]}<br>" + hover + "<extra></extra>"};
         if (is3d) {
             ideal.z = [view.ideal[2]];
             Object.assign(chosen,{z:[values[2]],text:["★"],textposition:"middle center",textfont:{size:32,color:"#e69b12"}});
@@ -131,9 +138,9 @@ function plotSpec(dataset, axes, goals, limits) {
             view.indices.includes(pickRow) ? "visible" : "outside plot limits";
         if (pickVisibility === "visible") {
             const pickTrace = {type:points.type, name:"Selection pick", mode:"markers", showlegend:true,
-                x:[values[0]], y:[values[1]], customdata:[escapeHtml(pick)],
+                x:[values[0]], y:[values[1]], customdata:[candidateHover(pick)],
                 marker:{symbol:"circle-open",size:is3d ? 21 : 37,color:"#673ab7",line:{color:"#673ab7",width:2.5}},
-                hovertemplate:"<b>Selection pick: %{customdata}</b><br>" + hover + "<extra></extra>"};
+                hovertemplate:"<b>Selection pick: %{customdata[0]}</b>%{customdata[1]}<br>" + hover + "<extra></extra>"};
             if (is3d) pickTrace.z = [values[2]];
             traces.splice(1, 0, pickTrace);
         }
@@ -165,6 +172,12 @@ function appendText(parent, tag, text, className) {
     node.textContent = text;
     if (className) node.className = className;
     parent.append(node);
+    return node;
+}
+function appendCandidateLabel(parent, tag, record, filename, className, prefix = "") {
+    const label = candidateLabel(record, filename);
+    const node = appendText(parent, tag, prefix + label, className);
+    if (label !== filename) node.title = filename;
     return node;
 }
 function detailsSection(parent, title) {
@@ -201,7 +214,7 @@ function renderShortlist(parent, record) {
     for (const entry of rows) {
         const row = body.insertRow();
         appendText(row, "td", entry.rank);
-        appendText(row, "td", entry.file, "filename");
+        appendCandidateLabel(row, "td", record, entry.file, "filename");
         appendText(row, "td", formatValue(entry.score));
         if (hasSecondary) appendText(row, "td", formatValue(entry.secondary_score));
         if (hasMargins) appendText(row, "td", finite(entry.score_margin) ? formatValue(entry.score_margin) : "—");
@@ -235,6 +248,7 @@ function renderSelectionPolicy(parent, record) {
         ["Active Pareto members", record.active_front_count],
         ["Selection record version", record.schema_version],
         ["Candidate set SHA-256", record.candidate_set_sha256],
+        ["Selected filename", record.selected.file],
         ["Selected file SHA-256", record.selected.file_sha256],
     ];
     for (const [key, value] of Object.entries(record.settings || {})) {
@@ -246,7 +260,8 @@ function renderSelectionPolicy(parent, record) {
         if (value != null) appendText(details, "p", `${label}: ${describeSetting(value)}`, "muted");
     }
 }
-function renderSensitivity(parent, sensitivity) {
+function renderSensitivity(parent, record) {
+    const sensitivity = record.sensitivity;
     if (!sensitivity?.checks?.length) return;
     const changed = sensitivity.changed_check_count;
     const total = sensitivity.check_count;
@@ -260,7 +275,7 @@ function renderSensitivity(parent, sensitivity) {
             ? `Move ${formatValue(100 * weightStep)} percentage points of weight from ${check.from_metric} to ${check.to_metric}`
             : `Set ${check.metric} target to ${formatValue(check.target)} (${formatValue(targetStep)} scales from the original target)`;
         appendText(row, "td", change);
-        appendText(row, "td", check.winner, "filename");
+        appendCandidateLabel(row, "td", record, check.winner, "filename");
     }
 }
 function renderQualification(parent, record) {
@@ -278,7 +293,7 @@ function renderQualification(parent, record) {
     const comparisons = record.top_candidates.map(row => [row.file, evidence.candidates[row.file_sha256]]);
     if (evidence.incumbent) comparisons.push(["Incumbent", evidence.incumbent]);
     for (const [name, evidenceRow] of comparisons) {
-        appendText(details, "h3", name);
+        appendCandidateLabel(details, "h3", record, name);
         if (!evidenceRow) {
             appendText(details, "p", "No replay evidence supplied for this file.", "muted");
             continue;
@@ -311,12 +326,12 @@ function renderSelection(record) {
         appendText(parent, "p", "CLI selection is unavailable.");
         return;
     }
-    appendText(parent, "strong", "○ Selection pick: " + record.selected.file, "pick");
+    appendCandidateLabel(parent, "strong", record, record.selected.file, "pick", "○ Selection pick: ");
     appendText(parent, "p", `${record.method} · ${record.objectives.length} active objectives · ${record.selection_count} ranked · ${record.retained_count} of ${record.loaded_count} retained after CLI limits`);
     appendText(parent, "p", "This ranking is fixed at export. Change selection settings with the CLI and regenerate the page.", "muted");
     renderQualification(parent, record);
     renderShortlist(parent, record);
-    renderSensitivity(parent, record.sensitivity);
+    renderSensitivity(parent, record);
     renderSelectionPolicy(parent, record);
 }
 function mountExplorer(dataset) {
@@ -410,10 +425,10 @@ function mountExplorer(dataset) {
                 const coordinates = values => keys.map((key,i) => `${byKey.get(key).label} = ${formatValue(values[i])}`).join(" · ");
                 const lines = [];
                 if (result.pickVisibility) {
-                    lines.push(`○ Selection pick: ${dataset.selection.selected.file} · ${result.pickVisibility}`);
+                    lines.push(`○ Selection pick: ${candidateLabel(dataset.selection, dataset.selection.selected.file)} · ${result.pickVisibility}`);
                 }
                 if (view.ideal) {
-                    lines.push(`★ Closest on plotted axes: ${dataset.names[view.selected]} · ${coordinates(keys.map(key => byKey.get(key).values[view.selected]))}`);
+                    lines.push(`★ Closest on plotted axes: ${candidateLabel(dataset.selection, dataset.names[view.selected])} · ${coordinates(keys.map(key => byKey.get(key).values[view.selected]))}`);
                     lines.push("◇ Theoretical ideal: " + coordinates(view.ideal));
                 } else if (view.indices.length) {
                     lines.push("Choose an ideal direction for each axis to show the plotted-axis markers.");

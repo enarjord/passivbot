@@ -578,6 +578,58 @@ def test_cli_selection_record_matches_html_and_ignores_initial_axes(tmp_path, ca
     assert records[0] == records[1]
 
 
+def test_cli_and_plot_share_distinct_labels_without_changing_filenames(tmp_path, capsys):
+    front = tmp_path / "pareto"
+    front.mkdir()
+    prefix = "a" * 24
+    fallback_prefix = prefix + "b" * 8
+    short_file = f"{prefix}.json"
+    fallback_file = f"{fallback_prefix}.json"
+    first_legacy = f"{fallback_prefix}{'1' * 32}.json"
+    second_legacy = f"{prefix}{'b' * 7}{'c' * 33}.json"
+    selected_file = f"{'d' * 64}.json"
+    selected_label = f"{'d' * 24}.json"
+    filenames = [
+        short_file, fallback_file, first_legacy, second_legacy, "custom.json", selected_file,
+    ]
+    for idx, filename in enumerate(filenames, start=1):
+        write_candidate(front / filename, (idx / 10, idx / 10, 1.0))
+    args = [
+        "--method", "lexicographic", "--priority", ",".join(METRICS[:2]), "--show-top", "6",
+    ]
+
+    assert cli_main(["tool", "pareto", str(front), *args, "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["selected"]["file"] == selected_file
+    assert record["selected"]["hash"] == Path(selected_file).stem
+    assert Path(record["selected"]["path"]) == front / selected_file
+    assert {row["file"] for row in record["top_candidates"]} == set(filenames)
+    assert record["candidate_labels"] == {
+        first_legacy: f"{fallback_prefix}1.json",
+        second_legacy: f"{prefix}{'b' * 7}c.json",
+        selected_file: selected_label,
+    }
+
+    assert cli_main(["tool", "pareto", str(front), *args]) == 0
+    output = capsys.readouterr().out
+    selected_line = next(line for line in output.splitlines() if "Selected file" in line)
+    assert selected_label in selected_line
+    assert selected_file not in selected_line
+    assert f"Backtest command: passivbot backtest {front / selected_file}" in output
+    shortlist = output.split("Top candidates:")[1]
+    for filename in filenames:
+        assert record["candidate_labels"].get(filename, filename) in shortlist
+    assert first_legacy not in shortlist
+
+    page = tmp_path / "view.html"
+    assert cli_main(["tool", "pareto-plot", str(front), *args, "--output", str(page)]) == 0
+    data = read_payload(page.read_text())
+    assert data["names"] == sorted(filenames)
+    assert data["selection"]["selected"]["file"] == selected_file
+    assert data["selection"]["candidate_labels"] == record["candidate_labels"]
+    assert data["selection"]["candidate_set_sha256"] == record["candidate_set_sha256"]
+
+
 def test_scenario_export_uses_values_from_the_selected_scenario(tmp_path):
     source = tmp_path / "candidate.json"
     write_candidate(source, layout="suite")

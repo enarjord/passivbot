@@ -95,6 +95,13 @@ default, and how their raw objectives differ from the selected member. Use `--sh
 change the shortlist size. A positive delta means the alternative has a higher raw value.
 The objective's direction determines whether that is an improvement.
 
+New Pareto result filenames start with 24 hex characters of the full entry hash. If two entries
+would use the same filename, the writer uses a longer prefix for the new entry. The CLI and HTML
+viewer show the filename for new results. They abbreviate older full-length hash names to 24
+characters and extend the label as needed to distinguish members. Existing files keep their
+original names. Use the actual selected path for replay. The optimizer publishes new Pareto files
+atomically, so its output filesystem needs to support hard links.
+
 Use `--json` to save a versioned selection record. It identifies the loaded set by hashing
 the ordered filename and file-digest pairs. The selected member and shortlist include SHA-256
 digests of the exact result JSON bytes read. The record also includes the ranked pool size,
