@@ -151,6 +151,10 @@ def test_pareto_cli_serializes_true_infinity_as_explicit_status(tmp_path, capsys
         == "positive_infinity"
     )
 
+    deltas = output["top_candidates"][0]["objective_deltas"]
+    assert deltas[OMEGA] is None
+    assert deltas["metric_status"][OMEGA]["status"] == "undefined"
+
 
 def test_compression_reports_raw_ranges_and_statuses():
     from pareto_compress import compress_candidates

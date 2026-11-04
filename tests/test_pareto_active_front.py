@@ -144,3 +144,49 @@ def test_text_reports_three_counts(front, capsys):
     assert "| Loaded candidates     | 4" in output
     assert "| Retained after limits | 4" in output
     assert "| Active front          | 2" in output
+
+
+def test_versioned_record_identifies_loaded_bytes_and_reports_raw_changes(front, capsys):
+    import hashlib
+
+    _, record = run(front, capsys, "--show-top", "4")
+    assert record["schema_version"] == 1
+    assert record["metric_definition_version"] == 2
+    assert record["settings"]["scaling"] == "atan_front_minmax"
+    winner = record["selected"]
+    assert winner["file_sha256"] == hashlib.sha256((front / winner["file"]).read_bytes()).hexdigest()
+    assert record["top_candidates"][0]["file"] == winner["file"]
+    runner_up = record["top_candidates"][1]
+    for metric, value in runner_up["objectives"].items():
+        assert runner_up["objective_deltas"][metric] == pytest.approx(
+            value - winner["objectives"][metric]
+        )
+    assert runner_up["score_margin"] == pytest.approx(winner["score"] - runner_up["score"])
+    assert record["sensitivity"]["check_count"] == 6
+
+    # A byte change leaves the parsed objectives alone but changes the source identity.
+    path = front / winner["file"]
+    path.write_bytes(path.read_bytes() + b"\n")
+    _, changed = run(front, capsys)
+    assert changed["selected"]["file"] == winner["file"]
+    assert changed["selected"]["file_sha256"] != winner["file_sha256"]
+    assert changed["candidate_set_sha256"] != record["candidate_set_sha256"]
+
+
+def test_aspiration_uses_active_front_and_exports_target_probes(front, capsys):
+    cagr = "cagr_fraction_strategy_equity"
+    omega = "omega_ratio_strategy_equity"
+    _, record = run(
+        front, capsys,
+        "--method", "aspiration",
+        "--target", f"{cagr}=0.5", "--target", f"{omega}=0.5",
+        "--scale", f"{cagr}=1", "--scale", f"{omega}=1",
+        "--sensitivity-weight-fraction", "0",
+        "--sensitivity-target-scales", "0.5",
+    )
+    assert record["settings"]["scaling"] == "fixed_raw"
+    assert record["active_front_count"] == record["selection_count"] == 2
+    assert record["selected"]["file"] != "d.json"
+    assert {check["kind"] for check in record["sensitivity"]["checks"]} == {"target_step"}
+    assert record["sensitivity"]["check_count"] == 4
+    assert "secondary_score" in record["top_candidates"][0]

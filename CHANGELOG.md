@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Share the Pareto CLI ranking with the offline HTML viewer and distinguish it from the
+  closest point on the plotted axes. Add fixed raw scales, directional aspiration targets,
+  preference sensitivity, and a versioned ranking record with optional native CPU replay evidence.
+
 - Speed up `migrate-config-v9` validation of scenario-heavy configs with inline coin
   strategy overrides and show progress during slow conversions.
 

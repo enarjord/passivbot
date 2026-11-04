@@ -77,3 +77,32 @@ const statusData = {names:['positive','negative','undefined'],metrics:[
 assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','floor',0)]).indices,[0]);
 assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','ceiling',0)]).indices,[1]);
 assert.deepEqual(computeView(statusData,['x','raw'],['max','min'],[]).indices,[]);
+
+// The ranking pick is supplied by Python. Axis settings and plot filters only affect its visibility.
+const ranked = {...data, selection:{selected:{file:'b'}}};
+for (const axes of [['adg','risk'],['adg','risk','third']]) {
+    const goals = axes.map(key => data.metrics.find(item => item.key === key).goal);
+    const result = plotSpec(ranked,axes,goals,[]);
+    const pick = result.traces.find(trace => trace.name === 'Selection pick');
+    const projection = result.traces.find(trace => trace.name === 'Closest on plotted axes');
+    assert.equal(result.pickVisibility,'visible');
+    assert.equal(pick.marker.symbol,'circle-open');
+    assert.equal(pick.customdata[0],'b');
+    assert.notEqual(projection.customdata[0],pick.customdata[0]);
+    assert.equal(axes.length === 3,Array.isArray(pick.z));
+}
+const hiddenPick = plotSpec(ranked,['adg','risk'],['max','min'],[bound('adg','floor',0.025)]);
+assert.equal(hiddenPick.pickVisibility,'outside plot limits');
+assert.equal(hiddenPick.traces.some(trace => trace.name === 'Selection pick'),false);
+const missingPick = plotSpec(ranked,['adg','extra'],['max','max'],[]);
+assert.equal(missingPick.pickVisibility,'missing coordinates');
+const unspecifiedDirection = plotSpec(ranked,['adg','risk'],[null,'min'],[]);
+assert.equal(unspecifiedDirection.pickVisibility,'visible');
+assert.equal(unspecifiedDirection.traces.find(trace => trace.name === 'Selection pick').customdata[0],'b');
+assert.equal(unspecifiedDirection.traces.some(trace => trace.name === 'Closest on plotted axes'),false);
+const overlappingPick = plotSpec({...tie,selection:{selected:{file:'second'}}},['x','y'],['max','min'],[bound('x','floor',1)]);
+assert.deepEqual(overlappingPick.traces.slice(1).map(trace => trace.marker.symbol),['circle-open','diamond-open','star']);
+for (const trace of overlappingPick.traces.slice(1)) {
+    assert.deepEqual(trace.x,[1]);
+    assert.deepEqual(trace.y,[1]);
+}

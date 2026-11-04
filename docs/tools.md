@@ -48,6 +48,7 @@ passivbot tool pareto optimize_results/.../pareto \
 passivbot tool pareto -o sharpe_ratio_strategy_equity,cagr_fraction_strategy_equity,peak_recovery_max_days_strategy_equity \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
+  --objectives cagr_fraction_strategy_equity,drawdown_max_fraction_strategy_equity \
   --weight cagr_fraction_strategy_equity=4 \
   --weight drawdown_max_fraction_strategy_equity=2 \
   --show-top 5
@@ -58,7 +59,8 @@ passivbot tool pareto --json
 Available methods:
 
 - `knee` - balanced compromise point when you want a compromise selector instead of ideal-point distance
-- `reference` - closest to user-specified aspiration targets
+- `reference` - closest to exact user-specified targets
+- `aspiration` - smallest worst weighted shortfall from directional targets
 - `ideal` - closest to the observed ideal point on the current front; default method
 - `utility` - highest weighted normalized utility
 - `lexicographic` - strict objective priority order
@@ -88,8 +90,17 @@ recovered, so it is not the complete scenario Pareto front across all evaluated 
 
 `passivbot tool pareto-explorer` is a CLI alias for the same tool.
 
-The output also shows the retained front's ideal point: the best observed value for each active
-objective after any `--limit` filters are applied.
+The output shows the best observed value on each active objective, the top five candidates by
+default, and how their raw objectives differ from the selected member. Use `--show-top N` to
+change the shortlist size. A positive delta means the alternative has a higher raw value.
+The objective's direction determines whether that is an improvement.
+
+Use `--json` to save a versioned selection record. It identifies the loaded set by hashing
+the ordered filename and file-digest pairs. The selected member and shortlist include SHA-256
+digests of the exact result JSON bytes read. The record also includes the ranked pool size,
+resolved objectives and directions, applied limits, method, scales, weights, targets and
+sensitivity checks where applicable. Freeze a copy of a changing optimizer front if you need
+to reproduce a decision later.
 
 Use `-s FILE` / `--save-selected FILE` to copy the selected member without reserializing it. Use
 `-f DIR` / `--save-filtered DIR` to copy every member retained immediately after limits and write
@@ -104,8 +115,96 @@ staged before installation. Concurrent destination mutation is outside the tool'
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_equity` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
-Normalization uses the active front's min/max values, so removing dominated candidates can
-change the selected winner. The front covers only saved candidates, not discarded optimizer results.
+Default scaling applies `(2 / pi) * atan(value)` and uses the ranked pool's min/max values.
+Changing the pool can change the ranking scale. The front covers the saved candidates.
+A newly constrained optimization can discover candidates discarded from the original front.
+
+### Fixed scales, aspirations and sensitivity
+
+Repeat `--scale METRIC=VALUE` once per active objective for `ideal`, `utility`,
+`reference`, `aspiration` or `outranking`. A scale is the size of a meaningful
+change in raw metric units. For example, a scale of `0.01` for a fractional Ulcer
+Index means one percentage point. Fixed scales require finite active objective values.
+For `reference`, fixed scales measure distance to the supplied raw target. Default scaling
+clamps targets to the observed range. The ideal point still moves with the ranked pool when the method uses the observed ideal.
+
+For `aspiration`, provide a finite target and positive scale for each active objective.
+Each objective's shortfall is the gap in the unfavorable direction, divided by its scale
+and floored at zero. The rank minimizes the largest weighted shortfall, then minimizes the
+weighted sum of signed shortfalls. Exceeding an aspiration can improve the tie-break. The
+nondominated pool is ranked after applying any explicit eligibility limits.
+
+```sh
+# Illustrative targets and scales. Replace them with your own preferences.
+passivbot tool pareto optimize_results/.../pareto --method aspiration \
+  --target position_held_time_weighted_mean_hours=24 \
+  --target ulcer_index_fraction_strategy_equity=0.08 \
+  --scale position_held_time_weighted_mean_hours=2 \
+  --scale ulcer_index_fraction_strategy_equity=0.01 \
+  --sensitivity-target-scales 0.5 --json > selection.json
+```
+
+Weighted methods probe transfers of one percentage point of total weight between pairs of
+active objectives by default. Set `--sensitivity-weight-fraction` to change the transfer
+or to `0` to disable these checks. For aspiration, `--sensitivity-target-scales` also
+moves each target by the specified multiple of its scale in both directions. The probes
+keep the ranked pool fixed. They report preference changes that would change the winner.
+
+### Attach native CPU qualification evidence
+
+Use `--qualification FILE` with either Pareto command to display saved native CPU replay
+evidence next to the selection. The operator supplies the evidence after replay. Candidate
+entries join on the result file's byte SHA-256 from the selection record. Record the frozen
+effective config digest separately, the native engine binary digest, and the digest of each
+scenario's frozen replay input manifest, including data and execution assumptions. This sidecar
+reports evidence independently of the ranking.
+
+The following example uses placeholder SHA-256 digests. Replace them with digests from your run.
+
+```json
+{
+  "schema_version": 1,
+  "definition_version": 2,
+  "engine": "rust_cpu",
+  "engine_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scenarios": {
+    "holdout-stress": {
+      "split": "holdout",
+      "execution": "stress",
+      "start_date": "2026-01-01",
+      "end_date": "2026-02-01",
+      "inputs_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "candidates": {
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc": {
+      "effective_config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "results": {
+        "holdout-stress": {
+          "status": "completed",
+          "effective_start_date": "2026-01-01T00:00:00Z",
+          "effective_end_date": "2026-02-01T23:59:00Z",
+          "liquidated": false,
+          "report": "replay/analysis.json",
+          "metrics": {"drawdown_max_fraction_strategy_equity": 0.12}
+        }
+      }
+    }
+  }
+}
+```
+
+Use `development`, `holdout` or `forward` for the split and `baseline` or `stress`
+for execution. Scenario bounds accept inclusive UTC dates or UTC timestamps. Completed and
+terminated results include the actual UTC replay bounds, liquidation flag, and a report
+reference. Completed results also include raw metrics, including the native `metric_status`
+entries for null values. A terminated result requires a reason and may include metrics.
+An unavailable result includes a reason and optionally a report reference. An optional
+top-level `incumbent` has the same shape as a candidate entry.
+
+References are displayed as supplied. The evidence file is operator-attested. Use comparable
+replays and keep unused holdouts separate from development scenarios.
+See the [campaign qualification runbook](ai/runbooks/optimization_campaign.md#cpu-qualification-of-gpu-candidates).
 
 ## Pareto trade-off explorer
 
@@ -141,20 +240,23 @@ facts retain explicit export statuses and have no plot coordinates. Off-axis fil
 compare genuine infinite endpoints normally; missing or undefined values fail a filter.
 Per-scenario values are not exported as separate metrics. No full configs are embedded.
 
-The highlighted **star is the chosen Pareto member closest to the theoretical ideal** on
-those selected axes. Distance is Euclidean with equal weights after normalizing each axis
-to the surviving, plottable candidates' range. The marker uses the finite raw chart
-coordinates; command-line selection uses the documented bounded objective coordinates. Constant axes (range at most `1e-15`) contribute zero distance; exact ties
-choose the first member in saved loading order. The chosen filename and values appear below
-the plot and on hover.
+The **CLI selection** uses the same Python selector, objectives, and selection arguments as
+`passivbot tool pareto`. It embeds the versioned record in the export, including ranking,
+sensitivity and any matching qualification evidence. For example, use the same
+`--method`, `--objectives` and `--limit` arguments in both commands. With `--scenario`,
+the chart uses that scenario's stored values. Browser axis, direction and filter changes leave
+the CLI selection fixed. The panel still identifies it when the selected point is off the chart
+or excluded by a browser filter.
 
-An **open blue diamond shows the theoretical ideal**: the best visible value on each selected
-axis, using its higher/lower-is-better direction. Different candidates may provide each
-coordinate, so the diamond need not represent a real candidate. Both markers update when
-axes, directions, or limits change, and remain distinct when they coincide. Direction selectors use saved
-scoring goals or known metric goals; unknown directions, including standard deviations,
-require a choice before either marker appears. In 2D, maximization axes are reversed so better
-values always lie toward the lower-left. 3D axes use normal orientation.
+**Closest on plotted axes** is a separate marker. It uses equal-weight Euclidean distance
+on the visible candidates' normalized raw coordinates. Constant axes (range at most `1e-15`)
+contribute zero distance and exact ties retain the first member in saved loading order.
+The **theoretical ideal** diamond marks the best visible value on each axis. Different
+candidates can provide those values. Both geometric markers update with axis or filter changes.
+Direction selectors use saved scoring goals or known metric goals. Choose a direction for
+unknown goals, including standard deviations, to show the geometric markers. In 2D,
+maximization axes are reversed so better values lie toward the lower-left. 3D axes use
+normal orientation.
 
 Limit cards offer inclusive floors and ceilings, a slider over the saved range, and an exact
 numeric input that also permits thresholds outside that range. Moving a slider or entering a
@@ -162,7 +264,7 @@ number enables the limit; uncheck its box to disable it. **Add** creates a limit
 including one not plotted. Enabled limits remain active when axes change. **Reset all limits**
 restores the unfiltered data. The ideal is recomputed from candidates surviving every enabled
 limit and having finite values on every selected axis. Counts report exclusions from limits
-and missing axis values separately. No survivors means neither marker is shown. Axis and color ranges
+and missing axis values separately. The geometric markers disappear when the chart is empty. Axis and color ranges
 stay fixed to the saved data during filtering, so changes remain visually comparable; zoom
 and the 3D camera are retained when only limits change.
 
@@ -177,8 +279,8 @@ input: `optimize_results/<run>/pareto` or its run directory produces `pareto_plo
 a custom front directory uses its directory name, and a single JSON uses its filename stem.
 Both initial dimensions use the same filename because the HTML supports switching views.
 The generated directory is ignored by Git. `--output` overrides this location. Use `--force`
-to replace existing output and `--open` to launch a browser. Regenerate older HTML files to obtain the new controls. Exports contain filenames and all saved metric
-values, so keep plots made from private results private. Large fronts produce larger HTML files.
+to replace existing output and `--open` to launch a browser. Regenerate older HTML files to obtain the new controls. Exports contain filenames, saved metric values, and any attached qualification evidence,
+so keep plots made from private results private. Large fronts produce larger HTML files.
 
 ## Pareto transformations / static plots
 

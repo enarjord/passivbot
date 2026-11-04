@@ -519,3 +519,160 @@ def test_stale_definition_version_cannot_be_exported(tmp_path):
     with pytest.raises(SystemExit):
         pareto_plot.main([str(source), "--output", str(output)])
     assert not output.exists()
+
+
+def test_cli_selection_record_matches_html_and_ignores_initial_axes(tmp_path, capsys):
+    front = tmp_path / "pareto"
+    front.mkdir()
+    write_candidate(front / "strong_growth.json", (0.4, 0.1, 2.0))
+    write_candidate(front / "strong_sortino.json", (0.2, 0.3, 5.0))
+    args = [
+        "--method",
+        "ideal",
+        "--weight",
+        f"{METRICS[2]}=3",
+        "--limit",
+        f"{METRICS[0]}>=0.1",
+        "--show-top",
+        "2",
+    ]
+    assert cli_main(["tool", "pareto", str(front), *args, "--json"]) == 0
+    cli_record = json.loads(capsys.readouterr().out)
+    assert cli_record["selected"]["file"] == "strong_sortino.json"
+    records = []
+    for index, axes in enumerate((METRICS[:2], METRICS[::-1])):
+        output = tmp_path / f"view-{index}.html"
+        assert (
+            cli_main(
+                [
+                    "tool",
+                    "pareto-plot",
+                    str(front),
+                    *axes,
+                    *args,
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        records.append(read_payload(output.read_text())["selection"])
+    for record in records:
+        assert str(tmp_path) not in json.dumps(record)
+        for field in (
+            "candidate_set_sha256",
+            "objectives",
+            "applied_limits",
+            "sensitivity",
+            "settings",
+        ):
+            assert record[field] == cli_record[field]
+        assert (
+            record["selected"]["file_sha256"] == cli_record["selected"]["file_sha256"]
+        )
+        assert record["top_candidates"][1]["file"] == "strong_growth.json"
+        assert record["top_candidates"][1]["objective_deltas"][
+            METRICS[0]
+        ] == pytest.approx(0.2)
+        assert record["top_candidates"][1]["score_margin"] > 0
+    assert records[0] == records[1]
+
+
+def test_scenario_export_uses_values_from_the_selected_scenario(tmp_path):
+    source = tmp_path / "candidate.json"
+    write_candidate(source, layout="suite")
+    output = tmp_path / "scenario.html"
+    assert (
+        pareto_plot.main([str(source), "--scenario", "example", "-o", str(output)]) == 0
+    )
+    data = read_payload(output.read_text())
+    assert data["selection"]["scenario"] == "example"
+    assert data["selection"]["selected"]["objectives"][METRICS[0]] == pytest.approx(
+        20.02
+    )
+    assert data["metrics"][0]["values"] == [pytest.approx(20.02)]
+
+
+def test_empty_cli_eligibility_fails_without_writing_plot(front, tmp_path, capsys):
+    output = tmp_path / "excluded.html"
+    with pytest.raises(SystemExit):
+        pareto_plot.main([str(front), "--limit", f"{METRICS[0]}>=1", "-o", str(output)])
+    assert (
+        "No Pareto candidates remained after applying limits" in capsys.readouterr().err
+    )
+    assert not output.exists()
+
+
+def test_selection_replay_evidence_is_embedded_as_inert_data(front, tmp_path, capsys):
+    import hashlib
+
+    output = tmp_path / "replay.html"
+    evidence = tmp_path / "evidence.html"
+    digest = hashlib.sha256((front / "a.json").read_bytes()).hexdigest()
+    reason = '</script><script>alert("x")</script>'
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "definition_version": 2,
+                "engine": "rust_cpu",
+                "engine_sha256": "a" * 64,
+                "scenarios": {
+                    "stress": {
+                        "split": "holdout",
+                        "execution": "stress",
+                        "start_date": "2026-01-01",
+                        "end_date": "2026-02-01",
+                        "inputs_sha256": "b" * 64,
+                    }
+                },
+                "candidates": {
+                    digest: {
+                        "effective_config_sha256": "c" * 64,
+                        "results": {
+                            "stress": {"status": "unavailable", "reason": reason}
+                        },
+                    }
+                },
+            }
+        )
+    )
+    assert (
+        pareto_plot.main(
+            [str(front), "--qualification", str(evidence), "-o", str(output)]
+        )
+        == 0
+    )
+    page = output.read_text()
+    assert reason not in page
+    record = read_payload(page)["selection"]
+    assert record["selected"]["file_sha256"] == digest
+    assert (
+        record["qualification"]["candidates"][digest]["results"]["stress"]["reason"]
+        == reason
+    )
+
+    original = evidence.read_bytes()
+    with pytest.raises(SystemExit):
+        pareto_plot.main(
+            [str(front), "--qualification", str(evidence), "--output", str(evidence), "--force"]
+        )
+    assert "Output must not overwrite qualification evidence" in capsys.readouterr().err
+    assert evidence.read_bytes() == original
+
+
+def test_selection_distinguishes_symlinked_candidates_with_the_same_target_basename(tmp_path):
+    front = tmp_path / "pareto"
+    front.mkdir()
+    for name, values in (("first", (0.2, 0.3, 5.0)), ("second", (0.4, 0.1, 2.0))):
+        destination = tmp_path / name / "candidate.json"
+        destination.parent.mkdir()
+        write_candidate(destination, values)
+        (front / f"{name}.json").symlink_to(destination)
+    output = tmp_path / "view.html"
+    assert pareto_plot.main(
+        [str(front), "--weight", f"{METRICS[0]}=4", "--output", str(output)]
+    ) == 0
+    data = read_payload(output.read_text())
+    assert data["names"] == ["first.json", "second.json"]
+    assert data["selection"]["selected"]["file"] == "second.json"
