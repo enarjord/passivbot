@@ -266,8 +266,16 @@ fn venue_value(count: f64, step: f64, scale: Option<(f64, f64)>) -> f64 {
 }
 
 fn round_at_venue_step(value: f64, step: f64, mode: RoundingMode) -> f64 {
+    round_at_venue_step_with_scale(value, step, mode, exact_step_scale(step))
+}
+
+fn round_at_venue_step_with_scale(
+    value: f64,
+    step: f64,
+    mode: RoundingMode,
+    scale: Option<(f64, f64)>,
+) -> f64 {
     let units = value / step;
-    let scale = exact_step_scale(step);
     let mut count = match mode {
         RoundingMode::Nearest => units.round(),
         RoundingMode::Floor => units.floor(),
@@ -511,59 +519,111 @@ fn canonical_step_value(count: f64, step: f64) -> Option<f64> {
 pub const GPU_MARKET_EXECUTION_SELL_LANE: usize = 0;
 pub const GPU_MARKET_EXECUTION_BUY_LANE: usize = 1;
 
-/// Recover only an exact, unique positive int32 venue count. The quotient
-/// selects candidates; canonical decimal equality is the acceptance proof.
-fn gpu_market_price_tick_count(price: f64, step: f64) -> Result<i32, &'static str> {
-    if !price.is_finite() || price <= 0.0 || !step.is_finite() || step <= 0.0 {
-        return Err("GPU market price and effective step must be finite and positive");
-    }
-    let nearest = (price / step).round();
-    if !nearest.is_finite() || nearest < 0.0 || nearest > i32::MAX as f64 + 1.0 {
-        return Err("GPU market price count exceeds the positive int32 domain");
-    }
-    let mut proven = None;
-    for count in [nearest - 1.0, nearest, nearest + 1.0] {
-        if count < 1.0 || count > i32::MAX as f64 {
-            continue;
-        }
-        if canonical_step_value(count, step) != Some(price) {
-            continue;
-        }
-        if proven.is_some()
-            || canonical_step_value(count - 1.0, step) == Some(price)
-            || canonical_step_value(count + 1.0, step) == Some(price)
-        {
-            return Err("GPU market price does not have a unique venue count");
-        }
-        proven = Some(count as i32);
-    }
-    proven.ok_or("GPU market price does not exactly round-trip through its venue count")
+/// One prepared price step per coin, reused for both sides of every active close.
+pub(crate) struct GpuMarketPriceStep {
+    step: f64,
+    rounding_scale: Option<(f64, f64)>,
+    decimal: Option<DecimalParts>,
+    proof_scale: Option<(f64, f64)>,
 }
 
-/// Prepare SELL then BUY counts using the existing CPU market-fill rounding.
-/// Invalid active data or an unprovable count is an error, never a sentinel.
-pub fn gpu_market_execution_tick_counts(
-    close: f64,
-    price_step: f64,
-    slippage: f64,
-) -> Result<[i32; 2], &'static str> {
-    if !close.is_finite() || close <= 0.0 {
-        return Err("Active GPU market closes must be finite and positive");
+impl GpuMarketPriceStep {
+    pub(crate) fn new(price_step: f64) -> Option<Self> {
+        if !price_step.is_finite() || price_step < 0.0 {
+            return None;
+        }
+        let step = price_step.max(f64::EPSILON);
+        let decimal = DecimalParts::from_float(step);
+        let proof_scale = decimal.and_then(|parts| {
+            if !(-15..=15).contains(&parts.exponent) {
+                return None;
+            }
+            let numerator = parts
+                .coefficient
+                .checked_mul(10_i128.pow(parts.exponent.max(0) as u32))?;
+            let denominator = 10_u64.pow((-parts.exponent).max(0) as u32);
+            (numerator < 1_i128 << 53).then_some((numerator as f64, denominator as f64))
+        });
+        Some(Self {
+            step,
+            rounding_scale: exact_step_scale(step),
+            decimal,
+            proof_scale,
+        })
     }
-    if !price_step.is_finite() || price_step < 0.0 {
-        return Err("GPU market price steps must be finite and nonnegative");
+
+    // Only nonnegative integral counts through i32::MAX + 1 reach this method.
+    fn canonical_value(&self, count: f64) -> Option<f64> {
+        if let Some((coefficient, denominator)) = self.proof_scale {
+            let numerator = count * coefficient;
+            // Below 2^53 the product is exact. Division by the exact power of
+            // ten rounds the rational value once, like the decimal parser.
+            if numerator < (1_u64 << 53) as f64 {
+                return Some(numerator / denominator);
+            }
+        }
+        self.decimal?
+            .multiply(DecimalParts {
+                coefficient: count as i128,
+                exponent: 0,
+            })?
+            .to_float()
     }
-    if !slippage.is_finite() || slippage < 0.0 {
-        return Err("GPU market slippage must be finite and nonnegative");
+
+    /// Recover only an exact, unique positive int32 venue count. The quotient
+    /// selects candidates; canonical decimal equality is the acceptance proof.
+    fn tick_count(&self, price: f64) -> Result<i32, &'static str> {
+        if !price.is_finite() || price <= 0.0 {
+            return Err("GPU market price and effective step must be finite and positive");
+        }
+        let nearest = (price / self.step).round();
+        if !nearest.is_finite() || nearest < 0.0 || nearest > i32::MAX as f64 + 1.0 {
+            return Err("GPU market price count exceeds the positive int32 domain");
+        }
+        let mut proven = None;
+        for count in [nearest - 1.0, nearest, nearest + 1.0] {
+            if count < 1.0 || count > i32::MAX as f64 {
+                continue;
+            }
+            if self.canonical_value(count) != Some(price) {
+                continue;
+            }
+            if proven.is_some()
+                || self.canonical_value(count - 1.0) == Some(price)
+                || self.canonical_value(count + 1.0) == Some(price)
+            {
+                return Err("GPU market price does not have a unique venue count");
+            }
+            proven = Some(count as i32);
+        }
+        proven.ok_or("GPU market price does not exactly round-trip through its venue count")
     }
-    let close = close.max(f64::EPSILON);
-    let step = price_step.max(f64::EPSILON);
-    let sell = round_dn(close * (1.0 - slippage), step).max(step);
-    let buy = round_up(close * (1.0 + slippage), step).max(step);
-    let mut counts = [0; 2];
-    counts[GPU_MARKET_EXECUTION_SELL_LANE] = gpu_market_price_tick_count(sell, step)?;
-    counts[GPU_MARKET_EXECUTION_BUY_LANE] = gpu_market_price_tick_count(buy, step)?;
-    Ok(counts)
+
+    /// Prepare SELL then BUY counts using the existing CPU market-fill rounding.
+    /// Invalid active data or an unprovable count is an error, never a sentinel.
+    pub(crate) fn execution_ticks(
+        &self,
+        close: f64,
+        slippage: f64,
+    ) -> Result<[i32; 2], &'static str> {
+        if !close.is_finite() || close <= 0.0 {
+            return Err("Active GPU market closes must be finite and positive");
+        }
+        if !slippage.is_finite() || slippage < 0.0 {
+            return Err("GPU market slippage must be finite and nonnegative");
+        }
+        let close = close.max(f64::EPSILON);
+        let round = |value, mode| {
+            round_at_venue_step_with_scale(value, self.step, mode, self.rounding_scale)
+                .max(self.step)
+        };
+        let sell = round(close * (1.0 - slippage), RoundingMode::Floor);
+        let buy = round(close * (1.0 + slippage), RoundingMode::Ceil);
+        let mut counts = [0; 2];
+        counts[GPU_MARKET_EXECUTION_SELL_LANE] = self.tick_count(sell)?;
+        counts[GPU_MARKET_EXECUTION_BUY_LANE] = self.tick_count(buy)?;
+        Ok(counts)
+    }
 }
 
 /// Recover a venue count only when the quantity uniquely round-trips in the
@@ -1213,12 +1273,57 @@ mod tests {
         tolerant_round_up_preserve_step,
     };
 
+    fn gpu_market_execution_tick_counts(
+        close: f64,
+        step: f64,
+        slippage: f64,
+    ) -> Result<[i32; 2], &'static str> {
+        super::GpuMarketPriceStep::new(step)
+            .ok_or("GPU market price steps must be finite and nonnegative")?
+            .execution_ticks(close, slippage)
+    }
+
+    #[test]
+    fn gpu_market_tick_values_match_decimal_proof_across_fast_and_fallback_ranges() {
+        for authored in [
+            0.0,
+            1e-300,
+            1e-15,
+            3e-12,
+            0.01,
+            0.1,
+            0.1234567890123456,
+            2.5,
+            100.0,
+            5_000_001.0,
+            1e200,
+            1e300,
+        ] {
+            let step = super::GpuMarketPriceStep::new(authored).unwrap();
+            for count in [
+                0.0,
+                1.0,
+                3.0,
+                10_000.0,
+                1_801_439_490.0,
+                i32::MAX as f64,
+                i32::MAX as f64 + 1.0,
+            ] {
+                assert_eq!(
+                    step.canonical_value(count),
+                    super::canonical_step_value(count, step.step).filter(|value| value.is_finite()),
+                    "authored step {authored}, count {count}",
+                );
+            }
+        }
+    }
+
     #[test]
     fn gpu_market_ticks_preserve_the_native_f64_market_boundary() {
         let close = 167.84391568013112_f64;
         let step = 0.01_f64;
         let slippage = 0.0005_f64;
-        let ticks = super::gpu_market_execution_tick_counts(close, step, slippage).unwrap();
+        let ticks = gpu_market_execution_tick_counts(close, step, slippage).unwrap();
         assert_eq!(ticks, [16775, 16793]);
         let old_sell = ((close as f32 * (1.0_f32 - slippage as f32)) / step as f32).floor() as i32;
         assert_eq!(old_sell, 16776);
@@ -1240,7 +1345,7 @@ mod tests {
             (0.3_f64.next_up(), [3, 4]),
         ] {
             assert_eq!(
-                super::gpu_market_execution_tick_counts(close, 0.1, 0.0).unwrap(),
+                gpu_market_execution_tick_counts(close, 0.1, 0.0).unwrap(),
                 expected
             );
         }
@@ -1255,8 +1360,7 @@ mod tests {
         ] {
             let step = authored_step.max(f64::EPSILON);
             let close = close.max(f64::EPSILON);
-            let actual =
-                super::gpu_market_execution_tick_counts(close, authored_step, slippage).unwrap();
+            let actual = gpu_market_execution_tick_counts(close, authored_step, slippage).unwrap();
             assert_eq!(
                 super::canonical_step_value(actual[0] as f64, step),
                 Some(round_dn(close * (1.0 - slippage), step).max(step))
@@ -1270,12 +1374,10 @@ mod tests {
 
     #[test]
     fn gpu_market_tick_proof_rejects_off_grid_values_and_int32_overflow() {
-        assert_eq!(super::gpu_market_price_tick_count(0.01, 0.01), Ok(1));
+        let step = super::GpuMarketPriceStep::new(0.01).unwrap();
+        assert_eq!(step.tick_count(0.01), Ok(1));
         let maximum = super::canonical_step_value(i32::MAX as f64, 0.01).unwrap();
-        assert_eq!(
-            super::gpu_market_price_tick_count(maximum, 0.01),
-            Ok(i32::MAX)
-        );
+        assert_eq!(step.tick_count(maximum), Ok(i32::MAX));
         let overflow = super::canonical_step_value(i32::MAX as f64 + 1.0, 0.01).unwrap();
         for price in [
             0.0,
@@ -1285,23 +1387,24 @@ mod tests {
             0.3_f64.next_up(),
             overflow,
         ] {
-            assert!(super::gpu_market_price_tick_count(price, 0.01).is_err());
+            assert!(step.tick_count(price).is_err());
         }
-        assert!(super::gpu_market_price_tick_count(0.3_f64.next_up(), 0.1).is_err());
-        assert!(super::gpu_market_execution_tick_counts(overflow, 0.01, 0.0).is_err());
-        assert!(super::gpu_market_execution_tick_counts(f64::MAX, 1.0, 1.0).is_err());
+        let tenth = super::GpuMarketPriceStep::new(0.1).unwrap();
+        assert!(tenth.tick_count(0.3_f64.next_up()).is_err());
+        assert!(gpu_market_execution_tick_counts(overflow, 0.01, 0.0).is_err());
+        assert!(gpu_market_execution_tick_counts(f64::MAX, 1.0, 1.0).is_err());
     }
 
     #[test]
     fn gpu_market_ticks_reject_invalid_active_operands() {
         for close in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(super::gpu_market_execution_tick_counts(close, 0.01, 0.0).is_err());
+            assert!(gpu_market_execution_tick_counts(close, 0.01, 0.0).is_err());
         }
         for step in [-0.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(super::gpu_market_execution_tick_counts(1.0, step, 0.0).is_err());
+            assert!(gpu_market_execution_tick_counts(1.0, step, 0.0).is_err());
         }
         for slippage in [-0.001, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(super::gpu_market_execution_tick_counts(1.0, 0.01, slippage).is_err());
+            assert!(gpu_market_execution_tick_counts(1.0, 0.01, slippage).is_err());
         }
     }
 

@@ -472,7 +472,8 @@ Prepared market execution prices use tick ABI 1. Rust selects SELL/BUY counts fr
 original f64 closes and slippage before f32 packing; active counts must be uniquely
 representable positive int32 values. Preparation rejects unrepresentable active prices.
 Each candle/coin adds two int32 values (eight bytes). Packing remains chunked, with bounded
-conversion scratch. Original f64 slippage and the ABI participate in immutable packing and
+conversion scratch and shared price-step metadata for each coin within a chunk. Original f64
+slippage and the ABI participate in immutable packing and
 residency identity. Prepared execution contract version 6 rejects older layouts; source
 and evaluation identities also prevent reuse of incompatible saved fitness.
 
