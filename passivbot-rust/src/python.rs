@@ -27,6 +27,7 @@ use crate::types::{
     OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
     TrailingPriceBundle, TwelEnforcerPolicy,
 };
+use crate::utils::GpuMarketPriceStep;
 use ndarray::{Array2, Array3};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
@@ -81,13 +82,17 @@ pub fn prepare_gpu_market_execution_ticks<'py>(
             "GPU market row offset must be nonnegative and its chunk end must fit int64",
         ));
     }
-    for coin in 0..coins {
-        let step = price_steps_f64_list[coin];
-        if !step.is_finite() || step < 0.0 {
-            return Err(PyValueError::new_err(format!(
+    let mut price_steps = Vec::new();
+    price_steps
+        .try_reserve_exact(coins)
+        .map_err(|_| PyMemoryError::new_err("Unable to allocate GPU market price steps"))?;
+    for (coin, step) in price_steps_f64_list.into_iter().enumerate() {
+        let step = GpuMarketPriceStep::new(step).ok_or_else(|| {
+            PyValueError::new_err(format!(
                 "GPU market price step must be finite and nonnegative for coin {coin}"
-            )));
-        }
+            ))
+        })?;
+        price_steps.push(step);
         let first = first_valid_indices_list[coin];
         let last = last_valid_indices_list[coin];
         if first <= last && first < 0 {
@@ -116,14 +121,13 @@ pub fn prepare_gpu_market_execution_ticks<'py>(
             {
                 continue;
             }
-            let ticks = crate::utils::gpu_market_execution_tick_counts(
-                closes[(row, coin)],
-                price_steps_f64_list[coin],
-                slippage_f64,
-            )
-            .map_err(|message| {
-                PyValueError::new_err(format!("{message}; global row {global_row}, coin {coin}"))
-            })?;
+            let ticks = price_steps[coin]
+                .execution_ticks(closes[(row, coin)], slippage_f64)
+                .map_err(|message| {
+                    PyValueError::new_err(format!(
+                        "{message}; global row {global_row}, coin {coin}"
+                    ))
+                })?;
             let start = (row * coins + coin) * 2;
             values[start..start + 2].copy_from_slice(&ticks);
         }

@@ -534,6 +534,9 @@ since the latest release tag; these features may already be available when insta
 - Reduce requested GPU HSL EMA tails one scope at a time, retaining exact observed
   samples while allowing larger replay batches within the existing scratch budget.
 
+- Speed up GPU market data preparation by reusing each coin's exact price-step conversion
+  across candles and avoiding decimal formatting for representable tick counts.
+
 - Prepare GPU market execution tick counts in Rust from original-precision candle prices
   and slippage, preventing f32 packing from selecting an adjacent venue tick for ordinary,
   HSL panic and delisting market fills. Reject unrepresentable active prices, invalidate
