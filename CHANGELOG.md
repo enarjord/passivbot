@@ -41,6 +41,9 @@ since the latest release tag; these features may already be available when insta
   record input preparation plus the actual search algorithm, population and seed facts
   in new sessions, without changing fitness identity or backfilling legacy runs.
 
+- Give the automatic GPU optimizer room to queue the scenario requests for its bounded
+  candidate window, reducing fragmented replays in suites while keeping dispatch limits.
+
 - Bound archive discovery for unknown leading candle gaps, respect source-bound
   history limits before archive scheduling, and support public REST-only simulation
   acquisition without relaxing coverage checks or offline behavior. Simulation listing boundaries

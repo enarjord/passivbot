@@ -97,7 +97,8 @@ class NativeDatasetRegistry:
             self.bindings = self._execution_variants(base, evaluator, bindings, vector, overrides)
             self.planner = NativeCandidatePlanner(evaluator, self.bindings, overrides_list=overrides)
             # Metric surface and effective static inputs must be valid before registration.
-            self.planner.prepare("preparation", vector)
+            plan = self.planner.prepare("preparation", vector)
+            self.requests_per_candidate = len(plan.requests)
         except BaseException:
             try:
                 self.close()

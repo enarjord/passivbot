@@ -69,6 +69,7 @@ class FakeService(GpuBacktestService):
         kwargs.pop("max_dispatch_candidate_bars")
         kwargs.pop("interrupt_check")
         kwargs.pop("tuning_mode")
+        kwargs.pop("auto_request_capacity")
         super().__init__(**kwargs)
 
     def register_dataset(self, dataset_id, dataset):

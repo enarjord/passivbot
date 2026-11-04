@@ -43,7 +43,8 @@ class NativeBacktestService:
 
     def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
-                 tuning_mode="auto", input_memory_budget=None, on_inputs_prepared=None):
+                 tuning_mode="auto", input_memory_budget=None, on_inputs_prepared=None,
+                 auto_request_capacity=None):
         from optimization.gpu.autotune import is_auto
         from optimization.gpu.execution_tuning import ExecutionBatchTuner
 
@@ -56,6 +57,17 @@ class NativeBacktestService:
         self._batch_tuner = (ExecutionBatchTuner(headroom=self._headroom, diagnostics=diagnostics)
                              if automatic else None)
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)
+        if auto_request_capacity is not None and (
+            type(auto_request_capacity) is not int or auto_request_capacity < 1
+        ):
+            raise ValueError("automatic request capacity must be a positive integer")
+        # Candidate-major admission can place several scenario requests per
+        # candidate in the queue. Expand transport capacity independently of
+        # the original dispatch ceiling when width tuning is active.
+        request_capacity = (
+            max(max_pending, auto_request_capacity)
+            if automatic and auto_request_capacity is not None else max_pending
+        )
         self._batch_policy = self._batch_tuner or ExecutionBatchTuner(initial=requested_width, enabled=False)
         if (isinstance(max_dispatch_candidate_bars, bool)
                 or not isinstance(max_dispatch_candidate_bars, int) or max_dispatch_candidate_bars < 1):
@@ -73,7 +85,7 @@ class NativeBacktestService:
         self._factual_capacities = {}
         self._residency = None
         self._executor = GpuBacktestService(
-            batch_size=requested_width, max_pending=max_pending,
+            batch_size=requested_width, max_pending=request_capacity,
             max_batch_delay=(0.005 if max_batch_delay is None and tuning_mode == "off"
                              else max_batch_delay),
             worker_context=self._worker_scope,
