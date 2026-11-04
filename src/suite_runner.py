@@ -1485,6 +1485,45 @@ def _apply_override(
     target[final_key] = value
 
 
+def _dataset_covers_scenario_range(
+    dataset: "ExchangeDataset",
+    scenario: SuiteScenario,
+    base_config: Dict[str, Any],
+) -> bool:
+    """Return True if the dataset's timestamps span the scenario's date range."""
+    timestamps = getattr(dataset, "timestamps", None)
+    if timestamps is None or len(timestamps) == 0:
+        return True
+    base_start = str(require_config_value(base_config, "backtest.start_date"))
+    base_end = str(require_config_value(base_config, "backtest.end_date"))
+    start, end = _scenario_date_window(base_start, base_end, scenario)
+    start_ts = _normalize_date_to_ts(start)
+    end_ts = _normalize_date_to_ts(end)
+    data_start = int(timestamps[0])
+    data_end = int(timestamps[-1])
+    return data_start <= start_ts and data_end >= end_ts
+
+
+def _compute_dataset_available_exchanges(
+    datasets: Dict[str, "ExchangeDataset"],
+) -> List[str]:
+    """Return the union of real exchanges across prepared datasets.
+
+    Dataset keys (e.g. "combined") are labels, not exchanges; a "combined"
+    dataset covers every configured exchange, so its real exchanges live in
+    ``available_exchanges`` rather than in its key/``exchange`` label.
+    """
+    if len(datasets) == 1 and "combined" in datasets:
+        return datasets["combined"].available_exchanges
+    return sorted(
+        {
+            exchange
+            for dataset in datasets.values()
+            for exchange in dataset.available_exchanges
+        }
+    )
+
+
 async def run_backtest_scenario(
     scenario: SuiteScenario,
     base_config: Dict[str, Any],
@@ -1552,8 +1591,14 @@ async def run_backtest_scenario(
 
     # Use combined dataset when:
     # 1. It exists, AND
-    # 2. Scenario uses all actual exchanges (not a strict subset)
+    # 2. Scenario uses all actual exchanges (not a strict subset), AND
+    # 3. (when per-exchange datasets are also present) combined covers the
+    #    scenario's date range.
     use_combined = has_combined and scenario_exchanges == actual_exchanges_set
+    if use_combined and any(key != "combined" for key in datasets):
+        use_combined = _dataset_covers_scenario_range(
+            datasets["combined"], scenario, base_config
+        )
 
     if use_combined:
         dataset = datasets["combined"]
@@ -2232,10 +2277,7 @@ async def run_backtest_suite_async(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    if len(datasets) == 1 and "combined" in datasets:
-        dataset_available_exchanges = datasets["combined"].available_exchanges
-    else:
-        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
+    dataset_available_exchanges = _compute_dataset_available_exchanges(datasets)
 
     # Deduplicate scenarios that resolve to identical effective inputs.
     seen_signatures: Dict[str, str] = {}
