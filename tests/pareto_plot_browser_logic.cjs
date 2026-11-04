@@ -77,3 +77,48 @@ const statusData = {names:['positive','negative','undefined'],metrics:[
 assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','floor',0)]).indices,[0]);
 assert.deepEqual(computeView(statusData,['x','y'],['max','min'],[bound('raw','ceiling',0)]).indices,[1]);
 assert.deepEqual(computeView(statusData,['x','raw'],['max','min'],[]).indices,[]);
+
+// The ranking pick is supplied by Python. Axis settings and plot filters only affect its visibility.
+const ranked = {...data, selection:{selected:{file:'b'}}};
+for (const axes of [['adg','risk'],['adg','risk','third']]) {
+    const goals = axes.map(key => data.metrics.find(item => item.key === key).goal);
+    const result = plotSpec(ranked,axes,goals,[]);
+    const pick = result.traces.find(trace => trace.name === 'Selection pick');
+    const projection = result.traces.find(trace => trace.name === 'Closest on plotted axes');
+    assert.equal(result.pickVisibility,'visible');
+    assert.equal(pick.marker.symbol,'circle-open');
+    assert.deepEqual(pick.customdata[0],['b','']);
+    assert.notEqual(projection.customdata[0][0],pick.customdata[0][0]);
+    assert.equal(axes.length === 3,Array.isArray(pick.z));
+}
+const hiddenPick = plotSpec(ranked,['adg','risk'],['max','min'],[bound('adg','floor',0.025)]);
+assert.equal(hiddenPick.pickVisibility,'outside plot limits');
+assert.equal(hiddenPick.traces.some(trace => trace.name === 'Selection pick'),false);
+const missingPick = plotSpec(ranked,['adg','extra'],['max','max'],[]);
+assert.equal(missingPick.pickVisibility,'missing coordinates');
+const unspecifiedDirection = plotSpec(ranked,['adg','risk'],[null,'min'],[]);
+assert.equal(unspecifiedDirection.pickVisibility,'visible');
+assert.deepEqual(unspecifiedDirection.traces.find(trace => trace.name === 'Selection pick').customdata[0],['b','']);
+assert.equal(unspecifiedDirection.traces.some(trace => trace.name === 'Closest on plotted axes'),false);
+const overlappingPick = plotSpec({...tie,selection:{selected:{file:'second'}}},['x','y'],['max','min'],[bound('x','floor',1)]);
+assert.deepEqual(overlappingPick.traces.slice(1).map(trace => trace.marker.symbol),['circle-open','diamond-open','star']);
+for (const trace of overlappingPick.traces.slice(1)) {
+    assert.deepEqual(trace.x,[1]);
+    assert.deepEqual(trace.y,[1]);
+}
+
+// Plot labels can abbreviate a legacy filename while the marker matches the saved file.
+const legacyFile = "a".repeat(64) + ".json";
+const shortLabel = "a".repeat(24) + ".json";
+const legacy = {...data, names:['a',legacyFile,'c','d'], selection:{
+    selected:{file:legacyFile}, candidate_labels:{[legacyFile]:shortLabel},
+}};
+for (const axes of [['adg','risk'],['adg','risk','third']]) {
+    const goals = axes.map(key => data.metrics.find(item => item.key === key).goal);
+    const result = plotSpec(legacy,axes,goals,[]);
+    const pick = result.traces.find(trace => trace.name === 'Selection pick');
+    assert.equal(result.pickVisibility,'visible');
+    assert.deepEqual(pick.x,[data.metrics[0].values[1]]);
+    assert.deepEqual(pick.customdata[0],[shortLabel,"<br>File: " + legacyFile]);
+    assert.deepEqual(result.traces[0].customdata[1],pick.customdata[0]);
+}

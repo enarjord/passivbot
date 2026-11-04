@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import textwrap
@@ -19,7 +21,7 @@ from config.limits import (
     resolve_reducer_mode,
     resolve_limit_basis,
 )
-from config.metrics import resolve_metric_value
+from config.metrics import CORE_METRIC_DEFINITION_VERSION, resolve_metric_value
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
@@ -36,7 +38,8 @@ from metrics_schema import (
     require_metric_definition,
     flatten_metric_stats,
 )
-from pareto_core import detect_latest_pareto_dir
+from pareto_core import PARETO_FILENAME_PREFIX_LENGTH
+from pareto_qualification import load_qualification, qualification_for_candidates
 
 
 METHOD_ALIASES = {
@@ -45,6 +48,7 @@ METHOD_ALIASES = {
     "reference": "reference",
     "ref": "reference",
     "r": "reference",
+    "aspiration": "aspiration",
     "ideal": "ideal",
     "i": "ideal",
     "utility": "utility",
@@ -62,14 +66,18 @@ METHOD_ALIASES = {
 METHOD_DESCRIPTIONS = {
     "knee": "Approximate knee-point chooser. Picks a balanced compromise on the Pareto front.",
     "reference": "Reference-point chooser. Picks the candidate closest to user targets.",
+    "aspiration": "Aspiration chooser. Minimizes the worst weighted shortfall from the targets, then the weighted signed shortfall.",
     "ideal": "Distance-to-ideal chooser. Picks the candidate closest to the observed ideal point.",
     "utility": "Weighted utility chooser. Picks the highest weighted normalized utility.",
     "lexicographic": "Strict priority chooser. Sorts by objective priority order.",
     "outranking": "Simplified PROMETHEE-style chooser based on pairwise net preference flow.",
 }
 
+WEIGHTED_METHODS = frozenset({"aspiration", "ideal", "reference", "utility", "outranking"})
+
 
 FILTERED_SELECTION_MANIFEST = "selection.json"
+SELECTION_RECORD_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,12 @@ class ParetoCandidate:
     stats_flat: Dict[str, float]
     aggregated_values: Dict[str, float]
     scenario: Optional[str] = None
+    file_sha256: str | None = None
+    source_filename: str | None = None
+
+    @property
+    def filename(self) -> str:
+        return self.source_filename or self.path.name
 
 
 @dataclass(frozen=True)
@@ -118,8 +132,8 @@ def _json_ready(value: Any) -> Any:
 
 
 def _public_selection_details(details: Mapping[str, Any]) -> Dict[str, Any]:
-    hidden = {"ranking_order", "score_vector"}
-    return {str(k): _json_ready(v) for k, v in details.items() if k not in hidden}
+    hidden = {"ranking_order", "score_vector", "secondary_score_vector", "sensitivity"}
+    return {key: value for key, value in details.items() if key not in hidden}
 
 
 def _method_explanation(method: str) -> str:
@@ -137,6 +151,8 @@ def _selection_rationale_lines(result: SelectionResult) -> List[str]:
         return ["Why this winner: only retained candidate."]
     if method == "reference":
         return ["Why this winner: smallest weighted distance to the supplied target utilities."]
+    if method == "aspiration":
+        return ["Why this winner: smallest worst weighted aspiration shortfall."]
     if method == "ideal":
         return ["Why this winner: smallest weighted distance to the observed ideal point on this front."]
     if method == "utility":
@@ -271,6 +287,8 @@ def _format_metric_value(value: Any) -> str:
 def _score_label_and_value(result: SelectionResult) -> tuple[str, str]:
     if result.method in {"ideal", "reference"}:
         return "Distance", f"{abs(float(result.score)):.6f}"
+    if result.method == "aspiration":
+        return "Worst shortfall", f"{abs(float(result.score)):.6f}"
     if result.method == "utility":
         return "Utility score", f"{float(result.score):.6f}"
     if result.method == "outranking":
@@ -340,40 +358,10 @@ def parse_method_name(raw_method: str) -> str:
     return method
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="passivbot tool pareto",
-        description=(
-            "Select a single candidate from a Pareto front directory and optionally copy the "
-            "winner or filtered set."
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=(
-            "Methods:\n"
-            "  knee         Approximate balanced compromise selector.\n"
-            "  reference    Closest to user targets; uses the full post-limit pool.\n"
-            "  ideal        Closest to the observed ideal point.\n"
-            "  utility      Highest weighted normalized utility (--weight metric=value).\n"
-            "  lexicographic Strict priority order (--priority metric_a,metric_b,...).\n"
-            "  outranking   Simplified PROMETHEE-style net flow selector.\n\n"
-            "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
-            "  -l 'cagr_fraction_strategy_equity>0.0'\n"
-            "  -l 'drawdown_max_fraction_strategy_equity<=0.35'\n"
-            "  --limits '[{\"metric\":\"drawdown_max_fraction_strategy_equity\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
-            "Outputs:\n"
-            "  -s configs/selected.local.json          Copy the selected member.\n"
-            "  -f optimize_results/filtered_pareto     Copy members retained after limits.\n"
-        ),
-    )
-    parser.add_argument(
-        "path",
-        nargs="?",
-        type=str,
-        help=(
-            "Pareto directory or optimization run directory. Defaults to the "
-            "lexicographically latest optimize_results/<run>/pareto with JSON candidates."
-        ),
-    )
+def add_selection_arguments(
+    parser: argparse.ArgumentParser, *, objective_short: bool = False
+) -> None:
+    objective_flags = ("-o", "--objectives") if objective_short else ("--objectives",)
     parser.add_argument(
         "-m",
         "--method",
@@ -408,8 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Whole-list limit payload using canonical optimize.limits schema.",
     )
     parser.add_argument(
-        "-o",
-        "--objectives",
+        *objective_flags,
         type=str,
         default=None,
         help="Rebuild and normalize the front on these comma-separated objectives. May include stored non-scoring metrics with known min/max direction.",
@@ -419,14 +406,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="METRIC=VALUE",
-        help="Repeatable method weight. Used by utility, ideal, reference, and outranking.",
+        help="Repeatable weight for ideal, utility, reference, aspiration, or outranking.",
     )
     parser.add_argument(
         "--target",
         action="append",
         default=None,
         metavar="METRIC=VALUE",
-        help="Repeatable reference-point target. Required for method=reference.",
+        help="Repeatable raw target for reference or aspiration.",
     )
     parser.add_argument(
         "--priority",
@@ -437,10 +424,73 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-top",
         type=int,
-        default=1,
+        default=5,
         metavar="N",
-        help="Show the top N ranked candidates instead of only the winner. Default: 1.",
+        help="Show the top N ranked candidates. Default: 5.",
     )
+    parser.add_argument(
+        "--scale",
+        action="append",
+        metavar="METRIC=VALUE",
+        help="Meaningful positive change in raw metric units. Required for aspiration.",
+    )
+    parser.add_argument(
+        "--sensitivity-weight-fraction",
+        type=float,
+        metavar="FRACTION",
+        help="Transfer this share of total weight between pairs of active objectives. "
+        "Default for weighted methods: 0.01. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--sensitivity-target-scales",
+        type=float,
+        metavar="MULTIPLE",
+        help="Move each aspiration target in either direction by this multiple of its scale.",
+    )
+    parser.add_argument(
+        "--qualification",
+        type=Path,
+        metavar="FILE",
+        help="Attach matching native CPU replay evidence from a qualification JSON sidecar.",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="passivbot tool pareto",
+        description=(
+            "Select a single candidate from a Pareto front directory and optionally copy the "
+            "winner or filtered set."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Methods:\n"
+            "  knee         Approximate balanced compromise selector.\n"
+            "  reference    Closest to exact targets; uses the full post-limit pool.\n"
+            "  aspiration   Smallest worst directional shortfall to targets in raw units.\n"
+            "  ideal        Closest to the observed ideal point.\n"
+            "  utility      Highest weighted normalized utility (--weight metric=value).\n"
+            "  lexicographic Strict priority order (--priority metric_a,metric_b,...).\n"
+            "  outranking   Simplified PROMETHEE-style net flow selector.\n\n"
+            "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
+            "  -l 'cagr_fraction_strategy_equity>0.0'\n"
+            "  -l 'drawdown_max_fraction_strategy_equity<=0.35'\n"
+            "  --limits '[{\"metric\":\"drawdown_max_fraction_strategy_equity\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
+            "Outputs:\n"
+            "  -s configs/selected.local.json          Copy the selected member.\n"
+            "  -f optimize_results/filtered_pareto     Copy members retained after limits.\n"
+        ),
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        type=str,
+        help=(
+            "Pareto directory or optimization run directory. Defaults to the "
+            "lexicographically latest optimize_results/<run>/pareto with JSON candidates."
+        ),
+    )
+    add_selection_arguments(parser, objective_short=True)
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "-s",
@@ -618,7 +668,7 @@ def project_candidates_to_scenario(
         if missing:
             raise ValueError(
                 f"Scenario {label!r} is missing scoring metric(s) {missing} "
-                f"in {candidate.path.name}."
+                f"in {candidate.filename}."
             )
         projected.append(
             ParetoCandidate(
@@ -628,6 +678,8 @@ def project_candidates_to_scenario(
                 stats_flat=_scenario_mean_values(values),
                 aggregated_values=values,
                 scenario=label,
+                file_sha256=candidate.file_sha256,
+                source_filename=candidate.source_filename,
             )
         )
     return projected
@@ -706,7 +758,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     raw_path = Path(path).expanduser()
     if raw_path.is_file():
         pareto_dir = raw_path.parent.resolve()
-        json_paths = [raw_path.resolve()]
+        json_paths = [pareto_dir / raw_path.name]
     else:
         pareto_dir = resolve_pareto_directory(raw_path)
         json_paths = sorted(pareto_dir.glob("*.json"))
@@ -718,8 +770,9 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     baseline_metrics: Optional[List[str]] = None
 
     for entry_path in json_paths:
-        with open(entry_path) as f:
-            entry = json.load(f)
+        resolved_path = entry_path.resolve()
+        contents = resolved_path.read_bytes()
+        entry = json.loads(contents)
         if not isinstance(entry, Mapping):
             continue
         specs = extract_objective_specs(entry)
@@ -752,11 +805,13 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
 
         candidates.append(
             ParetoCandidate(
-                path=entry_path.resolve(),
+                path=resolved_path,
                 entry=entry,
                 objectives=objectives,
                 stats_flat=stats_flat,
                 aggregated_values=aggregated_values,
+                file_sha256=hashlib.sha256(contents).hexdigest(),
+                source_filename=entry_path.name,
             )
         )
 
@@ -766,6 +821,26 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
             "JSON artifacts without optimize.scoring were ignored."
         )
     return pareto_dir, candidates, baseline_specs
+
+
+def load_selection_candidates(path: str | Path | None):
+    """Load the explicit source or the latest front with actual candidate files."""
+    if path:
+        return load_candidates(path)
+    root = Path("optimize_results")
+    if root.is_dir():
+        for run in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
+            front = run / "pareto"
+            if not front.is_dir():
+                continue
+            try:
+                return load_candidates(front)
+            except NoParetoCandidatesError:
+                continue
+    raise FileNotFoundError(
+        "No Pareto path provided and no optimize_results/<run>/pareto directory "
+        "with candidate JSON files was found."
+    )
 
 
 def _resolve_active_objective_metrics(
@@ -783,7 +858,7 @@ def _resolve_active_objective_metrics(
         requested = [item.strip() for item in priority_arg.split(",") if item.strip()]
     elif objectives_arg:
         requested = [item.strip() for item in objectives_arg.split(",") if item.strip()]
-    elif method == "reference" and target_map:
+    elif method in {"reference", "aspiration"} and target_map:
         requested = list(target_map.keys())
     else:
         requested = available
@@ -810,37 +885,50 @@ def _resolve_active_objective_metrics(
         raise ValueError(
             f"Unknown or unavailable objective metric(s): {invalid}; available scoring metrics: {available}"
         )
+    if not resolved:
+        raise ValueError("Choose at least one selection objective.")
+    if len({spec.metric for spec in resolved}) != len(resolved):
+        raise ValueError("Choose distinct selection objectives.")
     return resolved
+
+
+def _raw_objective_matrix(
+    candidates: Sequence[ParetoCandidate],
+    active_specs: Sequence[ObjectiveSpec],
+) -> np.ndarray:
+    raw = np.array(
+        [
+            [
+                _resolve_candidate_metric_value(candidate, spec.metric)
+                for spec in active_specs
+            ]
+            for candidate in candidates
+        ],
+        dtype=float,
+    )
+    undefined = np.argwhere(np.isnan(raw))
+    if undefined.size:
+        row, col = undefined[0]
+        raise ValueError(
+            f"undefined objective {active_specs[col].metric!r} in {candidates[row].filename}"
+        )
+    return raw
 
 
 def _normalize_objective_matrix(
     candidates: Sequence[ParetoCandidate],
     active_specs: Sequence[ObjectiveSpec],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    active_metrics = [spec.metric for spec in active_specs]
-    raw = np.array(
-        [
-            [
-                float(_resolve_candidate_metric_value(candidate, metric))
-                for metric in active_metrics
-            ]
-            for candidate in candidates
-        ],
-        dtype=float,
-    )
-    if np.any(np.isnan(raw)):
-        raise ValueError("undefined objective in candidate selection")
-    raw = (2.0 / np.pi) * np.arctan(raw)
+    raw = (2.0 / np.pi) * np.arctan(_raw_objective_matrix(candidates, active_specs))
     lows = raw.min(axis=0)
     highs = raw.max(axis=0)
     spans = highs - lows
     utilities = np.ones_like(raw, dtype=float)
-    for idx, metric in enumerate(active_metrics):
+    for idx, spec in enumerate(active_specs):
         span = spans[idx]
         if span <= 1e-15:
             utilities[:, idx] = 1.0
             continue
-        spec = active_specs[idx]
         if spec.goal == "max":
             utilities[:, idx] = (raw[:, idx] - lows[idx]) / span
         else:
@@ -852,9 +940,26 @@ def _weights_for_metrics(metrics: Sequence[str], weight_map: Optional[Dict[str, 
     weights = np.array([float((weight_map or {}).get(metric, 1.0)) for metric in metrics], dtype=float)
     if not np.all(np.isfinite(weights)) or np.any(weights < 0):
         raise ValueError("Weights must be finite and non-negative.")
-    if float(weights.sum()) <= 0.0:
+    with np.errstate(over="ignore"):
+        total = float(weights.sum())
+    if total <= 0.0:
         raise ValueError("At least one weight must be positive.")
-    return weights / weights.sum()
+    if not math.isfinite(total):
+        raise ValueError("The sum of objective weights must be finite.")
+    return weights / total
+
+
+def _fixed_coordinates(
+    raw: np.ndarray,
+    origins: np.ndarray,
+    directions: np.ndarray,
+    scales: np.ndarray,
+) -> np.ndarray:
+    with np.errstate(over="ignore", invalid="ignore"):
+        utilities = directions * (raw - origins) / scales
+    if not np.all(np.isfinite(utilities)):
+        raise ValueError("Fixed-scale selection requires finite scaled objective values.")
+    return utilities
 
 
 def _build_ideal_point(
@@ -901,9 +1006,8 @@ def _ranked_rows(
             {
                 "rank": rank,
                 "score": float(score_vector[int(idx)]),
-                "file": candidate.path.name,
-                "hash": candidate.path.stem,
-                "path": str(candidate.path),
+                "file": candidate.filename,
+                "hash": Path(candidate.filename).stem,
                 "objectives": {
                     metric: float(_resolve_candidate_metric_value(candidate, metric))
                     for metric in active_metrics
@@ -994,7 +1098,7 @@ def _resolve_limit_value(
         if requested_reducer != "mean":
             raise ValueError(
                 f"Scenario {candidate.scenario!r} stores one mean value per metric; "
-                f"limit reducer={requested_reducer!r} is unavailable for {candidate.path.name}."
+                f"limit reducer={requested_reducer!r} is unavailable for {candidate.filename}."
             )
     reducer = basis.reducer
     if "reducer" not in entry:
@@ -1102,7 +1206,7 @@ def filter_candidates_with_limits(
                 available = _format_available_limit_metrics(candidate)
                 raise ValueError(
                     f"Limit metric {metric!r} could not be resolved for "
-                    f"{candidate.path.name}. Available metrics: {available}"
+                    f"{candidate.filename}. Available metrics: {available}"
                 )
             if _limit_rejects(entry, value):
                 rejected = True
@@ -1123,7 +1227,7 @@ def _select_knee(
         score = 0.0
         scores = np.array([score], dtype=float)
         mode = "single_candidate"
-        anchor_files: list[str] = [candidates[0].path.name]
+        anchor_files: list[str] = [candidates[0].filename]
     else:
         anchor_indices = [int(np.argmax(utilities[:, j])) for j in range(n_obj)]
         unique_anchor_indices = list(dict.fromkeys(anchor_indices))
@@ -1145,8 +1249,8 @@ def _select_knee(
             idx = int(np.argmax(scores))
             score = float(scores[idx])
             mode = "maximin_fallback"
-        anchor_files = [candidates[i].path.name for i in unique_anchor_indices]
-    ranking_order = list(np.argsort(-scores))
+        anchor_files = [candidates[i].filename for i in unique_anchor_indices]
+    ranking_order = list(np.argsort(-scores, kind="stable"))
     candidate = candidates[idx]
     return SelectionResult(
         candidate=candidate,
@@ -1167,6 +1271,17 @@ def _select_knee(
     )
 
 
+def _weighted_distance(
+    utilities: np.ndarray, weights: np.ndarray, target_vector: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    with np.errstate(over="ignore", invalid="ignore"):
+        components = ((utilities - target_vector) ** 2) * weights
+        squared_distances = components.sum(axis=1)
+    if not np.all(np.isfinite(squared_distances)):
+        raise ValueError("Weighted selection distances are not finite; check the objective scales.")
+    return np.sqrt(squared_distances), components
+
+
 def _select_ideal_like(
     method: str,
     candidates: Sequence[ParetoCandidate],
@@ -1177,8 +1292,7 @@ def _select_ideal_like(
     *,
     details: Optional[Dict[str, Any]] = None,
 ) -> SelectionResult:
-    weighted_sq = ((utilities - target_vector) ** 2) * weights
-    distances = np.sqrt(weighted_sq.sum(axis=1))
+    distances, weighted_sq = _weighted_distance(utilities, weights, target_vector)
     idx = int(np.argmin(distances))
     candidate = candidates[idx]
     payload = {} if details is None else dict(details)
@@ -1190,7 +1304,7 @@ def _select_ideal_like(
     payload["distance_components"] = {
         metric: float(weighted_sq[idx, j]) for j, metric in enumerate(active_metrics)
     }
-    payload["ranking_order"] = list(np.argsort(distances))
+    payload["ranking_order"] = list(np.argsort(distances, kind="stable"))
     payload["score_vector"] = [float(-d) for d in distances]
     return SelectionResult(
         candidate=candidate,
@@ -1203,13 +1317,21 @@ def _select_ideal_like(
     )
 
 
+def _weighted_totals(utilities: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    with np.errstate(over="ignore", invalid="ignore"):
+        scores = utilities @ weights
+    if not np.all(np.isfinite(scores)):
+        raise ValueError("Weighted selection totals are not finite; check the objective scales.")
+    return scores
+
+
 def _select_utility(
     candidates: Sequence[ParetoCandidate],
     active_metrics: Sequence[str],
     utilities: np.ndarray,
     weights: np.ndarray,
 ) -> SelectionResult:
-    scores = utilities @ weights
+    scores = _weighted_totals(utilities, weights)
     idx = int(np.argmax(scores))
     candidate = candidates[idx]
     return SelectionResult(
@@ -1226,7 +1348,7 @@ def _select_utility(
             "utility_contributions": {
                 metric: float(utilities[idx, j] * weights[j]) for j, metric in enumerate(active_metrics)
             },
-            "ranking_order": list(np.argsort(-scores)),
+            "ranking_order": list(np.argsort(-scores, kind="stable")),
             "score_vector": [float(x) for x in scores],
         },
     )
@@ -1278,20 +1400,17 @@ def _select_outranking(
     weights: np.ndarray,
 ) -> SelectionResult:
     n = len(candidates)
-    if n == 1:
-        idx = 0
-        net_flows = np.array([0.0], dtype=float)
-    else:
-        net_flows = np.zeros(n, dtype=float)
-        for i in range(n):
-            for j in range(n):
-                if i == j:
-                    continue
-                pref_ij = float(np.sum(weights * np.maximum(utilities[i] - utilities[j], 0.0)))
-                pref_ji = float(np.sum(weights * np.maximum(utilities[j] - utilities[i], 0.0)))
-                net_flows[i] += pref_ij - pref_ji
-            net_flows[i] /= max(1, n - 1)
-        idx = int(np.argmax(net_flows))
+    # Positive preference minus negative preference is the weighted utility difference.
+    scores = _weighted_totals(utilities, weights)
+    with np.errstate(over="ignore", invalid="ignore"):
+        net_flows = (
+            np.zeros(1)
+            if n == 1
+            else (scores - np.sum(scores / n)) * (n / (n - 1))
+        )
+    if not np.all(np.isfinite(net_flows)):
+        raise ValueError("Selection net flows are not finite; check the objective scales.")
+    idx = int(np.argmax(scores))
     candidate = candidates[idx]
     return SelectionResult(
         candidate=candidate,
@@ -1304,10 +1423,127 @@ def _select_outranking(
             "active_metrics": list(active_metrics),
             "weights": dict(zip(active_metrics, [float(x) for x in weights])),
             "selected_utilities": {metric: float(utilities[idx, j]) for j, metric in enumerate(active_metrics)},
-            "ranking_order": list(np.argsort(-net_flows)),
+            "ranking_order": list(np.argsort(-scores, kind="stable")),
             "score_vector": [float(x) for x in net_flows],
         },
     )
+
+
+def _aspiration_scores(
+    utilities: np.ndarray, weights: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    worst_shortfalls = np.max(np.maximum(-utilities, 0.0) * weights, axis=1)
+    signed_shortfalls = -_weighted_totals(utilities, weights)
+    return worst_shortfalls, signed_shortfalls
+
+
+def _select_aspiration(
+    candidates: Sequence[ParetoCandidate],
+    active_metrics: Sequence[str],
+    utilities: np.ndarray,
+    weights: np.ndarray,
+) -> SelectionResult:
+    worst_shortfalls, signed_shortfalls = _aspiration_scores(utilities, weights)
+    ranking = np.lexsort((signed_shortfalls, worst_shortfalls))
+    idx = int(ranking[0])
+    candidate = candidates[idx]
+    return SelectionResult(
+        candidate=candidate,
+        method="aspiration",
+        score=float(-worst_shortfalls[idx]),
+        objective_values={
+            metric: float(_resolve_candidate_metric_value(candidate, metric))
+            for metric in active_metrics
+        },
+        details={
+            "active_metrics": list(active_metrics),
+            "weights": dict(zip(active_metrics, weights.tolist())),
+            "shortfalls": dict(zip(active_metrics, np.maximum(-utilities[idx], 0.0).tolist())),
+            "worst_weighted_shortfall": float(worst_shortfalls[idx]),
+            "weighted_signed_shortfall": float(signed_shortfalls[idx]),
+            "ranking_order": ranking.tolist(),
+            "score_vector": (-worst_shortfalls).tolist(),
+            "secondary_score_vector": (-signed_shortfalls).tolist(),
+        },
+    )
+
+
+def _selection_sensitivity(
+    candidates: Sequence[ParetoCandidate],
+    result: SelectionResult,
+    utilities: np.ndarray,
+    weights: np.ndarray,
+    target_vector: np.ndarray,
+    *,
+    weight_fraction: float | None,
+    target_scale: float | None,
+    fixed: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+) -> Dict[str, Any]:
+    """Probe changes in preference while keeping the evaluated candidate pool fixed."""
+    active_metrics = result.details["active_metrics"]
+
+    def winner(coordinates: np.ndarray, scenario_weights: np.ndarray) -> str:
+        if result.method == "aspiration":
+            worst, signed = _aspiration_scores(coordinates, scenario_weights)
+            idx = np.lexsort((signed, worst))[0]
+        elif result.method in {"ideal", "reference"}:
+            distances, _ = _weighted_distance(coordinates, scenario_weights, target_vector)
+            idx = np.argmin(distances)
+        else:  # Utility and linear outranking have the same ordering.
+            idx = np.argmax(_weighted_totals(coordinates, scenario_weights))
+        return candidates[int(idx)].filename
+
+    checks: list[dict[str, Any]] = []
+    if weight_fraction is not None:
+        for source, source_metric in enumerate(active_metrics):
+            if weight_fraction >= weights[source]:
+                continue
+            for dest, dest_metric in enumerate(active_metrics):
+                if dest == source or weights[dest] == 0.0:
+                    continue
+                updated = weights.copy()
+                updated[source] -= weight_fraction
+                updated[dest] += weight_fraction
+                checks.append(
+                    {
+                        "kind": "weight_transfer",
+                        "from_metric": source_metric,
+                        "to_metric": dest_metric,
+                        "winner": winner(utilities, updated),
+                    }
+                )
+
+    if target_scale is not None:
+        assert fixed is not None
+        raw, origins, directions, scales = fixed
+        updated = utilities.copy()
+        for col, metric in enumerate(active_metrics):
+            origin = float(origins[col])
+            step = target_scale * float(scales[col])
+            for direction in (-1, 1):
+                target = origin + direction * step
+                if not math.isfinite(target) or target == origin:
+                    raise ValueError(
+                        f"Sensitivity target change for {metric!r} must be finite and representable."
+                    )
+                updated[:, col] = _fixed_coordinates(raw[:, col], target, directions[col], scales[col])
+                checks.append(
+                    {
+                        "kind": "target_step",
+                        "metric": metric,
+                        "target": target,
+                        "winner": winner(updated, weights),
+                    }
+                )
+            updated[:, col] = utilities[:, col]
+
+    return {
+        "weight_transfer_fraction": weight_fraction,
+        "target_step_scales": target_scale,
+        "check_count": len(checks),
+        "changed_check_count": sum(check["winner"] != result.candidate.filename for check in checks),
+        "checks": checks,
+    }
 
 
 def select_candidate(
@@ -1319,6 +1555,9 @@ def select_candidate(
     weight_pairs: Optional[Sequence[str]] = None,
     target_pairs: Optional[Sequence[str]] = None,
     priority_arg: Optional[str] = None,
+    scale_pairs: Optional[Sequence[str]] = None,
+    sensitivity_weight_fraction: float | None = None,
+    sensitivity_target_scale: float | None = None,
 ) -> SelectionResult:
     if not candidates:
         raise ValueError("No Pareto candidates available for selection.")
@@ -1334,31 +1573,73 @@ def select_candidate(
         method=normalized_method,
     )
     active_metrics = [spec.metric for spec in active_specs]
-    utilities, lows, highs = _normalize_objective_matrix(candidates, active_specs)
-    weight_map = _parse_key_value_pairs(weight_pairs or [], value_name="weight") if weight_pairs else {}
+    weight_map = _parse_key_value_pairs(weight_pairs or [], value_name="weight")
+    scale_map = _parse_key_value_pairs(scale_pairs or [], value_name="scale")
+    if weight_map and normalized_method not in WEIGHTED_METHODS:
+        raise ValueError(f"Method {normalized_method!r} does not support objective weights.")
+    if target_map and normalized_method not in {"reference", "aspiration"}:
+        raise ValueError(f"Method {normalized_method!r} does not support objective targets.")
+    for option, values in (("weight", weight_map), ("target", target_map), ("scale", scale_map)):
+        extra = sorted(values.keys() - set(active_metrics))
+        if extra:
+            raise ValueError(f"Unknown or inactive {option} metric(s): {', '.join(extra)}.")
     weights = _weights_for_metrics(active_metrics, weight_map)
+    if sensitivity_weight_fraction is not None and (
+        normalized_method not in WEIGHTED_METHODS or not 0.0 < sensitivity_weight_fraction < 1.0
+    ):
+        raise ValueError("Weight sensitivity requires a weighted method and a fraction between 0 and 1.")
+    if sensitivity_target_scale is not None and (
+        normalized_method != "aspiration"
+        or not math.isfinite(sensitivity_target_scale)
+        or sensitivity_target_scale <= 0.0
+    ):
+        raise ValueError("Target sensitivity requires aspiration and a positive finite scale multiplier.")
+    if normalized_method in {"reference", "aspiration"} and not target_map:
+        raise ValueError(f"Method {normalized_method!r} requires at least one --target metric=value.")
+    if normalized_method == "aspiration" and not scale_map:
+        raise ValueError("Method 'aspiration' requires --scale metric=value for every objective.")
+
+    details: Dict[str, Any] = {"scaling": "atan_front_minmax"}
+    fixed = None
+    target_vector = np.ones(len(active_metrics), dtype=float)
+    if scale_map:
+        if normalized_method not in WEIGHTED_METHODS:
+            raise ValueError(f"Method {normalized_method!r} does not support fixed scales.")
+        for metric in active_metrics:
+            scale = scale_map.get(metric)
+            if scale is None or not math.isfinite(scale) or scale <= 0.0:
+                raise ValueError(f"Fixed scale for {metric!r} must be positive and finite.")
+        raw = _raw_objective_matrix(candidates, active_specs)
+        nonfinite = np.argwhere(~np.isfinite(raw))
+        if nonfinite.size:
+            row, col = nonfinite[0]
+            raise ValueError(
+                f"Fixed-scale selection requires a finite {active_metrics[col]!r} "
+                f"value in {candidates[row].filename}."
+            )
+        directions = np.array([1.0 if spec.goal == "max" else -1.0 for spec in active_specs])
+        scales = np.array([scale_map[metric] for metric in active_metrics])
+        if normalized_method in {"reference", "aspiration"}:
+            for metric in active_metrics:
+                if metric not in target_map or not math.isfinite(target_map[metric]):
+                    raise ValueError(f"Fixed-scale {normalized_method} requires a finite target for {metric!r}.")
+            origins = np.array([target_map[metric] for metric in active_metrics])
+        else:
+            origins = (raw * directions).max(axis=0) * directions
+        fixed = (raw, origins, directions, scales)
+        utilities = _fixed_coordinates(*fixed)
+        target_vector = np.zeros(len(active_metrics), dtype=float)
+        details = {"scaling": "fixed_raw", "scales": scale_map}
+    else:
+        utilities, lows, highs = _normalize_objective_matrix(candidates, active_specs)
+        if normalized_method == "reference":
+            target_vector = _normalize_reference_targets(target_map, active_specs, lows, highs)
 
     if normalized_method == "knee":
         result = _select_knee(candidates, active_metrics, utilities)
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    if normalized_method == "reference":
-        if not target_map:
-            raise ValueError("Method 'reference' requires at least one --target metric=value.")
-        target_vector = _normalize_reference_targets(target_map, active_specs, lows, highs)
+    elif normalized_method in {"reference", "ideal"}:
         result = _select_ideal_like(
-            "reference",
-            candidates,
-            active_metrics,
-            utilities,
-            weights,
-            target_vector,
-            details={"targets": target_map, "weights": dict(zip(active_metrics, weights))},
-        )
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    if normalized_method == "ideal":
-        target_vector = np.ones(len(active_metrics), dtype=float)
-        result = _select_ideal_like(
-            "ideal",
+            normalized_method,
             candidates,
             active_metrics,
             utilities,
@@ -1366,17 +1647,31 @@ def select_candidate(
             target_vector,
             details={"weights": dict(zip(active_metrics, weights))},
         )
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    if normalized_method == "utility":
+    elif normalized_method == "aspiration":
+        result = _select_aspiration(candidates, active_metrics, utilities, weights)
+    elif normalized_method == "utility":
         result = _select_utility(candidates, active_metrics, utilities, weights)
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    if normalized_method == "lexicographic":
+    elif normalized_method == "lexicographic":
         result = _select_lexicographic(candidates, active_metrics, utilities)
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    if normalized_method == "outranking":
+    elif normalized_method == "outranking":
         result = _select_outranking(candidates, active_metrics, utilities, weights)
-        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
-    raise ValueError(f"Unsupported selection method {normalized_method!r}")
+    else:
+        raise ValueError(f"Unsupported selection method {normalized_method!r}")
+    if normalized_method in {"reference", "aspiration"}:
+        details["targets"] = target_map
+    if sensitivity_weight_fraction is not None or sensitivity_target_scale is not None:
+        details["sensitivity"] = _selection_sensitivity(
+            candidates,
+            result,
+            utilities,
+            weights,
+            target_vector,
+            weight_fraction=sensitivity_weight_fraction,
+            target_scale=sensitivity_target_scale,
+            fixed=fixed,
+        )
+    result.details.update(details)
+    return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
 
 
 def format_selection_result(
@@ -1390,9 +1685,10 @@ def format_selection_result(
     active_front_count: Optional[int] = None,
     active_limits: Sequence[Dict[str, Any]],
     result: SelectionResult,
-    show_top: int = 1,
+    record: Mapping[str, Any],
 ) -> str:
-    selected_filename = result.candidate.path.name
+    labels = record["candidate_labels"]
+    selected_filename = result.candidate.filename
     score_label, score_value = _score_label_and_value(result)
     selected_display_path = _display_path(result.candidate.path)
     backtest_command = f"passivbot backtest {selected_display_path}"
@@ -1421,7 +1717,7 @@ def format_selection_result(
             ("Applied limits", str(len(active_limits))),
             ("Method", result.method),
             (score_label, score_value),
-            ("Selected file", selected_filename),
+            ("Selected file", labels.get(selected_filename, selected_filename)),
             ("Selected path", selected_display_path),
         ]
     )
@@ -1449,8 +1745,18 @@ def format_selection_result(
     weights = result.details.get("weights")
     targets = result.details.get("targets")
     if isinstance(targets, Mapping) and targets:
-        lines.append("Reference targets:")
+        lines.append("Aspiration targets:" if result.method == "aspiration" else "Reference targets:")
         for metric, value in targets.items():
+            lines.append(f"  - {metric} = {_format_metric_value(value)}")
+    scales = result.details.get("scales")
+    if scales:
+        lines.append("Fixed scales in raw metric units:")
+        for metric, value in scales.items():
+            lines.append(f"  - {metric} = {_format_metric_value(value)}")
+    shortfalls = result.details.get("shortfalls")
+    if shortfalls:
+        lines.append("Directional aspiration shortfalls in scale units:")
+        for metric, value in shortfalls.items():
             lines.append(f"  - {metric} = {_format_metric_value(value)}")
     priority = result.details.get("priority")
     if isinstance(priority, list) and priority:
@@ -1460,8 +1766,9 @@ def format_selection_result(
         lines.append(f"Knee mode: {knee_mode}")
     anchor_files = result.details.get("anchor_files")
     if isinstance(anchor_files, list) and anchor_files:
+        anchor_labels = [labels.get(name, name) for name in anchor_files]
         lines.append(
-            f"Anchor files ({len(anchor_files)}): {_summarize_anchor_files([str(item) for item in anchor_files])}"
+            f"Anchor files ({len(anchor_labels)}): {_summarize_anchor_files(anchor_labels)}"
         )
     lines.extend(_selection_rationale_lines(result))
     selected_utilities = result.details.get("selected_utilities")
@@ -1514,33 +1821,98 @@ def format_selection_result(
         for metric, value in result.objective_values.items():
             goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
             lines.append(f"  {metric} ({goal}): {value}")
-    ranking_order = result.details.get("ranking_order")
-    score_vector = result.details.get("score_vector")
-    if (
-        isinstance(ranking_order, list)
-        and isinstance(score_vector, list)
-        and show_top > 1
-        and len(ranking_order) > 1
-    ):
-        lines.extend(["", "Top candidates:"])
-        shortlist = _ranked_rows(
-            candidates,
-            list(active_metrics) if isinstance(active_metrics, list) else list(result.objective_values),
-            ranking_order,
-            score_vector,
-            limit=show_top,
+    shortlist = record["top_candidates"]
+    if len(shortlist) > 1:
+        lines.extend(["", "Top candidates:", "Metric columns show raw changes from the selected member."])
+        metrics = list(result.objective_values)
+        headers = ["rank", "file", "score"]
+        if result.method == "aspiration":
+            headers.append("tie-break score")
+        if result.method != "lexicographic":
+            headers.append("score behind")
+        headers.extend(metrics)
+        top_rows = []
+        for row in shortlist:
+            filename = row["file"]
+            columns = [f"#{row['rank']}", labels.get(filename, filename), f"{row['score']:.6f}"]
+            if result.method == "aspiration":
+                columns.append(f"{row['secondary_score']:.6f}")
+            if result.method != "lexicographic":
+                columns.append(_format_record_metric(row, "score_margin"))
+            deltas = row["objective_deltas"]
+            columns.extend(_format_record_metric(deltas, metric) for metric in metrics)
+            top_rows.append(columns)
+        lines.extend(_render_table(headers, top_rows))
+    sensitivity = record["sensitivity"]
+    if sensitivity:
+        lines.append(
+            f"Sensitivity: {sensitivity['changed_check_count']} of "
+            f"{sensitivity['check_count']} checks changed the pick."
         )
-        top_rows = [
-            [
-                f"#{row['rank']}",
-                f"{row['score']:.6f}",
-                str(row["file"]),
-                str(row["hash"]),
-            ]
-            for row in shortlist
-        ]
-        lines.extend(_render_table(["rank", "score", "file", "hash"], top_rows))
+        changed = {}
+        for check in sensitivity["checks"]:
+            winner = check["winner"]
+            if winner == record["selected"]["file"]:
+                continue
+            if check["kind"] == "weight_transfer":
+                description = (
+                    f"transfer {sensitivity['weight_transfer_fraction']:.2%} weight "
+                    f"from {check['from_metric']} to {check['to_metric']}"
+                )
+            else:
+                description = f"set {check['metric']} target to {check['target']:.6g}"
+            changed.setdefault(winner, description)
+        for winner, description in changed.items():
+            lines.append(f"  - {labels.get(winner, winner)} wins if you {description}.")
+    lines.extend(_format_qualification(record["qualification"], shortlist, labels))
     return "\n".join(lines)
+
+
+def _format_record_metric(metrics: Mapping[str, Any], metric: str) -> str:
+    value = metrics.get(metric)
+    if value is not None:
+        return _format_metric_value(value)
+    return metrics.get("metric_status", {}).get(metric, {}).get("status", "unavailable")
+
+
+def _format_qualification(
+    qualification: Mapping[str, Any] | None,
+    shortlist: Sequence[Mapping[str, Any]],
+    labels: Mapping[str, str],
+) -> list[str]:
+    if qualification is None:
+        return ["Qualification evidence: no native CPU replay evidence attached."]
+
+    lines = [f"Qualification evidence: Rust CPU {qualification['engine_sha256']}"]
+    subjects = [
+        (labels.get(row["file"], row["file"]), qualification["candidates"].get(row["file_sha256"]))
+        for row in shortlist
+    ]
+    if "incumbent" in qualification:
+        subjects.append(("Incumbent", qualification["incumbent"]))
+    for name, subject in subjects:
+        if subject is None:
+            lines.append(f"  {name}: no matching evidence")
+            continue
+        lines.append(f"  {name} (effective config {subject['effective_config_sha256']})")
+        for label, replay in subject["results"].items():
+            scenario = qualification["scenarios"][label]
+            status = replay["status"]
+            description = f"    {label} ({scenario['split']}, {scenario['execution']}): {status}"
+            if "effective_start_date" in replay:
+                description += (
+                    f" {replay['effective_start_date']} to {replay['effective_end_date']}, "
+                    f"liquidated={str(replay['liquidated']).lower()}"
+                )
+            if "reason" in replay:
+                description += f" ({replay['reason']})"
+            if "report" in replay:
+                description += f" · {replay['report']}"
+            lines.append(description)
+            metrics = replay.get("metrics", {})
+            for metric in sorted(metrics.keys() - {"metric_status"}):
+                lines.append(f"      {metric} = {_format_record_metric(metrics, metric)}")
+    return lines
 
 
 def _is_within(path: Path, directory: Path) -> bool:
@@ -1615,7 +1987,7 @@ def _prepare_filtered_output(
         raise FileExistsError(f"Filtered output directory already exists: {unresolved_output}")
     output = unresolved_output.resolve()
     _validate_output_path(output, pareto_dir, directory=True)
-    names = [candidate.path.name for candidate in candidates]
+    names = [candidate.filename for candidate in candidates]
     folded_names = [name.casefold() for name in names]
     if len(folded_names) != len(set(folded_names)):
         raise ValueError("Filtered members contain duplicate filenames.")
@@ -1630,6 +2002,13 @@ def _prepare_filtered_output(
     if output.parent.exists() and not output.parent.is_dir():
         raise NotADirectoryError(f"Filtered output parent is not a directory: {output.parent}")
     return output
+
+
+def _verify_export_digest(candidate: ParetoCandidate, copied_file: Path) -> None:
+    with copied_file.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != candidate.file_sha256:
+        raise ValueError(f"Pareto candidate changed after loading: {candidate.filename}")
 
 
 def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
@@ -1650,6 +2029,7 @@ def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
             file_descriptor = -1
             with candidate.path.open("rb") as source:
                 shutil.copyfileobj(source, destination)
+        _verify_export_digest(candidate, temporary)
         return temporary
     except Exception:
         if file_descriptor >= 0:
@@ -1681,13 +2061,14 @@ def _stage_filtered(
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
     try:
         for candidate in candidates:
-            destination = stage / candidate.path.name
+            destination = stage / candidate.filename
             if destination.exists():
                 raise ValueError(
                     f"Filtered member filename collides on the destination filesystem: "
-                    f"{candidate.path.name}"
+                    f"{candidate.filename}"
                 )
             shutil.copyfile(candidate.path, destination)
+            _verify_export_digest(candidate, destination)
         manifest = {
             "tool": "passivbot tool pareto",
             "pareto_dir": str(pareto_dir),
@@ -1695,8 +2076,8 @@ def _stage_filtered(
             "retained_count": len(candidates),
             "scenario": scenario,
             "applied_limits": _json_ready(active_limits),
-            "selected_member": selected.path.name,
-            "members": [candidate.path.name for candidate in candidates],
+            "selected_member": selected.filename,
+            "members": [candidate.filename for candidate in candidates],
         }
         manifest_path = stage / FILTERED_SELECTION_MANIFEST
         if manifest_path.exists():
@@ -1734,18 +2115,24 @@ def _install_filtered(stage: Path, output: Path) -> Path:
             _remove_export_tree(stage)
 
 
-def run_from_args(args: argparse.Namespace) -> SelectionResult:
+@dataclass(frozen=True)
+class SelectionEvaluation:
+    selection_candidates: Sequence[ParetoCandidate]
+    filtered_candidates: Sequence[ParetoCandidate]
+    active_limits: Sequence[Dict[str, Any]]
+    active_specs: Sequence[ObjectiveSpec]
+    active_front: Sequence[ParetoCandidate]
+    selection_pool: Sequence[ParetoCandidate]
+    scenario: str | None
+    result: SelectionResult
+
+
+def evaluate_selection(
+    candidates: Sequence[ParetoCandidate],
+    scoring_specs: Sequence[ObjectiveSpec],
+    args: argparse.Namespace,
+) -> SelectionEvaluation:
     method = parse_method_name(args.method)
-    raw_path = getattr(args, "path", None)
-    if not raw_path:
-        latest = detect_latest_pareto_dir()
-        if latest is None:
-            raise FileNotFoundError(
-                "No pareto path provided and no valid optimize_results/<run>/pareto directory "
-                "with at least one *.json candidate was found."
-            )
-        raw_path = str(latest)
-    pareto_dir, candidates, scoring_specs = load_candidates(raw_path)
     raw_scenario = getattr(args, "scenario", None)
     scenario = str(raw_scenario).strip() if raw_scenario is not None else None
     selection_candidates = (
@@ -1760,42 +2147,217 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     )
     if not filtered_candidates:
         raise ValueError("No Pareto candidates remained after applying limits.")
+
+    option_maps = {
+        name: _parse_key_value_pairs(getattr(args, name, None) or [], value_name=name)
+        for name in ("weight", "target", "scale")
+    }
+    priority = getattr(args, "priority", None)
+    if priority is not None and method != "lexicographic":
+        raise ValueError("--priority requires method=lexicographic.")
+    if priority is not None and getattr(args, "objectives", None):
+        raise ValueError("Choose either --priority or --objectives.")
     active_specs = _resolve_active_objective_metrics(
         scoring_specs,
         filtered_candidates,
         objectives_arg=getattr(args, "objectives", None),
-        priority_arg=(
-            getattr(args, "priority", None) if method == "lexicographic" else None
-        ),
-        target_map=_parse_key_value_pairs(
-            getattr(args, "target", None) or [], value_name="target"
-        ),
+        priority_arg=priority,
+        target_map=option_maps["target"],
         method=method,
     )
-    weight_map = _parse_key_value_pairs(
-        getattr(args, "weight", None) or [], value_name="weight"
-    )
-    weights = _weights_for_metrics([spec.metric for spec in active_specs], weight_map)
-    if method in {"ideal", "reference", "utility", "outranking"}:
+    active_metrics = [spec.metric for spec in active_specs]
+    if not active_metrics or len(set(active_metrics)) != len(active_metrics):
+        raise ValueError("Choose at least one distinct objective.")
+    for option, values in option_maps.items():
+        unknown = values.keys() - set(active_metrics)
+        if unknown:
+            raise ValueError(f"--{option} names inactive objectives: {', '.join(sorted(unknown))}")
+
+    if method in WEIGHTED_METHODS:
+        weights = _weights_for_metrics(active_metrics, option_maps["weight"])
         active_specs = [
             spec for spec, weight in zip(active_specs, weights) if weight > 0.0
         ]
+    effective_metrics = [spec.metric for spec in active_specs]
+    effective_pairs = {
+        name: [f"{metric}={values[metric]}" for metric in effective_metrics if metric in values]
+        for name, values in option_maps.items()
+    }
+    weight_step = getattr(args, "sensitivity_weight_fraction", None)
+    if weight_step is None and method in WEIGHTED_METHODS:
+        weight_step = 0.01
+
     active_front = build_objective_front(filtered_candidates, active_specs)
-    if not active_front:
-        raise ValueError(
-            "No Pareto candidates remained after rebuilding the active-objective front."
-        )
-    # Exact reference targets need not be Pareto-optimal in the original goals.
+    # Exact reference targets can favor a dominated candidate.
     selection_pool = filtered_candidates if method == "reference" else active_front
     result = select_candidate(
         selection_pool,
         active_specs,
         method=method,
-        objectives_arg=",".join(spec.metric for spec in active_specs),
-        weight_pairs=getattr(args, "weight", None),
-        target_pairs=getattr(args, "target", None),
-        priority_arg=getattr(args, "priority", None),
+        weight_pairs=effective_pairs["weight"],
+        target_pairs=effective_pairs["target"],
+        scale_pairs=effective_pairs["scale"],
+        sensitivity_weight_fraction=weight_step if weight_step != 0 else None,
+        sensitivity_target_scale=getattr(args, "sensitivity_target_scales", None),
     )
+    return SelectionEvaluation(
+        selection_candidates=selection_candidates,
+        filtered_candidates=filtered_candidates,
+        active_limits=active_limits,
+        active_specs=active_specs,
+        active_front=active_front,
+        selection_pool=selection_pool,
+        scenario=scenario,
+        result=result,
+    )
+
+
+def _objective_deltas(
+    objectives: Mapping[str, float], selected: Mapping[str, float]
+) -> dict[str, Any]:
+    deltas: dict[str, Any] = {}
+    statuses: dict[str, dict[str, str]] = {}
+    for metric, value in objectives.items():
+        baseline = selected[metric]
+        delta = value - baseline
+        if math.isnan(delta):
+            deltas[metric] = None
+            statuses[metric] = {"status": "undefined", "reason": "equal_infinite_values"}
+        elif math.isinf(delta) and math.isfinite(value) and math.isfinite(baseline):
+            deltas[metric] = None
+            statuses[metric] = {"status": "invalid", "reason": "delta_overflow"}
+        else:
+            deltas[metric] = delta
+    if statuses:
+        deltas["metric_status"] = statuses
+    return deltas
+
+
+def _candidate_labels(candidates: Sequence[ParetoCandidate]) -> dict[str, str]:
+    """Abbreviate legacy full hashes while keeping the displayed filenames distinct."""
+    filenames = {candidate.filename for candidate in candidates}
+    groups: dict[str, list[str]] = {}
+    for filename in sorted(filenames):
+        if re.fullmatch(r"[0-9a-f]{64}\.json", filename):
+            prefix = filename[:PARETO_FILENAME_PREFIX_LENGTH]
+            groups.setdefault(prefix, []).append(filename)
+
+    labels = {}
+    for group in groups.values():
+        for filename in group:
+            for width in range(PARETO_FILENAME_PREFIX_LENGTH, 64):
+                prefix = filename[:width]
+                label = f"{prefix}.json"
+                if label in filenames:
+                    continue
+                if any(other != filename and other.startswith(prefix) for other in group):
+                    continue
+                labels[filename] = label
+                break
+    return labels
+
+
+def build_selection_record(
+    evaluation: SelectionEvaluation, args: argparse.Namespace
+) -> dict[str, Any]:
+    result = evaluation.result
+    pool = evaluation.selection_pool
+    active_metrics = [spec.metric for spec in evaluation.active_specs]
+    show_top = int(getattr(args, "show_top", 5))
+    if show_top < 1:
+        raise ValueError("--show-top must be positive.")
+    rows = _ranked_rows(
+        pool,
+        active_metrics,
+        result.details["ranking_order"],
+        result.details["score_vector"],
+        limit=show_top,
+    )
+    loaded_candidates = evaluation.selection_candidates
+    fingerprints = [
+        (candidate.filename, candidate.file_sha256) for candidate in loaded_candidates
+    ]
+    candidate_set_hash = hashlib.sha256(
+        json.dumps(fingerprints, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    secondary_scores = result.details.get("secondary_score_vector")
+    for row, index in zip(rows, result.details["ranking_order"]):
+        row["file_sha256"] = pool[int(index)].file_sha256
+        row["objective_deltas"] = _objective_deltas(row["objectives"], result.objective_values)
+        if result.method != "lexicographic":
+            row["score_margin"] = result.score - row["score"]
+        if secondary_scores is not None:
+            row["secondary_score"] = secondary_scores[int(index)]
+
+    qualification_path = getattr(args, "qualification", None)
+    qualification = (
+        qualification_for_candidates(
+            load_qualification(qualification_path), [row["file_sha256"] for row in rows]
+        )
+        if qualification_path is not None
+        else None
+    )
+    details = _public_selection_details(result.details)
+    payload = {
+        "schema_version": SELECTION_RECORD_VERSION,
+        "metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
+        "candidate_set_sha256": candidate_set_hash,
+        "candidate_labels": _candidate_labels(loaded_candidates),
+        "loaded_count": len(loaded_candidates),
+        "retained_count": len(evaluation.filtered_candidates),
+        "active_front_count": len(evaluation.active_front),
+        "selection_count": len(pool),
+        "normalization_scope": (
+            "post_limit_pool" if result.method == "reference" else "active_front"
+        ),
+        "applied_limits": evaluation.active_limits,
+        "objectives": [
+            (
+                spec.to_config()
+                if evaluation.scenario is None
+                else {"metric": spec.metric, "goal": spec.goal, "scenario": evaluation.scenario}
+            )
+            for spec in evaluation.active_specs
+        ],
+        "method": result.method,
+        "method_description": _method_explanation(result.method),
+        "settings": {
+            key: details[key]
+            for key in ("scaling", "weights", "scales", "targets", "priority")
+            if key in details
+        },
+        "selected": {
+            "file": result.candidate.filename,
+            "hash": Path(result.candidate.filename).stem,
+            "file_sha256": result.candidate.file_sha256,
+            "score": float(result.score),
+            "objectives": result.objective_values,
+            "details": details,
+        },
+        "top_candidates": rows,
+        "sensitivity": result.details.get("sensitivity"),
+        "qualification": qualification,
+    }
+    if evaluation.scenario is not None:
+        payload.update(
+            {
+                "scenario": evaluation.scenario,
+                "front_scope": "saved_aggregate_pareto_members",
+                "scenario_front_count": len(evaluation.active_front),
+                "scenario_front_complete": False,
+            }
+        )
+    return _json_ready(payload)
+
+
+def run_from_args(args: argparse.Namespace) -> SelectionResult:
+    pareto_dir, candidates, scoring_specs = load_selection_candidates(getattr(args, "path", None))
+    evaluation = evaluate_selection(candidates, scoring_specs, args)
+    record = build_selection_record(evaluation, args)
+    result = evaluation.result
+    filtered_candidates = evaluation.filtered_candidates
+    scenario = evaluation.scenario
+    active_limits = evaluation.active_limits
     selected_output = _prepare_selected_output(
         getattr(args, "save_selected", None),
         pareto_dir,
@@ -1838,56 +2400,12 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             _remove_selected_stage(selected_stage)
         if filtered_stage is not None and filtered_stage.exists():
             _remove_export_tree(filtered_stage)
-    show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
-        ranking_order = result.details.get("ranking_order") or [
-            selection_pool.index(result.candidate)
-        ]
-        score_vector = result.details.get("score_vector") or [result.score] * len(
-            selection_pool
-        )
-        active_metrics = result.details.get("active_metrics") or list(
-            result.objective_values
-        )
-        payload = {
-            "pareto_dir": str(pareto_dir),
-            "loaded_count": len(candidates),
-            "retained_count": len(filtered_candidates),
-            "active_front_count": len(active_front),
-            "selection_count": len(selection_pool),
-            "normalization_scope": (
-                "post_limit_pool" if method == "reference" else "active_front"
-            ),
-            "applied_limits": _json_ready(active_limits),
-            "method": result.method,
-            "method_description": _method_explanation(result.method),
-            "selected": {
-                "file": result.candidate.path.name,
-                "hash": result.candidate.path.stem,
-                "path": str(result.candidate.path),
-                "score": float(result.score),
-                "objectives": _json_ready(result.objective_values),
-                "details": _public_selection_details(result.details),
-            },
-            "top_candidates": _json_ready(
-                _ranked_rows(
-                    selection_pool,
-                    active_metrics,
-                    ranking_order,
-                    score_vector,
-                    limit=show_top,
-                )
-            ),
-        }
-        if scenario is not None:
-            payload.update(
-                {
-                    "scenario": scenario,
-                    "front_scope": "saved_aggregate_pareto_members",
-                    "scenario_front_count": len(active_front),
-                    "scenario_front_complete": False,
-                }
-            )
+        payload = record
+        payload["pareto_dir"] = str(pareto_dir)
+        payload["selected"]["path"] = str(result.candidate.path)
+        for row, index in zip(payload["top_candidates"], result.details["ranking_order"]):
+            row["path"] = str(evaluation.selection_pool[int(index)].path)
         if selected_output is not None:
             payload["selected"]["saved_path"] = str(selected_output)
         if filtered_output is not None and filtered_manifest is not None:
@@ -1900,15 +2418,15 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     else:
         output = format_selection_result(
             pareto_dir,
-            candidates=selection_pool,
+            candidates=evaluation.selection_pool,
             loaded_count=len(candidates),
             retained_count=len(filtered_candidates),
-            active_front_count=len(active_front),
+            active_front_count=len(evaluation.active_front),
             scenario=scenario,
-            scenario_front_count=len(active_front) if scenario is not None else None,
+            scenario_front_count=len(evaluation.active_front) if scenario is not None else None,
             active_limits=active_limits,
             result=result,
-            show_top=show_top,
+            record=record,
         )
         saved_lines: List[str] = []
         if selected_output is not None:
@@ -1929,5 +2447,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    run_from_args(args)
+    try:
+        run_from_args(args)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     return 0

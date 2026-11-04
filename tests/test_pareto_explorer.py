@@ -1170,3 +1170,25 @@ def test_scenario_selected_metrics_ignore_unrelated_undefined_quantity(tmp_path)
             limits_payload=None,
             limit_entries=[f"{short}>0.1 scenario=base"],
         )
+
+
+def test_changed_candidate_bytes_cannot_be_exported(sample_pareto_dir, tmp_path):
+    _, candidates, _ = load_candidates(sample_pareto_dir)
+    candidate = candidates[0]
+    candidate.path.write_bytes(candidate.path.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="changed after loading"):
+        pareto_explorer._stage_selected(candidate, tmp_path / "selected.json")
+    assert not list(tmp_path.glob(".pareto-selected-*"))
+
+
+def test_scenario_selection_record_replaces_original_objective_basis(scenario_pareto_dir, capsys):
+    metric = "cagr_fraction_strategy_equity"
+    for path in scenario_pareto_dir.glob("*.json"):
+        candidate = json.loads(path.read_text())
+        candidate["optimize"]["scoring"] = [{"metric": metric, "goal": "max", "scenario": "bull"}]
+        path.write_text(json.dumps(candidate))
+
+    run_from_args(build_parser().parse_args([str(scenario_pareto_dir), "--scenario", "bear", "--json"]))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["objectives"] == [{"metric": metric, "goal": "max", "scenario": "bear"}]
+    assert payload["selected"]["objectives"][metric] == pytest.approx(0.9)

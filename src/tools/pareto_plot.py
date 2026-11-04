@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 from typing import Sequence
 import webbrowser
@@ -21,14 +20,23 @@ from metrics_schema import (
     copy_metric_value,
     require_metric_definition,
 )
-from pareto_explorer import NoParetoCandidatesError, ParetoCandidate, load_candidates
+from pareto_explorer import (
+    ParetoCandidate,
+    add_selection_arguments,
+    build_selection_record,
+    evaluate_selection,
+    load_selection_candidates,
+    project_candidates_to_scenario,
+)
 from tools.pareto_plot_page import PAGE, SCRIPT
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool pareto-plot",
-        description="Export all saved metrics to an interactive, offline Pareto HTML explorer.",
+        description=(
+            "Show the Pareto CLI selection and explore saved metrics in an offline HTML viewer."
+        ),
     )
     parser.add_argument(
         "path",
@@ -58,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force", action="store_true", help="Replace an existing HTML output file"
     )
+    add_selection_arguments(parser, objective_short=False)
     return parser
 
 
@@ -147,7 +156,7 @@ def build_dataset(
         metrics.append(metric)
     return dict(
         definition_version=CORE_METRIC_DEFINITION_VERSION,
-        names=[candidate.path.name for candidate in candidates],
+        names=[candidate.filename for candidate in candidates],
         metrics=metrics,
     )
 
@@ -188,26 +197,6 @@ def render_html(dataset: dict, selected: Sequence[str]) -> str:
     )
 
 
-def load_plot_candidates(path: str | None):
-    if path is not None:
-        return load_candidates(path)
-    root = Path("optimize_results")
-    if root.is_dir():
-        for run in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
-            front = run / "pareto"
-            if not front.is_dir():
-                continue
-            try:
-                return load_candidates(front)
-            except NoParetoCandidatesError:
-                # Skip empty/sidecar-only fronts; malformed candidates still fail visibly.
-                continue
-    raise FileNotFoundError(
-        "No Pareto path provided and no optimize_results/<run>/pareto directory "
-        "with candidate JSON files was found."
-    )
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -216,14 +205,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Choose two or three initial metrics, or omit metrics to select them in the HTML."
         )
     try:
-        pareto_dir, candidates, scoring_specs = load_plot_candidates(args.path)
-        dataset = build_dataset(candidates, scoring_specs)
+        pareto_dir, candidates, scoring_specs = load_selection_candidates(args.path)
         if args.list_metrics:
-            for metric in dataset["metrics"]:
+            if args.scenario is not None:
+                candidates = project_candidates_to_scenario(
+                    candidates, scoring_specs, args.scenario
+                )
+            for metric in build_dataset(candidates, scoring_specs)["metrics"]:
                 print(
                     f"{metric['key']} ({metric['goal'] or 'choose direction in HTML'}; {metric['count']}/{len(candidates)} values)"
                 )
             return 0
+        evaluation = evaluate_selection(candidates, scoring_specs, args)
+        dataset = build_dataset(evaluation.selection_candidates, scoring_specs)
+        dataset["selection"] = build_selection_record(evaluation, args)
         selected = select_metrics(args.metrics, dataset)
         source = Path(args.path).expanduser().resolve() if args.path else pareto_dir
         if source.is_file():
@@ -239,14 +234,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if output.resolve().suffix.lower() not in (".html", ".htm"):
             raise ValueError("Output must have an .html or .htm extension.")
-        if output.exists() and any(
-            output.samefile(candidate.path) for candidate in candidates
-        ):
-            raise ValueError("Output must not overwrite a Pareto candidate.")
-        if output.exists() and not args.force:
-            raise FileExistsError(
-                f"Output already exists: {output}; choose another path or use --force."
-            )
+        if output.exists():
+            if any(output.samefile(candidate.path) for candidate in candidates):
+                raise ValueError("Output must not overwrite a Pareto candidate.")
+            if args.qualification is not None and output.samefile(args.qualification.expanduser()):
+                raise ValueError("Output must not overwrite qualification evidence.")
+            if not args.force:
+                raise FileExistsError(
+                    f"Output already exists: {output}; choose another path or use --force."
+                )
         page = render_html(dataset, selected)
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("w" if args.force else "x", encoding="utf-8") as stream:

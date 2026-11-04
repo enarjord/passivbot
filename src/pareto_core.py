@@ -11,6 +11,9 @@ from config.metrics import resolve_metric_value, reject_retired_metric
 from metrics_schema import require_metric_definition, MetricAggregationError
 
 
+PARETO_FILENAME_PREFIX_LENGTH = 24
+
+
 def detect_latest_pareto_dir(root: str | Path = "optimize_results") -> Optional[Path]:
     base = Path(root).expanduser()
     if not base.is_dir():
