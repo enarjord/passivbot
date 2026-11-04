@@ -311,7 +311,9 @@ An omitted, null or `"auto"` batch width lets the service tune from completed pr
 work. A positive explicit width fixes its ceiling. `tuning_mode: "off"` disables batch-width
 and request-accumulation tuning and uses width 64 if none is supplied. `"refresh"` currently
 starts fresh like `"auto"`; advisory measurements are run-local. Prepared work/history
-budgets can reduce physical widths further. Native CUDA history chunks still adapt in
+budgets can reduce physical widths further. Automatic width changes require warm replay
+evidence that the new width affected the actual number of candidates dispatched.
+Native CUDA history chunks still adapt in
 `"off"` mode, targeting bounded command durations without a preemption guarantee.
 CPU consumption cadence also adapts independently. These controls change execution only;
 they never tune simulation precision or search policy.

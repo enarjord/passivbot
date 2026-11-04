@@ -41,16 +41,59 @@ def test_mixed_partial_fills_cannot_make_a_slower_smaller_trial_win():
 
 def test_partial_only_bounded_cohorts_still_train_and_can_accept_a_faster_trial():
     result = policy()
-    feed(result, 3, 12, backlog=0)
+    feed(result, 13, 13, backlog=0)
     controller = result.controllers["market"]
-    assert controller.width == 8 and controller.baseline == (16, .25)
+    assert controller.width == 8 and controller.baseline == (16, 1)
     decision = result.diagnostics_snapshot()["last_decision"]
-    assert decision["comparison_count"] == 3 and not decision["comparison_full_width"]
-    feed(result, 3, 10, backlog=0)
+    assert decision["comparison_count"] == 13 and not decision["comparison_full_width"]
+    feed(result, 8, 5, repeats=6, backlog=0)
     assert controller.width == 8 and controller.baseline is None
     decision = result.diagnostics_snapshot()["last_decision"]
-    assert decision["kind"] == "accepted" and decision["comparison_count"] == 3
-    assert not decision["comparison_full_width"]
+    assert decision["kind"] == "accepted" and decision["comparison_count"] == 8
+    assert decision["comparison_full_width"]
+
+
+@pytest.mark.parametrize("count", [205, 512])
+def test_warm_batches_that_fit_the_smaller_width_do_not_start_a_trial(count):
+    result = policy(initial=1024, ceiling=1024)
+    for seconds in (45, 44):
+        feed(result, count, seconds, backlog=0)
+        controller = result.controllers["market"]
+        assert controller.width == 1024 and controller.baseline is None
+    assert result.diagnostics_snapshot()["first_trial"] is None
+    assert result.diagnostics_snapshot()["completed_windows"] == 2
+
+    feed(result, 513, 45, backlog=0)
+    assert controller.width == 512 and controller.baseline == (1024, 513 / 45)
+
+
+@pytest.mark.parametrize("initial, baseline_count, trial, effective_count", [
+    (16, 12, 8, 8),
+    (8, 6, 16, 12),
+])
+def test_faster_underfilled_trial_rolls_back_and_can_retry_when_demand_returns(
+    caplog, initial, baseline_count, trial, effective_count,
+):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    result = policy(initial=initial)
+    controller = result.controllers["market"]
+    feed(result, baseline_count, 10)
+    assert controller.width == trial
+    feed(result, 6, 1, repeats=6, backlog=0)
+    assert controller.width == initial and controller.baseline is None
+    assert result.diagnostics_snapshot()["last_decision"]["kind"] == "rollback"
+    assert any("reason=width_effect_unobserved" in msg for msg in caplog.messages)
+
+    for _ in range(controller.cooldown):
+        feed(result, baseline_count, 10)
+        assert controller.width == initial
+    feed(result, baseline_count, 10)
+    assert controller.width == trial
+    feed(result, effective_count, 5, repeats=6)
+    assert controller.width == trial and controller.baseline is None
+    assert result.diagnostics_snapshot()["last_decision"]["kind"] == "accepted"
 
 
 def test_cold_full_width_shape_cannot_supply_comparison_evidence():
@@ -60,7 +103,7 @@ def test_cold_full_width_shape_cannot_supply_comparison_evidence():
     controller = result.controllers["market"]
     assert controller.last_comparison_count == 4
     assert controller.last_comparison_samples == 3
-    assert controller.baseline == (16, .4)
+    assert controller.width == 16 and controller.baseline is None
     assert not result.diagnostics_snapshot()["last_decision"]["comparison_full_width"]
 
 

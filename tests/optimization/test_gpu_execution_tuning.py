@@ -90,8 +90,10 @@ def test_bounded_cohort_can_try_non_power_of_two_growth_and_accept_or_roll_back(
     assert queries == [1]  # Acceptance/rollback does not query headroom again.
 
 
-@pytest.mark.parametrize("demand", [1, 255, 256])
-def test_demand_at_or_below_current_width_probes_smaller_without_headroom_query(demand):
+@pytest.mark.parametrize("demand, expected_width", [(1, 256), (128, 256), (129, 128), (256, 128)])
+def test_demand_at_or_below_current_width_only_probes_a_binding_smaller_width(
+    demand, expected_width,
+):
     def forbidden():
         pytest.fail("no feasible growth must not query device headroom")
 
@@ -100,8 +102,20 @@ def test_demand_at_or_below_current_width_probes_smaller_without_headroom_query(
     policy.width("a", 512)
     for _ in range(EVIDENCE_SAMPLES + 1):
         policy.observe("a", demand, 2, backlog=0, closing=False)
-    assert policy.width("a", 512) == 128
+    assert policy.width("a", 512) == expected_width
     assert policy.controllers["a"].ceiling == 512
+
+
+def test_growth_remains_available_after_an_underfilled_window_skips_shrinking():
+    policy = ExecutionBatchTuner(initial=256)
+    policy.constrain("a", 512)
+    assert policy.width("a", 512) == 256
+    for _ in range(EVIDENCE_SAMPLES):
+        policy.observe("a", 128, 2, backlog=0, closing=False, cold=False)
+    assert policy.width("a", 512) == 256
+    for _ in range(EVIDENCE_SAMPLES):
+        policy.observe("a", 256, 2, backlog=256, closing=False, cold=False)
+    assert policy.width("a", 512) == 512
 
 
 def test_non_power_of_two_growth_requires_headroom_and_never_changes_other_dataset():
