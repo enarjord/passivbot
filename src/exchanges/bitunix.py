@@ -1797,11 +1797,16 @@ class BitunixOrderStream:
         data = payload.get("data")
         if not isinstance(data, dict):
             raise ValueError("Bitunix kline websocket data is not an object")
-        open_price = _float(data.get("o"), field="kline websocket open")
-        high = _float(data.get("h"), field="kline websocket high")
-        low = _float(data.get("l"), field="kline websocket low")
-        close = _float(data.get("c"), field="kline websocket close")
-        base_volume = _float(data.get("b"), field="kline websocket base volume")
+        values = []
+        for key, field in (("o", "open"), ("h", "high"), ("l", "low"),
+                           ("c", "close"), ("b", "base volume")):
+            # Keep rejection messages structural; a bad public field must not
+            # leak its unbounded raw contents into diagnostics.
+            try:
+                values.append(_float(data.get(key), field=f"kline websocket {field}"))
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise ValueError(f"Bitunix kline websocket invalid {field}") from exc
+        open_price, high, low, close, base_volume = values
         if min(open_price, high, low, close) <= 0.0 or base_volume < 0.0:
             raise ValueError("Bitunix kline websocket has invalid price or volume")
         if low > min(open_price, close) or high < max(open_price, close) or low > high:
@@ -2082,7 +2087,7 @@ class BitunixOrderStream:
                                 continue
                         try:
                             symbol, rows = self._normalize_ohlcv_payload(payload)
-                        except ValueError:
+                        except ValueError as exc:
                             # Bitunix has emitted transient internally inconsistent
                             # OHLC updates (for example, low one tick above open).
                             # Never clamp or persist them, and do not sacrifice
@@ -2106,11 +2111,20 @@ class BitunixOrderStream:
                                 malformed_counts.get(malformed_symbol, 0) + 1
                             )
                             if malformed_symbol not in malformed_warned:
+                                reasons = {
+                                    "Bitunix kline websocket has inconsistent OHLC values": "inconsistent_ohlc",
+                                    "Bitunix kline websocket has invalid price or volume": "invalid_price_or_volume",
+                                    **{
+                                        f"Bitunix kline websocket invalid {field}": "invalid_" + field.replace(" ", "_")
+                                        for field in ("open", "high", "low", "close", "base volume")
+                                    },
+                                }
                                 logging.warning(
                                     "[bitunix] [candle] malformed kline update dropped "
-                                    "| symbol=%s action=drop_update "
+                                    "| symbol=%s reason=%s action=drop_update "
                                     "rest_fallback_after=%d",
                                     malformed_symbol,
+                                    reasons.get(str(exc), "invalid_kline_schema"),
                                     self.MAX_CONSECUTIVE_MALFORMED_KLINES,
                                 )
                                 malformed_warned.add(malformed_symbol)

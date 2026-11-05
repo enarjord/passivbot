@@ -6,6 +6,7 @@ from live import hsl_live
 import passivbot_rust as pbr
 
 import asyncio
+from urllib.parse import urlsplit, urlunsplit
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 
@@ -23,6 +24,27 @@ class OKXBot(CCXTBot):
         # Track whether dual-side/hedge mode is available; default to True.
         self.okx_dual_side = True
         self.okx_pm_account = False
+
+    def _apply_exchange_market_options(self, client, ccxt_id: str) -> None:
+        super()._apply_exchange_market_options(client, ccxt_id)
+        if ccxt_id != "okx":
+            return
+        # Pinned CCXT still uses the retired 8443 endpoints. Update official
+        # production/demo URLs before user endpoint overrides are applied.
+        for group in ("api", "test"):
+            urls = client.urls.get(group)
+            if not isinstance(urls, dict):
+                continue
+            url = urls.get("ws")
+            if not isinstance(url, str):
+                continue
+            parsed = urlsplit(url)
+            if (parsed.scheme == "wss" and parsed.port == 8443
+                    and parsed.hostname in {
+                        "ws.okx.com", "wspap.okx.com", "wseea.okx.com",
+                        "wseeapap.okx.com", "wsus.okx.com", "wsuspap.okx.com",
+                    }):
+                urls["ws"] = urlunsplit(parsed._replace(netloc=parsed.hostname + ":443"))
 
     async def _detect_account_config(self):
         """
