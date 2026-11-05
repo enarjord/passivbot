@@ -95,6 +95,16 @@ Ordinary preparation retains the actual immutable HSL candle-source and fill rec
 including for empty plans. A replacement receipt invalidates preparation and completed-plan
 acceptance after protection, even when its payload is equal. Quotes refreshed by preparation
 do not invalidate that receipt. These references belong only to the outstanding plan.
+Slow ordinary preparation must not consume the current-account freshness budget before
+permission capture. After EMA and quote preparation, confirm a fresh account cohort without
+changing the prepared position, order, snapped-balance or required-fill facts. An unchanged
+confirming read may advance its actual receipt times; it cannot retimestamp an old observation.
+An epoch-changing confirmation reacquires quotes through the canonical provider for that cohort,
+retaining their factual acquisition times. Recheck account facts and freshness after that await.
+Each attempt performs at most one such account refresh: changed facts, unavailable confirmation
+or renewed expiry discard the ordinary plan and retry through normal scheduling. This work stays
+in the ordinary task and does not make preparation a protective prerequisite.
+
 The offline fake runner drains unmet account confirmations, owner-required fill readiness and
 ordinary execution changes before advancing a bar. After a typed create/cancel connector deferral
 or an ordinary account-confirmation request, a fresh accepted ordinary plan must complete without

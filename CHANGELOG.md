@@ -152,6 +152,11 @@ since the latest release tag; these features may already be available when insta
 - Reduce repeated JSON decoding in live HSL evaluation while preserving native
   replay inputs, initializer retries, full output validation and decision payloads.
 
+- Confirm fresh, unchanged account facts after slow ordinary HSL preparation and
+  reacquire quotes for the confirmed cohort, preventing expired inputs from leaving
+  ordinary management in manual mode. Changed facts or failed confirmation still defer
+  the plan, while protective scheduling and write-admission checks remain independent.
+
 - Add `hsl_execution_episode_count` as a backtest metric and optimizer limit on CPU and GPU.
   Require executed hard-stop episodes without requiring realized losses or counting unfilled triggers.
 
