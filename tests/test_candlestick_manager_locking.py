@@ -483,3 +483,158 @@ async def test_budget_timeout_emits_terminal_remote_fetch_diagnostic_without_ret
     assert requests[0]["symbol"] == requests[1]["symbol"] == "BTC/USDT:USDT"
     assert requests[0]["tf"] == requests[1]["tf"] == "1m"
     assert requests[0]["since_ts"] == requests[1]["since_ts"]
+
+
+@pytest.mark.asyncio
+async def test_live_budget_bounds_spacing_lock_wait_without_cancelling_holder(tmp_path):
+    cm = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+        remote_fetch_min_interval_ms=1.0,
+    )
+    acquired, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_spacing_lock():
+        async with cm._remote_fetch_spacing_lock:
+            acquired.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_spacing_lock())
+    await acquired.wait()
+    started = time.monotonic()
+    try:
+        with cm.remote_fetch_budget(0.02):
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(
+                    cm._ccxt_fetch_ohlcv_once("BTC/USDT:USDT", 60_000, 2), timeout=0.3
+                )
+        assert time.monotonic() - started < 0.12
+        assert cm._remote_fetch_spacing_lock.locked()
+        assert not holder.done()
+    finally:
+        release.set()
+        await holder
+    assert not cm._remote_fetch_spacing_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_archive_http_body_obeys_budget_and_emits_terminal_event(tmp_path):
+    closed = []
+    events = []
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            closed.append(True)
+
+        def raise_for_status(self):
+            pass
+
+        async def read(self):
+            await asyncio.sleep(0.15)
+            return b"late"
+
+    class Session:
+        def get(self, _url):
+            return Response()
+
+    cm = CandlestickManager(
+        exchange=None, cache_dir=str(tmp_path), remote_fetch_callback=events.append,
+    )
+
+    async def get_session():
+        return Session()
+
+    cm._get_http_session = get_session
+    started = time.monotonic()
+    with cm.remote_fetch_budget(0.02):
+        with pytest.raises(TimeoutError):
+            await cm._archive_fetch_bytes("https://archive.invalid/day.zip")
+    assert time.monotonic() - started < 0.12
+    assert closed == [True]
+    assert [event["stage"] for event in events] == ["start", "error"]
+    assert events[-1]["error_type"] == "TimeoutError"
+    assert events[-1]["elapsed_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_archive_prefetch_budget_keeps_completed_days_and_stops_new_batches(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=str(tmp_path))
+    cm._archive_supported = lambda: True
+    day_ms, minute = 86_400_000, 60_000
+    first = 1_577_836_800_000  # 2020-01-01 UTC
+    rows = np.array([
+        (first + i * minute, 1, 1, 1, 1, 1) for i in range(1440)
+    ], dtype=CANDLE_DTYPE)
+    started_days, cancelled_days, events = [], [], []
+    cm._remote_fetch_callback = events.append
+
+    async def fetch_day(_symbol, day):
+        started_days.append(day)
+        if day == "2020-01-01":
+            return rows
+        try:
+            await asyncio.sleep(0.15)
+        finally:
+            cancelled_days.append(day)
+
+    cm._archive_fetch_day = fetch_day
+    symbol = "BTC/USDT:USDT"
+    started = time.monotonic()
+    with cm.remote_fetch_budget(0.03):
+        with pytest.raises(TimeoutError):
+            await cm._prefetch_archives_for_range(
+                symbol, first, first + 3 * day_ms - minute, parallel_days=2,
+            )
+        # The expired remote budget does not prevent a factual local read.
+        cached = await cm.get_candles(
+            symbol, start_ts=first, end_ts=first + day_ms - minute,
+            allow_remote_fetch=False, standardize=False,
+        )
+    assert time.monotonic() - started < 0.2
+    assert started_days == ["2020-01-01", "2020-01-02"]
+    assert cancelled_days == ["2020-01-02"]
+    np.testing.assert_array_equal(cached, rows)
+    persisted_index = json.loads(open(cm._index_path(symbol)).read())
+    assert "2020-01-01" in persisted_index["shards"]
+    assert "2020-01-03" not in persisted_index["shards"]
+    assert events[-1]["stage"] == "error"
+    assert events[-1]["kind"] == "archive_prefetch"
+    restarted = CandlestickManager(exchange=None, exchange_name="test", cache_dir=str(tmp_path))
+    from_disk = await restarted.get_candles(
+        symbol, start_ts=first, end_ts=first + day_ms - minute,
+        allow_remote_fetch=False, standardize=False,
+    )
+    np.testing.assert_array_equal(from_disk, rows)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_archive_prefetch_drains_all_current_children(tmp_path):
+    cm = CandlestickManager(exchange=None, cache_dir=str(tmp_path))
+    cm._archive_supported = lambda: True
+    day_ms, minute = 86_400_000, 60_000
+    first = 1_577_836_800_000
+    entered, finished = [], []
+    both_started = asyncio.Event()
+
+    async def fetch_day(_symbol, day):
+        entered.append(day)
+        if len(entered) == 2:
+            both_started.set()
+        try:
+            await asyncio.sleep(10)
+        finally:
+            finished.append(day)
+
+    cm._archive_fetch_day = fetch_day
+    task = asyncio.create_task(cm._prefetch_archives_for_range(
+        "BTC/USDT:USDT", first, first + 3 * day_ms - minute, parallel_days=2,
+    ))
+    await asyncio.wait_for(both_started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(finished) == sorted(entered) == ["2020-01-01", "2020-01-02"]

@@ -531,7 +531,10 @@ Ordinary live EMA preparation shares a ten-second remote acquisition budget acro
 all symbols and metric families. Warmup shares ten seconds per timeframe pass,
 or 45 seconds for a background warmup pass. Child tasks inherit the caller's
 monotonic deadline; nested scopes cannot renew it. Network requests, request
-spacing/backoff, pagination, and fetch-lock waits honor the remaining budget.
+spacing/backoff (including contended spacing-lock acquisition), pagination,
+archive session/connect/read I/O, and fetch-lock waits honor the remaining budget.
+Archive prefetch stops scheduling new batches at expiry, drains cancelled children,
+and flushes already completed days so they remain usable after restart.
 Expired acquisition raises `TimeoutError` through existing per-input availability
 handling. Complete cache reads remain available after expiry; a missing member
 stays in the planning cohort with explicit missing inputs for Rust's consumer and

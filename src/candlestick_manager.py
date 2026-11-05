@@ -5470,24 +5470,27 @@ class CandlestickManager:
         interval_ms = float(getattr(self, "_remote_fetch_min_interval_ms", 0.0) or 0.0)
         if interval_ms <= 0.0:
             return
-        async with self._remote_fetch_spacing_lock:
-            self._raise_if_shutdown_requested("remote_fetch_spacing")
-            now_ms = _utc_now_ms()
-            last_started_ms = int(getattr(self, "_remote_fetch_last_started_ms", 0) or 0)
-            wait_ms = int(last_started_ms + interval_ms - now_ms)
-            if wait_ms > 0:
-                self._log(
-                    "debug",
-                    "remote_fetch_spacing_wait",
-                    symbol=symbol,
-                    tf=tf,
-                    wait_ms=wait_ms,
-                    interval_ms=int(interval_ms),
-                )
-                with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
-                    await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+        # Waiting for another request's spacing token consumes this caller's
+        # budget too. Expiry cancels this waiter, never the lock holder.
+        async with asyncio.timeout(self._remote_fetch_time_remaining()):
+            async with self._remote_fetch_spacing_lock:
+                self._raise_if_shutdown_requested("remote_fetch_spacing")
                 now_ms = _utc_now_ms()
-            self._remote_fetch_last_started_ms = int(now_ms)
+                last_started_ms = int(getattr(self, "_remote_fetch_last_started_ms", 0) or 0)
+                wait_ms = int(last_started_ms + interval_ms - now_ms)
+                if wait_ms > 0:
+                    self._log(
+                        "debug",
+                        "remote_fetch_spacing_wait",
+                        symbol=symbol,
+                        tf=tf,
+                        wait_ms=wait_ms,
+                        interval_ms=int(interval_ms),
+                    )
+                    with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
+                        await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+                    now_ms = _utc_now_ms()
+                self._remote_fetch_last_started_ms = int(now_ms)
 
     async def _set_global_rate_limit(self, backoff_seconds: float = 5.0) -> None:
         """Set a global rate limit backoff that affects all concurrent requests."""
@@ -7092,6 +7095,7 @@ class CandlestickManager:
                 self._http_session = None
 
     async def _archive_fetch_bytes(self, url: str) -> Optional[bytes]:
+        self._remote_fetch_time_remaining()
         t0 = time.monotonic()
         url_hash = _remote_fetch_url_hash(url)
         self._emit_remote_fetch(
@@ -7104,30 +7108,31 @@ class CandlestickManager:
         )
         self._log("debug", "archive_http_get", url_hash=url_hash)
 
-        session = await self._get_http_session()
         try:
-            async with session.get(url) as resp:
-                if resp.status == 404:
-                    self._emit_remote_fetch(
-                        {
-                            "kind": "archive_http_get",
-                            "stage": "not_found",
-                            "exchange": str(self._ex_id),
-                            "url": str(url),
-                            "status": 404,
-                            "elapsed_ms": int((time.monotonic() - t0) * 1000),
-                        }
-                    )
-                    self._log(
-                        "debug",
-                        "archive_http_404",
-                        url_hash=url_hash,
-                        elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    )
-                    return None
-                resp.raise_for_status()
-                data = await resp.read()
-        except Exception as e:
+            async with asyncio.timeout(self._remote_fetch_time_remaining()):
+                session = await self._get_http_session()
+                async with session.get(url) as resp:
+                    if resp.status == 404:
+                        self._emit_remote_fetch(
+                            {
+                                "kind": "archive_http_get",
+                                "stage": "not_found",
+                                "exchange": str(self._ex_id),
+                                "url": str(url),
+                                "status": 404,
+                                "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                            }
+                        )
+                        self._log(
+                            "debug",
+                            "archive_http_404",
+                            url_hash=url_hash,
+                            elapsed_ms=int((time.monotonic() - t0) * 1000),
+                        )
+                        return None
+                    resp.raise_for_status()
+                    data = await resp.read()
+        except (Exception, asyncio.CancelledError) as e:
             err_type = bounded_exception_type(e)
             self._emit_remote_fetch(
                 {
@@ -7562,6 +7567,7 @@ class CandlestickManager:
         """
         if not self._archive_supported():
             return
+        self._remote_fetch_time_remaining()
 
         # For stock-perps with TradFi configured, allow fetches before exchange inception
         # so historical data can be backfilled from TradFi providers (alpaca/polygon/etc.).
@@ -7658,6 +7664,7 @@ class CandlestickManager:
             "verified_from_disk": 0,  # Files verified by loading (no index metadata)
         }
         for day_key, (day_start, day_end) in day_map.items():
+            self._remote_fetch_time_remaining()
             if start_ts > day_start or end_ts < day_end:
                 skipped_reasons["partial_day_request"] += 1
                 continue  # not a full-day request for this day
@@ -7788,7 +7795,8 @@ class CandlestickManager:
             async with sem:
                 try:
                     self._log("debug", "archive_day_attempt", symbol=symbol, day=day_key)
-                    arr = await self._archive_fetch_day(symbol, day_key)
+                    async with asyncio.timeout(self._remote_fetch_time_remaining()):
+                        arr = await self._archive_fetch_day(symbol, day_key)
                     return (day_key, arr, None)
                 except Exception as e:
                     return (day_key, None, _format_archive_exc(e))
@@ -7798,6 +7806,7 @@ class CandlestickManager:
             batch_size = max(1, parallel_days)  # Match semaphore for optimal throughput
 
             for batch_start in range(0, total_days, batch_size):
+                self._remote_fetch_time_remaining()
                 batch = days_to_fetch[batch_start : batch_start + batch_size]
                 batch_start_time = time.monotonic()
 
@@ -7834,8 +7843,14 @@ class CandlestickManager:
                     pass
 
                 # Fetch batch in parallel
-                tasks = [fetch_single_day(d) for d in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                tasks = [asyncio.create_task(fetch_single_day(d)) for d in batch]
+                try:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
                 # Process results and persist (with deferred index writes)
                 batch_had_saves = False
@@ -7897,13 +7912,21 @@ class CandlestickManager:
                         batch_size=len(batch),
                         elapsed_s=batch_elapsed,
                     )
-        except Exception:
-            # Re-raise, but ensure we still log completion below
+                # Preserve every completed day in this batch before raising an
+                # expired deadline; no subsequent batch may renew the budget.
+                self._remote_fetch_time_remaining()
+        except (Exception, asyncio.CancelledError) as exc:
+            self._emit_remote_fetch({
+                "kind": "archive_prefetch", "stage": "error",
+                "exchange": str(self._ex_id), "symbol": symbol,
+                "error_type": bounded_exception_type(exc),
+                "elapsed_ms": int((time.monotonic() - start_time) * 1000),
+            })
             raise
-
-        # Flush deferred index writes once after all batches complete
-        if completed > 0:
-            self.flush_deferred_index(symbol, tf="1m")
+        finally:
+            # Successful pages remain restart-visible after timeout/cancellation.
+            if completed > 0:
+                self.flush_deferred_index(symbol, tf="1m")
 
         # Log completion summary
         total_elapsed = round(time.monotonic() - start_time, 1)
