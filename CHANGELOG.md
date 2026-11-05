@@ -10,7 +10,9 @@ since the latest release tag; these features may already be available when insta
   retired-port notices that disrupt private authentication and candle streams.
   Explicit custom endpoint overrides remain authoritative.
 - Cancel and await listing-history child tasks before closing their clients on
-  cancellation or timeout, and close clients whose market discovery failed.
+  cancellation or timeout, and close clients whose market discovery failed. Reuse
+  loaded market snapshots and page Gate daily history forward to discover contracts
+  listed beyond the first bounded page.
 - Include bounded structural reasons when rejecting malformed Bitunix candle
   updates, without exposing raw field contents or relaxing candle validation.
 

@@ -348,8 +348,24 @@ async def get_first_timestamps_unified(
             # Data starts practically 'forever' in this example
             return await cc.fetch_ohlcv(symbol, since=1, timeframe="1d")
 
-        elif exchange_name in ["bybit", "gateio"]:
-            # Data since 2018
+        elif exchange_name == "gateio":
+            # CCXT bounds Gate's daily request to 1,999 rows. A fixed 2018
+            # request ends in 2023 and can never discover newer contracts.
+            # Walk disjoint bounded pages until the first exchange candle.
+            day_ms = 86_400_000
+            page_days = 1999
+            cursor = int(date_to_ts("2018-01-01"))
+            end_ms = int(cc.milliseconds())
+            while cursor <= end_ms:
+                rows = await cc.fetch_ohlcv(
+                    symbol, since=cursor, timeframe="1d", limit=page_days
+                )
+                if rows:
+                    return rows
+                cursor += page_days * day_ms
+            return []
+
+        elif exchange_name == "bybit":
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2018-01-01")), timeframe="1d")
 
         elif exchange_name == "okx":
@@ -648,6 +664,12 @@ async def get_first_timestamps_unified(
             try:
                 res = await task
                 all_markets[ex_name] = res
+                # The discovery snapshot is already CCXT-compatible. Install
+                # it on this owned fetch client instead of repeating public
+                # market discovery on the first candle request.
+                install_markets = getattr(ccxt_clients[ex_name], "set_markets", None)
+                if res and callable(install_markets):
+                    install_markets(res)
             except Exception as e:
                 print(f"Warning: failed to load markets for {ex_name}: {e}")
                 del ccxt_clients[ex_name]

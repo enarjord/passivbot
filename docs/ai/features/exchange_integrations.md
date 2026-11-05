@@ -374,6 +374,15 @@ as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
 non-string/non-integer identifiers before conversion; never cache a placeholder
 such as `"None"` as durable subscription state.
 
+### Listing-history discovery
+
+Discover the first available daily candle through forward pages of at most 1,999
+rows from the supported history start. A single pre-listing page can be empty
+without proving that a newer contract has no history; advance to the next disjoint
+page until the first candle or the current time. Reuse the market snapshot already
+loaded by discovery rather than repeating market discovery on its fetch client.
+Cancellation owns every child task through completion before closing transport.
+
 ### Multi-currency balance semantics
 
 Gate's `cross_available` is spendable margin, not stable account equity. Resting
