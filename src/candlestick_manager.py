@@ -2165,6 +2165,10 @@ class CandlestickManager:
             shards = idx.get("shards", {})
             if not isinstance(shards, dict) or not shards:
                 return 0
+            # Inspect each parent once, rather than stat every historical shard
+            # on every websocket update. Do not retain this inventory across
+            # calls: external deletion must invalidate cached EMA inputs promptly.
+            inventories = {}
             removed = 0
             for day_key, shard_meta in list(shards.items()):
                 if not isinstance(shard_meta, dict):
@@ -2172,7 +2176,26 @@ class CandlestickManager:
                 path = shard_meta.get("path")
                 if not path:
                     continue
-                if not os.path.exists(str(path)):
+                path = str(path)
+                parent, name = os.path.split(path)
+                parent = parent or "."
+                if parent not in inventories:
+                    try:
+                        with os.scandir(parent) as entries:
+                            inventories[parent] = {
+                                entry.name: entry.is_symlink() for entry in entries
+                            }
+                    except OSError:
+                        # Preserve the existing path-specific existence check
+                        # when directory enumeration is unavailable.
+                        inventories[parent] = None
+                inventory = inventories[parent]
+                exists = (
+                    os.path.exists(path)
+                    if inventory is None or inventory.get(name, False)
+                    else name in inventory
+                )
+                if not exists:
                     shards.pop(day_key, None)
                     removed += 1
             if not removed:
