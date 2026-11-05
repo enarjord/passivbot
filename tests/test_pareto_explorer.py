@@ -388,6 +388,172 @@ def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_
     assert filtered == []
 
 
+
+@pytest.fixture()
+def mean_only_suite_dir(tmp_path: Path) -> Path:
+    pareto_dir = tmp_path / "mean_only_suite" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    metric = "drawdown_max_fraction_strategy_equity"
+    _write_scenario_candidate(
+        pareto_dir,
+        "candidate",
+        aggregate={
+            "cagr_fraction_strategy_equity": 0.3,
+            "omega_ratio_strategy_equity": 1.2,
+            metric: 0.6,
+        },
+        scenarios={
+            label: {
+                "cagr_fraction_strategy_equity": 0.3,
+                "omega_ratio_strategy_equity": 1.2,
+                metric: value,
+            }
+            for label, value in (("base", 0.4), ("subset_1", 0.8), ("subset_2", 0.6))
+        },
+    )
+    candidate_path = pareto_dir / "candidate.json"
+    entry = json.loads(candidate_path.read_text())
+    entry["backtest"] = {"reducer": {"default": "mean"}}
+    for row in entry["suite_metrics"]["metrics"].values():
+        row["stats"] = {"mean": row["aggregated"]}
+    candidate_path.write_text(json.dumps(entry))
+    return pareto_dir
+
+
+@pytest.mark.parametrize(
+    "reducer,cap,passes",
+    [("max", 0.7, False), ("mean", 0.7, True), ("min", 0.5, True),
+     ("median", 0.7, True), ("std", 0.2, True)],
+)
+def test_explicit_suite_limit_reduces_saved_scenarios(mean_only_suite_dir, reducer, cap, passes):
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    filtered, _ = filter_candidates(
+        candidates,
+        limits_payload=None,
+        limit_entries=[json.dumps({
+            "metric": "drawdown_max_fraction_strategy_equity",
+            "penalize_if": "greater_than", "reducer": reducer, "value": cap,
+        })],
+    )
+    assert bool(filtered) is passes
+
+
+@pytest.mark.parametrize("selected,passes", [(None, False), (("base", "subset_2"), True)])
+def test_explicit_suite_limit_overrides_current_reducer_and_uses_selected_scenarios(
+    mean_only_suite_dir, selected, passes,
+):
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    filtered, _ = pareto_explorer.filter_candidates_with_limits(
+        candidates,
+        [{"metric": "drawdown_max_fraction_strategy_equity",
+          "penalize_if": "greater_than", "reducer": "max", "value": 0.7}],
+        reducer_cfg={"default": "min"},
+        scenario_labels=selected,
+    )
+    assert bool(filtered) is passes
+
+
+def test_omitted_suite_limit_reducer_preserves_saved_aggregate(mean_only_suite_dir):
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    filtered, _ = filter_candidates(
+        candidates, limits_payload=None,
+        limit_entries=["drawdown_max_fraction_strategy_equity<0.7"],
+    )
+    assert filtered == candidates
+
+
+@pytest.mark.parametrize("defect", ["missing", "undefined", "invalid", "nan", "bool", "empty"])
+def test_explicit_suite_limit_rejects_incomplete_scenarios_without_stat_fallback(
+    mean_only_suite_dir, defect,
+):
+    candidate_path = mean_only_suite_dir / "candidate.json"
+    entry = json.loads(candidate_path.read_text())
+    metric = "drawdown_max_fraction_strategy_equity"
+    suite = entry["suite_metrics"]
+    row = suite["metrics"][metric]
+    row["stats"]["max"] = 0.1  # Must not hide unusable raw scenario support.
+    if defect == "empty":
+        suite["scenario_labels"] = []
+    elif defect == "missing":
+        del row["scenarios"]["subset_1"]
+    elif defect in {"undefined", "invalid"}:
+        row["scenarios"]["subset_1"] = None
+        row["scenarios"]["metric_status"] = {"subset_1": {"status": defect}}
+    else:
+        row["scenarios"]["subset_1"] = float("nan") if defect == "nan" else True
+    candidate_path.write_text(json.dumps(entry))
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    with pytest.raises(ValueError, match="drawdown_max_fraction_strategy_equity.*reducer='max'.*candidate.json"):
+        filter_candidates(
+            candidates, limits_payload=None,
+            limit_entries=[f"{metric}<0.7 reducer=max"],
+        )
+
+
+@pytest.mark.parametrize("selected", [(), ("missing_scenario",)])
+def test_explicit_suite_limit_rejects_unavailable_selected_population(mean_only_suite_dir, selected):
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    with pytest.raises(ValueError, match="reducer='max'.*scenario|reducer='max'.*missing_scenario"):
+        pareto_explorer.filter_candidates_with_limits(
+            candidates,
+            [{"metric": "drawdown_max_fraction_strategy_equity",
+              "penalize_if": "greater_than", "reducer": "max", "value": 0.7}],
+            scenario_labels=selected,
+        )
+
+
+def test_explicit_suite_limit_preserves_infinite_endpoints(mean_only_suite_dir):
+    path = mean_only_suite_dir / "candidate.json"
+    entry = json.loads(path.read_text())
+    metric = "drawdown_max_fraction_strategy_equity"
+    scenarios = entry["suite_metrics"]["metrics"][metric]["scenarios"]
+    scenarios["subset_1"] = None
+    scenarios["metric_status"] = {"subset_1": {"status": "positive_infinity"}}
+    path.write_text(json.dumps(entry))
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    filtered, _ = filter_candidates(
+        candidates, limits_payload=None, limit_entries=[f"{metric}<0.7 reducer=max"],
+    )
+    assert filtered == []
+    with pytest.raises(ValueError, match="reducer='std'.*standard deviation.*undefined"):
+        filter_candidates(
+            candidates, limits_payload=None, limit_entries=[f"{metric}<0.7 reducer=std"],
+        )
+
+
+def test_pareto_cli_filters_mean_only_suite_with_explicit_max(mean_only_suite_dir, capsys):
+    path = mean_only_suite_dir / "candidate.json"
+    entry = json.loads(path.read_text())
+    row = entry["suite_metrics"]["metrics"]["drawdown_max_fraction_strategy_equity"]
+    row["scenarios"]["subset_1"] = 0.6
+    row["stats"]["mean"] = row["aggregated"] = 0.6
+    (mean_only_suite_dir / "passing.json").write_text(json.dumps(entry))
+    args = build_parser().parse_args([
+        str(mean_only_suite_dir), "--json", "-l", json.dumps({
+            "metric": "drawdown_max_fraction_strategy_equity",
+            "penalize_if": "greater_than", "reducer": "max", "value": 0.7,
+        }),
+    ])
+    result = run_from_args(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert result.candidate.path.stem == "passing"
+    assert payload["loaded_count"] == 2
+    assert payload["retained_count"] == 1
+
+
+def test_missing_stat_only_suite_limit_names_requested_reducer(mean_only_suite_dir):
+    path = mean_only_suite_dir / "candidate.json"
+    entry = json.loads(path.read_text())
+    del entry["suite_metrics"]["scenario_labels"]
+    path.write_text(json.dumps(entry))
+    _, candidates, _ = load_candidates(mean_only_suite_dir)
+    with pytest.raises(ValueError, match="Requested reducer: 'max'"):
+        filter_candidates(
+            candidates, limits_payload=None,
+            limit_entries=["drawdown_max_fraction_strategy_equity<0.7 reducer=max"],
+        )
+
+
 def test_select_candidate_knee_prefers_balanced_candidate(sample_pareto_dir: Path):
     _pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
     result = select_candidate(candidates, specs, method="knee")
@@ -628,12 +794,8 @@ def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
         limit_entries=["cagr_fraction_strategy_equity<0.6 scenario=null stat=max"],
     )
 
-    assert [candidate.path.stem for candidate in filtered_max] == [
-        "a",
-        "b",
-        "c_dominated",
-        "d",
-    ]
+    # An explicit reducer uses scenario facts, not the fixture's stored aggregate.
+    assert filtered_max == []
     assert max_limits[0]["reducer"] == "max"
 
 
