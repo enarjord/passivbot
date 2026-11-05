@@ -781,6 +781,12 @@ Console health includes fill age/pending confirmation, active held trailing inpu
 
 `cycle.completed` identifies `execution_owner`. For `hsl`, it completes one finite protective pass, not its overlapping background ordinary preparation. `timings_ms` reports authoritative refresh, protection and ordinary submission performed in that pass. Optional `ordinary_prepare_elapsed_ms` measures preparation start through retrieval of its completed task (including polling delay); `ordinary_pending_age_ms` describes an unfinished task separately. Early-return, shutdown-shortened and I/O-failed passes do not emit successful completions; completion describes the finite owner pass, not proof that every trading input or background task is ready. Only finite nonnegative numeric `timings_ms.authoritative` values bypass sensitive-key redaction.
 
+For the HSL owner, `ordinary_executed` records whether an ordinary plan passed account admission
+and returned from the execution path during that completed pass, matching the owner's existing
+return flag. It includes accepted empty or sub-millisecond executions whose integer timing can be
+zero. Absent or rejected plans report false. This is not exchange acknowledgement or proof of
+successful writes; other owners omit this optional field unless explicitly supplied.
+
 `candle.websocket_status` retains individual CCXT receive failures and observed recovery/retirement. Console coalescing is confined to receive-stage network errors; ingestion/programming failures retain their scoped warnings. Receive recovery is recorded before downstream ingestion. Durable terminal observations survive console overflow; watcher generation ownership prevents an old retirement from clearing a replacement receive failure. Recovery covers observed failed subscriptions, not venue connectivity or REST readiness, and overflow is labeled partial. No reconnect, fallback or trading policy depends on presentation state. Candle `scope=warmup_cache` summaries describe cache windows; held close coverage and trailing input waits describe current trading impact.
 
 Console prefixes include bounded exchange/user identity; full user identity is also in durable events and health summaries. Timestamped command archives include a unique run suffix; stable per-user log aliases remain unchanged. Routine KuCoin re-fetches are DEBUG, while slow fetches and newly persisted fills retain their existing operator visibility.

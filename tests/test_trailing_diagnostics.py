@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+from copy import deepcopy
 import os
 import subprocess
 import sys
@@ -52,7 +53,12 @@ def _sample_config():
         "total_wallet_exposure_limit_ratio": 2.0,
         "n_positions": 10,
     }
-    return {"bot": {"long": dict(params), "short": dict(params)}}
+    # Snapshot fixtures omit M1 metadata: declare that dimension canonically unused.
+    params["strategy"] = {"trailing_martingale": {branch: {
+        "threshold_log_range_1m_coefficient": 0., "retracement_log_range_1m_coefficient": 0.
+    } for branch in ("entry", "close")}}
+    return {"bot": {"portfolio": {"strategy_kind": "trailing_martingale"},
+                    "long": deepcopy(params), "short": deepcopy(params)}}
 
 
 def _sample_snapshot():
@@ -330,6 +336,118 @@ def test_snapshot_requires_current_hourly_log_range_field():
         build_trailing_inputs_from_snapshot(
             _sample_config(), snapshot, symbol="BTC/USDT:USDT", pside="long"
         )
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), "invalid", True])
+@pytest.mark.parametrize("field", ["h1_log_range_ema", "ema_lower", "ema_upper"])
+def test_snapshot_import_rejects_unavailable_indicators(value, field):
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    if field == "h1_log_range_ema":
+        market["entry_log_range_ema_1h"]["long"] = value
+    else:
+        market["ema_bands"]["long"]["lower" if field == "ema_lower" else "upper"] = value
+    with pytest.raises(ValueError, match="snapshot indicator unavailable"):
+        build_trailing_inputs_from_snapshot(_sample_config(), snapshot,
+            symbol="BTC/USDT:USDT", pside="long")
+
+
+def test_snapshot_import_retains_current_m1_value_and_rejects_unavailable_status():
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["strategy_inputs"] = {"long": {
+        "m1_log_range": {"status": "available", "value": .025},
+        "h1_log_range": {"status": "available", "value": 0.0},
+    }}
+    inputs = build_trailing_inputs_from_snapshot(_sample_config(), snapshot,
+        symbol="BTC/USDT:USDT", pside="long")
+    assert inputs["m1_log_range_ema"] == .025
+    assert inputs["h1_log_range_ema"] == 0.0
+    market["strategy_inputs"]["long"]["m1_log_range"] = {"status": "unavailable", "value": None}
+    with pytest.raises(ValueError, match=r"strategy_inputs.long.m1_log_range"):
+        build_trailing_inputs_from_snapshot(_sample_config(), snapshot,
+            symbol="BTC/USDT:USDT", pside="long")
+
+
+@pytest.mark.parametrize("value", [None, 0.0])
+def test_snapshot_cli_state_distinguishes_missing_from_real_zero(tmp_path, value):
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["entry_log_range_ema_1h"]["long"] = value
+    market["strategy_inputs"] = {"long": {"h1_log_range": {
+        "status": "unavailable" if value is None else "available", "value": value}}}
+    market["strategy_inputs"]["long"]["m1_log_range"] = {"status": "available", "value": 0.}
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps(snapshot))
+    config_path = Path(__file__).parents[1] / "configs/examples/default_trailing_martingale_long.json"
+    kwargs = dict(config_path=str(config_path), monitor_root=None, exchange=None, user=None,
+                  snapshot_path=str(path), symbol="BTC", pside="long", wizard=False)
+    if value is None:
+        with pytest.raises(ValueError, match=r"(entry_log_range_ema_1h|strategy_inputs).long"):
+            create_state_from_sources(**kwargs)
+    else:
+        state = create_state_from_sources(**kwargs)
+        assert state.inputs["h1_log_range_ema"] == 0.0
+
+
+@pytest.mark.parametrize("override_key", [None, "BTC", "BTC/USDT:USDT"])
+def test_not_required_snapshot_transport_needs_resolved_current_config(override_key):
+    from config.load import load_prepared_config
+    config = load_prepared_config(str(Path(__file__).parents[1] / "configs/examples/default_trailing_martingale_long.json"),
+        live_only=True, target="canonical", verbose=False, log_info=False)
+    for branch in ("entry", "close"):
+        for consumer in ("threshold", "retracement"):
+            config["bot"]["long"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_1h_coefficient"] = 0.
+    if override_key:
+        config["coin_overrides"] = {override_key: {"bot": {"long": {"strategy": {
+            "trailing_martingale": {"close": {"retracement_log_range_1h_coefficient": .25}}}}}}}
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["entry_log_range_ema_1h"]["long"] = None
+    market["strategy_inputs"] = {"long": {"h1_log_range": {
+        "status": "not_required", "required": False, "value": None}}}
+    market["strategy_inputs"]["long"]["m1_log_range"] = {"status": "available", "value": 0.}
+    if override_key:
+        with pytest.raises(ValueError, match="snapshot indicator unavailable"):
+            build_trailing_inputs_from_snapshot(config, snapshot, symbol="BTC/USDT:USDT", pside="long")
+    else:
+        inputs = build_trailing_inputs_from_snapshot(config, snapshot, symbol="BTC/USDT:USDT", pside="long")
+        assert inputs["h1_log_range_ema"] == 0.
+        assert inputs["not_required_indicators"] == ["h1_log_range"]
+
+
+@pytest.mark.parametrize("policy", ["required", "unused", "unknown"])
+def test_legacy_snapshot_cli_never_defaults_missing_required_m1(tmp_path, monkeypatch, policy):
+    import trailing_diagnostics_tool as tool
+
+    source_config = Path(__file__).parents[1] / "configs/examples/default_trailing_martingale_long.json"
+    config = json.loads(source_config.read_text())
+    if policy == "unused":
+        for branch in ("entry", "close"):
+            for consumer in ("threshold", "retracement"):
+                config["bot"]["global"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_1m_coefficient"] = 0.
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+    path = tmp_path / "legacy-snapshot.json"
+    snapshot = _sample_snapshot()
+    assert "strategy_inputs" not in snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    path.write_text(json.dumps(snapshot))
+    if policy == "unknown":
+        load = tool.load_prepared_config
+        def incomplete_config(*args, **kwargs):
+            result = load(*args, **kwargs)
+            result["bot"]["long"].pop("strategy")
+            return result
+        monkeypatch.setattr(tool, "load_prepared_config", incomplete_config)
+    kwargs = dict(config_path=str(config_path), monitor_root=None, exchange=None, user=None,
+                  snapshot_path=str(path), symbol="BTC", pside="long", wizard=False)
+    if policy != "unused":
+        with pytest.raises(ValueError, match=r"strategy_inputs.long.m1_log_range"):
+            create_state_from_sources(**kwargs)
+    else:
+        state = create_state_from_sources(**kwargs)
+        assert state.inputs["m1_log_range_ema"] == 0.
+        assert state.inputs["not_required_indicators"] == ["m1_log_range"]
 
 
 def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit_ratio():

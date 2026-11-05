@@ -15,6 +15,60 @@ Trailing diagnostics resolve strategy settings once per symbol and position side
 one synchronous section build. Those resolved settings are discarded afterward; configuration
 and coin-override changes must be observed by the next snapshot.
 
+Market `strategy_inputs` reports canonical per-side 1m/1h log-range spans (including fractional
+spans and symbol overrides), units, nullable prepared values, availability reasons and the last
+validated ordinary-input capture time/age. A real observed zero remains available; absent,
+malformed or non-finite values are `null`, never zero placeholders. Capture age describes the
+last prepared bundle, not independent proof of candle freshness. Missing inputs omit dependent
+native trailing calculations and retain explicit `entry_diagnostic_status` and
+`close_diagnostic_status`; diagnostic failure cannot discard unrelated snapshot sections.
+Complete canonical coefficients determine consumption separately for entry and close. An absent
+dimension whose consuming threshold/retracement coefficients are all zero is `not_required`, with
+`required=false` and a null observed value; only its inert native diagnostic transport may use
+zero. A nonzero consuming coefficient requires the actual prepared value. Available observed zero
+remains `available`, even for an optional dimension. Branch diagnostic payloads retain their own
+input classifications, so entry unavailability cannot suppress an independent close calculation.
+The snapshot-based trailing diagnostic tool rejects unavailable/non-finite indicator imports
+instead of replacing them with manual-wizard zeros; genuine observed log-range zeros remain valid.
+It accepts `not_required` transport only after independently confirming zero consumption from the
+current canonical configuration, including exact-symbol overrides. Without an exchange market
+resolver, authored override aliases that cannot be matched exactly conservatively prevent that
+zero transport; the importer neither guesses a coin mapping nor fetches market data.
+The same proof is required when an older snapshot omits M1 metadata entirely. Missing data with
+nonzero or unknown current consumption is rejected; legacy absence is not an implicit zero.
+`market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
+readiness flag; it does not grant order permission.
+
+The separate `ordinary` section observes the last validated Rust computation and its exact ordinary HSL
+capture, independently of the latest fast protective `hsl` observation. It retains native input
+and effective modes, active/initial-entry flags, captured HSL permission and bounded unavailability
+classifications. Its `stage=computed_native_plan` precedes the HSL owner's final receipt acceptance
+and does not imply submission or execution; current write admission remains independent. All rows
+are observational, never execution authority. Capture age, input expiry,
+account generation changes and pending confirmations distinguish current from stale observations.
+For captured HSL scopes, expiry includes the actual balance observation time retained before native
+evaluation alongside the consumed position and mark observations. A later unchanged balance refresh
+cannot renew an older computation's captured receipt; a required capture lacking that timestamp
+has unknown input age.
+`input_receipts` also projects the exact immutable `PlanningSnapshot` used by ordinary Rust:
+all required quote symbols/receipt counts and oldest quote time under that snapshot's quote TTL,
+plus balance, positions and open-orders times under the captured current-account TTL. Missing,
+future, incomplete or mismatched receipts produce unknown/stale observations. Required surface
+epochs are checked, while fills and completed candles retain their coverage/generation obligations
+and do not acquire a quote-age deadline. HSL input times add constraints only for actually captured
+HSL scopes; disabled/uncaptured scopes cannot substitute for the ordinary quote cohort. Neither a
+later market-provider cache update nor a replacement planning snapshot renews a retained computation.
+At most 128 held/restricted-prioritized rows accompany complete mode/scope/restricted-held counts
+and an explicit omitted count. Health summaries show the ordinary observation status/age and held
+restriction count separately from strategy close-wait conditions.
+
+`ordinary.pending_confirmations` reports current required account surfaces with requested and
+observed epochs. `last_create_filter` and `last_cancel_first_barrier` retain only bounded reason,
+count, wave id, required surface names and observation age. These are labelled last observed
+outcomes, including after confirmation settles; they do not imply an active barrier. Capture is
+independent of optional event sink success. Raw event data, order details and exception messages
+are not copied into this projection.
+
 `record_error` retains the event kind, tags, known code-owned source/stage classifications, and a
 bounded exception type. It must not persist arbitrary caller strings or numbers, exception messages,
 request URLs, responses, tracebacks, or caller-supplied raw diagnostic aliases. More detailed

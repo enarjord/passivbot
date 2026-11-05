@@ -1034,6 +1034,7 @@ def emit_live_cycle_completed(
     timings_ms: dict[str, int],
     execution_owner: str = "ordinary",
     ordinary_pending: bool | None = None,
+    ordinary_executed: bool | None = None,
     ordinary_prepare_elapsed_ms: int | None = None,
     ordinary_pending_age_ms: int | None = None,
 ) -> None:
@@ -1053,6 +1054,7 @@ def emit_live_cycle_completed(
             "elapsed_ms": elapsed_ms,
             "timings_ms": dict(timings_ms or {}),
             "execution_owner": execution_owner,
+            **({"ordinary_executed": ordinary_executed} if ordinary_executed is not None else {}),
             **(
                 {"ordinary_pending": ordinary_pending}
                 if ordinary_pending is not None
@@ -4235,6 +4237,9 @@ def emit_execution_create_filter_event(
     data: dict | None = None,
 ) -> bool:
     """Emit a bounded event for create orders filtered before exchange write."""
+    from live.ordinary_diagnostics import observe_create_filter
+    observe_create_filter(bot, event_type=event_type, reason_code=reason_code,
+                          order_count=order_count, wave=wave, data=data, now_ms=utc_ms())
     try:
         order_wave_id, _action_id = _execution_event_ids(
             wave, action="create", index=None

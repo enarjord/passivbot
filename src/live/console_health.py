@@ -61,11 +61,21 @@ def readiness_payload(bot, now_ms):
     ordinary_started = getattr(owner, '_ordinary_started_ms', None)
     ordinary_pending_age = (max(0, now_ms - ordinary_started)
         if ordinary is not None and not ordinary.done() and ordinary_started is not None else None)
+    from live.ordinary_diagnostics import snapshot
+    ordinary_observation = snapshot(bot, now_ms=now_ms)
+    restricted = [row for row in ordinary_observation.get('scopes', [])
+                  if row['held'] and row['effective_mode'] != 'normal']
     return dict(trailing_wait_count=len({symbol for symbol, _ in active} | {symbol for symbol, _ in blocked}),
                 trailing_wait_overflow_count=len({symbol for symbol, _ in blocked} - set(waits)),
                 trailing_wait_samples=details,
                 trailing_wait_max_ms=max((row['age_ms'] for row in details), default=None),
                 ordinary_pending_age_ms=ordinary_pending_age,
+                ordinary_plan_status=ordinary_observation['observation_status'],
+                ordinary_plan_age_ms=ordinary_observation.get('age_ms'),
+                ordinary_restricted_held_count=ordinary_observation.get('restricted_held_count'),
+                ordinary_restricted_sample=[dict(symbol=token(row['symbol'], 32), pside=row['pside'],
+                    effective_mode=row['effective_mode'], hsl_unavailable_reason=row['hsl_unavailable_reason'])
+                    for row in restricted[:1]],
                 account_surface_ages_ms=surface_ages,
                 fills_pending=bool(pending.get('fills', 0) > getattr(ledger.get('fills'), 'epoch', 0)),
                 last_cycle_completed_age_ms=(now_ms - completed if completed is not None

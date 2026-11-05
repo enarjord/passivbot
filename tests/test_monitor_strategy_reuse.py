@@ -40,6 +40,10 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
         config={"live": {}, "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}}},
         positions={s: {'long': {'size': 1., 'price': 100.}, 'short': {'size': -.5, 'price': 100.}} for s in symbols},
         _strategy_params_to_rust_dict=params,
+        _monitor_runtime_m1_log_range_emas={s: {defaults[side]['log_range_ema_span_minutes']: .01
+                                               for side in ('long', 'short')} for s in symbols},
+        _monitor_runtime_h1_log_range_emas={s: {defaults[side]['log_range_ema_span_1h_candles']: .02
+                                               for side in ('long', 'short')} for s in symbols},
         _orchestrator_exchange_params=lambda s: {'qty_step': .01},
         _bot_params_to_rust_dict=lambda side, symbol: {'n_positions': 2},
         bp=bp, bot_value=lambda *args: 1.,

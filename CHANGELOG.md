@@ -15,6 +15,15 @@ since the latest release tag; these features may already be available when insta
   20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
   and open-order state. Keep repeated observations quiet and label stale plans.
 
+- Distinguish unavailable monitor indicators from observed zero values, retain canonical fractional
+  spans and input capture ages, and show ordinary computation modes/permissions separately from
+  protective HSL observations. Include current confirmation epochs and dated cancel-first outcomes.
+  Reject unavailable snapshot indicators in the trailing diagnostic tool instead of using zeros,
+  including required 1m values omitted by older snapshots.
+  Keep unused log-range dimensions explicitly optional per branch and derive ordinary computation
+  expiry from its consumed account and complete quote receipts under their respective freshness limits.
+  Distinguish completed ordinary execution paths from skipped plans even when integer timing is zero.
+
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and

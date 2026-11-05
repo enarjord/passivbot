@@ -12,11 +12,13 @@ import numpy as np
 import passivbot_rust as pbr
 
 from live.event_bus import EventTypes, ReasonCodes
+from live import ordinary_diagnostics
 from trailing_diagnostics import (
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
     build_trailing_martingale_close_diagnostic,
     normalize_trailing_extrema,
+    log_range_input_required,
 )
 from risk_limits import (
     effective_we_excess_allowance_fraction,
@@ -723,6 +725,7 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 and symbol not in trailing_unavailable_symbols
                 and not exchange_cooldown_blocks_symbol
             ),
+            "tradable_basis": "market_and_prepared_inputs_only",
             "tradability_reasons": sorted(set(tradability_reasons)),
             "approved": {
                 "long": symbol
@@ -862,14 +865,15 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             ema_bands = hint.get("ema_bands")
             if isinstance(ema_bands, dict):
                 entry["ema_bands"] = deepcopy(ema_bands)
-        entry_log_range_ema_1h: dict[str, float] = {}
+        entry_log_range_ema_1h: dict[str, Optional[float]] = {}
+        indicator_inputs = {}
         for pside in ("long", "short"):
-            entry_log_range_ema_1h[pside] = float(
-                _monitor_h1_entry_logrange(
-                    self, pside, symbol, strategy_cache=strategy_cache
-                )
+            indicator_inputs[pside] = _monitor_logrange_inputs(
+                self, pside, symbol, strategy_cache=strategy_cache, now_ms=now_ms
             )
+            entry_log_range_ema_1h[pside] = indicator_inputs[pside]["h1_log_range"]["value"]
         entry["entry_log_range_ema_1h"] = entry_log_range_ema_1h
+        entry["strategy_inputs"] = indicator_inputs
         out[symbol] = entry
     return out
 
@@ -1217,6 +1221,7 @@ def _build_monitor_runtime_market_hints(
     m1_close_emas: dict[str, dict[float, float]],
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
+    strategy_cache = {}
     for symbol in symbols:
         hint: dict[str, Any] = {}
         per_side: dict[str, dict[str, float]] = {}
@@ -1240,9 +1245,18 @@ def _build_monitor_runtime_market_hints(
                         if family == "unstuck"
                         else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
                     )
-                    span0 = float(self.bp(pside, span_keys[0], symbol))
-                    span1 = float(self.bp(pside, span_keys[1], symbol))
-                    distance = float(self.bp(pside, distance_key, symbol))
+                    if family == "strategy":
+                        kind = getattr(self, "config", {}).get("bot", {}).get("portfolio", {}).get("strategy_kind")
+                        if kind == "ema_anchor":
+                            span_keys = ("ema_span_0_minutes", "ema_span_1_minutes")
+                        span0 = _monitor_strategy_value(self, pside, span_keys[0], symbol, strategy_cache=strategy_cache)
+                        span1 = _monitor_strategy_value(self, pside, span_keys[1], symbol, strategy_cache=strategy_cache)
+                        distance = (_monitor_strategy_value(self, pside, distance_key, symbol, strategy_cache=strategy_cache)
+                                    if kind != "ema_anchor" else 0.0)
+                    else:
+                        span0 = float(self.bp(pside, span_keys[0], symbol))
+                        span1 = float(self.bp(pside, span_keys[1], symbol))
+                        distance = float(self.bp(pside, distance_key, symbol))
                     if (
                         not all(math.isfinite(v) for v in (span0, span1, distance))
                         or min(span0, span1) <= 0.0
@@ -1256,20 +1270,18 @@ def _build_monitor_runtime_market_hints(
                         v is not None and math.isfinite(v) and v > 0.0 for v in values
                     ):
                         continue
-                except (KeyError, TypeError, ValueError):
+                except Exception:
                     # Monitor hints are optional; absence in one family does not hide the other.
                     continue
                 lower, upper = min(values), max(values)
                 if family == "strategy":
-                    side_hint.update(
-                        lower=lower,
-                        upper=upper,
-                        entry_trigger_price=(
+                    side_hint.update(lower=lower, upper=upper)
+                    if kind != "ema_anchor":
+                        side_hint["entry_trigger_price"] = (
                             lower * (1.0 - distance)
                             if pside == "long"
                             else upper * (1.0 + distance)
-                        ),
-                    )
+                        )
                 else:
                     side_hint.update(
                         unstuck_lower=lower,
@@ -1355,12 +1367,15 @@ def _update_monitor_runtime_hints(
     orders: list[dict[str, Any]],
     diagnostics: Optional[dict[str, Any]] = None,
 ) -> None:
+    captured_at_ms = int(utc_ms())
+    ordinary_diagnostics.observe_plan(self, diagnostics, idx_to_symbol, now_ms=captured_at_ms)
     market_hints = self._build_monitor_runtime_market_hints(
         symbols, last_prices, m1_close_emas
     )
     self._monitor_runtime_market_hints = market_hints
     self._monitor_runtime_m1_log_range_emas = deepcopy(m1_log_range_emas)
     self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
+    self._monitor_runtime_indicator_captured_at_ms = captured_at_ms
     self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
         idx_to_symbol,
         orders,
@@ -1449,6 +1464,8 @@ def _monitor_strategy_value(
         "entry_trailing_threshold_base_fraction": "entry.threshold_base_fraction",
         "entry_trailing_retracement_base_fraction": "entry.retracement_base_fraction",
         "entry_initial_ema_distance_fraction": "entry.initial_ema_distance_fraction",
+        "entry_ema_span_0_minutes": "entry.ema_span_0_minutes",
+        "entry_ema_span_1_minutes": "entry.ema_span_1_minutes",
         "entry_initial_qty_fraction": "entry.initial_qty_fraction",
         "entry_log_range_1h_coefficient": "entry.threshold_log_range_1h_coefficient",
         "entry_log_range_1m_coefficient": "entry.threshold_log_range_1m_coefficient",
@@ -1495,75 +1512,92 @@ def _monitor_entry_trailing_limit_cap(
     return None, "grid_only"
 
 
-def _monitor_h1_logrange_for_span(self, symbol: str, span: float) -> float:
-    h1_log_range_emas = getattr(self, "_monitor_runtime_h1_log_range_emas", {})
-    if not isinstance(h1_log_range_emas, dict):
-        return 0.0
-    symbol_entry = h1_log_range_emas.get(symbol, {})
-    if not isinstance(symbol_entry, dict):
-        return 0.0
+def _monitor_logrange_for_span(self, symbol: str, span: float, timeframe: str) -> Optional[float]:
+    cache = getattr(self, f"_monitor_runtime_{timeframe}_log_range_emas", {})
     try:
-        return float(symbol_entry.get(float(span), 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+        if not isinstance(cache, dict) or not isinstance(cache.get(symbol), dict):
+            return None
+        value = cache[symbol].get(float(span))
+        if value is None or isinstance(value, bool):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and value >= 0.0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
-def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> float:
-    m1_log_range_emas = getattr(self, "_monitor_runtime_m1_log_range_emas", {})
-    if not isinstance(m1_log_range_emas, dict):
-        return 0.0
-    symbol_entry = m1_log_range_emas.get(symbol, {})
-    if not isinstance(symbol_entry, dict):
-        return 0.0
-    try:
-        return float(symbol_entry.get(float(span), 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+def _monitor_h1_logrange_for_span(self, symbol: str, span: float) -> Optional[float]:
+    return _monitor_logrange_for_span(self, symbol, span, "h1")
+
+
+def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> Optional[float]:
+    return _monitor_logrange_for_span(self, symbol, span, "m1")
+
+
+def _monitor_logrange_inputs(self, pside, symbol, *, strategy_cache=None, now_ms=None, branch=None):
+    """Describe the actual canonical strategy spans and last prepared values."""
+    captured = getattr(self, "_monitor_runtime_indicator_captured_at_ms", None)
+    now_ms = int(utc_ms()) if now_ms is None else now_ms
+    age = now_ms - captured if type(captured) is int and 0 < captured <= now_ms else None
+    strategy_cache = {} if strategy_cache is None else strategy_cache
+    result = {}
+    for timeframe, keys, unit in (
+        ("m1", ("log_range_ema_span_minutes", "offset_log_range_ema_span_minutes"), "minutes"),
+        ("h1", ("log_range_ema_span_1h_candles", "offset_log_range_ema_span_1h_candles"), "hour_candles"),
+    ):
+        row = dict(value=None, status="unavailable", reason="strategy_span_unavailable", required=None,
+                   span=None, span_unit=unit, captured_at_ms=captured, age_ms=age)
+        try:
+            params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
+            required = log_range_input_required(params, timeframe, branch=branch)
+            row["required"] = required
+            if required is False:
+                row.update(status="not_required", reason="zero_strategy_coefficients")
+            span = next(float(params[key]) for key in keys if key in params)
+            if not math.isfinite(span) or span <= 0:
+                raise ValueError("invalid diagnostic span")
+            row["span"] = span
+            value = _monitor_logrange_for_span(self, symbol, span, timeframe)
+            if value is not None:
+                row.update(value=value, status="available", reason=None)
+            elif required is not False:
+                row.update(reason="prepared_value_unavailable")
+        except Exception:
+            # This optional projection cannot affect planning or hide another side's inputs.
+            pass
+        result[f"{timeframe}_log_range"] = row
+    return result
+
+
+def _monitor_diagnostic_logrange_values(inputs):
+    # Only proven unused dimensions receive inert native transport. They remain
+    # null/not_required in observed data; a required missing value never gets zero.
+    return tuple(0.0 if row["status"] == "not_required" and row["required"] is False
+                 else row["value"] for row in (inputs["h1_log_range"], inputs["m1_log_range"]))
 
 
 def _monitor_h1_entry_logrange(
     self, pside: str, symbol: str, *, strategy_cache=None
-) -> float:
-    try:
-        span = _monitor_strategy_value(
-            self,
-            pside,
-            "offset_log_range_ema_span_1h_candles",
-            symbol,
-            strategy_cache=strategy_cache,
-        )
-    except Exception:
-        try:
-            span = _monitor_strategy_value(
-                self,
-                pside,
-                "entry_log_range_ema_span_1h_candles",
-                symbol,
-                strategy_cache=strategy_cache,
-            )
-        except Exception:
-            return 0.0
-    return _monitor_h1_logrange_for_span(self, symbol, span)
+) -> Optional[float]:
+    return _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)["h1_log_range"]["value"]
 
 
 def _monitor_m1_entry_logrange(
     self, pside: str, symbol: str, *, strategy_cache=None
-) -> float:
-    try:
-        span = _monitor_strategy_value(
-            self,
-            pside,
-            "entry_log_range_ema_span_minutes",
-            symbol,
-            strategy_cache=strategy_cache,
-        )
-    except Exception:
-        return 0.0
-    return _monitor_m1_logrange_for_span(self, symbol, span)
+) -> Optional[float]:
+    return _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)["m1_log_range"]["value"]
 
 
 def _monitor_trailing_extrema(bundle: dict[str, Any]) -> dict[str, float]:
     return normalize_trailing_extrema(bundle)
+
+
+def _monitor_optional_payload(builder, *args, **kwargs):
+    try:
+        return builder(*args, **kwargs)
+    except Exception:
+        # A native diagnostic or config projection failure cannot discard the rest of a snapshot.
+        return None
 
 
 def _monitor_trailing_status(
@@ -1598,7 +1632,15 @@ def _build_monitor_trailing_entry_payload(
         market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
     )
     side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
-    if not isinstance(side_ema_bands, dict):
+    if not isinstance(side_ema_bands, dict) or not all(
+        isinstance(side_ema_bands.get(key), (int, float))
+        and math.isfinite(side_ema_bands[key]) and side_ema_bands[key] > 0
+        for key in ("lower", "upper")
+    ):
+        return None
+    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache, branch="entry")
+    h1, m1 = _monitor_diagnostic_logrange_values(logrange)
+    if h1 is None or m1 is None:
         return None
     inputs = {
         "symbol": symbol,
@@ -1617,18 +1659,10 @@ def _build_monitor_trailing_entry_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
-        "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
-        "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
-        "h1_log_range_ema": float(
-            _monitor_h1_entry_logrange(
-                self, pside, symbol, strategy_cache=strategy_cache
-            )
-        ),
-        "m1_log_range_ema": float(
-            _monitor_m1_entry_logrange(
-                self, pside, symbol, strategy_cache=strategy_cache
-            )
-        ),
+        "ema_lower": float(side_ema_bands["lower"]),
+        "ema_upper": float(side_ema_bands["upper"]),
+        "h1_log_range_ema": h1,
+        "m1_log_range_ema": m1,
         **dict(trailing_bundle),
     }
     for key in (
@@ -1657,6 +1691,7 @@ def _build_monitor_trailing_entry_payload(
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
+    payload["strategy_inputs"] = logrange
     return payload
 
 
@@ -1673,6 +1708,10 @@ def _build_monitor_trailing_close_payload(
     trailing_bundle: dict[str, float],
     strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
+    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache, branch="close")
+    h1, m1 = _monitor_diagnostic_logrange_values(logrange)
+    if h1 is None or m1 is None:
+        return None
     strategy_kind = (
         str(
             getattr(self, "config", {}).get("bot", {}).get("portfolio", {}).get("strategy_kind")
@@ -1683,8 +1722,6 @@ def _build_monitor_trailing_close_payload(
     )
     if strategy_kind == "trailing_martingale":
         strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
-        log_range_ema_span_minutes = float(strategy_params["log_range_ema_span_minutes"])
-        log_range_ema_span_1h_candles = float(strategy_params["log_range_ema_span_1h_candles"])
         inputs = {
             "symbol": symbol,
             "pside": pside,
@@ -1697,12 +1734,8 @@ def _build_monitor_trailing_close_payload(
                     "ask": float(current_price),
                 },
                 "ema_bands": {"upper": 0.0, "lower": 0.0},
-                "log_range_ema_1m": float(
-                    _monitor_m1_logrange_for_span(self, symbol, log_range_ema_span_minutes)
-                ),
-                "log_range_ema_1h": float(
-                    _monitor_h1_logrange_for_span(self, symbol, log_range_ema_span_1h_candles)
-                ),
+                "log_range_ema_1m": m1,
+                "log_range_ema_1h": h1,
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
             "runtime": {
@@ -1717,7 +1750,10 @@ def _build_monitor_trailing_close_payload(
             },
             "trailing": dict(trailing_bundle),
         }
-        return build_trailing_martingale_close_diagnostic(inputs)
+        payload = build_trailing_martingale_close_diagnostic(inputs)
+        if payload is not None:
+            payload["strategy_inputs"] = logrange
+        return payload
 
     inputs = {
         "symbol": symbol,
@@ -1736,16 +1772,8 @@ def _build_monitor_trailing_close_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
-        "h1_log_range_ema": float(
-            _monitor_h1_entry_logrange(
-                self, pside, symbol, strategy_cache=strategy_cache
-            )
-        ),
-        "m1_log_range_ema": float(
-            _monitor_m1_entry_logrange(
-                self, pside, symbol, strategy_cache=strategy_cache
-            )
-        ),
+        "h1_log_range_ema": h1,
+        "m1_log_range_ema": m1,
         **dict(trailing_bundle),
     }
     for key in (
@@ -1771,6 +1799,7 @@ def _build_monitor_trailing_close_payload(
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
+    payload["strategy_inputs"] = logrange
     return payload
 
 
@@ -1842,8 +1871,12 @@ def _build_monitor_trailing_section(
             )
             position_size = float(pos.get("size", 0.0) or 0.0)
             position_price = float(pos.get("price", 0.0) or 0.0)
-            side_payload: dict[str, Any] = {"extrema": dict(trailing_bundle)}
-            entry_payload = _build_monitor_trailing_entry_payload(
+            side_payload: dict[str, Any] = {
+                "extrema": dict(trailing_bundle),
+                "strategy_inputs": _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache),
+            }
+            entry_payload = _monitor_optional_payload(
+                _build_monitor_trailing_entry_payload,
                 self,
                 symbol,
                 pside,
@@ -1857,7 +1890,8 @@ def _build_monitor_trailing_section(
             )
             if entry_payload is not None:
                 side_payload["entry"] = entry_payload
-            close_payload = _build_monitor_trailing_close_payload(
+            close_payload = _monitor_optional_payload(
+                _build_monitor_trailing_close_payload,
                 self,
                 symbol,
                 pside,
@@ -1871,8 +1905,9 @@ def _build_monitor_trailing_section(
             )
             if close_payload is not None:
                 side_payload["close"] = close_payload
-            if "entry" in side_payload or "close" in side_payload:
-                symbol_payload[pside] = side_payload
+            side_payload["entry_diagnostic_status"] = "available" if entry_payload is not None else "unavailable"
+            side_payload["close_diagnostic_status"] = "available" if close_payload is not None else "unavailable"
+            symbol_payload[pside] = side_payload
         if symbol_payload:
             out[symbol] = symbol_payload
     return out
@@ -2058,6 +2093,8 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
         "positions": positions,
         "open_orders": open_orders,
         "modes": {
+            "source": "last_applied_rust_symbol_states",
+            "captured_at_ms": (getattr(self, "_monitor_ordinary_observation", None) or {}).get("captured_at_ms"),
             "effective": {
                 "long": dict(self.PB_modes.get("long", {})),
                 "short": dict(self.PB_modes.get("short", {})),
@@ -2068,6 +2105,7 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
             },
         },
         "hsl": _monitor_hsl_section(self, now_ms=now_ms),
+        "ordinary": ordinary_diagnostics.snapshot(self, now_ms=now_ms),
         "market": market,
         "trailing": self._build_monitor_trailing_section(
             balance_raw=balance_raw,
