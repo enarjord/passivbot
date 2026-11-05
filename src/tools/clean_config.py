@@ -105,13 +105,38 @@ def normalize_export_numbers(config: dict) -> dict:
 
 
 def cleanup_config(
-    source: dict, *, mode: str = "full", base_config_path: str = "", _allow_sparse: bool = False
+    source: dict, *, mode: str = "full", base_config_path: str = "", _allow_sparse: bool = False,
+    disabled_sides: str = "preserve", bot_layout: str = "preserve",
+    reshape_report: dict | None = None,
 ) -> dict:
     """Reuse canonical normalization without resolving dates or coin-list sources.
 
     Exporting is not runtime compilation or strategy migration. In particular,
     never apply optimizer fixed runtime overrides to the authored bot values.
     """
+    if disabled_sides != "preserve" or bot_layout != "preserve":
+        if mode not in MODES[:-1]:
+            raise ValueError("directional refactoring requires a semantic cleanup mode; --mode format only formats JSON")
+        from config.reshape import reshape_config
+        from config.project import project_config
+
+        # Audit the complete policy before a live/backtest projection can hide
+        # optimizer reachability or stored scenario declarations.
+        normalized = cleanup_config(
+            source, mode=mode if mode in {"compact", "resolved"} else "full",
+            base_config_path=base_config_path, _allow_sparse=_allow_sparse,
+        )
+        result = reshape_config(normalized, disabled_sides=disabled_sides,
+                                bot_layout=bot_layout, base_config_path=base_config_path)
+        if reshape_report is not None:
+            reshape_report.setdefault("changes", []).extend(result.changes)
+            reshape_report.setdefault("warnings", []).extend(result.warnings)
+        if mode == "compact":
+            from config.authoring import compact_config
+            return compact_config(result.config, base_config_path=base_config_path)
+        if mode in {"full", "resolved"}:
+            return result.config
+        return project_config(result.config, mode, record_step=False)
     if mode in {"compact", "resolved"}:
         from config.authoring import compact_config, resolved_config
 
@@ -201,11 +226,16 @@ def render_source(
     max_inline: int = 72,
     sort_keys: bool = False,
     destination: Path | None = None,
+    disabled_sides: str = "preserve",
+    bot_layout: str = "preserve",
+    reshape_report: dict | None = None,
 ) -> str:
     is_hjson = input_format == "hjson" or (
         input_format == "auto" and source.suffix.lower() == ".hjson"
     )
     if mode == "format":
+        if disabled_sides != "preserve" or bot_layout != "preserve":
+            raise ValueError("--mode format cannot use directional refactoring flags")
         if is_hjson:
             raise ValueError(
                 "--mode format requires strict JSON; use a config cleanup mode for HJSON"
@@ -229,7 +259,16 @@ def render_source(
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
-    if mode == "compact":
+    if disabled_sides != "preserve" or bot_layout != "preserve":
+        cleaned = cleanup_config(
+            payload, mode=mode, base_config_path=str(source),
+            disabled_sides=disabled_sides, bot_layout=bot_layout,
+            reshape_report=reshape_report,
+        )
+        if destination is not None and mode != "resolved":
+            from config.authoring import _rebase_override_files
+            _rebase_override_files(cleaned, str(source), str(destination))
+    elif mode == "compact":
         from config.authoring import compact_config
 
         cleaned = compact_config(payload, base_config_path=str(source),
@@ -286,6 +325,8 @@ class PlannedFile:
     destination: Path
     original: bytes
     output: bytes
+    reshape_changes: tuple[dict, ...] = ()
+    reshape_warnings: tuple[str, ...] = ()
 
 
 def _file_identity(path: Path):
@@ -361,6 +402,7 @@ def plan_files(args) -> list[PlannedFile]:
     plans = []
     for path, target in mappings:
         try:
+            report = {}
             original = path.read_bytes()
             output = render_source(
                 original.decode("utf-8"),
@@ -371,10 +413,15 @@ def plan_files(args) -> list[PlannedFile]:
                 max_inline=args.max_inline,
                 sort_keys=args.sort_keys,
                 destination=target,
+                disabled_sides=args.disabled_sides,
+                bot_layout=args.bot_layout,
+                reshape_report=report,
             ).encode("utf-8")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise ValueError(f"{path}: {exc}") from exc
-        plans.append(PlannedFile(path, target, original, output))
+        plans.append(PlannedFile(path, target, original, output,
+                                 tuple(report.get("changes", ())),
+                                 tuple(report.get("warnings", ()))))
     return plans
 
 
@@ -433,6 +480,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--in-place", action="store_true", help="Explicitly replace source files"
     )
+    add_reshape_arguments(parser)
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -484,9 +532,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_reshape_arguments(parser) -> None:
+    """The two offline authoring tools expose the same explicit policy choices."""
+    parser.add_argument(
+        "--disabled-sides", choices=("preserve", "disable", "omit"), default="preserve",
+        help="preserve policy (default), disable dormant sides retaining parameters, or omit their profiles and unused bounds; rejects reachable sides",
+    )
+    parser.add_argument(
+        "--bot-layout", choices=("preserve", "global", "side"), default="preserve",
+        help="preserve scopes (default), share the sole active profile through global, or use explicit side profiles; changes future inheritance",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.mode == "format" and (args.disabled_sides != "preserve" or args.bot_layout != "preserve"):
+        parser.error("--mode format cannot use directional refactoring flags")
     if args.in_place and args.dst is not None:
         parser.error("--in-place cannot be combined with dst")
     if args.check and args.dst is not None:
@@ -503,6 +565,10 @@ def main(argv: list[str] | None = None) -> int:
         plans = plan_files(args)
         changed = sum(plan.original != plan.output for plan in plans)
         for plan in plans:
+            for warning in plan.reshape_warnings:
+                print(f"Warning: {plan.source}: {warning}", file=sys.stderr)
+            for change in plan.reshape_changes:
+                print(f"Refactor: {plan.source}: {change['path']}: {change['reason']}", file=sys.stderr)
             different = plan.original != plan.output
             if args.check or args.dry_run:
                 status = "Would change" if different else "Unchanged"

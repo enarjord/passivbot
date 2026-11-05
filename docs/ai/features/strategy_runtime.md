@@ -53,6 +53,12 @@ defaults and declared pins; expanded effective inspection is a separate view. Ca
 materialize necessary derived leaves for ordinary replay, while resume retains validated source
 and binding authority separately.
 
+Offline migration and cleanup may explicitly refactor directional source policy through
+`--disabled-sides` and `--bot-layout`; both default to `preserve`. Ordinary exports retain pins.
+Opt-in refactoring reports discarded policy, rejects conflicting reachable fixed/scenario/search
+contexts, and never merges independent optimizer coordinates merely because values are equal.
+Dormant-side omission may change held-position management and must report that consequence.
+
 ## Explicit Side Activation
 
 `bot.long.enabled` and `bot.short.enabled` are strict booleans, each defaulting to false.
@@ -79,8 +85,9 @@ prepared mapping. JSON metadata cannot grant that authority. Actual fixed/scenar
 record equal-value declarations and parent replacement; changed direct effective values survive
 reprepare. Authored projection retains omission; full effective JSON is a resolved policy snapshot.
 Optimizer boolean reachability follows fixed/scenario declarations while numeric ranges remain
-unable to grant activation. Released-v8 conversion explicitly enables both sides and retains the
-frozen released numeric defaults and ranges.
+unable to grant activation. Released-v8 conversion by default explicitly enables both sides and
+retains the frozen released numeric defaults and ranges; optional offline refactoring is separate
+from that conversion policy.
 
 GPU activation uses appended directional slot 15 and fused long/short slots 18/19; existing
 minimum-cost, factual-HSL and age slots remain unchanged. Replay/evaluation identities include
