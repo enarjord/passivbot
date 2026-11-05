@@ -32,11 +32,13 @@ from config.scoring import (
 )
 from limit_utils import resolve_auto_limit_entries
 from metrics_schema import (
+    MetricAggregationError,
     copy_metric_value,
     decode_metric_value,
     encode_metric_values,
     require_metric_definition,
     flatten_metric_stats,
+    raw_reduce,
 )
 from pareto_core import PARETO_FILENAME_PREFIX_LENGTH
 from pareto_qualification import load_qualification, qualification_for_candidates
@@ -1101,6 +1103,34 @@ def _resolve_limit_value(
                 f"limit reducer={requested_reducer!r} is unavailable for {candidate.filename}."
             )
     reducer = basis.reducer
+    suite = candidate.entry.get("suite_metrics")
+    if (
+        "reducer" in entry
+        and isinstance(suite, Mapping)
+        and (candidate.scenario is None or explicit_suite_basis)
+        and (scenario_labels is not None or "scenario_labels" in suite)
+    ):
+        # Saved stats contain only reducers requested by the original run. Reduce
+        # the declared scenario population for this request, including its statuses.
+        selected = (
+            tuple(scenario_labels)
+            if scenario_labels is not None
+            else tuple(suite["scenario_labels"])
+        )
+        try:
+            require_metric_definition(suite)
+            if not selected:
+                raise MetricAggregationError("no scenario population available")
+            scenarios = suite.get("metrics", {}).get(metric, {}).get("scenarios", {})
+            return raw_reduce(
+                [decode_metric_value(scenarios, label) for label in selected], reducer
+            )
+        except MetricAggregationError as error:
+            raise MetricAggregationError(
+                f"Limit metric {metric!r} with reducer={reducer!r} could not be "
+                f"resolved for {candidate.filename}: {error}",
+                status=error.status,
+            ) from error
     if "reducer" not in entry:
         value = resolve_metric_value(aggregated_values, metric)
         if isinstance(value, (int, float)) and not math.isnan(float(value)):
@@ -1204,9 +1234,13 @@ def filter_candidates_with_limits(
             if value is None:
                 metric = str(entry.get("metric", "")).strip() or "<missing>"
                 available = _format_available_limit_metrics(candidate)
+                reducer_note = (
+                    f" Requested reducer: {entry['reducer']!r}."
+                    if "reducer" in entry else ""
+                )
                 raise ValueError(
                     f"Limit metric {metric!r} could not be resolved for "
-                    f"{candidate.filename}. Available metrics: {available}"
+                    f"{candidate.filename}.{reducer_note} Available metrics: {available}"
                 )
             if _limit_rejects(entry, value):
                 rejected = True
