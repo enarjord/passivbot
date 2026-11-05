@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use port 443 for official OKX production and demo WebSocket URLs, avoiding
+  retired-port notices that disrupt private authentication and candle streams.
+  Explicit custom endpoint overrides remain authoritative.
+- Cancel and await listing-history child tasks before closing their clients on
+  cancellation or timeout, and close clients whose market discovery failed.
+- Include bounded structural reasons when rejecting malformed Bitunix candle
+  updates, without exposing raw field contents or relaxing candle validation.
+
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and

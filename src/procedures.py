@@ -606,6 +606,8 @@ async def get_first_timestamps_unified(
 
     # Initialize ccxt clients for each exchange
     ccxt_clients = {}
+    owned_clients = []
+    owned_tasks = set()
     for ex_name in sorted(exchange_map):
         try:
             if ex_name == "bitunix":
@@ -623,6 +625,7 @@ async def get_first_timestamps_unified(
                 ccxt_clients[ex_name] = BitunixClient(client_config)
             else:
                 ccxt_clients[ex_name] = load_ccxt_instance(to_ccxt_exchange_id(ex_name))
+            owned_clients.append(ccxt_clients[ex_name])
         except Exception as e:
             print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
             del exchange_map[ex_name]
@@ -633,7 +636,8 @@ async def get_first_timestamps_unified(
         load_tasks = {}
         for ex_name in sorted(ccxt_clients):
             try:
-                load_tasks[ex_name] = load_markets(ex_name)
+                load_tasks[ex_name] = asyncio.create_task(load_markets(ex_name))
+                owned_tasks.add(load_tasks[ex_name])
             except Exception as e:
                 print(f"Error creating task for {ex_name}: {e}")
                 del ccxt_clients[ex_name]
@@ -690,6 +694,7 @@ async def get_first_timestamps_unified(
                     tasks[coin][ex_name] = asyncio.create_task(
                         fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])
                     )
+                    owned_tasks.add(tasks[coin][ex_name])
 
             # Gather all results for this batch
             batch_results = {}
@@ -707,6 +712,12 @@ async def get_first_timestamps_unified(
                                 )
                         except Exception as e:
                             print(f"Warning: failed to fetch OHLCV for {coin} on {ex_name}: {e}")
+
+            # Every fast child was awaited above; release completed candle rows
+            # between batches while retaining ownership of in-flight work.
+            owned_tasks.difference_update(
+                task for exchange_tasks in tasks.values() for task in exchange_tasks.values()
+            )
 
             # Second pass: issue expensive Bitget fetch only for unresolved coins.
             for coin in batch:
@@ -817,8 +828,23 @@ async def get_first_timestamps_unified(
         # Otherwise, return earliest cross-exchange timestamps
         return {coin: ftss.get(coin, 0.0) for coin in coins}
     finally:
+        # A caller timeout cancels only the child currently being awaited. Drain
+        # every sibling before closing its transport, including already-failed
+        # children whose exception the cancelled batch never reached.
+        for task in owned_tasks:
+            if not task.done():
+                task.cancel()
+        cleanup_results = await asyncio.gather(*owned_tasks, return_exceptions=True)
+        for result in cleanup_results:
+            if isinstance(result, Exception):
+                logging.warning(
+                    "[age] listing child failed during cleanup | error_type=%s",
+                    type(result).__name__,
+                )
+        # Failed market discovery removes a venue from the query, not from
+        # transport ownership: its client must still be closed.
         await asyncio.gather(
-            *(ccxt_clients[e].close() for e in ccxt_clients if hasattr(ccxt_clients[e], "close"))
+            *(client.close() for client in owned_clients if hasattr(client, "close"))
         )
 
 

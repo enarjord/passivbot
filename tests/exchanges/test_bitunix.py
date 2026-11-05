@@ -1429,6 +1429,7 @@ async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
     assert btc_rows[0][4] == 102.0
     assert eth_rows[0][4] == 101.0
     assert "malformed kline update dropped" in caplog.text
+    assert "reason=inconsistent_ohlc" in caplog.text
 
     await stream.un_watch_ohlcv("BTC/USDT:USDT", "1m")
     await stream.un_watch_ohlcv(eth_symbol, "1m")
@@ -2628,3 +2629,11 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
     finally:
         owner.cancel_inputs()
         provider.cancel_pending()
+
+
+def test_order_stream_kline_rejection_does_not_expose_raw_field():
+    client = _prepared_client()
+    stream = BitunixOrderStream(client)
+    with pytest.raises(ValueError, match="invalid high") as error:
+        stream._normalize_ohlcv_payload(_kline_payload(h="UNBOUNDED_SENSITIVE_VALUE"))
+    assert "UNBOUNDED_SENSITIVE_VALUE" not in str(error.value)

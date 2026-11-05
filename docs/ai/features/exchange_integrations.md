@@ -330,6 +330,17 @@ Handling:
 
 ## OKX Futures
 
+### WebSocket transport
+
+Official production and demo WebSocket endpoints use port 443. Pinned CCXT defaults
+may still include retired port 8443; update those official URLs before applying
+operator endpoint overrides. A retired-port `notice` with code `64010` can otherwise
+be classified by CCXT as an error during authentication and invalidate its pending
+login future. Apply the transport correction to both private order and public candle
+sessions; do not suppress arbitrary error messages or bypass authentication.
+
+Primary reference: [OKX WebSocket port migration](https://www.okx.com/docs-v5/log_en/).
+
 ### Long/short-mode close semantics
 
 Problem:

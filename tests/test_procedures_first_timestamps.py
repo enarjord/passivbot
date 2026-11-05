@@ -614,3 +614,72 @@ async def test_kucoin_first_timestamp_wire_range_and_age_gate(
     assert recovered == {symbol: first_ts}
     assert len(requests) == (1 if outcome == "candles" else 2)
     assert all(client.session is None for client in clients)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_listing_batch_drains_siblings_before_client_close(monkeypatch, tmp_path, caplog):
+    import asyncio
+
+    (tmp_path / "caches").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(procedures, "make_get_filepath", lambda p: str(tmp_path / p))
+    monkeypatch.setattr(procedures, "coin_to_symbol", lambda coin, _: coin + "/USDT:USDT")
+    started = asyncio.Event()
+    children = []
+    finished = []
+    closed = []
+
+    class Client(_DummyCC):
+        async def fetch_ohlcv(self, symbol, **kwargs):
+            children.append(asyncio.current_task())
+            if len(children) == 3:
+                started.set()
+            try:
+                if symbol.startswith("C/"):
+                    raise RuntimeError("sibling failed before cancellation")
+                await asyncio.Event().wait()
+            finally:
+                finished.append(symbol)
+
+        async def close(self):
+            assert len(finished) == 3
+            assert all(task.done() for task in children)
+            # Failure results have been consumed as part of owned-task cleanup.
+            assert not any(task._log_traceback for task in children)
+            closed.append(True)
+
+    client = Client("gateio", 0)
+    monkeypatch.setattr(procedures, "load_ccxt_instance", lambda _: client)
+
+    async def markets(_):
+        return {}
+
+    monkeypatch.setattr(procedures, "load_markets", markets)
+    task = asyncio.create_task(procedures.get_first_timestamps_unified(["A", "B", "C"], exchange="gateio"))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed == [True]
+    assert "listing child failed during cleanup | error_type=RuntimeError" in caplog.text
+    assert "sibling failed before cancellation" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_listing_market_discovery_still_closes_client(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    (tmp_path / "caches").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(procedures, "make_get_filepath", lambda p: str(tmp_path / p))
+    monkeypatch.setattr(procedures, "coin_to_symbol", lambda *_: "BTC/USDT:USDT")
+    client = _DummyCC("gateio", 0)
+    client.close = AsyncMock()
+    monkeypatch.setattr(procedures, "load_ccxt_instance", lambda _: client)
+
+    async def failed_markets(_):
+        raise RuntimeError("market discovery failed")
+
+    monkeypatch.setattr(procedures, "load_markets", failed_markets)
+    assert await procedures.get_first_timestamps_unified(["BTC"], exchange="gateio") == {"BTC": 0.0}
+    client.close.assert_awaited_once()
