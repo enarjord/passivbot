@@ -184,6 +184,18 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+### Authoritative futures book quotes
+
+Use the public `allTickers` endpoint through CCXT's explicit
+`futuresPublicGetAllTickers` method for bulk and symbol-filtered reads. The default
+`contracts/active` endpoint supplies contract statistics but no bid/ask. Keep one
+bulk request per read; do not fan out per symbol. Require positive finite bid,
+ask and last-trade prices, reject crossed books and leave incomplete rows
+unavailable to the snapshot caller. Never substitute last, mark or index price
+for a missing top-of-book quote, or mark/index price for a last trade.
+
+Primary reference: [KuCoin futures all tickers](https://www.kucoin.com/docs-new/rest/futures-trading/market-data/get-all-tickers).
+
 ### First-candle market-age discovery
 
 KuCoin rejects `from=1`. Request daily candles from a valid millisecond timestamp
