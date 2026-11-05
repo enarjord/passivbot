@@ -88,6 +88,12 @@ non-`mean` limit statistics are unavailable in this mode. The rebuilt front cove
 the saved aggregate-suite Pareto front: candidates already discarded by the optimizer cannot be
 recovered, so it is not the complete scenario Pareto front across all evaluated candidates.
 
+For suite artifacts, an explicit limit `reducer` (or `stat` alias) reduces the saved values
+across the declared scenarios, even if that statistic was not saved by the original run.
+Missing or unavailable values in that population make the limit fail with an error. Without
+an explicit reducer, limits continue to use the stored aggregate. With `--scenario`, limits
+use that scenario's scalar value; set `scenario=null` on a limit to reduce the full suite.
+
 `passivbot tool pareto-explorer` is a CLI alias for the same tool.
 
 The output shows the best observed value on each active objective, the top five candidates by

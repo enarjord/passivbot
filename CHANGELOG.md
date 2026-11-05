@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Compute explicitly requested Pareto limit reducers from saved scenario values, so
+  limits such as worst-scenario drawdown work even when only mean statistics were saved.
+  Reject incomplete scenario inputs instead of falling back to an aggregate.
+
 - Share the Pareto CLI ranking with the offline HTML viewer and distinguish it from the
   closest point on the plotted axes. Add fixed raw scales, directional aspiration targets,
   preference sensitivity, and a versioned ranking record with optional native CPU replay evidence.
