@@ -226,7 +226,7 @@ async def defer_staged_execution_cycle(bot, details: dict, loop_start_ms: int) -
     bot._last_loop_duration_ms = _utc_ms() - loop_start_ms
     bot._maybe_log_health_summary()
     bot._maybe_log_trailing_status()
-    bot._maybe_log_unstuck_status()
+    run_diagnostic_step("unstuck status", lambda: bot._maybe_log_unstuck_status())
     bot._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
     await bot._monitor_flush_snapshot()
     bot._set_log_silence_watchdog_context(

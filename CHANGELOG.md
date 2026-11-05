@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show live unstuck diagnostics after startup, on meaningful state changes, and every
+  20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
+  and open-order state. Keep repeated observations quiet and label stale plans.
+
 - Compute explicitly requested Pareto limit reducers from saved scenario values, so
   limits such as worst-scenario drawdown work even when only mean statistics were saved.
   Reject incomplete scenario inputs instead of falling back to an aggregate.
