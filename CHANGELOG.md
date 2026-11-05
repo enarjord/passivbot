@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Report asynchronous background failures separately from the execution restart budget,
+  redact callback diagnostics, and label health cycle timestamps as observation ages.
+  Preserve immediate mode recovery messages with bounded grouped transitions and HSL
+  unavailability reasons, suppress empty forager selection chatter caused only by slot changes,
+  and label pre-acknowledgement order messages as submissions.
+
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and

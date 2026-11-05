@@ -12323,3 +12323,67 @@ def test_forager_selection_becoming_empty_is_visible_once(monkeypatch, caplog):
     ]
     assert len(lines) == 2
     assert "selected=-" in lines[1] and "reason=selection_changed" in lines[1]
+
+
+@pytest.mark.asyncio
+async def test_asyncio_failure_diagnostics_count_without_restart_or_secret_text(monkeypatch, caplog):
+    bot = _unit_bot()
+    bot.error_counts = [123]
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    try:
+        bot._install_asyncio_runtime_exception_handler()
+        handler = loop.get_exception_handler()
+        with caplog.at_level(logging.ERROR):
+            handler(loop, {"message": "Task exception was never retrieved secret-url",
+                           "exception": RuntimeError("apiKey=SECRET"),
+                           "future": "RAW_PRIVATE_TASK"})
+            handler(loop, {"message": "Unclosed client session", "client_session": "SECRET"})
+        assert bot._health_asyncio_errors == 2
+        assert bot.error_counts == [123]
+        assert "RuntimeError" in caplog.text
+        assert "SECRET" not in caplog.text
+        assert "secret-url" not in caplog.text
+        assert "RAW_PRIVATE_TASK" not in caplog.text
+    finally:
+        loop.set_exception_handler(previous)
+
+
+def test_mode_outage_and_recovery_are_immediate_and_grouped(monkeypatch, caplog):
+    bot = _unit_bot()
+    bot.get_max_n_positions = lambda side: 1
+    bot.get_current_n_positions = lambda side: 1
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    bot._hsl_mode_override_reasons = {
+        ("long", symbol): "hsl_current_balance_unavailable"
+        for symbol in ("BTC/USDT:USDT", "ETH/USDT:USDT")
+    }
+    with caplog.at_level(logging.INFO):
+        bot._log_mode_changes({"changed": [
+            "long.BTC/USDT:USDT: normal -> manual",
+            "long.ETH/USDT:USDT: normal -> manual"]}, {})
+        bot._log_mode_changes({"changed": [
+            "long.BTC/USDT:USDT: manual -> normal",
+            "long.ETH/USDT:USDT: manual -> normal"]}, {})
+        bot._log_mode_changes({"changed": [
+            "long.BTC/USDT:USDT: normal -> manual"]}, {})
+    lines = [r.message for r in caplog.records if "[mode]" in r.message]
+    assert len(lines) == 3
+    assert "count=2" in lines[0] and "hsl_current_balance_unavailable" in lines[0]
+    assert "manual -> normal" in lines[1]
+    assert "normal -> manual" in lines[2]
+
+
+def test_empty_forager_slot_changes_remain_quiet(monkeypatch, caplog):
+    bot = _unit_bot()
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    selection = dict(pside="long", slots_to_fill=1, selected_symbol_indices=[],
+                     incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[])
+    result = {"diagnostics": {"forager_selections": [selection]}}
+    with caplog.at_level(logging.INFO):
+        for slots in (1, 0, 2, 0, 1):
+            selection["slots_to_fill"] = slots
+            bot._log_forager_selection_diagnostics(result, {})
+    assert len([r for r in caplog.records if "[forager] long selection" in r.message]) == 1

@@ -170,3 +170,12 @@ def test_last_write_survives_retry_cache_pruning(monkeypatch):
     reconciler.add_to_recent_order_cancellations(bot, {'id': 'cancel'})
     bot.recent_order_cancellations.clear()
     assert readiness_payload(bot, 1801000)['last_write_age_ms'] == 900000
+
+
+def test_health_labels_execution_budget_and_passive_async_failures_separately():
+    message = format_periodic_health_summary(dict(errors_last_hour=0, async_errors_total=4,
+        last_cycle_completed_age_ms=0, last_write_age_ms=None))
+    assert 'execution_errors_1h=0/10' in message
+    assert 'async_errors_total=4' in message
+    assert 'cycle_completed_age=0.0s' in message
+    assert 'last_write=?' in message

@@ -1528,6 +1528,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     )
 
     bot = FakeBot()
+    bot._health_asyncio_errors = 4
     payload = bot._build_health_summary_payload(now_ms=160_000)
 
     assert payload["uptime_ms"] == 60_000
@@ -1536,6 +1537,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["positions_short"] == 1
     assert payload["quote"] == "USDT"
     assert payload["error_budget_max"] == 10
+    assert payload["async_errors_total"] == 4
     assert "slow_phases" not in payload
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
@@ -1916,7 +1918,7 @@ def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypat
     lines = [record.message for record in caplog.records if "[health]" in record.message]
     assert lines
     assert all(len(line) <= 170 for line in lines)
-    assert "last_cycle=?" in " ".join(lines)
+    assert "cycle_completed_age=?" in " ".join(lines)
     assert "last_loop=n/a" in lines[0] and "account_age=?" in lines[0]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -5151,8 +5153,8 @@ async def test_execute_orders_parent_records_order_opened_event(monkeypatch):
         def log_order_action(self, *args, **kwargs):
             return None
 
-        def _log_order_action_summary(self, *args, **kwargs):
-            return None
+        def _log_order_action_summary(self, grouped_orders, action):
+            self.submission_summary = (grouped_orders, action)
 
         def _build_order_params(self, _order):
             return {}
@@ -5161,6 +5163,8 @@ async def test_execute_orders_parent_records_order_opened_event(monkeypatch):
             return None
 
         async def execute_orders(self, orders):
+            assert self.submission_summary[1] == "submit"
+            assert self._health_orders_placed == 0  # no acknowledgement yet
             context = self._execution_connector_call_context
             assert context["action"] == "create"
             assert context["orders"][0] is orders[0]
