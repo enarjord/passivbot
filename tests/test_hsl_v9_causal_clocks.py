@@ -515,7 +515,7 @@ def test_malformed_native_unavailability_remains_a_fatal_producer_error(change):
                       retention_horizon_ms=60_000, reconstruction="bounded_bootstrap"))
     output.update(change)
     request = Request(Scope("coin", "long", "A"), json.dumps(facts(1)), "limit", (), (), (),
-                      SimpleNamespace(evaluate_grids=lambda *_: json.dumps(output)))
+                      SimpleNamespace(evaluate_decoded_grids=lambda *_, **__: output))
     with pytest.raises(InvalidHslOutput):
         evaluate_requests((request,))
 
