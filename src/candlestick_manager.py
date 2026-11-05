@@ -3792,13 +3792,15 @@ class CandlestickManager:
         """Remove authoritative 1m timestamps from persisted known-gap ranges."""
         if rows.size == 0:
             return False
-        gaps = self._get_known_gaps_enhanced(symbol)
-        if not gaps:
-            return False
         timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
         if timestamps.size == 0:
             return False
         first_ts, last_ts = int(timestamps[0]), int(timestamps[-1])
+        # Most new rows are outside retained historical gaps. Consult the
+        # revision-bound range view before normalizing the full rewrite cohort.
+        if not self._get_known_gaps_in_range(symbol, first_ts, last_ts):
+            return False
+        gaps = self._get_known_gaps_enhanced(symbol)
         retained: List[GapEntry] = []
         changed = False
         for gap in gaps:
@@ -4134,7 +4136,9 @@ class CandlestickManager:
         fetch_start = int(start_ts)
         fetch_end = int(end_ts)
         if gap_index is None:
-            gap_index = _KnownGapIndex(self._get_known_gaps_enhanced(symbol))
+            gap_index = _KnownGapIndex(
+                self._get_known_gaps_in_range(symbol, fetch_start, fetch_end)
+            )
         for gap in gap_index.overlapping(fetch_start, fetch_end):
             if fetch_start > fetch_end:
                 return None
@@ -4364,7 +4368,7 @@ class CandlestickManager:
             now_ms = self._now_ms()
         ranges = [(int(start_ts), int(end_ts))]
         for gap in sorted(
-            self._get_known_gaps_enhanced(symbol),
+            self._get_known_gaps_in_range(symbol, start_ts, end_ts),
             key=lambda item: int(item["start_ts"]),
         ):
             if self._should_retry_gap(gap, now_ms=now_ms):
@@ -4759,7 +4763,7 @@ class CandlestickManager:
             deferred_missing_spans: List[Tuple[int, int]] = []
             refreshable_missing_spans: List[Tuple[int, int]] = list(missing)
             if step_ms == ONE_MIN_MS and missing:
-                known_gaps = self._get_known_gaps_enhanced(symbol)
+                known_gaps = self._get_known_gaps_in_range(symbol, start_ts, end_ts)
 
                 def merge_spans(
                     spans: Iterable[Tuple[int, int]],
@@ -8645,7 +8649,9 @@ class CandlestickManager:
             # writer or local persistence replaces the metadata list.
             metadata = self._ensure_symbol_index(symbol)["meta"]["known_gaps"]
             if gap_index is None or metadata is not gap_metadata:
-                gap_index = _KnownGapIndex(self._get_known_gaps_enhanced(symbol))
+                gap_index = _KnownGapIndex(
+                    self._get_known_gaps_in_range(symbol, start_ts, end_ts)
+                )
                 gap_metadata = metadata
             return gap_index
 

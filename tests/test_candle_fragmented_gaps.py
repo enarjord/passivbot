@@ -196,11 +196,11 @@ def test_many_deferred_fragments_use_one_metadata_snapshot(tmp_path, monkeypatch
     ]
     reads = []
 
-    def load_gaps(symbol):
+    def load_gaps(symbol, start_ts, end_ts):
         reads.append(symbol)
         return gaps
 
-    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", load_gaps)
+    monkeypatch.setattr(cm, "_get_known_gaps_in_range", load_gaps)
     assert cm._known_gap_retry_deferred_at(
         "SPARSE/USDT:USDT", 0, 999 * ONE_MIN_MS, now_ms=now
     )
