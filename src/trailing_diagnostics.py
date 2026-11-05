@@ -702,6 +702,11 @@ def build_trailing_inputs_from_snapshot(
             if not isinstance(row, Mapping) or row.get("status") != "available":
                 raise ValueError(f"snapshot indicator unavailable: {field}; obtain a ready snapshot or use wizard mode")
             observed_values[metric] = _snapshot_indicator(row.get("value"), field)
+    if "m1_log_range" not in observed_values:
+        if not _snapshot_logrange_unused(config, symbol, pside, "m1"):
+            raise ValueError(f"snapshot indicator unavailable: market.strategy_inputs.{pside}.m1_log_range; obtain a ready snapshot or use wizard mode")
+        observed_values["m1_log_range"] = 0.0
+        unused.append("m1_log_range")
     h1_log_range = (0.0 if h1_by_side[pside] is None and "h1_log_range" in unused else
                    _snapshot_indicator(h1_by_side[pside], f"market.entry_log_range_ema_1h.{pside}"))
     symbol_trailing = trailing.get(symbol, {}) if isinstance(trailing, Mapping) else {}

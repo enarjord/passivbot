@@ -18,7 +18,8 @@ since the latest release tag; these features may already be available when insta
 - Distinguish unavailable monitor indicators from observed zero values, retain canonical fractional
   spans and input capture ages, and show ordinary computation modes/permissions separately from
   protective HSL observations. Include current confirmation epochs and dated cancel-first outcomes.
-  Reject unavailable snapshot indicators in the trailing diagnostic tool instead of using zeros.
+  Reject unavailable snapshot indicators in the trailing diagnostic tool instead of using zeros,
+  including required 1m values omitted by older snapshots.
   Keep unused log-range dimensions explicitly optional per branch and include the consumed balance
   observation in ordinary computation expiry.
 

@@ -34,6 +34,8 @@ It accepts `not_required` transport only after independently confirming zero con
 current canonical configuration, including exact-symbol overrides. Without an exchange market
 resolver, authored override aliases that cannot be matched exactly conservatively prevent that
 zero transport; the importer neither guesses a coin mapping nor fetches market data.
+The same proof is required when an older snapshot omits M1 metadata entirely. Missing data with
+nonzero or unknown current consumption is rejected; legacy absence is not an implicit zero.
 `market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
 readiness flag; it does not grant order permission.
 
