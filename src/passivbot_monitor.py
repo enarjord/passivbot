@@ -18,6 +18,7 @@ from trailing_diagnostics import (
     build_trailing_entry_diagnostic,
     build_trailing_martingale_close_diagnostic,
     normalize_trailing_extrema,
+    log_range_input_required,
 )
 from risk_limits import (
     effective_we_excess_allowance_fraction,
@@ -1533,7 +1534,7 @@ def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> Optional[fl
     return _monitor_logrange_for_span(self, symbol, span, "m1")
 
 
-def _monitor_logrange_inputs(self, pside, symbol, *, strategy_cache=None, now_ms=None):
+def _monitor_logrange_inputs(self, pside, symbol, *, strategy_cache=None, now_ms=None, branch=None):
     """Describe the actual canonical strategy spans and last prepared values."""
     captured = getattr(self, "_monitor_runtime_indicator_captured_at_ms", None)
     now_ms = int(utc_ms()) if now_ms is None else now_ms
@@ -1544,22 +1545,35 @@ def _monitor_logrange_inputs(self, pside, symbol, *, strategy_cache=None, now_ms
         ("m1", ("log_range_ema_span_minutes", "offset_log_range_ema_span_minutes"), "minutes"),
         ("h1", ("log_range_ema_span_1h_candles", "offset_log_range_ema_span_1h_candles"), "hour_candles"),
     ):
-        row = dict(value=None, status="unavailable", reason="strategy_span_unavailable",
+        row = dict(value=None, status="unavailable", reason="strategy_span_unavailable", required=None,
                    span=None, span_unit=unit, captured_at_ms=captured, age_ms=age)
         try:
             params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
+            required = log_range_input_required(params, timeframe, branch=branch)
+            row["required"] = required
+            if required is False:
+                row.update(status="not_required", reason="zero_strategy_coefficients")
             span = next(float(params[key]) for key in keys if key in params)
             if not math.isfinite(span) or span <= 0:
                 raise ValueError("invalid diagnostic span")
             row["span"] = span
             value = _monitor_logrange_for_span(self, symbol, span, timeframe)
-            row.update(value=value, status="available" if value is not None else "unavailable",
-                       reason=None if value is not None else "prepared_value_unavailable")
+            if value is not None:
+                row.update(value=value, status="available", reason=None)
+            elif required is not False:
+                row.update(reason="prepared_value_unavailable")
         except Exception:
             # This optional projection cannot affect planning or hide another side's inputs.
             pass
         result[f"{timeframe}_log_range"] = row
     return result
+
+
+def _monitor_diagnostic_logrange_values(inputs):
+    # Only proven unused dimensions receive inert native transport. They remain
+    # null/not_required in observed data; a required missing value never gets zero.
+    return tuple(0.0 if row["status"] == "not_required" and row["required"] is False
+                 else row["value"] for row in (inputs["h1_log_range"], inputs["m1_log_range"]))
 
 
 def _monitor_h1_entry_logrange(
@@ -1624,9 +1638,8 @@ def _build_monitor_trailing_entry_payload(
         for key in ("lower", "upper")
     ):
         return None
-    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)
-    h1 = logrange["h1_log_range"]["value"]
-    m1 = logrange["m1_log_range"]["value"]
+    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache, branch="entry")
+    h1, m1 = _monitor_diagnostic_logrange_values(logrange)
     if h1 is None or m1 is None:
         return None
     inputs = {
@@ -1678,6 +1691,7 @@ def _build_monitor_trailing_entry_payload(
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
+    payload["strategy_inputs"] = logrange
     return payload
 
 
@@ -1694,9 +1708,8 @@ def _build_monitor_trailing_close_payload(
     trailing_bundle: dict[str, float],
     strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
-    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)
-    h1 = logrange["h1_log_range"]["value"]
-    m1 = logrange["m1_log_range"]["value"]
+    logrange = _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache, branch="close")
+    h1, m1 = _monitor_diagnostic_logrange_values(logrange)
     if h1 is None or m1 is None:
         return None
     strategy_kind = (
@@ -1737,7 +1750,10 @@ def _build_monitor_trailing_close_payload(
             },
             "trailing": dict(trailing_bundle),
         }
-        return build_trailing_martingale_close_diagnostic(inputs)
+        payload = build_trailing_martingale_close_diagnostic(inputs)
+        if payload is not None:
+            payload["strategy_inputs"] = logrange
+        return payload
 
     inputs = {
         "symbol": symbol,
@@ -1783,6 +1799,7 @@ def _build_monitor_trailing_close_payload(
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
+    payload["strategy_inputs"] = logrange
     return payload
 
 

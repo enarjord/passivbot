@@ -376,11 +376,36 @@ def test_snapshot_cli_state_distinguishes_missing_from_real_zero(tmp_path, value
     kwargs = dict(config_path=str(config_path), monitor_root=None, exchange=None, user=None,
                   snapshot_path=str(path), symbol="BTC", pside="long", wizard=False)
     if value is None:
-        with pytest.raises(ValueError, match=r"entry_log_range_ema_1h.long"):
+        with pytest.raises(ValueError, match=r"(entry_log_range_ema_1h|strategy_inputs).long"):
             create_state_from_sources(**kwargs)
     else:
         state = create_state_from_sources(**kwargs)
         assert state.inputs["h1_log_range_ema"] == 0.0
+
+
+@pytest.mark.parametrize("override_key", [None, "BTC", "BTC/USDT:USDT"])
+def test_not_required_snapshot_transport_needs_resolved_current_config(override_key):
+    from config.load import load_prepared_config
+    config = load_prepared_config(str(Path(__file__).parents[1] / "configs/examples/default_trailing_martingale_long.json"),
+        live_only=True, target="canonical", verbose=False, log_info=False)
+    for branch in ("entry", "close"):
+        for consumer in ("threshold", "retracement"):
+            config["bot"]["long"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_1h_coefficient"] = 0.
+    if override_key:
+        config["coin_overrides"] = {override_key: {"bot": {"long": {"strategy": {
+            "trailing_martingale": {"close": {"retracement_log_range_1h_coefficient": .25}}}}}}}
+    snapshot = _sample_snapshot()
+    market = snapshot["payload"]["market"]["BTC/USDT:USDT"]
+    market["entry_log_range_ema_1h"]["long"] = None
+    market["strategy_inputs"] = {"long": {"h1_log_range": {
+        "status": "not_required", "required": False, "value": None}}}
+    if override_key:
+        with pytest.raises(ValueError, match="snapshot indicator unavailable"):
+            build_trailing_inputs_from_snapshot(config, snapshot, symbol="BTC/USDT:USDT", pside="long")
+    else:
+        inputs = build_trailing_inputs_from_snapshot(config, snapshot, symbol="BTC/USDT:USDT", pside="long")
+        assert inputs["h1_log_range_ema"] == 0.
+        assert inputs["not_required_indicators"] == ["h1_log_range"]
 
 
 def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit_ratio():

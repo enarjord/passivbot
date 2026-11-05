@@ -71,12 +71,17 @@ def observe_plan(bot, diagnostics, idx_to_symbol, *, now_ms):
         captured = wave.captured_ms if wave is not None else now_ms
         stamps = ([captured, wave.position_observed_ms, *wave.mark_observed_ms]
                   if wave is not None else [captured])
-        expires = min(stamps) + max_age if type(max_age) is int and max_age > 0 else None
+        balance_at = getattr(wave, "balance_observed_ms", None)
+        if wave is not None:
+            stamps.append(balance_at)
+        expires = (min(stamps) + max_age if type(max_age) is int and max_age > 0
+                   and all(type(stamp) is int and 0 < stamp <= captured for stamp in stamps) else None)
         bot._monitor_ordinary_observation = dict(
             source="rust_orchestrator", authority="observation_only",
             stage="computed_native_plan",
             captured_at_ms=captured, completed_at_ms=now_ms,
             input_expires_at_ms=expires,
+            balance_observed_at_ms=balance_at,
             account_generation=(wave.generation if wave is not None else
                                 getattr(bot, "_account_invalidation_generation", 0)),
             mode_counts=counts, scope_count=len(rows), scopes=rows[:ROW_LIMIT],

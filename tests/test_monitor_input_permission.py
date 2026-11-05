@@ -29,13 +29,16 @@ def strategy_bot(kind="trailing_martingale"):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_canonical_spans_missing_inputs_zero_and_recovery(kind):
     bot = strategy_bot(kind)
+    if kind == "ema_anchor":
+        for timeframe in ("1m", "1h"):
+            bot.config["bot"]["long"]["strategy"][kind][f"offset_log_range_{timeframe}_coefficient"] = .1
     params = bot._strategy_params_to_rust_dict("long", "BTC")
     h1_key = "log_range_ema_span_1h_candles" if kind == "trailing_martingale" else "offset_log_range_ema_span_1h_candles"
     m1_key = "log_range_ema_span_minutes" if kind == "trailing_martingale" else "offset_log_range_ema_span_minutes"
     # Fractional horizons and symbol overrides must survive projection unchanged.
     bot.coin_overrides = {"BTC": {"bot": {"long": {"strategy": {kind: {h1_key: 24.5}}}}}}
     missing = monitor._monitor_logrange_inputs(bot, "long", "BTC", now_ms=1250)
-    assert missing["h1_log_range"] == dict(value=None, status="unavailable",
+    assert missing["h1_log_range"] == dict(value=None, status="unavailable", required=True,
         reason="prepared_value_unavailable", span=24.5, span_unit="hour_candles",
         captured_at_ms=1000, age_ms=250)
     bot._monitor_runtime_h1_log_range_emas = {"BTC": {24.5: 0.0}}
@@ -80,7 +83,7 @@ def plan_bot(count=1):
         _live_market_snapshot_max_age_ms=lambda: 1000,
         _hsl_planning_wave=Wave(captured_ms=1000, position_observed_ms=900,
             mark_observed_ms=(950,), decisions=(), unavailable=(Unavailable(scope, "current_balance_unavailable"),),
-            positions="unused", open_orders=(), balance=100, generation=2))
+            positions="unused", open_orders=(), balance=100, generation=2, balance_observed_ms=1000))
     rows = []
     for idx in range(count):
         rows.append(dict(symbol_idx=idx, long=dict(input_mode="manual", effective_mode="manual", active=True, allow_initial=False),
@@ -221,3 +224,126 @@ def test_nullable_diagnostics_remain_renderable_in_tui():
         "ema_bands": {"long": {"lower": None, "upper": None}}}
     assert "lo=-" in _format_tick_line("BTC", {"payload": {"last": 1.}}, market)
     assert isinstance(_render_trailing_panel({"trailing": {"BTC": {"long": {"strategy_inputs": inputs}}}}), list)
+
+
+def native_diagnostic_bot(unused="1m"):
+    from pathlib import Path
+    from config.load import load_prepared_config
+    from passivbot import Passivbot
+    bot = strategy_bot()
+    bot.config = load_prepared_config(str(Path(__file__).parents[1] / "configs/examples/suite_example.json"),
+        live_only=True, target="canonical", verbose=False, log_info=False)
+    # Keep the example's unused metrics, while selecting its optional entry diagnostic.
+    bot.config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["retracement_base_fraction"] = .01
+    if unused == "1h":
+        for branch in ("entry", "close"):
+            for consumer in ("threshold", "retracement"):
+                bot.config["bot"]["long"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_1h_coefficient"] = 0.
+    symbol = "BTC/USDT:USDT"
+    bot._strategy_params_to_rust_dict = Passivbot._strategy_params_to_rust_dict.__get__(bot)
+    bot._monitor_runtime_m1_log_range_emas = {symbol: {999.: .99}}  # Different forager span.
+    span = bot._strategy_params_to_rust_dict("long", symbol)["log_range_ema_span_1h_candles"]
+    bot._monitor_runtime_h1_log_range_emas = {symbol: {span: .01}} if unused != "1h" else {}
+    bot.bp = lambda side, key, symbol: .5 if key == "wallet_exposure_limit_ratio" else .1
+    bot.bot_value = lambda *args: 1.5
+    exchange = dict(qty_step=.001, price_step=.1, min_qty=.001, min_cost=1.,
+                    c_mult=1., maker_fee_fraction=.0002, taker_fee_fraction=.0005)
+    bot._orchestrator_exchange_params = lambda symbol: exchange
+    bot._bot_params_to_rust_dict = lambda *args: dict(wallet_exposure_limit_ratio=.5,
+        total_wallet_exposure_limit_ratio=1.5, n_positions=3, risk_we_excess_allowance_fraction=.1,
+        risk_wel_enforcer_enabled=False, risk_wel_enforcer_threshold_ratio=1.)
+    for attr, value in (("qty_steps", .001), ("price_steps", .1), ("min_qtys", .001),
+                        ("min_costs", 1.), ("c_mults", 1.)):
+        setattr(bot, attr, {symbol: value})
+    return bot, symbol
+
+
+def diagnostic_payloads(bot, symbol):
+    common = dict(symbol=symbol, pside="long", balance_raw=1000., current_price=102.,
+        position_size=1., position_price=100., trailing_bundle=dict(
+            min_since_open=99., max_since_min=102., max_since_open=103., min_since_max=101.))
+    return (
+        monitor._build_monitor_trailing_entry_payload(bot, **common,
+            market_entry={"ema_bands": {"long": {"lower": 100., "upper": 102.}}}),
+        monitor._build_monitor_trailing_close_payload(bot, **common, balance_strategy=1000.),
+    )
+
+
+def test_unused_public_example_metric_keeps_real_native_diagnostics():
+    bot, symbol = native_diagnostic_bot()
+    inputs = monitor._monitor_logrange_inputs(bot, "long", symbol, now_ms=2000)
+    assert inputs["m1_log_range"]["status"] == "not_required"
+    assert inputs["m1_log_range"]["value"] is None
+    assert inputs["m1_log_range"]["span"] == 60.
+    for payload in diagnostic_payloads(bot, symbol):
+        assert payload is not None
+        assert payload["strategy_inputs"]["m1_log_range"]["status"] == "not_required"
+        assert payload["strategy_inputs"]["m1_log_range"]["value"] is None
+
+
+@pytest.mark.parametrize("branch", ["entry", "close"])
+@pytest.mark.parametrize("consumer", ["threshold", "retracement"])
+@pytest.mark.parametrize("timeframe", ["1m", "1h"])
+@pytest.mark.parametrize("coefficient", [-.25, .25])
+def test_each_branch_requires_its_nonzero_consumers_independently(branch, consumer, timeframe, coefficient):
+    bot, symbol = native_diagnostic_bot(unused=timeframe)
+    bot.config["bot"]["long"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_{timeframe}_coefficient"] = coefficient
+    payloads = diagnostic_payloads(bot, symbol)
+    assert payloads[0 if branch == "entry" else 1] is None
+    assert payloads[1 if branch == "entry" else 0] is not None
+
+
+def test_real_observed_zero_remains_available_when_dimension_unused():
+    bot, symbol = native_diagnostic_bot()
+    bot._monitor_runtime_m1_log_range_emas[symbol][60.] = 0.
+    row = monitor._monitor_logrange_inputs(bot, "long", symbol)["m1_log_range"]
+    assert row["status"] == "available" and row["value"] == 0. and row["required"] is False
+
+
+def test_balance_receipt_expiry_is_retained_not_renewed_from_live_ledger():
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    bot._hsl_planning_wave = replace(bot._hsl_planning_wave, balance_observed_ms=100)
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    # A later confirming receipt cannot rewrite the already consumed balance age.
+    bot.freshness_ledger.stamp("balance", now_ms=1200)
+    assert ordinary.snapshot(bot, now_ms=1100)["observation_status"] == "current"
+    old = ordinary.snapshot(bot, now_ms=1101)
+    assert old["input_expires_at_ms"] == 1100
+    assert old["balance_observed_at_ms"] == 100
+    assert old["stale_reasons"] == ["input_expired"]
+    assert "ordinary_computed=stale" in format_periodic_health_summary(readiness_payload(bot, 1200))
+    bot._hsl_planning_wave = replace(bot._hsl_planning_wave, balance_observed_ms=1200,
+        captured_ms=1200, position_observed_ms=1200, mark_observed_ms=(1200,))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1200)
+    assert ordinary.snapshot(bot, now_ms=1300)["observation_status"] == "current"
+
+
+def test_wave_without_balance_receipt_never_claims_current_input_age():
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    bot._hsl_planning_wave = replace(bot._hsl_planning_wave, balance_observed_ms=None)
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1100)
+    assert ordinary.snapshot(bot, now_ms=1200)["stale_reasons"] == ["input_age_unknown"]
+
+
+def test_real_wave_retains_balance_receipt_read_before_native_evaluation(monkeypatch):
+    from live import hsl_live
+    from test_hsl_runtime import NOW, bot as make_bot
+    import utils
+    bot = make_bot("coin")
+    monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {"long": set(bot.positions), "short": set()}
+    ledger = bot._ensure_freshness_ledger()
+    original = ledger.surfaces["balance"].updated_ms
+    evaluate = hsl_live.runtime.evaluate
+    def slow_evaluate(requests):
+        result = evaluate(requests)
+        ledger.stamp("balance", now_ms=NOW + 10)
+        return result
+    monkeypatch.setattr(hsl_live.runtime, "evaluate", slow_evaluate)
+    wave = hsl_live.owner(bot).capture()
+    assert wave.balance_observed_ms == original
+    assert ledger.surfaces["balance"].updated_ms == NOW + 10

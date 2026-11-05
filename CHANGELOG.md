@@ -19,6 +19,8 @@ since the latest release tag; these features may already be available when insta
   spans and input capture ages, and show ordinary computation modes/permissions separately from
   protective HSL observations. Include current confirmation epochs and dated cancel-first outcomes.
   Reject unavailable snapshot indicators in the trailing diagnostic tool instead of using zeros.
+  Keep unused log-range dimensions explicitly optional per branch and include the consumed balance
+  observation in ordinary computation expiry.
 
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional

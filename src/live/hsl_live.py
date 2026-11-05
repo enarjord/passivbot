@@ -119,6 +119,7 @@ class Wave:
     generation: int
     required_fills: tuple | None = None
     ordinary_receipts: OrdinaryReceipts | None = None
+    balance_observed_ms: int | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -169,6 +170,7 @@ class Owner:
         if quotes is not None:
             self.quotes.update(quotes)
         now_utc, max_age = self.remember_position()
+        balance_observed_ms = bot._ensure_freshness_ledger().surfaces["balance"].updated_ms
         requests, unavailable = runtime.capture(
             bot,
             self.quotes,
@@ -205,6 +207,7 @@ class Owner:
             runtime.observe_open_orders(bot),
             bot.get_raw_balance(),
             int(getattr(bot, "_account_invalidation_generation", 0)),
+            balance_observed_ms=balance_observed_ms,
         )
         return wave
 

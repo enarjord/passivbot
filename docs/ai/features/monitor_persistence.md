@@ -22,8 +22,18 @@ malformed or non-finite values are `null`, never zero placeholders. Capture age 
 last prepared bundle, not independent proof of candle freshness. Missing inputs omit dependent
 native trailing calculations and retain explicit `entry_diagnostic_status` and
 `close_diagnostic_status`; diagnostic failure cannot discard unrelated snapshot sections.
+Complete canonical coefficients determine consumption separately for entry and close. An absent
+dimension whose consuming threshold/retracement coefficients are all zero is `not_required`, with
+`required=false` and a null observed value; only its inert native diagnostic transport may use
+zero. A nonzero consuming coefficient requires the actual prepared value. Available observed zero
+remains `available`, even for an optional dimension. Branch diagnostic payloads retain their own
+input classifications, so entry unavailability cannot suppress an independent close calculation.
 The snapshot-based trailing diagnostic tool rejects unavailable/non-finite indicator imports
 instead of replacing them with manual-wizard zeros; genuine observed log-range zeros remain valid.
+It accepts `not_required` transport only after independently confirming zero consumption from the
+current canonical configuration, including exact-symbol overrides. Without an exchange market
+resolver, authored override aliases that cannot be matched exactly conservatively prevent that
+zero transport; the importer neither guesses a coin mapping nor fetches market data.
 `market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
 readiness flag; it does not grant order permission.
 
@@ -34,6 +44,9 @@ classifications. Its `stage=computed_native_plan` precedes the HSL owner's final
 and does not imply submission or execution; current write admission remains independent. All rows
 are observational, never execution authority. Capture age, input expiry,
 account generation changes and pending confirmations distinguish current from stale observations.
+Expiry includes the actual balance observation time retained before native evaluation alongside
+the consumed position and mark observations. A later unchanged balance refresh cannot renew an
+older computation's captured receipt; a wave lacking that timestamp has unknown input age.
 At most 128 held/restricted-prioritized rows accompany complete mode/scope/restricted-held counts
 and an explicit omitted count. Health summaries show the ordinary observation status/age and held
 restriction count separately from strategy close-wait conditions.

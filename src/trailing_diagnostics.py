@@ -583,6 +583,27 @@ def snapshot_payload(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
     return snapshot
 
 
+def log_range_input_required(params: Mapping[str, Any], timeframe: str, *, branch=None) -> Optional[bool]:
+    """Resolve diagnostic consumption from complete canonical strategy coefficients."""
+    suffix = {"m1": "1m", "h1": "1h"}[timeframe]
+    try:
+        offset = f"offset_log_range_{suffix}_coefficient"
+        if offset in params:
+            values = [params[offset]]
+        else:
+            values = []
+            for name in ((branch,) if branch is not None else ("entry", "close")):
+                section = params[name]
+                values.extend(section[f"{kind}_log_range_{suffix}_coefficient"]
+                              for kind in ("threshold", "retracement"))
+        if any(isinstance(value, bool) for value in values):
+            return None
+        values = [float(value) for value in values]
+        return any(value != 0.0 for value in values) if all(math.isfinite(v) for v in values) else None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def _snapshot_indicator(value: Any, field: str, *, positive: bool = False) -> float:
     """Snapshot imports cannot turn an unavailable observed input into a wizard default."""
     try:
@@ -594,6 +615,27 @@ def _snapshot_indicator(value: Any, field: str, *, positive: bool = False) -> fl
         return result
     except (TypeError, ValueError, OverflowError):
         raise ValueError(f"snapshot indicator unavailable: {field}; obtain a ready snapshot or use wizard mode") from None
+
+
+def _snapshot_logrange_unused(config, symbol, pside, timeframe):
+    from config.strategy import build_runtime_strategy_side, get_active_strategy_side
+
+    bot = config.get("bot", {})
+    kind = bot.get("portfolio", {}).get("strategy_kind")
+    side = bot.get(pside, {})
+    if kind != "trailing_martingale" or not isinstance(side.get("strategy", {}).get(kind), Mapping):
+        return False
+    overrides = config.get("coin_overrides", {})
+    if any(key != symbol for key in overrides):
+        # The offline importer has no exchange market resolver. An authored coin
+        # alias may refer to this symbol; never guess that an override is unrelated.
+        return False
+    params = build_runtime_strategy_side(
+        get_active_strategy_side(side, strategy_kind=kind, pside=pside),
+        strategy_kind=kind, pside=pside,
+        override_side=overrides.get(symbol, {}).get("bot", {}).get(pside, {}),
+    )
+    return log_range_input_required(params, timeframe) is False
 
 
 def build_trailing_inputs_from_snapshot(
@@ -639,21 +681,29 @@ def build_trailing_inputs_from_snapshot(
         raise KeyError(
             f"snapshot missing market.c_mult for {symbol}; restart the bot with a newer monitor snapshot or use wizard mode"
         )
-    h1_log_range = _snapshot_indicator(
-        h1_by_side[pside], f"market.entry_log_range_ema_1h.{pside}"
-    )
     observed_inputs = market_entry.get("strategy_inputs", {})
     observed_side = observed_inputs.get(pside, {}) if isinstance(observed_inputs, Mapping) else {}
     observed_values = {}
+    unused = []
     if isinstance(observed_side, Mapping):
         for metric in ("m1_log_range", "h1_log_range"):
             if metric not in observed_side:
                 continue
             row = observed_side[metric]
             field = f"market.strategy_inputs.{pside}.{metric}"
+            if (isinstance(row, Mapping) and row.get("status") == "not_required"
+                    and row.get("required") is False
+                    and _snapshot_logrange_unused(config, symbol, pside, metric.split("_")[0])):
+                # Current config independently proves this dimension inert. This is
+                # diagnostic transport, not an invented observed indicator value.
+                observed_values[metric] = 0.0
+                unused.append(metric)
+                continue
             if not isinstance(row, Mapping) or row.get("status") != "available":
                 raise ValueError(f"snapshot indicator unavailable: {field}; obtain a ready snapshot or use wizard mode")
             observed_values[metric] = _snapshot_indicator(row.get("value"), field)
+    h1_log_range = (0.0 if h1_by_side[pside] is None and "h1_log_range" in unused else
+                   _snapshot_indicator(h1_by_side[pside], f"market.entry_log_range_ema_1h.{pside}"))
     symbol_trailing = trailing.get(symbol, {}) if isinstance(trailing, Mapping) else {}
     side_trailing = symbol_trailing.get(pside, {}) if isinstance(symbol_trailing, Mapping) else {}
     if not isinstance(side_trailing, Mapping):
@@ -691,6 +741,8 @@ def build_trailing_inputs_from_snapshot(
     }
     if "m1_log_range" in observed_values:
         out["m1_log_range_ema"] = observed_values["m1_log_range"]
+    if unused:
+        out["not_required_indicators"] = unused
     out.update(normalize_trailing_extrema(extrema_source))
     for key in sorted(set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS)):
         if key == "wallet_exposure_limit_ratio":
