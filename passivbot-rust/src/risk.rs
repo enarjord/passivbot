@@ -309,6 +309,69 @@ pub fn gate_entries_by_twel(
         .collect()
 }
 
+/// One native observation of a held position's unstuck gates. It never grants execution authority.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnstuckDiagnostic {
+    pub symbol_idx: usize,
+    pub pside: String,
+    pub reason: String,
+    pub proposed: bool,
+    pub allowance: Option<f64>,
+    pub exposure_ratio: Option<f64>,
+    pub exposure_trigger_ratio: Option<f64>,
+    pub current_price: Option<f64>,
+    pub ema_trigger_price: Option<f64>,
+    pub qty: Option<f64>,
+    pub price: Option<f64>,
+    pub estimated_pnl: Option<f64>,
+}
+
+impl UnstuckDiagnostic {
+    pub fn new(symbol_idx: usize, side: usize, reason: &str) -> Self {
+        Self {
+            symbol_idx,
+            pside: if side == LONG { "long" } else { "short" }.to_string(),
+            reason: reason.to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+fn observe_unstuck(
+    diagnostics: &mut Option<&mut Vec<UnstuckDiagnostic>>,
+    observation: Option<UnstuckDiagnostic>,
+    reason: &str,
+) {
+    if let (Some(rows), Some(mut row)) = (diagnostics.as_deref_mut(), observation) {
+        row.reason = reason.to_string();
+        rows.push(row);
+    }
+}
+
+fn observe_unstuck_proposal(
+    diagnostics: &mut Option<&mut Vec<UnstuckDiagnostic>>,
+    input: &UnstuckPositionInput,
+    qty: f64,
+    price: f64,
+) {
+    if let Some(rows) = diagnostics.as_deref_mut() {
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.symbol_idx == input.idx
+                && row.pside == if input.side == LONG { "long" } else { "short" }
+        }) {
+            row.proposed = true;
+            row.qty = Some(qty);
+            row.price = Some(price);
+            row.estimated_pnl = Some(if input.side == LONG {
+                calc_pnl_long(input.position_price, price, qty, input.c_mult)
+            } else {
+                calc_pnl_short(input.position_price, price, qty, input.c_mult)
+            });
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct UnstuckPositionInput {
     pub idx: usize,
@@ -339,21 +402,52 @@ pub fn calc_unstucking_action(
     allowance_short: f64,
     positions: &[UnstuckPositionInput],
 ) -> Option<(usize, usize, Order)> {
-    calc_unstucking_action_with_allowance(balance, positions, |input| match input.side {
+    calc_unstucking_action_with_allowance(balance, positions, None, |input| match input.side {
         LONG => allowance_long,
         SHORT => allowance_short,
         _ => 0.0,
     })
 }
 
-pub fn calc_unstucking_action_with_realized_drawdown(
+#[cfg(test)]
+fn calc_unstucking_action_with_realized_drawdown(
     balance: f64,
     realized_drawdown: f64,
     positions: &[UnstuckPositionInput],
 ) -> Result<Option<(usize, usize, Order)>, String> {
+    calc_unstucking_action_with_realized_drawdown_observed(
+        balance,
+        realized_drawdown,
+        positions,
+        None,
+    )
+}
+
+pub fn calc_unstucking_action_with_diagnostics(
+    balance: f64,
+    realized_drawdown: f64,
+    positions: &[UnstuckPositionInput],
+    diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
+) -> Result<Option<(usize, usize, Order)>, String> {
+    calc_unstucking_action_with_realized_drawdown_observed(
+        balance,
+        realized_drawdown,
+        positions,
+        diagnostics,
+    )
+}
+
+fn calc_unstucking_action_with_realized_drawdown_observed(
+    balance: f64,
+    realized_drawdown: f64,
+    positions: &[UnstuckPositionInput],
+    diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
+) -> Result<Option<(usize, usize, Order)>, String> {
     let mut error = None;
-    let result = calc_unstucking_action_with_allowance(balance, positions, |input| {
-        if input.unstuck_loss_allowance_fraction <= 0.0 || input.total_wallet_exposure_limit_ratio <= 0.0 {
+    let result = calc_unstucking_action_with_allowance(balance, positions, diagnostics, |input| {
+        if input.unstuck_loss_allowance_fraction <= 0.0
+            || input.total_wallet_exposure_limit_ratio <= 0.0
+        {
             return 0.0;
         }
         match crate::hsl_decay::allowance_for(
@@ -379,6 +473,7 @@ pub fn calc_unstucking_action_with_realized_drawdown(
 fn calc_unstucking_action_with_allowance<F>(
     balance: f64,
     positions: &[UnstuckPositionInput],
+    mut diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
     mut allowance_for: F,
 ) -> Option<(usize, usize, Order)>
 where
@@ -397,17 +492,35 @@ where
     let mut stuck_positions: Vec<Candidate> = Vec::new();
 
     for input in positions {
+        let mut observation = diagnostics.as_ref().map(|_| {
+            let mut row = UnstuckDiagnostic::new(input.idx, input.side, "inputs_unavailable");
+            row.exposure_trigger_ratio = Some(input.unstuck_exposure_trigger_ratio);
+            row.current_price = input
+                .current_price
+                .is_finite()
+                .then_some(input.current_price);
+            row
+        });
+        macro_rules! skip_observed {
+            ($reason:expr) => {{
+                observe_unstuck(&mut diagnostics, observation, $reason);
+                continue;
+            }};
+        }
         let allowance = allowance_for(input);
+        if let Some(row) = observation.as_mut() {
+            row.allowance = Some(allowance);
+        }
         if allowance <= 0.0 {
-            continue;
+            skip_observed!("allowance_exhausted");
         }
 
         if !input.position_price.is_finite() || input.position_price <= 0.0 {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
         let size_abs = input.position_size.abs();
         if size_abs <= f64::EPSILON {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
 
         let wallet_exposure =
@@ -417,14 +530,18 @@ where
 
         let unstuck_exposure_trigger_ratio = input.unstuck_exposure_trigger_ratio;
         if unstuck_exposure_trigger_ratio < 0.0 {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
-        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_exposure_trigger_ratio {
-            continue;
+        if let Some(row) = observation.as_mut() {
+            row.exposure_ratio = (effective_wel > 0.0).then_some(wallet_exposure / effective_wel);
+        }
+        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_exposure_trigger_ratio
+        {
+            skip_observed!("below_exposure_trigger");
         }
 
         if !input.current_price.is_finite() || input.current_price <= 0.0 {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
 
         let price_step = if input.price_step > 0.0 {
@@ -437,7 +554,7 @@ where
             let ema_price = match input.side {
                 LONG => {
                     if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
-                        continue;
+                        skip_observed!("inputs_unavailable");
                     }
                     let target = input.ema_band_upper * (1.0 + input.unstuck_ema_distance_fraction);
                     let rounded = if price_step > 0.0 {
@@ -446,13 +563,13 @@ where
                         target
                     };
                     if !rounded.is_finite() || rounded <= 0.0 {
-                        continue;
+                        skip_observed!("inputs_unavailable");
                     }
                     rounded
                 }
                 SHORT => {
                     if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
-                        continue;
+                        skip_observed!("inputs_unavailable");
                     }
                     let target = input.ema_band_lower * (1.0 - input.unstuck_ema_distance_fraction);
                     let rounded = if price_step > 0.0 {
@@ -461,7 +578,7 @@ where
                         target
                     };
                     if !rounded.is_finite() || rounded <= 0.0 {
-                        continue;
+                        skip_observed!("inputs_unavailable");
                     }
                     rounded
                 }
@@ -473,19 +590,23 @@ where
                 SHORT => input.current_price <= ema_price,
                 _ => false,
             };
+            if let Some(row) = observation.as_mut() {
+                row.ema_trigger_price = Some(ema_price);
+            }
             if !meets_trigger {
-                continue;
+                skip_observed!("waiting_ema");
             }
         } else if input.side != LONG && input.side != SHORT {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
 
         let pprice_diff =
             calc_pside_adverse_price_change_fraction(input.side, input.position_price, input.current_price);
         if !pprice_diff.is_finite() {
-            continue;
+            skip_observed!("inputs_unavailable");
         }
 
+        observe_unstuck(&mut diagnostics, observation, "eligible");
         stuck_positions.push(Candidate { input, pprice_diff });
     }
 
@@ -564,6 +685,7 @@ where
                 if close_qty == 0.0 {
                     continue;
                 }
+                observe_unstuck_proposal(&mut diagnostics, input, close_qty, close_price);
                 return Some((
                     input.idx,
                     LONG,
@@ -601,6 +723,7 @@ where
                 if close_qty == 0.0 {
                     continue;
                 }
+                observe_unstuck_proposal(&mut diagnostics, input, close_qty, close_price);
                 return Some((
                     input.idx,
                     SHORT,
@@ -984,6 +1107,121 @@ mod tests {
             market_price,
             order_type,
         }
+    }
+
+    fn unstuck_diagnostic_input(side: usize) -> UnstuckPositionInput {
+        UnstuckPositionInput {
+            idx: 0,
+            side,
+            position_size: if side == LONG { 10.0 } else { -10.0 },
+            position_price: if side == LONG { 130.0 } else { 110.0 },
+            wallet_exposure_limit_ratio: 1.0,
+            effective_we_excess_allowance_fraction: 0.0,
+            unstuck_exposure_trigger_ratio: 0.5,
+            unstuck_close_fraction: 0.1,
+            unstuck_ema_gating_enabled: true,
+            unstuck_ema_distance_fraction: 0.0,
+            unstuck_loss_allowance_fraction: 0.1,
+            total_wallet_exposure_limit_ratio: 1.0,
+            ema_band_upper: 119.0,
+            ema_band_lower: 121.0,
+            current_price: 120.003,
+            price_step: 0.01,
+            qty_step: 0.01,
+            min_qty: 0.01,
+            min_cost: 0.0,
+            c_mult: 1.0,
+        }
+    }
+
+    #[test]
+    fn unstuck_diagnostics_observe_exact_gates_without_changing_decisions() {
+        for side in [LONG, SHORT] {
+            for case in 0..6 {
+                let mut input = unstuck_diagnostic_input(side);
+                let mut drawdown = 0.0;
+                let expected = match case {
+                    0 => {
+                        drawdown = 1_000.0;
+                        "allowance_exhausted"
+                    }
+                    1 => {
+                        input.position_size *= 0.1;
+                        "below_exposure_trigger"
+                    }
+                    2 => {
+                        input.ema_band_upper = 125.001;
+                        input.ema_band_lower = 115.009;
+                        "waiting_ema"
+                    }
+                    3 => {
+                        input.ema_band_upper = f64::NAN;
+                        input.ema_band_lower = f64::NAN;
+                        "inputs_unavailable"
+                    }
+                    4 => {
+                        input.unstuck_ema_gating_enabled = false;
+                        input.ema_band_upper = f64::NAN;
+                        input.ema_band_lower = f64::NAN;
+                        "eligible"
+                    }
+                    _ => "eligible",
+                };
+                let positions = [input];
+                let ordinary =
+                    calc_unstucking_action_with_realized_drawdown(1_000.0, drawdown, &positions)
+                        .unwrap();
+                let mut rows = Vec::new();
+                let observed = calc_unstucking_action_with_diagnostics(
+                    1_000.0,
+                    drawdown,
+                    &positions,
+                    Some(&mut rows),
+                )
+                .unwrap();
+                let normalize = |result: Option<(usize, usize, Order)>| {
+                    result.map(|(idx, side, order)| {
+                        (
+                            idx,
+                            side,
+                            order.qty.to_bits(),
+                            order.price.to_bits(),
+                            order.order_type,
+                        )
+                    })
+                };
+                assert_eq!(normalize(ordinary), normalize(observed));
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].reason, expected);
+                assert_eq!(rows[0].proposed, expected == "eligible");
+                if expected == "waiting_ema" {
+                    assert_eq!(
+                        rows[0].ema_trigger_price,
+                        Some(if side == LONG { 125.01 } else { 115.0 })
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unstuck_diagnostics_preserve_global_least_stuck_selection() {
+        let mut positions = vec![
+            unstuck_diagnostic_input(LONG),
+            unstuck_diagnostic_input(SHORT),
+        ];
+        positions[1].idx = 1;
+        positions[1].position_price = 119.0;
+        let mut rows = Vec::new();
+        let selected =
+            calc_unstucking_action_with_diagnostics(1_000.0, 0.0, &positions, Some(&mut rows))
+                .unwrap()
+                .unwrap();
+        assert_eq!((selected.0, selected.1), (1, SHORT));
+        assert_eq!(rows.iter().filter(|row| row.proposed).count(), 1);
+        assert!(rows[1].proposed);
+        assert_eq!(rows[0].reason, "eligible");
+        assert_eq!(rows[1].reason, "eligible");
     }
 
     #[test]

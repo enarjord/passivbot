@@ -6,15 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Use port 443 for official OKX production and demo WebSocket URLs, avoiding
-  retired-port notices that disrupt private authentication and candle streams.
-  Explicit custom endpoint overrides remain authoritative.
-- Cancel and await listing-history child tasks before closing their clients on
-  cancellation or timeout, and close clients whose market discovery failed. Reuse
-  loaded market snapshots and page Gate daily history forward to discover contracts
-  listed beyond the first bounded page.
-- Include bounded structural reasons when rejecting malformed Bitunix candle
-  updates, without exposing raw field contents or relaxing candle validation.
+- Show live unstuck diagnostics after startup, on meaningful state changes, and every
+  20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
+  and open-order state. Keep repeated observations quiet and label stale plans.
 
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
@@ -41,6 +35,16 @@ since the latest release tag; these features may already be available when insta
 
 - Allow `compose-coin-overrides` to load saved optimizer and backtest results directly
   as single-coin inputs or master configs, removing known result metadata before strict validation.
+
+- Use port 443 for official OKX production and demo WebSocket URLs, avoiding
+  retired-port notices that disrupt private authentication and candle streams.
+  Explicit custom endpoint overrides remain authoritative.
+- Cancel and await listing-history child tasks before closing their clients on
+  cancellation or timeout, and close clients whose market discovery failed. Reuse
+  loaded market snapshots and page Gate daily history forward to discover contracts
+  listed beyond the first bounded page.
+- Include bounded structural reasons when rejecting malformed Bitunix candle
+  updates, without exposing raw field contents or relaxing candle validation.
 
 - Verify bounded source-leading candle unavailability with explicit public intervals and
   a matching historical control, without treating missing candles as market inception

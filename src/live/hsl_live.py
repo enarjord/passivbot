@@ -960,6 +960,11 @@ class Owner:
                         "[trailing] status presentation failed | error_type=%s",
                         type(exc).__name__,
                     )
+                from live.events import run_diagnostic_step
+
+                run_diagnostic_step(
+                    "unstuck status", lambda: bot._maybe_log_unstuck_status()
+                )
                 await bot._sleep_unless_shutdown(
                     max(0.05, float(bot.live_value("execution_delay_seconds"))),
                     stage="hsl_execution_delay",

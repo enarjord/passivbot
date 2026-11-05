@@ -345,7 +345,10 @@ ordinary closes, HSL closes and signed rebates all contribute in deterministic e
 order. UPNL and external balance changes do not. HSL episode transitions never reset it.
 Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
-exposure thresholds and close sizing retain their existing policies. The global
+exposure thresholds and close sizing retain their existing policies. The live orchestrator exposes
+observability-only unstuck gate rows, including exhausted allowance, exposure/EMA waits, unavailable
+inputs, eligible positions, proposed closes, and whether the proposal survives final native reducer
+selection. Python presents these facts without recomputing selection or authorizing execution. The global
 `bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
 `memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_fraction`,
 without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
