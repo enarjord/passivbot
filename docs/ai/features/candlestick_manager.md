@@ -509,6 +509,22 @@ The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
 
+### Physical gap evidence and cache health
+
+An internal hole in canonical candle rows is unknown even when gap metadata is
+absent. Only an explicit `no_trades` record proves omitted trading activity;
+partial proof covers only its recorded minutes. Ordinary reads and EMA consumers
+leave other physical internal holes unavailable. Explicit provisional continuity
+still uses the complete physical outage width, including real bounds outside a
+narrower query. KuCoin source rows rejected by validation cannot prove no-trade
+omission between their accepted neighbours.
+
+Returned runtime synthetic rows are tracked for replacement and diagnostics;
+that tracking count does not assert that those rows were persisted. Periodic
+`scope=warmup_cache` reports count candle surfaces by timeframe (`unhealthy_tf`),
+including background candidates. They are distinct from current account/order
+readiness, active-position trailing availability, and action blockers.
+
 ### Live acquisition deadlines
 
 Ordinary live EMA preparation shares a ten-second remote acquisition budget across

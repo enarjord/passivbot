@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Leave unrecorded internal candle outages unavailable instead of interpreting
+  missing gap metadata as no-trade history. Keep bounded provisional continuity
+  explicit, and reject malformed KuCoin source rows as no-trade evidence.
+- Break periodic candle-cache health counts down by timeframe so hourly rollover
+  gaps remain distinguishable from missing one-minute history.
+
 - Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
   retries, and lock contention leave missing inputs scoped to their consumers
   instead of indefinitely delaying ordinary planning. Preserve completed pages

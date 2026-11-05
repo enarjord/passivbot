@@ -5745,6 +5745,24 @@ class Passivbot:
             f"synthetic={integer(synthetic_count)} "
             f"worst_missing={integer(worst_missing)}"
         )
+        # Counts describe cache surfaces, not blocked trading actions. Keep
+        # minute/hour deficiencies distinct even when only a few examples fit.
+        timeframe_counts: dict[str, int] = {}
+        for _symbol, timeframe, _missing, _tail in unhealthy_samples:
+            label = Passivbot._format_candle_health_console_token(
+                timeframe, Passivbot._CANDLE_HEALTH_CONSOLE_TIMEFRAME_MAX_LEN
+            )
+            timeframe_counts[label] = timeframe_counts.get(label, 0) + 1
+        timeframe_summary = ",".join(
+            f"{timeframe}:{integer(count)}"
+            for timeframe, count in sorted(timeframe_counts.items())[:2]
+        )
+        if len(timeframe_counts) > 2:
+            timeframe_summary += f",+{integer(len(timeframe_counts) - 2)}tf"
+        if timeframe_summary:
+            detailed = f"{base_message} unhealthy_tf={timeframe_summary}"
+            if len(detailed) + 18 <= Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN:
+                base_message = detailed
         message = base_message
         samples = []
         for symbol, timeframe, missing, tail in unhealthy_samples[

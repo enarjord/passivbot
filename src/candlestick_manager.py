@@ -4120,6 +4120,57 @@ class CandlestickManager:
                 fetch_start = gap_end + ONE_MIN_MS
         return None if fetch_start > fetch_end else fetch_start
 
+    def _unverified_internal_candle_gaps(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> List[Tuple[int, int]]:
+        """Physical cache holes are unknown until an explicit no-trade proof.
+
+        Metadata absence is not proof. Keep the complete physical gap bounds so
+        a narrow query cannot admit a large outage as a short provisional gap.
+        Leading/tail absence remains owned by the existing edge policies.
+        """
+        cached = self._cache.get(symbol)
+        if cached is None or cached.size < 2:
+            return []
+        timestamps = np.asarray(cached["ts"], dtype=np.int64)
+        # Canonical cache producers retain sorted rows. Python's binary search
+        # reads the strided timestamp column directly rather than materializing
+        # the whole retained history for each narrow consumer window.
+        left = max(0, bisect_left(timestamps, int(start_ts)) - 1)
+        right = min(timestamps.size, bisect_left(timestamps, int(end_ts) + 1) + 1)
+        timestamps = timestamps[left:right]
+        if timestamps.size < 2:
+            return []
+        holes = np.flatnonzero(np.diff(timestamps) > ONE_MIN_MS)
+        if holes.size == 0:
+            return []
+        first = int(timestamps[holes[0]]) + ONE_MIN_MS
+        last = int(timestamps[holes[-1] + 1]) - ONE_MIN_MS
+        proofs = sorted(
+            (int(gap["start_ts"]), int(gap["end_ts"]))
+            for gap in self._get_known_gaps_in_range(symbol, first, last)
+            if str(gap.get("reason", GAP_REASON_AUTO)) == GAP_REASON_NO_TRADES
+        )
+        unknown = []
+        for index in holes:
+            gap_start = int(timestamps[index]) + ONE_MIN_MS
+            gap_end = int(timestamps[index + 1]) - ONE_MIN_MS
+            cursor = gap_start
+            for proof_start, proof_end in proofs:
+                if proof_end < cursor:
+                    continue
+                if proof_start > gap_end:
+                    break
+                if proof_start > cursor:
+                    unknown.append((cursor, min(gap_end, proof_start - ONE_MIN_MS)))
+                cursor = max(cursor, proof_end + ONE_MIN_MS)
+                if cursor > gap_end:
+                    break
+            if cursor <= gap_end:
+                unknown.append((cursor, gap_end))
+        return [(start, end) for start, end in unknown
+                if start <= int(end_ts) and end >= int(start_ts)]
+
     def _unverified_gap_ranges(
         self,
         symbol: str,
@@ -4139,6 +4190,15 @@ class CandlestickManager:
             if overlap_start <= overlap_end:
                 ranges.append((overlap_start, overlap_end))
         return ranges
+
+    def _unverified_candle_gap_ranges(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> List[Tuple[int, int]]:
+        """Combine metadata availability with unrecorded physical internal holes."""
+        return self._unverified_gap_ranges(symbol, start_ts, end_ts) + [
+            (max(int(start_ts), start), min(int(end_ts), end))
+            for start, end in self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
+        ]
 
     def _unverified_uncovered_gap_ranges(
         self,
@@ -6333,12 +6393,11 @@ class CandlestickManager:
             arr = self._normalize_ccxt_ohlcv(page)
             rejected_payload_timestamps = (
                 self._rejected_ccxt_ohlcv_timestamps(page, arr)
-                if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
+                if self._record_payload_gaps_as_known
                 else set()
             )
             has_unidentifiable_rejected_row = bool(
                 self._record_payload_gaps_as_known
-                and period_ms > ONE_MIN_MS
                 and self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
             )
             rejected_ranges = []
@@ -6470,7 +6529,18 @@ class CandlestickManager:
                         for i in gap_idxs:
                             gap_start = int(ts_arr[i] + period_ms)
                             gap_end = int(ts_arr[i + 1] - period_ms)
-                            self._record_verified_gap(symbol, gap_start, gap_end)
+                            if has_unidentifiable_rejected_row or any(
+                                gap_start <= rejected_ts <= gap_end
+                                for rejected_ts in rejected_payload_timestamps
+                            ):
+                                # An invalid supplied bucket is not an omitted
+                                # no-tick interval, even when valid rows bracket it.
+                                self._add_known_gap(
+                                    symbol, gap_start, gap_end,
+                                    reason=GAP_REASON_FETCH_FAILED,
+                                )
+                            else:
+                                self._record_verified_gap(symbol, gap_start, gap_end)
                     if prev_last_ts is not None and first_ts > prev_last_ts + period_ms:
                         gap_start = int(prev_last_ts + period_ms)
                         gap_end = int(first_ts - period_ms)
@@ -9346,7 +9416,7 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
-        unverified_gap_ranges = self._unverified_gap_ranges(
+        unverified_gap_ranges = self._unverified_candle_gap_ranges(
             symbol,
             start_ts,
             end_ts,
@@ -9356,10 +9426,9 @@ class CandlestickManager:
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
             )
             excluded_synthetic_ranges = []
-            for full_gap_start, full_gap_end in self._unverified_uncovered_gap_ranges(
-                symbol,
-                start_ts,
-                end_ts,
+            for full_gap_start, full_gap_end in (
+                self._unverified_uncovered_gap_ranges(symbol, start_ts, end_ts)
+                + self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
             ):
                 overlap_start = max(int(start_ts), full_gap_start)
                 overlap_end = min(int(end_ts), full_gap_end)
@@ -9771,7 +9840,7 @@ class CandlestickManager:
         # every named timestamp is already covered by a real row and the gap
         # metadata is merely stale.
         if str(self.exchange_name or "").lower() != "fake":
-            for gap_start, gap_end in self._unverified_gap_ranges(
+            for gap_start, gap_end in self._unverified_candle_gap_ranges(
                 symbol,
                 start_ts,
                 min(last_cached, latest_expected),
@@ -9983,7 +10052,7 @@ class CandlestickManager:
             and str(self.exchange_name or "").lower() != "fake"
         ):
             timestamps = np.asarray(arr["ts"], dtype=np.int64)
-            for gap_start, gap_end in self._unverified_gap_ranges(
+            for gap_start, gap_end in self._unverified_candle_gap_ranges(
                 symbol, start_ts, end_ts
             ):
                 mask = (timestamps >= int(gap_start)) & (timestamps <= int(gap_end))

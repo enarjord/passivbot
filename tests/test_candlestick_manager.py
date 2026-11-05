@@ -6027,3 +6027,88 @@ async def test_paginated_overlap_with_advancing_tail_completes(tmp_path):
     )
     assert not pages
     assert list(result["ts"]) == [start + i * ONE_MIN_MS for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_internal_outage_is_not_no_trade_proof(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="bitunix", cache_dir=str(tmp_path))
+    minute = 60_000
+    cm._now_ms_callback = lambda: 2000 * minute
+    symbol = "GAP/USDT:USDT"
+    original = np.array([
+        (500 * minute, 1, 1, 1, 1, 1),
+        (1896 * minute, 2, 2, 2, 2, 1),
+    ], dtype=CANDLE_DTYPE)
+    cm._cache[symbol] = original.copy()
+    rows = await cm.get_candles(
+        symbol, start_ts=500 * minute, end_ts=1896 * minute,
+        allow_remote_fetch=False,
+    )
+    np.testing.assert_array_equal(rows, original)
+    assert not cm._synthetic_timestamps.get(symbol)
+    # A narrowed window cannot turn part of the same long outage into an
+    # admissible short provisional continuity span.
+    narrow = await cm.get_candles(
+        symbol, start_ts=1890 * minute, end_ts=1896 * minute,
+        allow_remote_fetch=False, allow_provisional_internal_gaps=True,
+    )
+    assert narrow["ts"].tolist() == [1896 * minute]
+    assert not cm._synthetic_timestamps.get(symbol)
+    # Neither scalar nor batched EMA readers may fill the missing reset history.
+    cm._now_ms_callback = lambda: 1897 * minute + 1000
+    assert math.isnan(await cm.get_latest_ema_close(
+        symbol, 10.0, allow_remote_fetch=False,
+    ))
+    metrics = await cm.get_latest_ema_metric_spans(
+        symbol, {"close": [10.0], "log_range": [10.0]},
+        allow_remote_fetch=False,
+    )
+    assert math.isnan(metrics["close"][10.0])
+    assert math.isnan(metrics["log_range"][10.0])
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+
+
+@pytest.mark.asyncio
+async def test_explicit_no_trade_proof_allows_only_its_covered_internal_minutes(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="kucoin", cache_dir=str(tmp_path))
+    minute = 60_000
+    cm._now_ms_callback = lambda: 120 * minute
+    symbol = "SPARSE/USDT:USDT"
+    cm._cache[symbol] = np.array([
+        (100 * minute, 1, 1, 1, 1, 1),
+        (105 * minute, 2, 2, 2, 2, 1),
+    ], dtype=CANDLE_DTYPE)
+    cm._record_verified_gap(symbol, 101 * minute, 102 * minute)
+    rows = await cm.get_candles(
+        symbol, start_ts=100 * minute, end_ts=105 * minute,
+        allow_remote_fetch=False,
+    )
+    assert rows["ts"].tolist() == [i * minute for i in (100, 101, 102, 105)]
+    assert rows["bv"].tolist() == [1.0, 0.0, 0.0, 1.0]
+    # Unproven minutes remain absent; standardization never mutates the source.
+    assert cm._cache[symbol]["ts"].tolist() == [100 * minute, 105 * minute]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected_timestamp", [101 * 60_000, "bad-timestamp"])
+async def test_kucoin_rejected_minute_is_not_verified_no_trade_omission(tmp_path, rejected_timestamp):
+    class SparseExchange:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=SparseExchange(), exchange_name="kucoin", cache_dir=str(tmp_path),
+    )
+    minute = 60_000
+
+    async def fetch(*args, **kwargs):
+        return [
+            [100 * minute, 1, 1, 1, 1, 1],
+            [rejected_timestamp, 1, -1, 1, 1, 1],
+            [102 * minute, 1, 1, 1, 1, 1],
+        ]
+
+    cm._ccxt_fetch_ohlcv_once = fetch
+    rows = await cm._fetch_ohlcv_paginated("SPARSE/USDT:USDT", 100 * minute, 103 * minute)
+    assert rows["ts"].tolist() == [100 * minute, 102 * minute]
+    gaps = cm._get_known_gaps_in_range("SPARSE/USDT:USDT", 101 * minute, 101 * minute)
+    assert gaps and all(gap["reason"] == "fetch_failed" for gap in gaps)
