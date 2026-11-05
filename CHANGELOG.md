@@ -85,6 +85,9 @@ since the latest release tag; these features may already be available when insta
   explicit, and reject malformed KuCoin source rows as no-trade evidence.
 - Break periodic candle-cache health counts down by timeframe so hourly rollover
   gaps remain distinguishable from missing one-minute history.
+- Reduce recent candle-gap query overhead by limiting metadata normalization to
+  overlapping history, preserving complete outage bounds, current retry epochs
+  and externally updated indexes.
 
 - Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
   retries, and lock contention leave missing inputs scoped to their consumers

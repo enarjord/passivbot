@@ -91,6 +91,7 @@ def test_gap_trim_matches_reference_and_preserves_metadata(defer):
         before = deepcopy(gaps)
         saved = []
         cm = SimpleNamespace(_get_known_gaps_enhanced=lambda symbol: gaps,
+                             _get_known_gaps_in_range=lambda *args: gaps,
                              _save_known_gaps_enhanced=lambda *args, **kwargs: saved.append((args, kwargs)))
         expected, retained = reference_trim(gaps, arr)
         assert CandlestickManager._trim_known_gaps_covered_by_rows(cm, 'A', arr, defer_index=defer) == expected
@@ -102,7 +103,9 @@ def test_disjoint_gaps_do_not_search_or_write(monkeypatch):
     gaps = [dict(start_ts=i*ONE_MIN_MS, end_ts=i*ONE_MIN_MS) for i in range(3000)]
     def fail(*args, **kwargs):
         pytest.fail('disjoint gaps must not search timestamps or rewrite metadata')
-    cm = SimpleNamespace(_get_known_gaps_enhanced=lambda symbol: gaps, _save_known_gaps_enhanced=fail)
+    cm = SimpleNamespace(_get_known_gaps_enhanced=lambda symbol: gaps,
+                         _get_known_gaps_in_range=lambda *args: gaps,
+                         _save_known_gaps_enhanced=fail)
     monkeypatch.setattr(np, 'searchsorted', fail)
     for ts in (-ONE_MIN_MS, 3001*ONE_MIN_MS):
         assert not CandlestickManager._trim_known_gaps_covered_by_rows(cm, 'A', rows([ts]))

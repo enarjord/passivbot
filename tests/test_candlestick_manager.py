@@ -3507,7 +3507,7 @@ def test_completed_candle_health_scales_to_many_sparse_deferred_gaps(
         for index in range(gap_count)
     ]
     monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: candles)
-    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", lambda _symbol: gaps)
+    cm._save_known_gaps_enhanced(symbol, gaps)
     monkeypatch.setattr(cm, "_should_retry_gap", lambda *_args, **_kwargs: False)
 
     started = time.perf_counter()
@@ -3555,7 +3555,7 @@ def test_completed_candle_health_scales_to_many_verified_sparse_gaps(
         for index in range(gap_count)
     ]
     monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: candles)
-    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", lambda _symbol: gaps)
+    cm._save_known_gaps_enhanced(symbol, gaps)
 
     started = time.perf_counter()
     report = cm.get_completed_candle_health(

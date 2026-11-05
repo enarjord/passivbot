@@ -599,6 +599,14 @@ skips copying/sorting the retained candle history. This optimization neither
 deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
 Full metadata reads and index serialization still scale with total history.
 
+Deferred-prefix and range-splitting queries, candle read-cohort indexes, and health
+coverage masks select overlapping factual records before enhancing retry metadata.
+Nonoverlapping row ingestion skips full gap normalization without rewriting the
+index; an actual overlap retains the full-history rewrite and proof/epoch policy.
+Selections retain complete outage bounds and the existing owned-record revision,
+external-index replacement and conservative unowned-list behavior. No retry or
+trading permission is cached, and payload/index durability ordering is unchanged.
+
 Unknown-gap coverage checks build one contiguous timestamp index after copying,
 sorting and excluding provisional synthetic candles. All gap slices in that
 synchronous cohort share the index, avoiding NumPy's repeated materialization of
