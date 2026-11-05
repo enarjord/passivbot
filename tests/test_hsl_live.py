@@ -141,7 +141,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
             from live.hsl_runtime import InvalidHslOutput
 
             original_filter = market_data.filter_fresh_market_snapshot_creations
-            native = ScopeReplay.evaluate_grids
+            native = ScopeReplay.evaluate_decoded_grids
             boundary_reached = []
 
             async def change_at_boundary(current_bot, orders, **kwargs):
@@ -153,8 +153,8 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 if path == "malformed_before_write":
                     monkeypatch.setattr(
                         ScopeReplay,
-                        "evaluate_grids",
-                        lambda _self, value, grids: '{"decision": null}',
+                        "evaluate_decoded_grids",
+                        lambda _self, value, grids, **kwargs: {"decision": None},
                     )
                 return result
 
@@ -170,7 +170,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 else:
                     await instance.protect()
             finally:
-                monkeypatch.setattr(ScopeReplay, "evaluate_grids", native)
+                monkeypatch.setattr(ScopeReplay, "evaluate_decoded_grids", native)
                 monkeypatch.setattr(
                     market_data,
                     "filter_fresh_market_snapshot_creations",
@@ -1865,14 +1865,14 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
     owner.bind(wave, (), (order,))
     diagnostic_before = object()
     bot._hsl_diagnostic_observation = diagnostic_before
-    native = ScopeReplay.evaluate_grids
+    native = ScopeReplay.evaluate_decoded_grids
     calls = []
 
-    def evaluate(replay, metadata, grids):
+    def evaluate(replay, metadata, grids, **kwargs):
         calls.append(json.loads(metadata)["snapshot"])
-        return native(replay, metadata, grids)
+        return native(replay, metadata, grids, **kwargs)
 
-    monkeypatch.setattr(ScopeReplay, "evaluate_grids", evaluate)
+    monkeypatch.setattr(ScopeReplay, "evaluate_decoded_grids", evaluate)
     assert owner.admit(order)
     assert len(calls) == 1
     assert bot._hsl_diagnostic_observation is diagnostic_before

@@ -17,7 +17,12 @@ class BootstrapAnchor:
 
 def continuity_status(output, *, now):
     """Validate the required native support envelope before trusting its state."""
-    status = json.loads(output)["continuity"]
+    return continuity_status_decoded(json.loads(output), now=now)
+
+
+def continuity_status_decoded(output, *, now):
+    """Apply the same envelope checks to an already decoded current result."""
+    status = output["continuity"]
     if not isinstance(status, dict) or type(status["initialized"]) is not bool:
         raise ValueError("invalid HSL continuity initialization status")
     if type(status["retention_horizon_ms"]) is not int or status["retention_horizon_ms"] < 60_000:
@@ -52,26 +57,38 @@ class ScopeReplay:
             import passivbot_rust as pbr
 
             native_factory = pbr.HslV9Replay
-        snapshot = json.loads(metadata)["snapshot"]
+        value = json.loads(metadata)
+        snapshot = value["snapshot"]
         self.anchor = BootstrapAnchor(snapshot["start"], snapshot["now"])
         self._pending = (metadata, tuple(grids))
         self._native = native_factory()
         self._initialized = False
         self.last_seen_ms = snapshot["now"]
         self.horizon_ms = max(snapshot["now"] - snapshot["start"],
-                              json.loads(metadata).get("cooldown_ms", 0), 60_000)
+                              value.get("cooldown_ms", 0), 60_000)
 
-    def _evaluate(self, metadata, grids):
+    def _evaluate(self, metadata, grids, *, now=None):
         output = self._native.evaluate_grids(metadata, grids)
-        status = continuity_status(output, now=json.loads(metadata)["snapshot"]["now"])
+        decoded = json.loads(output)
+        if now is None:
+            now = json.loads(metadata)["snapshot"]["now"]
+        status = continuity_status_decoded(decoded, now=now)
         self._initialized = status["initialized"]
         if self._initialized:
             anchor = BootstrapAnchor(status["bootstrap_origin_ms"], status["bootstrap_observed_ms"])
             if anchor != self.anchor:
                 self.anchor = anchor
-        return output
+        return output, decoded
 
     def evaluate_grids(self, metadata, grids):
+        """Preserve the native JSON transport for standalone callers."""
+        return self._evaluate_grids(metadata, grids)[0]
+
+    def evaluate_decoded_grids(self, metadata, grids, *, now):
+        """Return this evaluation's decoded result without retaining a decision."""
+        return self._evaluate_grids(metadata, grids, now=now)[1]
+
+    def _evaluate_grids(self, metadata, grids, *, now=None):
         current = (metadata, tuple(grids))
         if not self._initialized:
             if self._pending is None:
@@ -80,13 +97,15 @@ class ScopeReplay:
             # Exceptions retain the exact pending initializer for a retry. A
             # successful unavailable result may own a ledger; inactive/no-ledger
             # results must let a later ready capture become the initializer.
-            output = self._evaluate(*initializer)
+            output = self._evaluate(
+                *initializer, now=now if current == initializer else None
+            )
             self._pending = None
             if current == initializer:
                 return output
         if not self._initialized:
             self._pending = current
-        output = self._evaluate(*current)
+        output = self._evaluate(*current, now=now)
         self._pending = None
         return output
 

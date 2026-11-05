@@ -428,8 +428,8 @@ def test_malformed_later_native_scope_does_not_publish_an_earlier_usable_subset(
         return json.dumps(output)
 
     monkeypatch.setattr(
-        ScopeReplay, "evaluate_grids",
-        lambda _self, request, grids: malformed(request, grids),
+        ScopeReplay, "evaluate_decoded_grids",
+        lambda _self, request, grids, **kwargs: json.loads(malformed(request, grids)),
     )
     with pytest.raises(InvalidHslOutput):
         run(value)
@@ -533,8 +533,8 @@ def test_malformed_native_decision_is_fatal(field, value, monkeypatch):
         return json.dumps(result)
 
     monkeypatch.setattr(
-        ScopeReplay, "evaluate_grids",
-        lambda _self, request, grids: malformed(request, grids),
+        ScopeReplay, "evaluate_decoded_grids",
+        lambda _self, request, grids, **kwargs: json.loads(malformed(request, grids)),
     )
     with pytest.raises(InvalidHslOutput):
         run(bot())
@@ -562,8 +562,8 @@ def test_malformed_native_continuity_envelope_is_fatal(change, monkeypatch):
             result["continuity"].update(change)
         return json.dumps(result)
 
-    monkeypatch.setattr(ScopeReplay, "evaluate_grids",
-                        lambda _self, request, grids: malformed(request, grids))
+    monkeypatch.setattr(ScopeReplay, "evaluate_decoded_grids",
+                        lambda _self, request, grids, **kwargs: json.loads(malformed(request, grids)))
     with pytest.raises(InvalidHslOutput):
         run(bot())
 
@@ -576,8 +576,8 @@ def test_native_errors_use_the_bot_fatal_contract(monkeypatch):
         raise ValueError("unexpected native schema error")
 
     monkeypatch.setattr(
-        ScopeReplay, "evaluate_grids",
-        lambda _self, request, grids: invalid(request, grids),
+        ScopeReplay, "evaluate_decoded_grids",
+        lambda _self, request, grids, **kwargs: invalid(request, grids),
     )
     with pytest.raises(FatalBotException):
         run(bot())
@@ -768,8 +768,8 @@ def test_lifecycle_incoherent_native_response_is_fatal(changes, monkeypatch):
         return json.dumps(result)
 
     monkeypatch.setattr(
-        ScopeReplay, "evaluate_grids",
-        lambda _self, request, grids: malformed(request, grids),
+        ScopeReplay, "evaluate_decoded_grids",
+        lambda _self, request, grids, **kwargs: json.loads(malformed(request, grids)),
     )
     with pytest.raises(InvalidHslOutput):
         run(bot())
@@ -1628,3 +1628,16 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     assert not unavailable and scaled[0].action == "normal"
     assert run(value, marks=marks)[0] == scaled
     assert (value.config, value.coin_overrides) == original
+
+
+def test_decoded_native_output_still_rejects_nonfinite_unconsumed_fields(monkeypatch):
+    native = ScopeReplay.evaluate_decoded_grids
+
+    def malformed(replay, metadata, grids, **kwargs):
+        result = native(replay, metadata, grids, **kwargs)
+        result["unconsumed_diagnostic"] = {"nested": [float("nan")]}
+        return result
+
+    monkeypatch.setattr(ScopeReplay, "evaluate_decoded_grids", malformed)
+    with pytest.raises(InvalidHslOutput):
+        run(bot())
