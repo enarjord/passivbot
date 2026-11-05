@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce repeated candle shard parsing by reusing bounded validated NPY headers,
+  while reading current payload bytes and preserving corruption checks.
+
 - Report asynchronous background failures separately from the execution restart budget,
   redact callback diagnostics, and label health cycle timestamps as observation ages.
   Preserve immediate mode recovery messages with bounded grouped transitions and HSL
