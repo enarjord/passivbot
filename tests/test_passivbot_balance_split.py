@@ -4156,7 +4156,7 @@ def test_candle_health_summary_formatter_exact_format():
 
     assert message == (
         "[candle] health: scope=warmup_cache symbols=3 unhealthy_surfaces=3 stale=2 synthetic=4 "
-        "worst_missing=6 | BTC 1m missing=2 tail=3; ETH 1h missing=1; SOL 15m missing=6"
+        "worst_missing=6 unhealthy_tf=15m:1,1h:1,+1tf | BTC 1m missing=2 tail=3; +2 more"
     )
 
 
@@ -4241,7 +4241,7 @@ def test_candle_health_summary_projection_preserves_debug_payload_and_transition
     assert calls == [{"BTC/USDT:USDT"}, {"BTC/USDT:USDT"}]
     assert info_messages == [
         "[candle] health: scope=warmup_cache symbols=1 unhealthy_surfaces=1 stale=0 synthetic=3 "
-        "worst_missing=2 | BTC 1m missing=2 tail=2"
+        "worst_missing=2 unhealthy_tf=1m:1 | BTC 1m missing=2 tail=2"
     ]
     assert len(debug_records) == 2
     assert debug_records[0].args[1] == {

@@ -80,6 +80,17 @@ since the latest release tag; these features may already be available when insta
   now require independent venue/contract launch metadata rather than a first observed candle;
   versioned preparation and offline proofs prevent reuse of older weak boundary attestations.
 
+- Leave unrecorded internal candle outages unavailable instead of interpreting
+  missing gap metadata as no-trade history. Keep bounded provisional continuity
+  explicit, and reject malformed KuCoin source rows as no-trade evidence.
+- Break periodic candle-cache health counts down by timeframe so hourly rollover
+  gaps remain distinguishable from missing one-minute history.
+
+- Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
+  retries, and lock contention leave missing inputs scoped to their consumers
+  instead of indefinitely delaying ordinary planning. Preserve completed pages
+  for retry and keep nonblocking fetch-lock ownership cancellation-safe.
+
 - Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
 
 - Prepare optimizer suites and maximum searched warmup with `download --for-optimize`,

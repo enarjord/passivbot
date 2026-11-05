@@ -509,6 +509,49 @@ The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
 
+### Physical gap evidence and cache health
+
+An internal hole in canonical candle rows is unknown even when gap metadata is
+absent. Only an explicit `no_trades` record proves omitted trading activity;
+partial proof covers only its recorded minutes. Ordinary reads and EMA consumers
+leave other physical internal holes unavailable. Explicit provisional continuity
+still uses the complete physical outage width, including real bounds outside a
+narrower query. KuCoin source rows rejected by validation cannot prove no-trade
+omission between their accepted neighbours.
+
+Returned runtime synthetic rows are tracked for replacement and diagnostics;
+that tracking count does not assert that those rows were persisted. Periodic
+`scope=warmup_cache` reports count candle surfaces by timeframe (`unhealthy_tf`),
+including background candidates. They are distinct from current account/order
+readiness, active-position trailing availability, and action blockers.
+
+### Live acquisition deadlines
+
+Ordinary live EMA preparation shares a ten-second remote acquisition budget across
+all symbols and metric families. Warmup shares ten seconds per timeframe pass,
+or 45 seconds for a background warmup pass. Child tasks inherit the caller's
+monotonic deadline; nested scopes cannot renew it. Network requests, request
+spacing/backoff (including contended spacing-lock acquisition), pagination,
+archive session/connect/read I/O, and fetch-lock waits honor the remaining budget.
+Archive prefetch stops scheduling new batches at expiry, drains cancelled children,
+and flushes already completed days so they remain usable after restart.
+Expired acquisition raises `TimeoutError` through existing per-input availability
+handling. Complete cache reads remain available after expiry; a missing member
+stays in the planning cohort with explicit missing inputs for Rust's consumer and
+ranking policy. No neutral value, partial ranking universe, or candle is invented.
+
+Pages persisted before timeout remain useful to later reads. File-lock acquisition
+and release are nonblocking operations in the owning task, with no worker-thread
+handoff that can complete acquisition after cancellation. Historical callers keep
+their existing unbounded acquisition policy unless they explicitly install a budget.
+Protective HSL scheduling retains its independent current-fact requirements.
+
+Trailing reconstruction still requires a completed candle beginning strictly after
+the latest fill minute. Before that first source candle finalizes, a one-to-two
+minute wait can be intrinsic to the completed-bar contract. Missing that reset
+boundary must not be bridged by a projected candle; retrieval delay after finalization
+is a separate availability problem.
+
 ### Live EMA preparation pacing
 
 Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel

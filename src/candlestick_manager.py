@@ -47,7 +47,8 @@ import sys
 import time
 import zlib
 import atexit
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -1440,7 +1441,10 @@ class CandlestickManager:
         remaining = max(0.0, float(seconds))
         while remaining > 0.0:
             self._raise_if_shutdown_requested(stage)
+            budget_remaining = self._remote_fetch_time_remaining()
             chunk = min(remaining, 0.25)
+            if budget_remaining is not None:
+                chunk = min(chunk, budget_remaining)
             await asyncio.sleep(chunk)
             remaining -= chunk
         self._raise_if_shutdown_requested(stage)
@@ -1673,12 +1677,56 @@ class CandlestickManager:
         except Exception:
             return
 
+    @contextmanager
+    def remote_fetch_budget(self, seconds: float):
+        """Bound a live caller's remote work while keeping local reads available.
+
+        Child tasks inherit the same deadline. Nested budgets may shorten it but
+        never restart it. No deadline is installed for ordinary historical tools.
+        """
+        seconds = float(seconds)
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("remote candle budget must be finite and positive")
+        variable = getattr(self, "_remote_fetch_deadline", None)
+        if variable is None:
+            variable = self._remote_fetch_deadline = ContextVar(
+                "candle_remote_fetch_deadline", default=None
+            )
+        previous = variable.get()
+        deadline = time.monotonic() + seconds
+        if previous is not None:
+            deadline = min(deadline, previous)
+        token = variable.set(deadline)
+        try:
+            yield
+        finally:
+            variable.reset(token)
+            if time.monotonic() >= deadline:
+                self._throttled_warning(
+                    "remote_fetch_budget_expired",
+                    "remote_fetch_budget_expired",
+                    budget_seconds=seconds,
+                    action="defer_unavailable_inputs",
+                )
+
+    def _remote_fetch_time_remaining(self) -> float | None:
+        variable = getattr(self, "_remote_fetch_deadline", None)
+        deadline = None if variable is None else variable.get()
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("live candle acquisition budget expired")
+        return remaining
+
     async def _release_lock(
         self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
     ) -> None:
         """Release a portalocker lock safely and refresh its metadata."""
         try:
-            await asyncio.to_thread(lock.release)
+            # Unlocking is nonblocking. Keep acquisition/release in the owning
+            # task so cancellation cannot leave an unregistered OS lock behind.
+            lock.release()
         except portalocker.exceptions.LockException as exc:
             self._log(
                 "warning",
@@ -2469,9 +2517,15 @@ class CandlestickManager:
         while True:
             attempt += 1
             self._raise_if_shutdown_requested("fetch_lock_wait")
+            remaining_budget = self._remote_fetch_time_remaining()
+            if remaining_budget is not None:
+                deadline = min(deadline, time.monotonic() + remaining_budget)
             lock_obj = portalocker.Lock(lock_path, timeout=0, fail_when_locked=True)
             try:
-                await asyncio.to_thread(lock_obj.acquire)
+                # timeout=0/fail_when_locked makes this a single nonblocking
+                # attempt. A worker thread could acquire after caller cancellation
+                # and leak the lock before ownership is registered.
+                lock_obj.acquire()
                 acquired_at = time.time()
                 self._touch_lockfile(
                     lock_path,
@@ -2535,7 +2589,10 @@ class CandlestickManager:
                     attempt=attempt,
                     error_type=bounded_exception_type(exc),
                 )
-                await self._sleep_interruptible(backoff, stage="fetch_lock_wait")
+                await self._sleep_interruptible(
+                    min(backoff, max(0.0, deadline - time.monotonic())),
+                    stage="fetch_lock_wait",
+                )
                 backoff = min(backoff * 2.0, self._lock_backoff_max)
 
     @staticmethod
@@ -4090,6 +4147,61 @@ class CandlestickManager:
                 fetch_start = gap_end + ONE_MIN_MS
         return None if fetch_start > fetch_end else fetch_start
 
+    def _unverified_internal_candle_gaps(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> List[Tuple[int, int]]:
+        """Physical cache holes are unknown until an explicit no-trade proof.
+
+        Metadata absence is not proof. Keep the complete physical gap bounds so
+        a narrow query cannot admit a large outage as a short provisional gap.
+        Leading/tail absence remains owned by the existing edge policies.
+        """
+        cached = self._cache.get(symbol)
+        if cached is None or cached.size < 2:
+            return []
+        timestamps = np.asarray(cached["ts"], dtype=np.int64)
+        # Canonical cache producers retain sorted rows. Python's binary search
+        # reads the strided timestamp column directly rather than materializing
+        # the whole retained history for each narrow consumer window.
+        left = max(0, bisect_left(timestamps, int(start_ts)) - 1)
+        right = min(timestamps.size, bisect_left(timestamps, int(end_ts) + 1) + 1)
+        timestamps = timestamps[left:right]
+        if timestamps.size < 2:
+            return []
+        holes = np.flatnonzero(np.diff(timestamps) > ONE_MIN_MS)
+        if holes.size == 0:
+            return []
+        first = int(timestamps[holes[0]]) + ONE_MIN_MS
+        last = int(timestamps[holes[-1] + 1]) - ONE_MIN_MS
+        proofs = sorted(
+            (int(gap["start_ts"]), int(gap["end_ts"]))
+            for gap in self._get_known_gaps_in_range(symbol, first, last)
+            if str(gap.get("reason", GAP_REASON_AUTO)) == GAP_REASON_NO_TRADES
+        )
+        unknown = []
+        for index in holes:
+            gap_start = int(timestamps[index]) + ONE_MIN_MS
+            gap_end = int(timestamps[index + 1]) - ONE_MIN_MS
+            cursor = gap_start
+            for proof_start, proof_end in proofs:
+                if proof_end < cursor:
+                    continue
+                if proof_start > gap_end:
+                    break
+                if proof_start > cursor:
+                    # Once price continuity is unknown, a later no-trade fragment
+                    # cannot inherit an earlier real close across that outage.
+                    unknown.append((cursor, gap_end))
+                    cursor = gap_end + ONE_MIN_MS
+                    break
+                cursor = max(cursor, proof_end + ONE_MIN_MS)
+                if cursor > gap_end:
+                    break
+            if cursor <= gap_end:
+                unknown.append((cursor, gap_end))
+        return [(start, end) for start, end in unknown
+                if start <= int(end_ts) and end >= int(start_ts)]
+
     def _unverified_gap_ranges(
         self,
         symbol: str,
@@ -4109,6 +4221,15 @@ class CandlestickManager:
             if overlap_start <= overlap_end:
                 ranges.append((overlap_start, overlap_end))
         return ranges
+
+    def _unverified_candle_gap_ranges(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> List[Tuple[int, int]]:
+        """Combine metadata availability with unrecorded physical internal holes."""
+        return self._unverified_gap_ranges(symbol, start_ts, end_ts) + [
+            (max(int(start_ts), start), min(int(end_ts), end))
+            for start, end in self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
+        ]
 
     def _unverified_uncovered_gap_ranges(
         self,
@@ -5376,24 +5497,27 @@ class CandlestickManager:
         interval_ms = float(getattr(self, "_remote_fetch_min_interval_ms", 0.0) or 0.0)
         if interval_ms <= 0.0:
             return
-        async with self._remote_fetch_spacing_lock:
-            self._raise_if_shutdown_requested("remote_fetch_spacing")
-            now_ms = _utc_now_ms()
-            last_started_ms = int(getattr(self, "_remote_fetch_last_started_ms", 0) or 0)
-            wait_ms = int(last_started_ms + interval_ms - now_ms)
-            if wait_ms > 0:
-                self._log(
-                    "debug",
-                    "remote_fetch_spacing_wait",
-                    symbol=symbol,
-                    tf=tf,
-                    wait_ms=wait_ms,
-                    interval_ms=int(interval_ms),
-                )
-                with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
-                    await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+        # Waiting for another request's spacing token consumes this caller's
+        # budget too. Expiry cancels this waiter, never the lock holder.
+        async with asyncio.timeout(self._remote_fetch_time_remaining()):
+            async with self._remote_fetch_spacing_lock:
+                self._raise_if_shutdown_requested("remote_fetch_spacing")
                 now_ms = _utc_now_ms()
-            self._remote_fetch_last_started_ms = int(now_ms)
+                last_started_ms = int(getattr(self, "_remote_fetch_last_started_ms", 0) or 0)
+                wait_ms = int(last_started_ms + interval_ms - now_ms)
+                if wait_ms > 0:
+                    self._log(
+                        "debug",
+                        "remote_fetch_spacing_wait",
+                        symbol=symbol,
+                        tf=tf,
+                        wait_ms=wait_ms,
+                        interval_ms=int(interval_ms),
+                    )
+                    with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
+                        await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+                    now_ms = _utc_now_ms()
+                self._remote_fetch_last_started_ms = int(now_ms)
 
     async def _set_global_rate_limit(self, backoff_seconds: float = 5.0) -> None:
         """Set a global rate limit backoff that affects all concurrent requests."""
@@ -5441,6 +5565,7 @@ class CandlestickManager:
         tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
         for attempt in range(max_attempts):
             self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
+            self._remote_fetch_time_remaining()
             # Wait for global rate limit backoff if one is active
             await self._apply_rate_limit_backoff()
             try:
@@ -5505,13 +5630,23 @@ class CandlestickManager:
                     attempt=attempt + 1,
                     param_keys=_bounded_remote_fetch_param_keys(params),
                 )
-                if getattr(self, "_net_sem", None) is not None:
-                    async with self._net_sem:  # type: ignore[attr-defined]
-                        # Re-check rate limit after acquiring semaphore.
-                        # Tasks may have been queued before a 429 set the
-                        # global backoff; honour it now instead of firing
-                        # immediately after the semaphore unblocks.
-                        await self._apply_rate_limit_backoff()
+                remaining_budget = self._remote_fetch_time_remaining()
+                async with asyncio.timeout(remaining_budget):
+                    if getattr(self, "_net_sem", None) is not None:
+                        async with self._net_sem:  # type: ignore[attr-defined]
+                            # Re-check rate limit after acquiring semaphore.
+                            # Tasks may have been queued before a 429 set the
+                            # global backoff; honour it now instead of firing
+                            # immediately after the semaphore unblocks.
+                            await self._apply_rate_limit_backoff()
+                            res = await ex.fetch_ohlcv(
+                                symbol,
+                                timeframe=tf_norm,
+                                since=since_ms,
+                                limit=request_limit,
+                                params=params,
+                            )
+                    else:
                         res = await ex.fetch_ohlcv(
                             symbol,
                             timeframe=tf_norm,
@@ -5519,14 +5654,6 @@ class CandlestickManager:
                             limit=request_limit,
                             params=params,
                         )
-                else:
-                    res = await ex.fetch_ohlcv(
-                        symbol,
-                        timeframe=tf_norm,
-                        since=since_ms,
-                        limit=request_limit,
-                        params=params,
-                    )
                 first_ts = None
                 last_ts = None
                 if res:
@@ -5583,6 +5710,10 @@ class CandlestickManager:
                         "error_type": err_type,
                     }
                 )
+                # A started request needs a terminal timing event even when its
+                # caller-owned budget expired. Emit the failure before propagating
+                # deadline exhaustion; no retry may renew that deadline.
+                self._remote_fetch_time_remaining()
                 action = "exhausted" if attempt == max_attempts - 1 else "retry"
                 self._throttled_warning(
                     f"ccxt_fetch_ohlcv_failed:{symbol}:{tf_norm}:{err_type}:{action}",
@@ -6268,6 +6399,7 @@ class CandlestickManager:
 
         while since < end_excl:
             self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
+            self._remote_fetch_time_remaining()
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
             probe_limit = None
             if (
@@ -6295,12 +6427,11 @@ class CandlestickManager:
             arr = self._normalize_ccxt_ohlcv(page)
             rejected_payload_timestamps = (
                 self._rejected_ccxt_ohlcv_timestamps(page, arr)
-                if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
+                if self._record_payload_gaps_as_known
                 else set()
             )
             has_unidentifiable_rejected_row = bool(
                 self._record_payload_gaps_as_known
-                and period_ms > ONE_MIN_MS
                 and self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
             )
             rejected_ranges = []
@@ -6432,7 +6563,18 @@ class CandlestickManager:
                         for i in gap_idxs:
                             gap_start = int(ts_arr[i] + period_ms)
                             gap_end = int(ts_arr[i + 1] - period_ms)
-                            self._record_verified_gap(symbol, gap_start, gap_end)
+                            if has_unidentifiable_rejected_row or any(
+                                gap_start <= rejected_ts <= gap_end
+                                for rejected_ts in rejected_payload_timestamps
+                            ):
+                                # An invalid supplied bucket is not an omitted
+                                # no-tick interval, even when valid rows bracket it.
+                                self._add_known_gap(
+                                    symbol, gap_start, gap_end,
+                                    reason=GAP_REASON_FETCH_FAILED,
+                                )
+                            else:
+                                self._record_verified_gap(symbol, gap_start, gap_end)
                     if prev_last_ts is not None and first_ts > prev_last_ts + period_ms:
                         gap_start = int(prev_last_ts + period_ms)
                         gap_end = int(first_ts - period_ms)
@@ -6980,6 +7122,7 @@ class CandlestickManager:
                 self._http_session = None
 
     async def _archive_fetch_bytes(self, url: str) -> Optional[bytes]:
+        self._remote_fetch_time_remaining()
         t0 = time.monotonic()
         url_hash = _remote_fetch_url_hash(url)
         self._emit_remote_fetch(
@@ -6992,30 +7135,31 @@ class CandlestickManager:
         )
         self._log("debug", "archive_http_get", url_hash=url_hash)
 
-        session = await self._get_http_session()
         try:
-            async with session.get(url) as resp:
-                if resp.status == 404:
-                    self._emit_remote_fetch(
-                        {
-                            "kind": "archive_http_get",
-                            "stage": "not_found",
-                            "exchange": str(self._ex_id),
-                            "url": str(url),
-                            "status": 404,
-                            "elapsed_ms": int((time.monotonic() - t0) * 1000),
-                        }
-                    )
-                    self._log(
-                        "debug",
-                        "archive_http_404",
-                        url_hash=url_hash,
-                        elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    )
-                    return None
-                resp.raise_for_status()
-                data = await resp.read()
-        except Exception as e:
+            async with asyncio.timeout(self._remote_fetch_time_remaining()):
+                session = await self._get_http_session()
+                async with session.get(url) as resp:
+                    if resp.status == 404:
+                        self._emit_remote_fetch(
+                            {
+                                "kind": "archive_http_get",
+                                "stage": "not_found",
+                                "exchange": str(self._ex_id),
+                                "url": str(url),
+                                "status": 404,
+                                "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                            }
+                        )
+                        self._log(
+                            "debug",
+                            "archive_http_404",
+                            url_hash=url_hash,
+                            elapsed_ms=int((time.monotonic() - t0) * 1000),
+                        )
+                        return None
+                    resp.raise_for_status()
+                    data = await resp.read()
+        except (Exception, asyncio.CancelledError) as e:
             err_type = bounded_exception_type(e)
             self._emit_remote_fetch(
                 {
@@ -7450,6 +7594,7 @@ class CandlestickManager:
         """
         if not self._archive_supported():
             return
+        self._remote_fetch_time_remaining()
 
         # For stock-perps with TradFi configured, allow fetches before exchange inception
         # so historical data can be backfilled from TradFi providers (alpaca/polygon/etc.).
@@ -7546,6 +7691,7 @@ class CandlestickManager:
             "verified_from_disk": 0,  # Files verified by loading (no index metadata)
         }
         for day_key, (day_start, day_end) in day_map.items():
+            self._remote_fetch_time_remaining()
             if start_ts > day_start or end_ts < day_end:
                 skipped_reasons["partial_day_request"] += 1
                 continue  # not a full-day request for this day
@@ -7676,7 +7822,8 @@ class CandlestickManager:
             async with sem:
                 try:
                     self._log("debug", "archive_day_attempt", symbol=symbol, day=day_key)
-                    arr = await self._archive_fetch_day(symbol, day_key)
+                    async with asyncio.timeout(self._remote_fetch_time_remaining()):
+                        arr = await self._archive_fetch_day(symbol, day_key)
                     return (day_key, arr, None)
                 except Exception as e:
                     return (day_key, None, _format_archive_exc(e))
@@ -7686,6 +7833,7 @@ class CandlestickManager:
             batch_size = max(1, parallel_days)  # Match semaphore for optimal throughput
 
             for batch_start in range(0, total_days, batch_size):
+                self._remote_fetch_time_remaining()
                 batch = days_to_fetch[batch_start : batch_start + batch_size]
                 batch_start_time = time.monotonic()
 
@@ -7722,8 +7870,14 @@ class CandlestickManager:
                     pass
 
                 # Fetch batch in parallel
-                tasks = [fetch_single_day(d) for d in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                tasks = [asyncio.create_task(fetch_single_day(d)) for d in batch]
+                try:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
                 # Process results and persist (with deferred index writes)
                 batch_had_saves = False
@@ -7785,13 +7939,21 @@ class CandlestickManager:
                         batch_size=len(batch),
                         elapsed_s=batch_elapsed,
                     )
-        except Exception:
-            # Re-raise, but ensure we still log completion below
+                # Preserve every completed day in this batch before raising an
+                # expired deadline; no subsequent batch may renew the budget.
+                self._remote_fetch_time_remaining()
+        except (Exception, asyncio.CancelledError) as exc:
+            self._emit_remote_fetch({
+                "kind": "archive_prefetch", "stage": "error",
+                "exchange": str(self._ex_id), "symbol": symbol,
+                "error_type": bounded_exception_type(exc),
+                "elapsed_ms": int((time.monotonic() - start_time) * 1000),
+            })
             raise
-
-        # Flush deferred index writes once after all batches complete
-        if completed > 0:
-            self.flush_deferred_index(symbol, tf="1m")
+        finally:
+            # Successful pages remain restart-visible after timeout/cancellation.
+            if completed > 0:
+                self.flush_deferred_index(symbol, tf="1m")
 
         # Log completion summary
         total_elapsed = round(time.monotonic() - start_time, 1)
@@ -9308,7 +9470,7 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
-        unverified_gap_ranges = self._unverified_gap_ranges(
+        unverified_gap_ranges = self._unverified_candle_gap_ranges(
             symbol,
             start_ts,
             end_ts,
@@ -9318,10 +9480,9 @@ class CandlestickManager:
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
             )
             excluded_synthetic_ranges = []
-            for full_gap_start, full_gap_end in self._unverified_uncovered_gap_ranges(
-                symbol,
-                start_ts,
-                end_ts,
+            for full_gap_start, full_gap_end in (
+                self._unverified_uncovered_gap_ranges(symbol, start_ts, end_ts)
+                + self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
             ):
                 overlap_start = max(int(start_ts), full_gap_start)
                 overlap_end = min(int(end_ts), full_gap_end)
@@ -9733,7 +9894,7 @@ class CandlestickManager:
         # every named timestamp is already covered by a real row and the gap
         # metadata is merely stale.
         if str(self.exchange_name or "").lower() != "fake":
-            for gap_start, gap_end in self._unverified_gap_ranges(
+            for gap_start, gap_end in self._unverified_candle_gap_ranges(
                 symbol,
                 start_ts,
                 min(last_cached, latest_expected),
@@ -9945,7 +10106,7 @@ class CandlestickManager:
             and str(self.exchange_name or "").lower() != "fake"
         ):
             timestamps = np.asarray(arr["ts"], dtype=np.int64)
-            for gap_start, gap_end in self._unverified_gap_ranges(
+            for gap_start, gap_end in self._unverified_candle_gap_ranges(
                 symbol, start_ts, end_ts
             ):
                 mask = (timestamps >= int(gap_start)) & (timestamps <= int(gap_end))
