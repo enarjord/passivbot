@@ -638,24 +638,40 @@ unchanged.
 
 ## Trailing And Unstuck Status Materiality
 
-`trailing.status` and `unstuck.status` retain one complete observation every five minutes while the
-corresponding status producer is active. `operator_visible=false` suppresses only console and
-durable text projection; structured and monitor sinks still receive the event. Missing visibility
-metadata remains operator-visible. The first observation, a qualitative transition, a material
-numeric transition, and the existing hourly reminder use `operator_visible=true`. The `changed`
-field is true only for the first or materially changed observation, not for an unchanged hourly
-reminder.
+`trailing.status` retains one complete observation every five minutes while its producer is
+active, with an hourly unchanged reminder. `unstuck.status` is observed in the normal execution
+loop and deferred-planning path: the first observation and semantic changes print immediately,
+unchanged observations remain structured every five minutes, and unchanged INFO reminders use
+20 minutes. `operator_visible=false` suppresses only console and durable text projection.
+The `changed` field excludes unchanged reminders.
 
-Unstuck allowance materiality uses five-percent relative hysteresis against the last
-operator-visible baseline. Status, over-budget crossing, configured overrides, candidate symbol,
-and existing target fields remain qualitative transition inputs. Trailing visibility is owned per
+Rust classifies held positions at the actual unstuck gates and reports allowance, exposure/EMA
+thresholds, eligibility, and proposal details. Final native orders determine `selected`;
+`loss_gate_blocked`, `superseded`, and `finalization_filtered` retain the proposal without
+implying submission. Python
+retains at most three samples per side, aggregate reason counts, allowance range (coin overrides
+may differ), and plan age. No completed plan is `awaiting_plan`; observations at least five
+minutes old are `stale_plan`, with no current selection displayed. The open-order flag is
+account-wide exchange-observed state, separate from native selection. Neither grants execution
+authority. Observations perform no exchange fetch and failures remain isolated from trading.
+Visibility checkpoints advance only after accepted event enqueue or successful legacy console
+projection, allowing a rejected initial or changed event to retry. Diagnostic collection is enabled
+for one-shot live/JSON planning; the reused-workspace backtest path skips it.
+
+Unstuck allowance movement uses five-percent relative hysteresis against the last visible
+baseline, including accumulated movement and immediate zero/positive crossings. Candidate-only
+churn and numeric movement print at most every five minutes; reason/count and open-order
+transitions remain immediate. Ordinary price and target movement do not trigger INFO. Its
+console uses bounded records per side, plus one watch/proposal record when available.
+
+Trailing visibility is owned per
 `symbol`/`pside`/`kind` item so one changing position does not expose unrelated repeats. Its
 threshold and retracement ratios are material at an absolute ratio delta of `0.0005` (0.05
 percentage points); threshold and retracement prices are material at a relative delta of `0.005`
 (0.5 percent). Qualitative status, support, and trigger flags remain immediate.
 
 These thresholds affect human projection only. They must not change Rust planning, order emission,
-position handling, unstuck eligibility, trailing calculations, the five-minute observation cadence,
+position handling, unstuck eligibility, trailing calculations, the observation cadence,
 or event payload values. Legacy direct INFO logging remains a fallback only when the structured
 console is unavailable and follows the same producer-owned admission decision.
 
