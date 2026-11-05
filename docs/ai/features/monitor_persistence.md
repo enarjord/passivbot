@@ -15,6 +15,34 @@ Trailing diagnostics resolve strategy settings once per symbol and position side
 one synchronous section build. Those resolved settings are discarded afterward; configuration
 and coin-override changes must be observed by the next snapshot.
 
+Market `strategy_inputs` reports canonical per-side 1m/1h log-range spans (including fractional
+spans and symbol overrides), units, nullable prepared values, availability reasons and the last
+validated ordinary-input capture time/age. A real observed zero remains available; absent,
+malformed or non-finite values are `null`, never zero placeholders. Capture age describes the
+last prepared bundle, not independent proof of candle freshness. Missing inputs omit dependent
+native trailing calculations and retain explicit `entry_diagnostic_status` and
+`close_diagnostic_status`; diagnostic failure cannot discard unrelated snapshot sections.
+`market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
+readiness flag; it does not grant order permission.
+
+The separate `ordinary` section observes the last validated Rust computation and its exact ordinary HSL
+capture, independently of the latest fast protective `hsl` observation. It retains native input
+and effective modes, active/initial-entry flags, captured HSL permission and bounded unavailability
+classifications. Its `stage=computed_native_plan` precedes the HSL owner's final receipt acceptance
+and does not imply submission or execution; current write admission remains independent. All rows
+are observational, never execution authority. Capture age, input expiry,
+account generation changes and pending confirmations distinguish current from stale observations.
+At most 128 held/restricted-prioritized rows accompany complete mode/scope/restricted-held counts
+and an explicit omitted count. Health summaries show the ordinary observation status/age and held
+restriction count separately from strategy close-wait conditions.
+
+`ordinary.pending_confirmations` reports current required account surfaces with requested and
+observed epochs. `last_create_filter` and `last_cancel_first_barrier` retain only bounded reason,
+count, wave id, required surface names and observation age. These are labelled last observed
+outcomes, including after confirmation settles; they do not imply an active barrier. Capture is
+independent of optional event sink success. Raw event data, order details and exception messages
+are not copied into this projection.
+
 `record_error` retains the event kind, tags, known code-owned source/stage classifications, and a
 bounded exception type. It must not persist arbitrary caller strings or numbers, exception messages,
 request URLs, responses, tracebacks, or caller-supplied raw diagnostic aliases. More detailed

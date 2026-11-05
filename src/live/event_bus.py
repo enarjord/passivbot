@@ -2425,6 +2425,21 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     pending_age = _data_number(data, "ordinary_pending_age_ms")
     if pending_age is not None:
         parts.append(f"ordinary_pending={pending_age / 1000.:.1f}s")
+    ordinary_status = data.get("ordinary_plan_status")
+    if ordinary_status in {"current", "stale", "not_evaluated", "diagnostic_unavailable"}:
+        age = _data_number(data, "ordinary_plan_age_ms")
+        parts.append(f"ordinary_computed={ordinary_status}" + (f"/{age / 1000.:.1f}s" if age is not None else ""))
+        restricted = _data_int(data, "ordinary_restricted_held_count")
+        parts.append(f"ordinary_held_restricted={restricted}" if restricted is not None else "ordinary_held_restricted=?")
+        samples = data.get("ordinary_restricted_sample")
+        if isinstance(samples, list) and samples and isinstance(samples[0], Mapping):
+            row = samples[0]
+            label = ":".join(re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get(key, "?")))[:32]
+                             for key in ("symbol", "pside", "effective_mode"))
+            parts.append("ordinary_scope=" + label)
+            reason = row.get("hsl_unavailable_reason")
+            if reason:
+                parts.append("ordinary_hsl_cause=" + re.sub(r"[^a-z_]", "_", str(reason))[:64])
     waits = _data_int(data, "trailing_wait_count")
     if waits:
         age = _data_number(data, "trailing_wait_max_ms")

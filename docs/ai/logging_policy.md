@@ -247,6 +247,12 @@ Balance and cumulative trading activity remain in the durable health event and d
 summaries split into bounded, individually timestamped records. Diagnostic projection failure must
 leave the base heartbeat visible with readiness unavailable.
 
+Ordinary-plan observations remain separate from fast protective HSL status and point market/input
+tradability. Periodic health labels the last validated ordinary plan's freshness/age and held
+restriction count, with one bounded effective-mode/cause example. Strategy close-wait conditions
+do not imply ordinary order permission. Pending confirmation epochs describe current waits;
+historical cancel-first outcomes retain their own age and cannot be displayed as active gates.
+
 A prior GREEN/inactive HSL observation may expire immediately before an unchanged fresh observation
 replaces it. The producer marks only this proven replacement case; both events retain their durable
 severity and freshness. Its console projection uses DEBUG and a bounded five-minute aggregate of
