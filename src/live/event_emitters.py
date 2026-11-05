@@ -4811,6 +4811,9 @@ def _unstuck_status_side_summary(
     *,
     override_limit: int = 8,
 ) -> dict[str, Any]:
+    if info.get("native") is True:
+        # Constructed by live.unstuck_diagnostics from a fixed native schema.
+        return dict(info)
     status = str(info.get("status") or "unknown")
     out: dict[str, Any] = {"status": status}
     for key in ("allowance", "peak", "change_from_peak_percent", "loss_allowance_fraction"):
@@ -4986,7 +4989,7 @@ def emit_unstuck_status_event(
     side_statuses: dict[str, dict[str, Any]],
     changed: bool,
     operator_visible: bool,
-) -> None:
+):
     try:
         sides = {
             str(pside): _unstuck_status_side_summary(dict(info or {}))
@@ -5002,8 +5005,10 @@ def emit_unstuck_status_event(
         over_budget_sides = sorted(
             pside for pside, info in sides.items() if bool(info.get("over_budget"))
         )
-        bot._emit_live_event(
+        return bot._emit_live_event(
             EventTypes.UNSTUCK_STATUS,
+            require_enqueue=True,
+            defer_sync_sinks_until_enqueued=True,
             level="info",
             component="risk.unstuck.status",
             tags=(EventTags.RISK, EventTags.UNSTUCK, EventTags.SUMMARY),

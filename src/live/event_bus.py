@@ -3400,6 +3400,14 @@ def _format_hsl_console(event: LiveEvent) -> str:
 
 
 def format_console_event(event: LiveEvent) -> str:
+    if event.event_type == EventTypes.UNSTUCK_STATUS:
+        sides = event.data.get("sides", {})
+        if isinstance(sides, Mapping) and any(
+            isinstance(v, Mapping) and v.get("native") is True for v in sides.values()
+        ):
+            from live.unstuck_diagnostics import format_sides
+
+            return "\n".join(format_sides(sides))
     if event.event_type == EventTypes.HSL_STATUS and event.data.get("engine") == "hsl":
         return _format_hsl_console(event)
     if (
@@ -3564,6 +3572,9 @@ class ConsoleSummarySink:
             and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY
         ):
             for line in split_health_console(message):
+                emit(line)
+        elif event.event_type == EventTypes.UNSTUCK_STATUS:
+            for line in message.splitlines():
                 emit(line)
         else:
             emit(message)

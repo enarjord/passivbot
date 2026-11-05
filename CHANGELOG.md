@@ -6,8 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Reduce repeated JSON decoding in live HSL evaluation while preserving native
-  replay inputs, initializer retries, full output validation and decision payloads.
+- Show live unstuck diagnostics after startup, on meaningful state changes, and every
+  20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
+  and open-order state. Keep repeated observations quiet and label stale plans.
 
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
@@ -113,6 +114,9 @@ since the latest release tag; these features may already be available when insta
 - Allow Metal replay batches of up to 1,024 candidates within existing scratch and work
   budgets. Shorten temporal chunks before reducing parallel candidates, and distinguish
   batch capacity from actual replay geometry in startup logs.
+
+- Reduce repeated JSON decoding in live HSL evaluation while preserving native
+  replay inputs, initializer retries, full output validation and decision payloads.
 
 - Add `hsl_execution_episode_count` as a backtest metric and optimizer limit on CPU and GPU.
   Require executed hard-stop episodes without requiring realized losses or counting unfilled triggers.
