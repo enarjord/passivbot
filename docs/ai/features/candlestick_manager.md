@@ -198,7 +198,15 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    refresh cannot consume the entire cycle and starve the rest of the batch. A timed-out candidate
    surface receives a short in-memory retry delay so one blocked symbol cannot monopolize
    successive refresh cycles. Exhausting an assigned scheduler time share is an expected DEBUG
-   yield; a timeout raised by the candle operation itself remains a warning. Completed-candle health reports
+   yield; a timeout raised by the candle operation itself remains a warning.
+   Candidate REST repair has an independent data-maintainer owner; successful ordinary
+   planning, account admission, order intent, and exchange writes are not scheduling
+   prerequisites. With a positive candle network budget, the owner checks at 15-second
+   intervals and coalesces with executor-requested refreshes. An exhausted token bucket
+   does not spawn a worker. Existing per-surface budgets, retry delays and full candidate
+   cohorts remain authoritative. Shutdown cancels and drains its registered worker;
+   an old owner's cancellation must not touch a replacement maintainer registry.
+   This acquisition work is never awaited by the protective lane. Completed-candle health reports
    whether missing minutes are currently refreshable separately
    from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry
    cooldown is active do not spend background REST budget. This scheduler classification never
