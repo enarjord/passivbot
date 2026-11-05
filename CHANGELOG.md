@@ -90,6 +90,9 @@ since the latest release tag; these features may already be available when insta
   retries, and lock contention leave missing inputs scoped to their consumers
   instead of indefinitely delaying ordinary planning. Preserve completed pages
   for retry and keep nonblocking fetch-lock ownership cancellation-safe.
+- Keep background candidate candle repair running when ordinary planning cannot
+  reach order admission, preserving fetch budgets, strict input readiness and the
+  complete ranking cohort.
 
 - Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
 

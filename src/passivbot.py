@@ -19356,6 +19356,33 @@ class Passivbot:
             self._forager_candidate_candle_refresh_task()
         )
 
+    async def maintain_forager_candidate_candles(self) -> None:
+        """Repair candidate inputs independently of ordinary write admission."""
+        registry = self.maintainers
+        try:
+            while not Passivbot._shutdown_requested(self):
+                max_calls = int(get_optional_live_value(
+                    self.config, "max_ohlcv_fetches_per_minute", 0
+                ) or 0)
+                if max_calls > 0 and self.is_forager_mode():
+                    cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
+                    # Do not create workers merely to discover an empty bucket.
+                    # The worker consumes tokens only at actual fetch attempts.
+                    available = self._forager_refresh_budget(
+                        max_calls, max_cycle_budget=cycle_cap,
+                        initial_tokens=cycle_cap, consume=False,
+                    )
+                    if available > 0:
+                        self._schedule_forager_candidate_candle_refresh()
+                await self._sleep_unless_shutdown(
+                    15.0, stage="forager_candidate_refresh_interval"
+                )
+        finally:
+            task = registry.get("forager_candidate_candle_refresh")
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def update_ohlcvs_1m_for_actives(self) -> bool:
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=60s old).
 
@@ -19575,6 +19602,10 @@ class Passivbot:
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]
+        if int(get_optional_live_value(
+            getattr(self, "config", {}), "max_ohlcv_fetches_per_minute", 0
+        ) or 0) > 0:
+            maintainer_names.append("maintain_forager_candidate_candles")
         if getattr(self, "monitor_publisher", None) is not None:
             maintainer_names.append("maintain_monitor_snapshot")
         if self.ws_enabled:
