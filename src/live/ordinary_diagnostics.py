@@ -33,6 +33,87 @@ def _reason(value):
     return ",".join(parts[:4]) if parts and all(p in _HSL_REASONS for p in parts) else "unavailable"
 
 
+def _input_receipts(bot, wave, symbols, *, now_ms, account_max_age_ms):
+    """Project the immutable inputs consumed by this computation, never live caches."""
+    from live.planning_snapshot import PlanningSnapshot
+
+    snapshot = getattr(bot, "_current_planning_snapshot", None)
+    detail = dict(account_max_age_ms=(account_max_age_ms if type(account_max_age_ms) is int and account_max_age_ms >= 0 else None),
+                  account_observed_at_ms={}, account_generation=None,
+                  required_market_symbol_count=len(symbols), market_receipt_count=0,
+                  market_max_age_ms=None, market_oldest_observed_at_ms=None,
+                  planning_captured_at_ms=None,
+                  hsl_inputs_required=bool(wave is not None and (wave.decisions or wave.unavailable)))
+    problems, deadlines = set(), []
+
+    def expiry(stamp, ttl, latest, problem):
+        if (type(stamp) is not int or not 0 < stamp <= latest
+                or type(ttl) is not int or ttl < 0):
+            problems.add(problem)
+            return None
+        deadlines.append(stamp + ttl)
+        return stamp + ttl
+
+    if not isinstance(snapshot, PlanningSnapshot):
+        problems.add("planning_snapshot_unavailable")
+    else:
+        if type(snapshot.account_invalidation_generation) is int and snapshot.account_invalidation_generation >= 0:
+            detail["account_generation"] = snapshot.account_invalidation_generation
+        else:
+            problems.add("planning_account_generation_unavailable")
+        snapshot_time = snapshot.ts_ms
+        if type(snapshot_time) is not int or not 0 < snapshot_time <= now_ms:
+            problems.add("planning_capture_time_unavailable")
+            snapshot_time = 0
+        else:
+            detail["planning_captured_at_ms"] = snapshot_time
+        if set(snapshot.symbols) != symbols or len(snapshot.symbols) != len(symbols):
+            problems.add("planning_symbol_cohort_mismatch")
+        if wave is not None and snapshot.account_invalidation_generation != wave.generation:
+            problems.add("planning_account_generation_mismatch")
+        surfaces = {row.name: row for row in snapshot.surfaces}
+        if len(surfaces) != len(snapshot.surfaces):
+            problems.add("duplicate_surface_receipt")
+        for name in ("balance", "positions", "open_orders"):
+            row = surfaces.get(name)
+            stamp = row.updated_ms if row is not None else None
+            detail["account_observed_at_ms"][name] = stamp if type(stamp) is int and stamp >= 0 else None
+            if name not in snapshot.required_surfaces:
+                problems.add("account_surface_not_declared")
+            expiry(stamp, account_max_age_ms, snapshot_time, name + "_receipt_unavailable")
+        # Fill/candle readiness is generation/coverage based, not the live quote TTL.
+        for name in snapshot.required_surfaces:
+            row = surfaces.get(name)
+            if (row is None or type(row.epoch) is not int or type(row.min_epoch) is not int
+                    or row.epoch < row.min_epoch):
+                problems.add("required_surface_epoch_unavailable")
+        quotes = {row.symbol: row for row in snapshot.market_snapshots}
+        detail["market_receipt_count"] = len(quotes)
+        detail["market_max_age_ms"] = (snapshot.market_snapshot_max_age_ms
+            if type(snapshot.market_snapshot_max_age_ms) is int and snapshot.market_snapshot_max_age_ms >= 0 else None)
+        missing = symbols - set(quotes)
+        detail["missing_market_symbol_count"] = len(missing)
+        detail["missing_market_symbols"] = sorted(missing)[:3]
+        if len(quotes) != len(snapshot.market_snapshots) or set(quotes) != symbols:
+            problems.add("market_receipt_cohort_mismatch")
+        quote_times = []
+        for symbol in symbols:
+            row = quotes.get(symbol)
+            stamp = row.fetched_ms if row is not None else None
+            if expiry(stamp, snapshot.market_snapshot_max_age_ms, snapshot_time,
+                      "market_receipt_unavailable") is not None:
+                quote_times.append(stamp)
+        detail["market_oldest_observed_at_ms"] = min(quote_times, default=None)
+    if detail["hsl_inputs_required"]:
+        if type(wave.captured_ms) is not int or not 0 < wave.captured_ms <= now_ms:
+            problems.add("hsl_capture_time_unavailable")
+        for stamp in (wave.captured_ms, wave.position_observed_ms,
+                      wave.balance_observed_ms, *wave.mark_observed_ms):
+            expiry(stamp, account_max_age_ms, wave.captured_ms, "hsl_receipt_unavailable")
+    detail["problems"] = sorted(problems)
+    return (min(deadlines) if deadlines and not problems else None), detail
+
+
 def observe_plan(bot, diagnostics, idx_to_symbol, *, now_ms):
     """Called after validation of the native result; never refresh or reevaluate risk."""
     try:
@@ -69,21 +150,18 @@ def observe_plan(bot, diagnostics, idx_to_symbol, *, now_ms):
         max_age_getter = getattr(bot, "_live_market_snapshot_max_age_ms", None)
         max_age = max_age_getter() if callable(max_age_getter) else None
         captured = wave.captured_ms if wave is not None else now_ms
-        stamps = ([captured, wave.position_observed_ms, *wave.mark_observed_ms]
-                  if wave is not None else [captured])
-        balance_at = getattr(wave, "balance_observed_ms", None)
-        if wave is not None:
-            stamps.append(balance_at)
-        expires = (min(stamps) + max_age if type(max_age) is int and max_age > 0
-                   and all(type(stamp) is int and 0 < stamp <= captured for stamp in stamps) else None)
+        expires, receipts = _input_receipts(bot, wave, set(idx_to_symbol.values()),
+                                           now_ms=now_ms, account_max_age_ms=max_age)
+        balance_at = getattr(wave, "balance_observed_ms", None) if receipts["hsl_inputs_required"] else None
         bot._monitor_ordinary_observation = dict(
             source="rust_orchestrator", authority="observation_only",
             stage="computed_native_plan",
             captured_at_ms=captured, completed_at_ms=now_ms,
             input_expires_at_ms=expires,
             balance_observed_at_ms=balance_at,
-            account_generation=(wave.generation if wave is not None else
-                                getattr(bot, "_account_invalidation_generation", 0)),
+            input_receipts=receipts,
+            account_generation=(receipts["account_generation"] if receipts["account_generation"] is not None else
+                                wave.generation if wave is not None else None),
             mode_counts=counts, scope_count=len(rows), scopes=rows[:ROW_LIMIT],
             omitted_scopes=max(0, len(rows) - ROW_LIMIT),
             restricted_held_count=sum(r["held"] and r["effective_mode"] != "normal" for r in rows),

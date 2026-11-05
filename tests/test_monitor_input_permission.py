@@ -12,6 +12,8 @@ from live.event_bus import EventTypes, ReasonCodes, format_periodic_health_summa
 from live.freshness import FreshnessLedger
 from live.hsl_live import Wave
 from live.hsl_runtime import Scope, Unavailable
+from live.planning_snapshot import PlanningSnapshot
+from live.market_snapshot import MarketSnapshot
 import passivbot_monitor as monitor
 
 
@@ -75,7 +77,8 @@ def test_price_bands_use_canonical_entry_horizons(kind):
 
 def plan_bot(count=1):
     ledger = FreshnessLedger(now_ms=1000)
-    for name in ordinary.SURFACES:
+    ledger.begin_epoch(now_ms=1000)
+    for name in (*ordinary.SURFACES, "market_snapshot", "completed_candles"):
         ledger.stamp(name, now_ms=1000)
     scope = Scope("portfolio", None, None)
     bot = SimpleNamespace(positions={"BTC": {"long": {"size": 1}}},
@@ -88,7 +91,13 @@ def plan_bot(count=1):
     for idx in range(count):
         rows.append(dict(symbol_idx=idx, long=dict(input_mode="manual", effective_mode="manual", active=True, allow_initial=False),
             short=dict(input_mode=None, effective_mode="normal", active=False, allow_initial=False)))
-    return bot, dict(symbol_states=rows), {idx: "BTC" if idx == 0 else f"S{idx}" for idx in range(count)}
+    mapping = {idx: "BTC" if idx == 0 else f"S{idx}" for idx in range(count)}
+    bot._current_planning_snapshot = PlanningSnapshot.capture(ts_ms=1000, exchange="fake", user="example",
+        ledger=ledger, required_surfaces=(*ordinary.SURFACES, "market_snapshot", "completed_candles"),
+        min_epochs={name:ledger.surfaces[name].epoch for name in ledger.surfaces},
+        symbols=mapping.values(), market_snapshots={s:MarketSnapshot(s, 1., 1., 1., 1000, "fixture") for s in mapping.values()},
+        market_snapshot_max_age_ms=1000, account_invalidation_generation=2)
+    return bot, dict(symbol_states=rows), mapping
 
 
 def test_last_ordinary_manual_is_separate_from_fast_green_and_market_tradable():
@@ -139,10 +148,14 @@ def test_ordinary_capture_age_generation_pending_and_recovery():
 
 
 def test_dex_qualified_symbols_keep_ordinary_diagnostic_coverage():
+    from dataclasses import replace
     bot, diagnostics, mapping = plan_bot()
     symbol = "xyz:TSLA/USDC:USDC"
     bot.positions = {symbol: {"long": {"size": 1}}}
     mapping[0] = symbol
+    snapshot = bot._current_planning_snapshot
+    bot._current_planning_snapshot = replace(snapshot, symbols=(symbol,),
+        market_snapshots=(replace(snapshot.market_snapshots[0], symbol=symbol),))
     ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1100)
     section = ordinary.snapshot(bot, now_ms=1200)
     assert section["observation_status"] == "current"
@@ -347,3 +360,173 @@ def test_real_wave_retains_balance_receipt_read_before_native_evaluation(monkeyp
     wave = hsl_live.owner(bot).capture()
     assert wave.balance_observed_ms == original
     assert ledger.surfaces["balance"].updated_ms == NOW + 10
+
+
+@pytest.mark.parametrize("hsl_disabled", [False, True])
+def test_ordinary_quote_cohort_expiry_includes_flat_unscoped_candidates(hsl_disabled):
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot(2)
+    wave = bot._hsl_planning_wave
+    bot._hsl_planning_wave = replace(wave, mark_observed_ms=(),
+        unavailable=() if hsl_disabled else (Unavailable(Scope("coin", "long", "BTC"), "current_balance_unavailable"),),
+        balance_observed_ms=None if hsl_disabled else 1000,
+        position_observed_ms=0 if hsl_disabled else 1000)
+    snapshot = bot._current_planning_snapshot
+    bot._current_planning_snapshot = replace(snapshot, market_snapshots=tuple(
+        replace(row, fetched_ms=100 if row.symbol == "S1" else 1000) for row in snapshot.market_snapshots))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    current = ordinary.snapshot(bot, now_ms=1100)
+    assert current["input_expires_at_ms"] == 1100
+    assert current["input_receipts"]["problems"] == []
+    assert current["input_receipts"]["required_market_symbol_count"] == 2
+    assert current["observation_status"] == "current"
+    assert ordinary.snapshot(bot, now_ms=1101)["stale_reasons"] == ["input_expired"]
+    assert bot._current_planning_snapshot.invalid_details(now_ms=1101)[0]["reason"] == "snapshot_too_old"
+
+
+@pytest.mark.parametrize("account_ttl,quote_ttl,expected", [(1000, 200, 1100), (200, 1000, 1200)])
+def test_account_and_quote_receipts_keep_independent_ttls(account_ttl, quote_ttl, expected):
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    bot._hsl_planning_wave = replace(bot._hsl_planning_wave, unavailable=(), mark_observed_ms=())
+    bot._live_market_snapshot_max_age_ms = lambda: account_ttl
+    snapshot = bot._current_planning_snapshot
+    bot._current_planning_snapshot = replace(snapshot, market_snapshot_max_age_ms=quote_ttl,
+        market_snapshots=tuple(replace(row, fetched_ms=900) for row in snapshot.market_snapshots))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    assert ordinary.snapshot(bot, now_ms=expected)["observation_status"] == "current"
+    assert ordinary.snapshot(bot, now_ms=expected + 1)["input_expires_at_ms"] == expected
+    assert ordinary.snapshot(bot, now_ms=expected + 1)["stale_reasons"] == ["input_expired"]
+
+
+@pytest.mark.parametrize("fault", ["missing_snapshot", "missing_quote", "future_quote", "cohort", "future_capture"])
+def test_unproven_planning_receipt_never_becomes_current(fault):
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot(2)
+    snapshot = bot._current_planning_snapshot
+    if fault == "missing_snapshot":
+        bot._current_planning_snapshot = None
+    elif fault == "missing_quote":
+        bot._current_planning_snapshot = replace(snapshot, market_snapshots=snapshot.market_snapshots[:1])
+    elif fault == "future_quote":
+        bot._current_planning_snapshot = replace(snapshot,
+            market_snapshots=tuple(replace(row, fetched_ms=1001) for row in snapshot.market_snapshots))
+    elif fault == "cohort":
+        bot._current_planning_snapshot = replace(snapshot, symbols=("BTC",))
+    else:
+        bot._current_planning_snapshot = replace(snapshot, ts_ms=1001)
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    observed = ordinary.snapshot(bot, now_ms=1500)
+    assert observed["input_expires_at_ms"] is None
+    assert observed["input_receipts"]["problems"]
+    assert observed["observation_status"] == "stale"
+
+
+@pytest.mark.parametrize("surface", ["balance", "positions", "open_orders"])
+@pytest.mark.parametrize("fault", ["missing", "zero", "future", "old"])
+def test_every_consumed_account_receipt_constrains_observation(surface, fault):
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    snapshot = bot._current_planning_snapshot
+    stamps = []
+    for row in snapshot.surfaces:
+        if row.name == surface:
+            if fault == "missing":
+                continue
+            row = replace(row, updated_ms={"zero": 0, "future": 1001, "old": 100}[fault])
+        stamps.append(row)
+    bot._current_planning_snapshot = replace(snapshot, surfaces=tuple(stamps))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    result = ordinary.snapshot(bot, now_ms=1200)
+    assert result["observation_status"] == "stale"
+    if fault == "old":
+        assert result["input_expires_at_ms"] == 1100
+    else:
+        assert result["input_expires_at_ms"] is None
+
+
+def test_old_fill_and_candle_receipts_keep_coverage_epochs_not_quote_ttl():
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    snapshot = bot._current_planning_snapshot
+    bot._current_planning_snapshot = replace(snapshot, surfaces=tuple(
+        replace(row, updated_ms=1) if row.name in {"fills", "completed_candles"} else row
+        for row in snapshot.surfaces))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1100)
+    result = ordinary.snapshot(bot, now_ms=1200)
+    assert result["input_receipts"]["problems"] == []
+    assert result["observation_status"] == "current"
+    assert result["input_expires_at_ms"] == 1900  # Earlier required HSL position receipt.
+
+
+def test_live_cache_and_replacement_snapshot_cannot_renew_old_computation():
+    from dataclasses import replace
+    bot, diagnostics, mapping = plan_bot()
+    snapshot = bot._current_planning_snapshot
+    bot._current_planning_snapshot = replace(snapshot,
+        market_snapshots=tuple(replace(row, fetched_ms=100) for row in snapshot.market_snapshots))
+    ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1000)
+    bot.market_snapshot_provider = SimpleNamespace(_cache={"BTC": MarketSnapshot("BTC", 1., 1., 1., 1200, "new")})
+    bot._current_planning_snapshot = replace(snapshot, ts_ms=1200,
+        market_snapshots=tuple(replace(row, fetched_ms=1200) for row in snapshot.market_snapshots))
+    assert ordinary.snapshot(bot, now_ms=1200)["input_expires_at_ms"] == 1100
+    assert ordinary.snapshot(bot, now_ms=1200)["observation_status"] == "stale"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hsl_enabled", [False, True])
+async def test_real_fake_ordinary_compute_has_complete_immutable_receipts(tmp_path, monkeypatch, hsl_enabled):
+    import argparse
+    import hjson
+    from config import prepare_config
+    from config.hsl import generated_template
+    from hsl_fixture import load_fake_hsl_config, mutable_runtime_fixture, set_risk_memory_spans
+    from live import hsl_live
+    from test_run_fake_live import REPO_ROOT, _cleanup_fake_user_state
+    import tools.run_fake_live as runner
+    import utils
+
+    user = f"fake_monitor_receipts_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    legacy = prepare_config(load_fake_hsl_config(), target="canonical", runtime=None, verbose=False)
+    cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
+    for side in ("long", "short"):
+        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.
+        cfg["bot"][side]["hsl"]["enabled"] = bool(hsl_enabled and side == "long")
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.
+    cfg["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
+    cfg["bot"]["long"]["hsl"].update(drawdown_fraction_ema_span_minutes=1., drawdown_threshold_fraction=.5)
+    set_risk_memory_spans(cfg, 288.)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({k:v for k,v in cfg.items() if not k.startswith("_")}))
+    scenario = hjson.loads((REPO_ROOT / "scenarios/fake_live/hsl_long_red_restart.hjson").read_text())
+    scenario.pop("assertions", None)
+    scenario["run_initial_cycle"] = True
+    scenario_path = tmp_path / "scenario.hjson"
+    scenario_path.write_text(hjson.dumps(scenario))
+    completed = []
+
+    async def exercise(bot):
+        owner = hsl_live.owner(bot)
+        owner.poll_inputs()
+        await bot.refresh_protective_authoritative_state(require_balance=True)
+        assert await owner._ordinary_plan() is not None
+        result = ordinary.snapshot(bot, now_ms=int(utils.utc_ms()))
+        assert result["stage"] == "computed_native_plan"
+        assert result["input_receipts"]["problems"] == []
+        assert result["input_receipts"]["required_market_symbol_count"] > 0
+        assert result["input_receipts"]["hsl_inputs_required"] is hsl_enabled
+        assert result["input_expires_at_ms"] >= int(utils.utc_ms())
+        assert result["observation_status"] == "current"
+        completed.append(True)
+        return {"ordinary_receipts_verified": True}
+
+    monkeypatch.setattr(runner, "_run_fake_cycle", exercise)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+            max_steps=1, output_dir=str(tmp_path / "run"), log_level=1, snapshot_each_step=False)
+        assert await runner._async_main(args) == 0
+        assert completed
+    finally:
+        _cleanup_fake_user_state(user)

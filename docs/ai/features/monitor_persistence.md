@@ -46,9 +46,18 @@ classifications. Its `stage=computed_native_plan` precedes the HSL owner's final
 and does not imply submission or execution; current write admission remains independent. All rows
 are observational, never execution authority. Capture age, input expiry,
 account generation changes and pending confirmations distinguish current from stale observations.
-Expiry includes the actual balance observation time retained before native evaluation alongside
-the consumed position and mark observations. A later unchanged balance refresh cannot renew an
-older computation's captured receipt; a wave lacking that timestamp has unknown input age.
+For captured HSL scopes, expiry includes the actual balance observation time retained before native
+evaluation alongside the consumed position and mark observations. A later unchanged balance refresh
+cannot renew an older computation's captured receipt; a required capture lacking that timestamp
+has unknown input age.
+`input_receipts` also projects the exact immutable `PlanningSnapshot` used by ordinary Rust:
+all required quote symbols/receipt counts and oldest quote time under that snapshot's quote TTL,
+plus balance, positions and open-orders times under the captured current-account TTL. Missing,
+future, incomplete or mismatched receipts produce unknown/stale observations. Required surface
+epochs are checked, while fills and completed candles retain their coverage/generation obligations
+and do not acquire a quote-age deadline. HSL input times add constraints only for actually captured
+HSL scopes; disabled/uncaptured scopes cannot substitute for the ordinary quote cohort. Neither a
+later market-provider cache update nor a replacement planning snapshot renews a retained computation.
 At most 128 held/restricted-prioritized rows accompany complete mode/scope/restricted-held counts
 and an explicit omitted count. Health summaries show the ordinary observation status/age and held
 restriction count separately from strategy close-wait conditions.
