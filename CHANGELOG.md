@@ -92,6 +92,9 @@ since the latest release tag; these features may already be available when insta
   reports with `backtest-report` or inspect saved results with the local `backtest-dash`
   tool. Existing CSV result readers remain supported.
 
+- Reduce candle-cache filesystem overhead by checking historical shard presence once per
+  directory, while still detecting external deletions on the next read.
+
 - Reduce standalone setup overhead with a conservative source and installed-runtime
   identity manifest. The versioned identity deliberately invalidates prior evaluation
   reuse when any Python source or installed distribution metadata changes.
