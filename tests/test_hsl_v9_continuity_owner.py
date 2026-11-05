@@ -220,3 +220,33 @@ def test_full_cooldown_protects_dormant_owner_and_partial_absence_is_not_flatnes
     assert "A" not in owner.prune(300_101)
     replacement = owner.scope("A", metadata(start=300_000, now=400_000, mark=90), ())
     assert replacement is not replay
+
+
+def test_decoded_current_result_matches_json_transport_through_bootstrap_and_updates():
+    first = metadata(start=0, now=100, mark=90)
+    later = metadata(start=100, now=200, mark=100)
+    string_owner = FactualReplays(native_factory=Native).scope("A", first, ())
+    decoded_owner = FactualReplays(native_factory=Native).scope("A", first, ())
+    for value, now in ((later, 200), (later, 200), (metadata(start=200, now=300, mark=80), 300)):
+        raw = string_owner.evaluate_grids(value, ())
+        assert type(raw) is str
+        decoded = decoded_owner.evaluate_decoded_grids(value, (), now=now)
+        assert decoded == json.loads(raw)
+        assert decoded_owner.anchor == string_owner.anchor
+        assert decoded_owner._pending == string_owner._pending
+    assert decoded_owner._native.inputs == string_owner._native.inputs
+
+
+def test_decoded_bootstrap_checks_initializer_clock_before_current_clock():
+    class FutureInitializer(Native):
+        def evaluate_grids(self, metadata, grids):
+            result = json.loads(super().evaluate_grids(metadata, grids))
+            result["continuity"]["bootstrap_observed_ms"] = 150
+            return json.dumps(result)
+
+    first = metadata(start=0, now=100, mark=90)
+    replay = FactualReplays(native_factory=FutureInitializer).scope("A", first, ())
+    with pytest.raises(ValueError, match="source clocks"):
+        replay.evaluate_decoded_grids(metadata(start=100, now=200, mark=100), (), now=200)
+    assert replay._pending == (first, ())
+    assert not replay._initialized

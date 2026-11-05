@@ -16,7 +16,7 @@ import passivbot_rust as pbr
 from config.hsl import FIELDS, engine, native_hsl_mode, require_live_balance_support, require_live_runtime_support
 from config.risk_memory import risk_bootstrap_horizon_minutes
 from live.hsl_budget import BudgetObservations
-from live.hsl_continuity import FactualReplays, continuity_status
+from live.hsl_continuity import FactualReplays, continuity_status_decoded
 from live.hsl_inputs import FillTape, capture_fills
 from passivbot_exceptions import FatalBotException
 
@@ -762,12 +762,18 @@ def _evaluate(requests):
     decisions = []
     for request in requests:
         submitted = json.loads(request.metadata)
-        output = json.loads(
-            pbr.hsl_v9_evaluate_grids(request.metadata, request.price_grids)
-            if request.replay is None
-            else request.replay.evaluate_grids(request.metadata, request.price_grids)
-        )
-        continuity_status(json.dumps(output, allow_nan=False), now=submitted["snapshot"]["now"])
+        if request.replay is None:
+            output = json.loads(
+                pbr.hsl_v9_evaluate_grids(request.metadata, request.price_grids)
+            )
+        else:
+            output = request.replay.evaluate_decoded_grids(
+                request.metadata, request.price_grids, now=submitted["snapshot"]["now"]
+            )
+        # Preserve the full-envelope non-finite check, including inactive and
+        # unavailable results, and the existing canonical Decision payload.
+        payload = json.dumps(output, allow_nan=False)
+        continuity_status_decoded(output, now=submitted["snapshot"]["now"])
         decision = output["decision"]
         unavailable = output["unavailable_reason"]
         if unavailable is not None:
@@ -854,7 +860,7 @@ def _evaluate(requests):
                 request.scope,
                 None if decision is None else decision["action"],
                 request.execution_type,
-                json.dumps(output, allow_nan=False),
+                payload,
                 reasons,
             )
         )

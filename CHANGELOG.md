@@ -135,6 +135,9 @@ since the latest release tag; these features may already be available when insta
   budgets. Shorten temporal chunks before reducing parallel candidates, and distinguish
   batch capacity from actual replay geometry in startup logs.
 
+- Reduce repeated JSON decoding in live HSL evaluation while preserving native
+  replay inputs, initializer retries, full output validation and decision payloads.
+
 - Add `hsl_execution_episode_count` as a backtest metric and optimizer limit on CPU and GPU.
   Require executed hard-stop episodes without requiring realized losses or counting unfilled triggers.
 
