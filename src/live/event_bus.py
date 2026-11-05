@@ -2437,7 +2437,7 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
         row = samples[0]
         parts.append("wait_scope=" + re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get("symbol", "?")))[:32]
                      + ":" + re.sub(r"[^a-zA-Z0-9_]", "_", str(row.get("phase", "?")))[:24])
-    for field, label in (("last_cycle_completed_age_ms", "last_cycle"), ("last_write_age_ms", "last_write")):
+    for field, label in (("last_cycle_completed_age_ms", "cycle_completed_age"), ("last_write_age_ms", "last_write")):
         age = _data_number(data, field)
         parts.append(f"{label}={age / 1000.:.1f}s" if age is not None else f"{label}=?")
     cpu = _data_number(data, "cpu_percent")
@@ -2446,7 +2446,10 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
 
     errors = _data_int(data, "errors_last_hour")
     error_budget_max = _data_int(data, "error_budget_max")
-    parts.append(f"errors_1h={errors or 0}/{error_budget_max or 10}")
+    parts.append(f"execution_errors_1h={errors or 0}/{error_budget_max or 10}")
+    async_errors = _data_int(data, "async_errors_total")
+    if async_errors:
+        parts.append(f"async_errors_total={async_errors}")
 
     ws = _data_int(data, "ws_reconnects")
     if ws:

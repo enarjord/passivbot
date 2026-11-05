@@ -6018,20 +6018,35 @@ class Passivbot:
             return
         if getattr(self, "_asyncio_exception_handler_loop", None) is loop:
             return
-        previous_handler = loop.get_exception_handler()
-        self._previous_asyncio_exception_handler = previous_handler
         self._asyncio_exception_handler_loop = loop
 
         def _handler(active_loop, context):
+            # Async background faults are observations, not execution failures:
+            # counting them must not consume the bot's restart budget.
+            self._health_asyncio_errors = int(getattr(self, "_health_asyncio_errors", 0)) + 1
             try:
                 if self._handle_asyncio_runtime_exception(context):
                     return
+                exc = context.get("exception") if isinstance(context, dict) else None
+                if isinstance(exc, BaseException):
+                    if not hasattr(self, "_asyncio_failure_log_state"):
+                        self._asyncio_failure_log_state = {}
+                    _log_process_failure(
+                        "[async] unhandled background failure", exc, action="observe",
+                        failure_state=self._asyncio_failure_log_state,
+                        context={"stage": "asyncio", "incident_id": "background"},
+                    )
+                else:
+                    # Only code-owned classifications are printable. The context
+                    # can contain request arguments or objects with unsafe reprs.
+                    kind = {"Unclosed client session": "unclosed_client_session",
+                            "Unclosed connector": "unclosed_connector"}.get(
+                                context.get("message"), "unavailable")
+                    logging.error("[async] background failure | kind=%s error_type=unavailable", kind)
             except Exception:
-                pass
-            if previous_handler is not None:
-                previous_handler(active_loop, context)
-            else:
-                active_loop.default_exception_handler(context)
+                # The asyncio default formatter retains raw callback arguments,
+                # exception messages and client objects. Never route those to a sink.
+                logging.error("[async] background failure diagnostic unavailable")
 
         loop.set_exception_handler(_handler)
 
@@ -9570,8 +9585,9 @@ class Passivbot:
         # Initialize throttle cache if needed (for INFO level only)
         if not hasattr(self, "_mode_change_last_log_ms"):
             self._mode_change_last_log_ms = {}
-        mode_change_throttle_ms = 300_000  # 5 minutes for INFO-level throttle
+        mode_change_throttle_ms = 300_000  # startup/selection reminders only
         now_ms = utc_ms()
+        visible_changes = []
 
         for change_type, changes in res.items():
             for elm in changes:
@@ -9631,17 +9647,46 @@ class Passivbot:
                         symbol_part = elm.split(":")[0]
                         throttle_key = f"info:{change_type}:{symbol_part}"
                         last_log_ms = self._mode_change_last_log_ms.get(throttle_key, 0)
-                        if (now_ms - last_log_ms) < mode_change_throttle_ms:
+                        if (
+                            change_type != "changed"
+                            and (now_ms - last_log_ms) < mode_change_throttle_ms
+                        ):
                             continue
                         self._mode_change_last_log_ms[throttle_key] = now_ms
                     except Exception:
                         pass
-                    logging.info(
-                        "[mode] %s %s%s",
-                        change_type,
-                        Passivbot._log_mode_element(elm),
-                        info_suffix,
-                    )
+                    visible_changes.append((change_type, elm, info_suffix))
+
+        # Group identical transitions into one bounded record, while never
+        # throttling a recovery behind its preceding outage on the same symbol.
+        groups = {}
+        for change_type, elm, suffix in visible_changes:
+            label, _, transition = elm.partition(": ")
+            side, _, symbol = label.partition(".")
+            cause = (
+                getattr(self, "_hsl_mode_override_reasons", {}).get((side, symbol))
+                if transition.endswith("manual") else None
+            )
+            key = (change_type, side, transition, suffix, cause)
+            groups.setdefault(key, []).append((elm, symbol))
+        for (change_type, side, transition, suffix, cause), rows in groups.items():
+            reason = f" reason={cause}" if cause else ""
+            if len(rows) == 1:
+                logging.info(
+                    "[mode] %s %s%s%s", change_type,
+                    Passivbot._log_mode_element(rows[0][0]), suffix, reason,
+                )
+            else:
+                sample = ",".join(
+                    Passivbot._format_candle_health_console_token(
+                        Passivbot._log_symbol(symbol), 24
+                    ) for _, symbol in rows[:3]
+                )
+                logging.info(
+                    "[mode] %s %s: %s%s count=%d symbols=%s%s", change_type,
+                    side, transition, reason, len(rows), sample,
+                    f",+{len(rows)-3}" if len(rows) > 3 else "",
+                )
 
     async def get_filtered_coins(
         self, pside: str, *, max_network_fetches: Optional[int] = None
@@ -13608,7 +13653,9 @@ class Passivbot:
                 status="succeeded" if selected_symbols else "skipped",
                 reason_code="rust_orchestrator_selection",
             )
-            info_key = (selected_set_key, slots_to_fill)
+            # Empty eligibility has no selection to change when only capacity
+            # changes. Retain the real slot count in the durable/debug payload.
+            info_key = (selected_set_key, slots_to_fill if selected_symbols else None)
             debug_key = (info_key, score_key)
             state = self._forager_selection_log_state.setdefault(pside, {})
             last_info_key = state.get("info_key")
@@ -17615,6 +17662,7 @@ class Passivbot:
         hsl = hsl_live.owner(self)
         wave = hsl.capture(market_snapshots)
         self._hsl_planning_wave = wave
+        self._hsl_mode_override_reasons = {}
         for side in ("long", "short"):
             for symbol in symbols:
                 action, _ = wave.permission(symbol, side)
@@ -17622,6 +17670,14 @@ class Passivbot:
                     mode_overrides[side][symbol] = "panic"
                 elif action == "unavailable":
                     mode_overrides[side][symbol] = "manual"
+                    from live.hsl_live import matches
+                    reason = next(
+                        (item.reason for item in wave.unavailable
+                         if matches(item.scope, symbol, side)), "unavailable"
+                    )
+                    self._hsl_mode_override_reasons[(side, symbol)] = (
+                        "hsl_" + re.sub(r"[^a-zA-Z0-9_]", "_", str(reason))[:64]
+                    )
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True,
             context="rust order calculation",

@@ -238,8 +238,12 @@ The periodic heartbeat reports current open orders, last-loop duration, account 
 and held close coverage (resting, waiting on a proven native trailing diagnostic, blocked, or
 unknown). A zero order count never implies either waiting or failure. Account age is unknown while
 required observations or confirmations are missing. Summary scheduling lateness is labelled
-`summary_late`; reconnect/rate-limit counts are process totals. Balance and cumulative trading
-activity remain in the durable health event and dedicated action/position records. Long health
+`summary_late`; reconnect/rate-limit counts are process totals. `execution_errors_1h`
+counts only failures charged to the execution restart budget; `async_errors_total` separately
+counts asyncio background failures without changing that budget. Asyncio diagnostics use the
+same bounded frame projection as process failures, never the default raw context formatter.
+`cycle_completed_age` is time since the last completed cycle, not cycle execution duration.
+Balance and cumulative trading activity remain in the durable health event and dedicated action/position records. Long health
 summaries split into bounded, individually timestamped records. Diagnostic projection failure must
 leave the base heartbeat visible with readiness unavailable.
 
@@ -250,8 +254,14 @@ replacement count and maximum prior-sample age. This age is not an outage durati
 observations, RED, unavailable scopes and changed semantic state remain immediate. Estimation
 provenance is labelled separately from freshness reasons. No trading authority uses these fields.
 
+Mode changes into and out of protective or unavailable-input states remain immediate;
+identical transitions across symbols may share a bounded count/sample record. A reminder
+throttle must not suppress recovery behind an earlier transition on the same symbol.
+
 Trailing-input warnings get an immediate recovery/clear notice without waiting for the periodic
 trailing diagnostic. Recovery means the input blocker cleared, not that a close order must exist.
+Order `submit` messages describe connector submission attempts, not exchange acknowledgement;
+execution outcomes own the accepted, deferred, skipped and failed counts.
 Routine refresh statistics and cancel-first mechanics stay in DEBUG; action outcomes and abnormal
 slow refreshes remain visible. A recognized self-generated websocket hint can use DEBUG only for
 presentation: required account refresh and fill-progress visibility remain unchanged.

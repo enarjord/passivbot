@@ -529,6 +529,7 @@ def _build_health_summary_payload(
         "fills": int(self._health_fills),
         "pnl": float(self._health_pnl),
         "errors_last_hour": recent_errors,
+        "async_errors_total": int(getattr(self, "_health_asyncio_errors", 0)),
         "error_budget_max": 10,
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
