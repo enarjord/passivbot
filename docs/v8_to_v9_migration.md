@@ -66,11 +66,31 @@ before backtesting a proposed replacement.
 V9 uses `bot.global` for inherited directional defaults and `bot.portfolio` for
 account-wide policy. The converter retains frozen released-v8 side parameters and search
 ranges as explicit side policy, including equal-valued pins; it does not replace old asymmetric
-profiles with the new common starter. It explicitly writes `enabled: true` for both sides and
-reports the choice, preserving search reachability when a side starts with zero capacity.
+profiles with the new common starter. By default, it explicitly writes `enabled: true` for both
+sides and reports the choice, preserving search reachability when a side starts with zero capacity.
 Zero capacity still prevents entries; it no longer implicitly sets held-position management
 to Manual. New v9 configs instead default to disabled sides. No intermediate dev-v9 migration
 is added.
+
+To deliberately refactor the migrated policy, use the same optional
+[`--disabled-sides` and `--bot-layout` flags](tools.md#optional-directional-refactoring)
+as `clean-config`. For example, a config with only long entry capacity can discard its dormant
+short profile and use common defaults with an explicit long activation:
+
+```sh
+passivbot tool migrate-config-v9 input.v8.json output.v9.json \
+  --best-effort --disabled-sides omit --bot-layout global
+```
+
+The default `preserve` choices leave migration policy unchanged. `disable` retains dormant
+parameters with `enabled: false`; `omit` discards them. Dormancy is checked after released-v8
+defaults and position-count normalization. A currently zero-capacity side is not disposable when
+optimizer ranges or fixed/scenario policy can make it usable: the tool rejects that conflict.
+Layout changes also reject nonempty global optimizer bounds; retain the layout or explicitly
+author side bounds first. Normal capacity validation still applies.
+Review the reported removals and warnings before adopting a refactored config, including its
+effect on held positions and future inheritance. These flags do not grant equivalence between
+v8 and v9 trading behavior or replace the migration acknowledgments below.
 
 V9 uses separate slow EMA spans for each HSL policy, account-wide unstuck realized memory and
 account-wide loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.

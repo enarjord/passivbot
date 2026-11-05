@@ -474,6 +474,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_realized_loss_gate_memory_change=False,
             acknowledge_search_backend_change=False, metric_replacements=None,
             acknowledge_metric_formula_change=False, base_config_path="", best_effort=False,
+            disabled_sides="preserve", bot_layout="preserve",
             _progress=None):
     """Transform and canonically validate root, files and every effective scenario."""
     from config import prepare_config
@@ -680,6 +681,13 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     # Keep resolution context internal after referenced coin files are inlined.
     exported.get("live", {}).pop("base_config_path", None)
     _restore_authored_export_inputs(exported, transformed.config)
+    if disabled_sides != "preserve" or bot_layout != "preserve":
+        from config.reshape import reshape_config
+        progress("refactoring directional policy")
+        reshaped = reshape_config(exported, disabled_sides=disabled_sides,
+                                  bot_layout=bot_layout, base_config_path=base_config_path)
+        return MigrationResult(reshaped.config, [*transformed.changes, *reshaped.changes],
+                               (*transformed.warnings, *reshaped.warnings))
     return MigrationResult(exported, transformed.changes, transformed.warnings)
 
 
@@ -735,6 +743,8 @@ def main(argv=None):
     parser.add_argument("--report", type=Path)
     parser.add_argument("--in-place", action="store_true")
     parser.add_argument("--backup", type=Path)
+    from tools.clean_config import add_reshape_arguments
+    add_reshape_arguments(parser)
     args = parser.parse_args(argv)
     if args.in_place and args.output_config is not None:
         parser.error("--in-place cannot be combined with output_config")
@@ -789,6 +799,7 @@ def main(argv=None):
                 metric_replacements=replacements,
                 acknowledge_metric_formula_change=args.acknowledge_metric_formula_change,
                 base_config_path=str(args.input_config.resolve()), best_effort=args.best_effort,
+                disabled_sides=args.disabled_sides, bot_layout=args.bot_layout,
                 _progress=progress,
             )
         rendered = json_dumps_streamlined(result.config, allow_nan=False) + "\n"

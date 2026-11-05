@@ -519,6 +519,58 @@ The tool makes no network or authenticated exchange calls and starts no bot.
 `streamline-json` retains its existing in-place, recursively selected formatting interface for
 compatibility. Prefer `clean-config --mode format` for explicit output paths and bounded depth.
 
+### Optional directional refactoring
+
+`clean-config` and `migrate-config-v9` share two opt-in refactoring flags. Their defaults preserve
+the existing source policy; ordinary `compact` output still retains explicit side pins even when
+they equal a common value. Refactoring is unavailable with `--mode format`.
+
+| Flag | Choices and effect |
+| --- | --- |
+| `--disabled-sides` | `preserve` (default) retains the existing activation and profiles; `disable` explicitly disables dormant sides while retaining their parameters; `omit` removes dormant side profiles and their unused side policy. |
+| `--bot-layout` | `preserve` (default) keeps existing scopes; `global` puts a single active directional profile in `bot.global`, leaving its side block with activation; `side` puts directional profiles in their respective side blocks. Portfolio settings remain under `bot.portfolio`. |
+
+A dormant side is explicitly disabled or has zero total exposure or zero positions after normal
+loading. Migration uses resolved released-v8 defaults and normalized position counts. Automatic
+disabling or omission rejects alternate fixed/scenario or optimizer contexts that can make the
+side usable, including stored scenarios whose suite is currently disabled. Existing validation
+still rejects positive exposure with zero positions; these flags do not repair invalid capacities.
+Coin policy and optimizer transforms participate in validation; ambiguous transformations fail
+with an actionable error rather than silently dropping a reachable profile.
+
+`global` requires exactly one retained side that is enabled and has positive exposure and position
+capacity. Retained dormant profiles keep their own values, and side-specific optimizer bounds may
+remain side-specific. Both layout changes reject nonempty `optimize.bounds.global`: declare the
+intended side bounds explicitly first, or retain `--bot-layout preserve`. Refactoring never combines
+independent optimizer coordinates merely because their current values or bounds are equal.
+
+`omit` removes the dormant side's profile, bounds and inline side patches, reporting the removals.
+It cannot remove long while `mirror_short_from_long` consumes its profile. Any remaining referenced
+coin override file, including fixed/scenario references, requires an initial `--mode resolved`
+export to inline validated sources before omission. The tool does not modify referenced files;
+reloadable approved/ignored coin-list files remain supported.
+
+Omitting a side discards its profile, so later enabling it uses inherited or schema defaults.
+Disabled sides still manage held positions; changing their inherited parameters can change closes
+and protection. Inspect the reported changes and warnings before adopting the output. Moving an
+active profile to global also makes it follow future common edits. Exposure budgets remain per
+side if another direction is later enabled.
+
+`clean-config` prints change reasons and warnings to stderr, including during `--dry-run` and
+`--check`. Migration includes them in its usual change report and warnings.
+
+```shell
+# Retain dormant profiles but make their disabled status explicit.
+passivbot tool clean-config input.json disabled.json --disabled-sides disable
+
+# Discard a dormant opposite profile and use one shared directional base.
+passivbot tool clean-config input.json lean.json --mode compact \
+  --disabled-sides omit --bot-layout global
+
+# Keep directional settings under their respective side blocks.
+passivbot tool clean-config input.json directional.json --bot-layout side
+```
+
 ## Explain a config setting
 
 ```shell
