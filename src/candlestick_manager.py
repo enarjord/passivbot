@@ -4162,7 +4162,11 @@ class CandlestickManager:
                 if proof_start > gap_end:
                     break
                 if proof_start > cursor:
-                    unknown.append((cursor, min(gap_end, proof_start - ONE_MIN_MS)))
+                    # Once price continuity is unknown, a later no-trade fragment
+                    # cannot inherit an earlier real close across that outage.
+                    unknown.append((cursor, gap_end))
+                    cursor = gap_end + ONE_MIN_MS
+                    break
                 cursor = max(cursor, proof_end + ONE_MIN_MS)
                 if cursor > gap_end:
                     break

@@ -6069,7 +6069,11 @@ async def test_unrecorded_internal_outage_is_not_no_trade_proof(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_explicit_no_trade_proof_allows_only_its_covered_internal_minutes(tmp_path):
+@pytest.mark.parametrize("proof_start,expected", [
+    (101, [100, 101, 102, 105]),
+    (102, [100, 105]),
+])
+async def test_explicit_no_trade_proof_allows_only_its_covered_internal_minutes(tmp_path, proof_start, expected):
     cm = CandlestickManager(exchange=None, exchange_name="kucoin", cache_dir=str(tmp_path))
     minute = 60_000
     cm._now_ms_callback = lambda: 120 * minute
@@ -6078,13 +6082,13 @@ async def test_explicit_no_trade_proof_allows_only_its_covered_internal_minutes(
         (100 * minute, 1, 1, 1, 1, 1),
         (105 * minute, 2, 2, 2, 2, 1),
     ], dtype=CANDLE_DTYPE)
-    cm._record_verified_gap(symbol, 101 * minute, 102 * minute)
+    cm._record_verified_gap(symbol, proof_start * minute, 102 * minute)
     rows = await cm.get_candles(
         symbol, start_ts=100 * minute, end_ts=105 * minute,
         allow_remote_fetch=False,
     )
-    assert rows["ts"].tolist() == [i * minute for i in (100, 101, 102, 105)]
-    assert rows["bv"].tolist() == [1.0, 0.0, 0.0, 1.0]
+    assert rows["ts"].tolist() == [i * minute for i in expected]
+    assert rows["bv"].tolist() == [1.0 if i in (100, 105) else 0.0 for i in expected]
     # Unproven minutes remain absent; standardization never mutates the source.
     assert cm._cache[symbol]["ts"].tolist() == [100 * minute, 105 * minute]
 
