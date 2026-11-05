@@ -88,6 +88,7 @@ from legacy_data_migrator import (
     normalize_ccxt_volume_to_base,
 )
 import live.ema_timing as ema_timing
+from candle_shard_io import load_candle_array
 from live.diagnostic_safety import bounded_exception_type
 from utils import (
     FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
@@ -2776,7 +2777,7 @@ class CandlestickManager:
             return np.empty((0,), dtype=CANDLE_DTYPE)
         try:
             with open(path, "rb") as f:
-                arr = np.load(f, allow_pickle=False)
+                arr = load_candle_array(f, CANDLE_DTYPE)
             if isinstance(arr, np.ndarray) and arr.dtype == CANDLE_DTYPE:
                 return arr
             # Legacy downloader shards are often stored as 2D float arrays:

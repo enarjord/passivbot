@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -634,14 +635,14 @@ async def test_ws_failed_existing_shard_read_preserves_history(
     if failure == "corrupt":
         shard.write_bytes(b"invalid numpy shard")
     else:
-        load = np.load
+        open_file = builtins.open
 
-        def unreadable(file, *args, **kwargs):
-            if Path(file.name) == shard:
+        def unreadable(file, mode="r", *args, **kwargs):
+            if isinstance(file, (str, Path)) and Path(file) == shard and mode == "rb":
                 raise PermissionError("unreadable fixture")
-            return load(file, *args, **kwargs)
+            return open_file(file, mode, *args, **kwargs)
 
-        monkeypatch.setattr(np, "load", unreadable)
+        monkeypatch.setattr(builtins, "open", unreadable)
     original_bytes = {path: path.read_bytes() for path in [primary, legacy] if path and path.exists()}
     expected_error = ValueError if failure == "corrupt" else PermissionError
     with pytest.raises(expected_error):
@@ -664,17 +665,18 @@ async def test_ws_merge_read_failure_after_successful_canonical_read(tmp_path, m
     cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
     shard = Path(cm._shard_path(symbol, "1970-01-01", timeframe="1m"))
     original_bytes = shard.read_bytes()
-    load = np.load
+    open_file = builtins.open
     reads = 0
 
-    def fail_second_read(file, *args, **kwargs):
+    def fail_second_read(file, mode="r", *args, **kwargs):
         nonlocal reads
-        reads += 1
-        if reads == 2:
-            raise PermissionError("merge read unavailable")
-        return load(file, *args, **kwargs)
+        if isinstance(file, (str, Path)) and Path(file) == shard and mode == "rb":
+            reads += 1
+            if reads == 2:
+                raise PermissionError("merge read unavailable")
+        return open_file(file, mode, *args, **kwargs)
 
-    monkeypatch.setattr(np, "load", fail_second_read)
+    monkeypatch.setattr(builtins, "open", fail_second_read)
     with pytest.raises(PermissionError):
         await _prime_and_finalize_ws_row(
             cm, symbol, [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
@@ -705,14 +707,14 @@ async def test_ws_merge_reads_actual_shard_after_another_manager_publishes_day(
     original_bytes = shard.read_bytes()
     row = [midnight + ONE_MIN_MS, 101, 103, 100, 102, 3]
     if unreadable:
-        load = np.load
+        open_file = builtins.open
 
-        def fail_read(file, *args, **kwargs):
-            if Path(file.name) == shard:
+        def fail_read(file, mode="r", *args, **kwargs):
+            if isinstance(file, (str, Path)) and Path(file) == shard and mode == "rb":
                 raise PermissionError("newly discovered target unavailable")
-            return load(file, *args, **kwargs)
+            return open_file(file, mode, *args, **kwargs)
 
-        monkeypatch.setattr(np, "load", fail_read)
+        monkeypatch.setattr(builtins, "open", fail_read)
         with pytest.raises(PermissionError):
             await _prime_and_finalize_ws_row(cm, symbol, row)
         assert shard.read_bytes() == original_bytes

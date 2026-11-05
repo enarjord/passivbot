@@ -582,6 +582,13 @@ ctime currently reports creation time, which cannot detect same-size in-place
 corrections with restored mtime. Ordinary disk reads remain authoritative there.
 Clearing the cache or restarting reconstructs identical rows.
 
+Canonical one-dimensional candle NPY reads may reuse up to 128 validated headers,
+keyed by the complete header bytes and format version read on that call. Each
+header is bounded to NumPy's default 10,000-byte limit. Every payload is read
+again; same-size corrections, replacement files, malformed headers and truncated
+payloads remain visible. Other NPY shapes/dtypes/formats retain NumPy's loader
+and its no-pickle policy. This metadata cache does not certify any source rows.
+
 Only factual source rows are cached. Mutable consumer arrays and the one-minute
 memory cache never alias retained immutable rows. One-minute reads still merge
 against the current memory state; identical sorted overlaps may bypass the
