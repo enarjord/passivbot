@@ -5598,7 +5598,6 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
-                self._remote_fetch_time_remaining()
                 last_exc = e
                 raw_err_type = type(e).__name__
                 err_type = bounded_exception_type(e)
@@ -5617,6 +5616,10 @@ class CandlestickManager:
                         "error_type": err_type,
                     }
                 )
+                # A started request needs a terminal timing event even when its
+                # caller-owned budget expired. Emit the failure before propagating
+                # deadline exhaustion; no retry may renew that deadline.
+                self._remote_fetch_time_remaining()
                 action = "exhausted" if attempt == max_attempts - 1 else "retry"
                 self._throttled_warning(
                     f"ccxt_fetch_ohlcv_failed:{symbol}:{tf_norm}:{err_type}:{action}",

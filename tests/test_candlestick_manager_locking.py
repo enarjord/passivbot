@@ -461,3 +461,25 @@ async def test_live_timeout_preserves_successful_pages_for_restart(tmp_path):
         allow_remote_fetch=False, standardize=False,
     )
     assert rows["ts"].tolist() == [i * minute for i in range(995, 998)]
+
+
+@pytest.mark.asyncio
+async def test_budget_timeout_emits_terminal_remote_fetch_diagnostic_without_retry(tmp_path):
+    exchange = FakeExchange()
+    exchange._sleep = 10.0
+    events = []
+    cm = CandlestickManager(
+        exchange=exchange, exchange_name="fake", cache_dir=str(tmp_path),
+        archive_enabled=False, remote_fetch_callback=events.append,
+    )
+    with cm.remote_fetch_budget(0.02):
+        with pytest.raises(TimeoutError, match="budget expired"):
+            await cm._ccxt_fetch_ohlcv_once("BTC/USDT:USDT", 995 * 60_000, 5)
+    requests = [event for event in events if event.get("kind") == "ccxt_fetch_ohlcv"]
+    assert [event["stage"] for event in requests] == ["start", "error"]
+    assert requests[1]["attempt"] == 1
+    assert requests[1]["error_type"] == "TimeoutError"
+    assert requests[1]["elapsed_ms"] >= 0
+    assert requests[0]["symbol"] == requests[1]["symbol"] == "BTC/USDT:USDT"
+    assert requests[0]["tf"] == requests[1]["tf"] == "1m"
+    assert requests[0]["since_ts"] == requests[1]["since_ts"]
