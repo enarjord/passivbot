@@ -2185,6 +2185,10 @@ class CandlestickManager:
                             inventories[parent] = {
                                 entry.name: entry.is_symlink() for entry in entries
                             }
+                        if not os.access(parent, os.X_OK):
+                            # Listing names needs read permission; checking a
+                            # child needs directory search permission as well.
+                            inventories[parent] = None
                     except OSError:
                         # Preserve the existing path-specific existence check
                         # when directory enumeration is unavailable.

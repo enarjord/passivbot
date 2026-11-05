@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from candlestick_manager import CandlestickManager
 
 
@@ -61,3 +63,22 @@ def test_shard_pruning_uses_existing_path_fallback_when_listing_fails(tmp_path, 
     monkeypatch.setattr(os, "scandir", denied)
     assert manager._prune_missing_shards_from_index(index) == 1
     assert set(index["shards"]) == {"present"}
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root can search mode-0400 directories")
+def test_readable_but_unsearchable_directory_does_not_prove_shard_exists(tmp_path):
+    manager = CandlestickManager(exchange=None, exchange_name="test", cache_dir=str(tmp_path))
+    parent = tmp_path / "readable"
+    parent.mkdir()
+    shard = parent / "data.npy"
+    shard.touch()
+    index = {"shards": {"day": {"path": str(shard)}}}
+    parent.chmod(0o400)
+    try:
+        if os.path.exists(shard):
+            pytest.skip("filesystem does not enforce search permissions")
+        assert manager._prune_missing_shards_from_index(index) == 1
+        assert not index["shards"]
+    finally:
+        parent.chmod(0o700)
