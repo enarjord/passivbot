@@ -87,6 +87,15 @@ def matches(scope, symbol, side):
     )
 
 
+class OrdinaryPlanDeferred(RuntimeError):
+    """Discard preparation when its current-account facts cannot be confirmed."""
+
+    def __init__(self, reason, missing=()):
+        self.reason = str(reason)
+        self.missing = tuple(missing)
+        super().__init__(self.reason)
+
+
 @dataclass(frozen=True, eq=False)
 class OrdinaryReceipts:
     """Strong references to the immutable HSL acquisitions used in preparation."""
@@ -253,18 +262,8 @@ class Owner:
             and wave.required_fills != self.required_fill_facts()
         ):
             return False
-        ledger = bot._ensure_freshness_ledger()
-        pending = getattr(bot, "_authoritative_pending_confirmations", {})
-        for surface in ("balance", "positions", "open_orders"):
-            state = ledger.surfaces[surface]
-            if (
-                state.updated_ms <= 0
-                or not 0
-                <= now - state.updated_ms
-                <= bot._live_market_snapshot_max_age_ms()
-                or int(pending.get(surface, 0)) > state.epoch
-            ):
-                return False
+        if self._current_account_unavailable(now):
+            return False
         # Every write requires the current account generation. Changed size/basis
         # requires replanning, including for a panic close.
         if (
@@ -276,6 +275,72 @@ class Owner:
         if wave.balance != bot.get_raw_balance():
             return False
         return True
+
+    def _current_account_unavailable(self, now):
+        bot = self.bot
+        ledger = bot._ensure_freshness_ledger()
+        pending = getattr(bot, "_authoritative_pending_confirmations", {})
+        return tuple(
+            surface
+            for surface in ("balance", "positions", "open_orders")
+            if (
+                (state := ledger.surfaces[surface]).updated_ms <= 0
+                or not 0 <= now - state.updated_ms <= bot._live_market_snapshot_max_age_ms()
+                or int(pending.get(surface, 0)) > state.epoch
+            )
+        )
+
+    async def refresh_ordinary_account(self, prepared_account):
+        """Confirm unchanged facts after slow preparation, before capturing permission.
+
+        A confirming read may advance receipt times, never rewrite an old one.
+        Changed economic facts still invalidate the prepared universe. This work
+        stays in the ordinary task; protection never awaits EMA preparation.
+        """
+        from utils import utc_ms
+
+        bot = self.bot
+        if self._refresh_lock.locked():
+            # An existing protective refresh may already supply the needed
+            # confirmation. Wait for its complete cohort without cancelling it.
+            async with self._refresh_lock:
+                pass
+        if self._shutdown_requested():
+            raise OrdinaryPlanDeferred("shutdown")
+        if not self.same_account_facts(prepared_account, self.account_facts()):
+            raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+        if self._current_account_unavailable(int(utc_ms())):
+            from ccxt.base.errors import InvalidNonce, NetworkError
+            from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+            try:
+                refreshed = await bot.refresh_protective_authoritative_state(
+                    require_balance=True
+                )
+            except InvalidNonce:
+                raise
+            except (NetworkError, AuthoritativeSurfaceUnavailable) as exc:
+                raise OrdinaryPlanDeferred(
+                    "current_account_refresh_unavailable",
+                    self._current_account_unavailable(int(utc_ms())),
+                ) from exc
+            if not refreshed:
+                raise OrdinaryPlanDeferred(
+                    "current_account_refresh_unavailable",
+                    self._current_account_unavailable(int(utc_ms())),
+                )
+        self.require_ordinary_account(prepared_account)
+
+    def require_ordinary_account(self, prepared_account):
+        from utils import utc_ms
+
+        if self._shutdown_requested():
+            raise OrdinaryPlanDeferred("shutdown")
+        if not self.same_account_facts(prepared_account, self.account_facts()):
+            raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+        missing = self._current_account_unavailable(int(utc_ms()))
+        if self._refresh_lock.locked() or missing:
+            raise OrdinaryPlanDeferred("current_account_inputs_unavailable", missing)
 
     def admit(self, order):
         from utils import utc_ms
@@ -662,7 +727,20 @@ class Owner:
         )
         if not ready:
             return None
-        cancels, creates = await bot.calc_orders_to_cancel_and_create()
+        try:
+            cancels, creates = await bot.calc_orders_to_cancel_and_create()
+        except OrdinaryPlanDeferred as exc:
+            bot._log_staged_execution_defer(
+                dict(
+                    context="ordinary HSL capture",
+                    defer_reason=exc.reason,
+                    missing=list(exc.missing),
+                    required=["balance", "positions", "open_orders"],
+                    invalid={"hsl_account": [{"reason": exc.reason}]},
+                    epoch=bot._ensure_freshness_ledger().epoch,
+                )
+            )
+            return None
         if not self.same_account_facts(account, self.account_facts()):
             return None
         if not receipts.matches(self.ordinary_receipts()):
