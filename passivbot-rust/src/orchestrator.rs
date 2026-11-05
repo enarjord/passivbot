@@ -38,8 +38,8 @@ mod core {
         wallet_exposure_limit_ratio_with_allowance_from_base,
     };
     use crate::risk::{
-        calc_twel_enforcer_actions, calc_unstucking_action_with_realized_drawdown,
-        GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
+        calc_twel_enforcer_actions, calc_unstucking_action_with_diagnostics, GateEntriesPosition,
+        TwelEnforcerInputPosition, UnstuckDiagnostic, UnstuckPositionInput,
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_price_ema_spans_minutes,
@@ -283,6 +283,8 @@ mod core {
         pub min_effective_cost_blocks: Vec<MinEffectiveCostBlock>,
         #[serde(default)]
         pub forager_selections: Vec<ForagerSelectionDiagnostic>,
+        #[serde(default)]
+        pub unstuck: Vec<UnstuckDiagnostic>,
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -3481,12 +3483,21 @@ mod core {
         input: &OrchestratorInput,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
         let mut workspace = OrchestratorWorkspace::default();
-        compute_ideal_orders_with_workspace(input, &mut workspace)
+        compute_ideal_orders_observed(input, &mut workspace, true)
     }
 
+    /// Repeated replay path: omit live-only unstuck observations and their allocations.
     pub fn compute_ideal_orders_with_workspace(
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
+    ) -> Result<OrchestratorOutput, OrchestratorError> {
+        compute_ideal_orders_observed(input, workspace, false)
+    }
+
+    fn compute_ideal_orders_observed(
+        input: &OrchestratorInput,
+        workspace: &mut OrchestratorWorkspace,
+        collect_unstuck_diagnostics: bool,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
         validate_account_risk_inputs(input)?;
         let mut diagnostics = OrchestratorDiagnostics::default();
@@ -4167,10 +4178,23 @@ mod core {
             }
         }
 
+        let auto_unstuck_allowed = input.global.auto_unstuck_allowed.unwrap_or(
+            input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
+        );
         // Unstuck: select one global unstuck close and add it (do not replace).
         workspace.unstuck_inputs.clear();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
-            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+            if s.pos.size == 0.0 {
+                continue;
+            }
+            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) {
+                if collect_unstuck_diagnostics {
+                    diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                        s.symbol_idx,
+                        LONG,
+                        "mode_blocked",
+                    ));
+                }
                 continue;
             }
             let sym = &input.symbols[s.symbol_idx];
@@ -4182,6 +4206,13 @@ mod core {
                 && bot.unstuck_exposure_trigger_ratio > 0.0
                 && bot.total_wallet_exposure_limit_ratio > 0.0;
             if !enabled {
+                if collect_unstuck_diagnostics {
+                    diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                        s.symbol_idx,
+                        LONG,
+                        "disabled",
+                    ));
+                }
                 continue;
             }
             let ema_bands = if bot.unstuck_ema_gating_enabled {
@@ -4200,6 +4231,22 @@ mod core {
                             StrategyInputScope::Unstuck,
                             &mut diagnostics,
                         )?;
+                        if collect_unstuck_diagnostics {
+                            let mut row =
+                                UnstuckDiagnostic::new(s.symbol_idx, LONG, "inputs_unavailable");
+                            if auto_unstuck_allowed {
+                                // Budget availability is independent of the missing EMA. Diagnostic
+                                // failure stays absent and never changes the original scoped defer.
+                                row.allowance = crate::hsl_decay::allowance_for(
+                                    input_balance_raw(input),
+                                    bot.unstuck_loss_allowance_fraction,
+                                    bot.total_wallet_exposure_limit_ratio,
+                                    input.global.unstuck_realized_pnl_drawdown,
+                                )
+                                .ok();
+                            }
+                            diagnostics.unstuck.push(row);
+                        }
                         continue;
                     }
                 }
@@ -4233,7 +4280,17 @@ mod core {
             });
         }
         for s in per_short.iter().filter_map(|v| v.as_ref()) {
-            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+            if s.pos.size == 0.0 {
+                continue;
+            }
+            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) {
+                if collect_unstuck_diagnostics {
+                    diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                        s.symbol_idx,
+                        SHORT,
+                        "mode_blocked",
+                    ));
+                }
                 continue;
             }
             let sym = &input.symbols[s.symbol_idx];
@@ -4245,6 +4302,13 @@ mod core {
                 && bot.unstuck_exposure_trigger_ratio > 0.0
                 && bot.total_wallet_exposure_limit_ratio > 0.0;
             if !enabled {
+                if collect_unstuck_diagnostics {
+                    diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                        s.symbol_idx,
+                        SHORT,
+                        "disabled",
+                    ));
+                }
                 continue;
             }
             let ema_bands = if bot.unstuck_ema_gating_enabled {
@@ -4263,6 +4327,22 @@ mod core {
                             StrategyInputScope::Unstuck,
                             &mut diagnostics,
                         )?;
+                        if collect_unstuck_diagnostics {
+                            let mut row =
+                                UnstuckDiagnostic::new(s.symbol_idx, SHORT, "inputs_unavailable");
+                            if auto_unstuck_allowed {
+                                // Budget availability is independent of the missing EMA. Diagnostic
+                                // failure stays absent and never changes the original scoped defer.
+                                row.allowance = crate::hsl_decay::allowance_for(
+                                    input_balance_raw(input),
+                                    bot.unstuck_loss_allowance_fraction,
+                                    bot.total_wallet_exposure_limit_ratio,
+                                    input.global.unstuck_realized_pnl_drawdown,
+                                )
+                                .ok();
+                            }
+                            diagnostics.unstuck.push(row);
+                        }
                         continue;
                     }
                 }
@@ -4295,14 +4375,12 @@ mod core {
                 c_mult: sym.exchange.c_mult,
             });
         }
-        let auto_unstuck_allowed = input.global.auto_unstuck_allowed.unwrap_or(
-            input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
-        );
         if auto_unstuck_allowed {
-            if let Some((idx, side, order)) = calc_unstucking_action_with_realized_drawdown(
+            if let Some((idx, side, order)) = calc_unstucking_action_with_diagnostics(
                 input_balance_raw(input),
                 input.global.unstuck_realized_pnl_drawdown,
                 &workspace.unstuck_inputs,
+                collect_unstuck_diagnostics.then_some(&mut diagnostics.unstuck),
             )
             .map_err(|_| OrchestratorError::NonFiniteInput {
                 field: "global.unstuck_realized_pnl_drawdown_or_allowance",
@@ -4331,6 +4409,15 @@ mod core {
                         }
                     }
                 }
+            }
+        }
+        if collect_unstuck_diagnostics && !auto_unstuck_allowed {
+            for candidate in &workspace.unstuck_inputs {
+                diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                    candidate.idx,
+                    candidate.side,
+                    "planning_disabled",
+                ));
             }
         }
 
@@ -4507,6 +4594,41 @@ mod core {
                     &side.pos,
                     &symbol.short.bot_params,
                 );
+            }
+        }
+
+        // Keep proposed intent separate from the surviving output. Use the same net-PnL
+        // projection as the loss gate, including estimated execution price, fees and slippage.
+        for row in diagnostics.unstuck.iter_mut().filter(|row| row.proposed) {
+            let pside = if row.pside == "long" {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+            let per_side = if pside == PositionSide::Long {
+                &*per_long
+            } else {
+                &*per_short
+            };
+            if let Some(state) = per_side[row.symbol_idx].as_ref() {
+                if let Some(order) = state.closes.iter().find(|order| {
+                    matches!(
+                        order.order_type,
+                        OrderType::CloseUnstuckLong | OrderType::CloseUnstuckShort
+                    )
+                }) {
+                    let symbol = &input.symbols[row.symbol_idx];
+                    row.qty = Some(order.qty);
+                    row.price = Some(order.price);
+                    row.estimated_pnl = projected_close_pnl(
+                        order,
+                        &state.pos,
+                        &symbol.exchange,
+                        &input.global,
+                        &symbol.order_book,
+                        &symbol_side_input(symbol, pside).bot_params,
+                    );
+                }
             }
         }
 
@@ -4727,7 +4849,7 @@ mod core {
             });
         }
 
-        let orders = orders
+        let orders: Vec<ExecutableOrder> = orders
             .into_iter()
             .map(|order| {
                 let symbol = &input.symbols[order.symbol_idx];
@@ -4746,6 +4868,87 @@ mod core {
                 )
             })
             .collect();
+
+        for row in &mut diagnostics.unstuck {
+            if !row.proposed {
+                continue;
+            }
+            let pside = if row.pside == "long" {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+            let order_type = if pside == PositionSide::Long {
+                OrderType::CloseUnstuckLong
+            } else {
+                OrderType::CloseUnstuckShort
+            };
+            if let Some(order) = orders.iter().find(|order| {
+                order.symbol_idx == row.symbol_idx
+                    && order.pside == pside
+                    && order.order_type == order_type
+            }) {
+                row.reason = "selected".to_string();
+                row.qty = Some(order.qty);
+                row.price = Some(order.price);
+                let symbol = &input.symbols[row.symbol_idx];
+                let position = symbol_side_input(symbol, pside).position;
+                let ideal = IdealOrder {
+                    symbol_idx: order.symbol_idx,
+                    pside,
+                    qty: order.qty,
+                    price: order.price,
+                    order_type: order.order_type,
+                };
+                row.estimated_pnl = projected_close_pnl(
+                    &ideal,
+                    &position,
+                    &symbol.exchange,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol_side_input(symbol, pside).bot_params,
+                );
+            } else if let Some(block) = diagnostics.loss_gate_blocks.iter().find(|block| {
+                block.symbol_idx == row.symbol_idx
+                    && block.pside == pside
+                    && block.order_type == order_type
+            }) {
+                row.reason = "loss_gate_blocked".to_string();
+                row.qty = Some(block.qty);
+                row.price = Some(block.price);
+                row.estimated_pnl = Some(block.projected_pnl);
+            } else if orders.iter().any(|order| {
+                order.symbol_idx == row.symbol_idx
+                    && order.pside == pside
+                    && is_protective_close_reducer(order.order_type, pside)
+            }) {
+                row.reason = "superseded".to_string();
+            } else {
+                row.reason = "finalization_filtered".to_string();
+            }
+        }
+        // A held position omitted from ordinary generation still has an explicit unavailable observation.
+        if collect_unstuck_diagnostics {
+            for symbol in &input.symbols {
+                for (side, pside, position) in [
+                    (LONG, "long", symbol.long.position),
+                    (SHORT, "short", symbol.short.position),
+                ] {
+                    if position.size != 0.0
+                        && !diagnostics
+                            .unstuck
+                            .iter()
+                            .any(|row| row.symbol_idx == symbol.symbol_idx && row.pside == pside)
+                    {
+                        diagnostics.unstuck.push(UnstuckDiagnostic::new(
+                            symbol.symbol_idx,
+                            side,
+                            "inputs_unavailable",
+                        ));
+                    }
+                }
+            }
+        }
 
         diagnostics.symbol_states = input
             .symbols
@@ -5141,6 +5344,159 @@ mod core {
                 hedge_mode: true,
                 strategy_kind: StrategyKind::TrailingMartingale,
             }
+        }
+
+        fn unstuck_diagnostic_test_input() -> OrchestratorInput {
+            let mut global = make_basic_global();
+            global
+                .global_bot_params
+                .long
+                .total_wallet_exposure_limit_ratio = 1.0;
+            global.global_bot_params.long.n_positions = 1;
+            let mut symbol = make_basic_symbol(0);
+            symbol.long.position = Position {
+                size: 10.0,
+                price: 110.0,
+            };
+            symbol.long.bot_params.unstuck_enabled = true;
+            symbol.long.bot_params.unstuck_loss_allowance_fraction = 0.1;
+            symbol.long.bot_params.unstuck_close_fraction = 0.1;
+            symbol.long.bot_params.unstuck_exposure_trigger_ratio = 0.5;
+            symbol.long.bot_params.unstuck_ema_gating_enabled = false;
+            symbol.long.bot_params.risk_wel_enforcer_threshold_ratio = 0.0;
+            symbol.long.bot_params.risk_twel_enforcer_threshold_ratio = 0.0;
+            OrchestratorInput {
+                balance: 1_000.0,
+                balance_raw: 1_000.0,
+                timestamp_ms: 0,
+                global,
+                symbols: vec![symbol],
+                peek_hints: None,
+                forager_hysteresis: None,
+            }
+        }
+
+        #[test]
+        fn unstuck_diagnostics_report_disabled_mode_and_planning_gates() {
+            for expected in [
+                "disabled",
+                "mode_blocked",
+                "planning_disabled",
+                "inputs_unavailable",
+            ] {
+                let mut input = unstuck_diagnostic_test_input();
+                match expected {
+                    "disabled" => input.symbols[0].long.bot_params.unstuck_enabled = false,
+                    "mode_blocked" => input.symbols[0].long.mode = Some(TradingMode::Manual),
+                    "planning_disabled" => input.global.auto_unstuck_allowed = Some(false),
+                    _ => {
+                        input.symbols[0].allow_missing_strategy_inputs = true;
+                        input.symbols[0].long.bot_params.unstuck_ema_gating_enabled = true;
+                        input.symbols[0].long.bot_params.unstuck_ema_span_0_minutes = 100.0;
+                        input.symbols[0].long.bot_params.unstuck_ema_span_1_minutes = 200.0;
+                    }
+                }
+                let output = compute_ideal_orders_for_test(&input).unwrap();
+                assert_eq!(output.diagnostics.unstuck.len(), 1);
+                assert_eq!(output.diagnostics.unstuck[0].reason, expected);
+                assert!(!output.diagnostics.unstuck[0].proposed);
+                if expected == "inputs_unavailable" {
+                    assert_eq!(output.diagnostics.unstuck[0].allowance, Some(100.0));
+                }
+            }
+        }
+
+        #[test]
+        fn unstuck_diagnostics_distinguish_selected_blocked_and_superseded_intents() {
+            for expected in ["selected", "loss_gate_blocked", "superseded"] {
+                let mut input = unstuck_diagnostic_test_input();
+                match expected {
+                    "loss_gate_blocked" => {
+                        input.global.loss_gate_max_drawdown_fraction = 0.001;
+                    }
+                    "superseded" => {
+                        input.symbols[0].long.bot_params.wallet_exposure_limit_ratio = 0.5;
+                        input.symbols[0]
+                            .long
+                            .bot_params
+                            .risk_wel_enforcer_threshold_ratio = 1.0;
+                    }
+                    _ => {}
+                }
+                let output = compute_ideal_orders_for_test(&input).unwrap();
+                assert_eq!(output.diagnostics.unstuck.len(), 1);
+                let row = &output.diagnostics.unstuck[0];
+                assert!(row.proposed);
+                assert_eq!(row.reason, expected);
+                let selected = output
+                    .orders
+                    .iter()
+                    .find(|order| order.order_type == OrderType::CloseUnstuckLong);
+                assert_eq!(selected.is_some(), expected == "selected");
+                if let Some(order) = selected {
+                    assert_eq!(row.qty, Some(order.qty));
+                    assert_eq!(row.price, Some(order.price));
+                    let fee = qty_to_cost(order.qty.abs(), order.price, 1.0)
+                        * input.symbols[0].exchange.maker_fee_fraction;
+                    assert_eq!(
+                        row.estimated_pnl,
+                        Some(calc_pnl_long(110.0, order.price, order.qty, 1.0) - fee)
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn unstuck_diagnostics_observed_and_replay_paths_have_identical_orders() {
+            for case in 0..6 {
+                let mut input = unstuck_diagnostic_test_input();
+                match case {
+                    0 => input.global.market_orders_allowed = true,
+                    1 => input.global.unstuck_realized_pnl_drawdown = 1_000.0,
+                    2 => input.global.loss_gate_max_drawdown_fraction = 0.001,
+                    3 => input.symbols[0].long.mode = Some(TradingMode::Manual),
+                    4 => input.global.auto_unstuck_allowed = Some(false),
+                    _ => input.symbols[0].long.bot_params.unstuck_enabled = false,
+                }
+                for symbol in &mut input.symbols {
+                    sync_trailing_martingale_strategy_params(symbol);
+                }
+                let mut observed = super::compute_ideal_orders(&input).unwrap();
+                let mut workspace = OrchestratorWorkspace::default();
+                let replay =
+                    super::compute_ideal_orders_with_workspace(&input, &mut workspace).unwrap();
+                assert!(replay.diagnostics.unstuck.is_empty());
+                assert_eq!(observed.diagnostics.unstuck.len(), 1);
+                observed.diagnostics.unstuck.clear();
+                assert_eq!(
+                    serde_json::to_value(observed).unwrap(),
+                    serde_json::to_value(replay).unwrap()
+                );
+            }
+        }
+
+        #[test]
+        fn unstuck_diagnostics_project_market_slippage_and_net_fees() {
+            let mut input = unstuck_diagnostic_test_input();
+            input.global.market_orders_allowed = true;
+            input.global.market_order_slippage_fraction = 0.01;
+            input.symbols[0].exchange.taker_fee_fraction = 0.001;
+            let output = compute_ideal_orders_for_test(&input).unwrap();
+            let row = &output.diagnostics.unstuck[0];
+            assert_eq!(row.reason, "selected");
+            let order = output
+                .orders
+                .iter()
+                .find(|order| order.order_type == OrderType::CloseUnstuckLong)
+                .unwrap();
+            assert_eq!(order.execution_type, ExecutionType::Market);
+            assert_eq!(
+                row.estimated_pnl,
+                Some(
+                    calc_pnl_long(110.0, 99.0, order.qty, 1.0)
+                        - qty_to_cost(order.qty.abs(), 99.0, 1.0) * 0.001
+                )
+            );
         }
 
         #[test]

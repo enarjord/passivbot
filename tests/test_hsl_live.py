@@ -2308,7 +2308,8 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
 
 
 @pytest.mark.asyncio
-async def test_hsl_trailing_console_failure_does_not_stop_execution():
+@pytest.mark.parametrize("broken", ["trailing", "unstuck"])
+async def test_hsl_status_console_failure_does_not_stop_execution(broken):
     from types import SimpleNamespace
 
     bot = SimpleNamespace(stop_signal_received=False)
@@ -2328,11 +2329,21 @@ async def test_hsl_trailing_console_failure_does_not_stop_execution():
 
     instance.cycle = cycle
     bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_trailing_status = broken_console
+    bot._maybe_log_trailing_status = (
+        broken_console if broken == "trailing" else lambda: calls.append("trailing")
+    )
+    bot._maybe_log_unstuck_status = (
+        broken_console if broken == "unstuck" else lambda: calls.append("unstuck")
+    )
     bot._sleep_unless_shutdown = sleep
     bot.live_value = lambda key: 0.05
     await instance.run()
-    assert calls == ["cycle", "console"] and not instance._running
+    assert calls == (
+        ["cycle", "console", "unstuck"]
+        if broken == "trailing"
+        else ["cycle", "trailing", "console"]
+    )
+    assert not instance._running
 
 
 from hsl_fixture import load_fake_hsl_config

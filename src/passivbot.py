@@ -63,6 +63,7 @@ from live import (
     planning_gates,
     reconciler,
     state_refresh,
+    unstuck_diagnostics,
 )
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
 from live import balance_validation, hsl_live
@@ -910,7 +911,6 @@ _HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS = 5.0
 
 
 class Passivbot:
-    UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA = 0.05
     TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA = 0.0005
     TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA = 0.005
     STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000
@@ -1756,16 +1756,7 @@ class Passivbot:
         self._log_silence_watchdog_stage = "idle"
         self._bot_ready = False
 
-        # Unstuck logging throttle
-        self._unstuck_last_log_ms = 0
-        self._unstuck_log_interval_ms = 5 * 60 * 1000  # 5 minutes
-        self._unstuck_unchanged_info_log_interval_ms = (
-            self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS
-        )
-        self._unstuck_operator_visible_baseline_by_pside = {}
-        self._unstuck_operator_visible_ms_by_pside = {}
-        self._unstuck_last_selection_signature = None
-        self._unstuck_last_selection_info_ms = 0
+        self._unstuck_native_observation = None
         self._trailing_last_status_check_ms = 0
         self._trailing_status_check_interval_ms = 5 * 60 * 1000
         self._trailing_unchanged_info_log_interval_ms = (
@@ -2617,16 +2608,6 @@ class Passivbot:
                 out[symbol] = fraction
         return out
 
-    @staticmethod
-    def _format_unstuck_override_fractions_for_logging(overrides: dict[str, float]) -> str:
-        if not overrides:
-            return ""
-        items = list(overrides.items())
-        shown = ", ".join(f"{symbol}={fraction:.4f}" for symbol, fraction in items[:4])
-        if len(items) > 4:
-            shown = f"{shown}, +{len(items) - 4} more"
-        return shown
-
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
@@ -2668,107 +2649,6 @@ class Passivbot:
             "override_allowances": override_allowances,
         }
 
-    def _get_unstuck_status_snapshot_parts_and_signature(
-        self,
-    ) -> tuple[dict[str, dict], list[str], tuple]:
-        """Build the current unstuck status snapshot, log line, and signature."""
-        side_infos = {}
-        parts = []
-        signature_parts = []
-        for pside in ["long", "short"]:
-            info = self._calc_unstuck_allowance_for_logging(pside)
-            runtime_hints = getattr(self, "_monitor_runtime_unstuck_hints", {})
-            if isinstance(runtime_hints, dict):
-                hint = runtime_hints.get(pside)
-                if isinstance(hint, dict):
-                    info = dict(info or {})
-                    for key in (
-                        "next_symbol",
-                        "next_target_price",
-                        "next_target_price_offset_fraction",
-                        "next_unstuck_trigger_price_offset_fraction",
-                    ):
-                        if hint.get(key) is not None:
-                            info[key] = hint[key]
-            side_infos[pside] = dict(info or {})
-            status = info.get("status")
-            if status == "disabled":
-                parts.append(f"{pside}: disabled")
-                signature_parts.append((pside, "disabled"))
-            elif status == "unstuck_disabled":
-                parts.append(f"{pside}: unstuck disabled")
-                signature_parts.append((pside, "unstuck_disabled"))
-            elif status == "no_pnl_manager" or status == "no_history":
-                parts.append(f"{pside}: no pnl history")
-                signature_parts.append((pside, "no_history"))
-            else:
-                allowance = info["allowance"]
-                overrides_str = self._format_unstuck_override_fractions_for_logging(
-                    info.get("override_loss_allowance_fractions", {})
-                )
-                overrides_suffix = (
-                    f" | overrides={overrides_str}" if overrides_str else ""
-                )
-                if allowance < 0:
-                    parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | change_from_peak_percent=%.1f%%%s"
-                        % (
-                            pside,
-                            allowance,
-                            info["peak"],
-                            info["change_from_peak_percent"],
-                            overrides_suffix,
-                        )
-                    )
-                else:
-                    parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | change_from_peak_percent=%.1f%%%s"
-                        % (
-                            pside,
-                            allowance,
-                            info["peak"],
-                            info["change_from_peak_percent"],
-                            overrides_suffix,
-                        )
-                    )
-                signature_parts.append(
-                    (
-                        pside,
-                        "over_budget" if allowance < 0 else "ok",
-                        round(float(allowance), 2),
-                        tuple(
-                            sorted(info.get("override_loss_allowance_fractions", {}).items())
-                        ),
-                        str(info.get("next_symbol") or ""),
-                        round(
-                            self._trailing_status_float(info.get("next_target_price")),
-                            8,
-                        ),
-                        round(
-                            self._trailing_status_float(
-                                info.get("next_target_price_offset_fraction")
-                            ),
-                            8,
-                        ),
-                        round(
-                            self._trailing_status_float(
-                                info.get("next_unstuck_trigger_price_offset_fraction")
-                            ),
-                            8,
-                        ),
-                    )
-                )
-        return side_infos, parts, tuple(signature_parts)
-
-    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
-        """Build the current unstuck status log line and a comparable signature."""
-        (
-            _side_infos,
-            parts,
-            signature,
-        ) = self._get_unstuck_status_snapshot_parts_and_signature()
-        return parts, signature
-
     @staticmethod
     def _status_materiality_number(value: Any) -> float | None:
         try:
@@ -2777,147 +2657,8 @@ class Passivbot:
             return None
         return number if math.isfinite(number) else None
 
-    @classmethod
-    def _unstuck_allowance_materially_changed(
-        cls, baseline: float | None, current: float | None
-    ) -> bool:
-        if baseline is None or current is None:
-            return baseline != current
-        denominator = max(abs(baseline), 1e-12)
-        delta = abs(current - baseline)
-        boundary = denominator * cls.UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA
-        return delta > boundary or math.isclose(
-            delta, boundary, rel_tol=1e-12, abs_tol=0.0
-        )
-
-    @staticmethod
-    def _unstuck_status_qualitative_signature(info: dict) -> tuple:
-        return (
-            str(info.get("status") or "unknown"),
-            Passivbot._status_materiality_number(info.get("allowance")) is not None
-            and Passivbot._status_materiality_number(info.get("allowance")) < 0.0,
-            tuple(sorted((info.get("override_loss_allowance_fractions") or {}).items())),
-            str(info.get("next_symbol") or ""),
-            info.get("next_target_price"),
-            info.get("next_target_price_offset_fraction"),
-            info.get("next_unstuck_trigger_price_offset_fraction"),
-        )
-
-    def _unstuck_status_operator_decision(
-        self, side_infos: dict[str, dict], now_ms: int
-    ) -> tuple[bool, bool]:
-        baselines = getattr(self, "_unstuck_operator_visible_baseline_by_pside", None)
-        if not isinstance(baselines, dict):
-            baselines = {}
-            self._unstuck_operator_visible_baseline_by_pside = baselines
-        visible_ms = getattr(self, "_unstuck_operator_visible_ms_by_pside", None)
-        if not isinstance(visible_ms, dict):
-            visible_ms = {}
-            self._unstuck_operator_visible_ms_by_pside = visible_ms
-        heartbeat_interval_ms = int(
-            getattr(
-                self,
-                "_unstuck_unchanged_info_log_interval_ms",
-                self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS,
-            )
-        )
-        operator_visible = False
-        material_changed = False
-        for pside, info in sorted(side_infos.items()):
-            current = dict(info or {})
-            qualitative = self._unstuck_status_qualitative_signature(current)
-            allowance = self._status_materiality_number(current.get("allowance"))
-            baseline = baselines.get(pside)
-            changed = baseline is None or (
-                qualitative != baseline["qualitative"]
-                or self._unstuck_allowance_materially_changed(
-                    baseline["allowance"], allowance
-                )
-            )
-            heartbeat = (
-                not changed
-                and now_ms - int(visible_ms.get(pside, 0) or 0) >= heartbeat_interval_ms
-            )
-            if changed or heartbeat:
-                baselines[pside] = {
-                    "qualitative": qualitative,
-                    "allowance": allowance,
-                }
-                visible_ms[pside] = now_ms
-                operator_visible = True
-                material_changed = material_changed or changed
-        return operator_visible, material_changed
-
     def _maybe_log_unstuck_status(self) -> None:
-        """Log unstuck status on meaningful change, with an hourly INFO heartbeat."""
-        now_ms = utc_ms()
-        if (now_ms - self._unstuck_last_log_ms) < self._unstuck_log_interval_ms:
-            return
-        self._unstuck_last_log_ms = now_ms
-        (
-            side_infos,
-            parts,
-            _signature,
-        ) = self._get_unstuck_status_snapshot_parts_and_signature()
-        operator_visible, status_changed = self._unstuck_status_operator_decision(
-            side_infos, now_ms
-        )
-        if operator_visible and not Passivbot._live_event_console_available(self):
-            logging.info("[unstuck] %s", " | ".join(parts))
-        self._emit_unstuck_status_event(
-            side_statuses=side_infos,
-            changed=status_changed,
-            operator_visible=operator_visible,
-        )
-
-    def _maybe_log_unstuck_selection(
-        self,
-        *,
-        symbol: str,
-        pside: str,
-        entry_price: float,
-        current_price: float,
-        allowance: float,
-    ) -> None:
-        """Log unstuck coin selection on change, with an hourly INFO heartbeat."""
-        now_ms = utc_ms()
-        signature = (symbol, pside, round(float(allowance), 2))
-        last_signature = getattr(self, "_unstuck_last_selection_signature", None)
-        changed = signature != last_signature
-        last_info_ms = int(getattr(self, "_unstuck_last_selection_info_ms", 0) or 0)
-        if (
-            signature == last_signature
-            and (now_ms - last_info_ms) < self._unstuck_unchanged_info_log_interval_ms
-        ):
-            return
-        if entry_price > 0 and current_price > 0:
-            price_change_percent = (current_price / entry_price - 1.0) * 100
-            sign = "+" if price_change_percent >= 0 else ""
-        else:
-            price_change_percent = 0.0
-            sign = ""
-        coin = symbol.split("/")[0] if "/" in symbol else symbol
-        if not Passivbot._live_event_console_available(self):
-            logging.info(
-                "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-                coin,
-                pside,
-                entry_price,
-                current_price,
-                sign,
-                price_change_percent,
-                allowance,
-            )
-        self._emit_unstuck_selection_event(
-            symbol=symbol,
-            pside=pside,
-            entry_price=entry_price,
-            current_price=current_price,
-            allowance=allowance,
-            changed=changed,
-        )
-        self._unstuck_last_selection_signature = signature
-        self._unstuck_last_selection_info_ms = now_ms
+        unstuck_diagnostics.maybe_log_status(self)
 
     def _active_trailing_position_sides(self) -> list[tuple[str, str, dict]]:
         out: list[tuple[str, str, dict]] = []
@@ -3389,6 +3130,7 @@ class Passivbot:
             boot_stage = "publish_startup_ready"
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
+            run_diagnostic_step("startup unstuck status", lambda: self._maybe_log_unstuck_status())
             ready_ts = utc_ms()
             ready_data = {"debug_mode": bool(self.debug_mode)}
             if live_event_debug_profiles:
@@ -15408,22 +15150,6 @@ class Passivbot:
         """Whether configured Rust unstuck logic consumes validated PnL inputs."""
         return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
-    def _calc_orchestrator_unstuck_allowance_for_symbol(
-        self, pside: str, symbol: str, realized_memory: dict
-    ) -> float:
-        loss_fraction = float(self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0)
-        twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
-        if loss_fraction <= 0.0 or twel <= 0.0:
-            return 0.0
-        return float(
-            pbr.calc_auto_unstuck_allowance_v9(
-                self.get_raw_balance(),
-                loss_fraction,
-                twel,
-                float(realized_memory["unstuck"]["drawdown"]),
-            )
-        )
-
     async def _load_orchestrator_ema_bundle(
         self, symbols: list[str], modes: dict[str, dict[str, str]]
     ) -> tuple[
@@ -18204,6 +17930,10 @@ class Passivbot:
             output_hash=output_hash,
             remote_call_id=rust_call_id,
         )
+        run_diagnostic_step(
+            "observe native unstuck decision",
+            lambda: unstuck_diagnostics.observe(self, diagnostics, idx_to_symbol),
+        )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -18255,28 +17985,6 @@ class Passivbot:
                 execution_priority,
             )
             ideal_orders.setdefault(symbol, []).append(tup)
-
-        # Log unstuck coin selection
-        for o in orders:
-            order_type_str = o.get("order_type", "")
-            if "close_unstuck" in order_type_str:
-                symbol = idx_to_symbol.get(int(o.get("symbol_idx", -1)))
-                if symbol:
-                    pside = "long" if "long" in order_type_str else "short"
-                    pos = self.positions.get(symbol, {}).get(pside, {})
-                    entry_price = pos.get("price", 0.0)
-                    current_price = last_prices.get(symbol, 0.0)
-                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
-                        pside, symbol, realized_memory
-                    )
-                    self._maybe_log_unstuck_selection(
-                        symbol=symbol,
-                        pside=pside,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        allowance=allowance,
-                    )
-                break  # Only one unstuck order per cycle
 
         # Log EMA gating for symbols in normal mode with no position and no initial entry
         self._log_ema_gating(ideal_orders, m1_close_emas, last_prices, symbols)
