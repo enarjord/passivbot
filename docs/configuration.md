@@ -196,6 +196,15 @@ both does not divide one account-wide budget. Either side object may be omitted 
 should remain disabled. New schema defaults use one common numerical starter profile, retaining
 the former long defaults; activation defaults false independently for each side.
 
+For authored profiles, use `global` when the same base settings are intended for reuse across
+directions, with side blocks containing activation and intentional differences. Keep a profile
+under `long` or `short` when those settings belong specifically to that direction. Both layouts
+are valid for a one-sided config: enabling the other side later inherits the common profile in
+the first layout and schema/global defaults in the second. Moving values between these scopes
+changes which future edits and global optimizer bounds affect a side; it is an explicit
+refactoring rather than redundant-value removal. See the optional
+[config refactoring flags](tools.md#optional-directional-refactoring).
+
 ### Side Activation
 
 `bot.long.enabled` and `bot.short.enabled` are strict booleans, each defaulting to `false`.
@@ -223,7 +232,7 @@ uses `live.modes.disapproved_position`.
 
 Compact and resolved-source exports retain explicit pins and omission. Expanded inspection
 shows effective values and their sources separately; it does not turn inherited values into pins.
-Released-v8 migration reports both sides as enabled while preserving frozen old
+Released-v8 migration by default reports both sides as enabled while preserving frozen old
 parameters, capacities, modes and search ranges. Zero capacity still prevents entries,
 but no longer implicitly suppresses held-position management through manual mode.
 
