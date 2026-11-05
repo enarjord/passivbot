@@ -6,17 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Leave unrecorded internal candle outages unavailable instead of interpreting
-  missing gap metadata as no-trade history. Keep bounded provisional continuity
-  explicit, and reject malformed KuCoin source rows as no-trade evidence.
-- Break periodic candle-cache health counts down by timeframe so hourly rollover
-  gaps remain distinguishable from missing one-minute history.
-
-- Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
-  retries, and lock contention leave missing inputs scoped to their consumers
-  instead of indefinitely delaying ordinary planning. Preserve completed pages
-  for retry and keep nonblocking fetch-lock ownership cancellation-safe.
-
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and
@@ -69,6 +58,17 @@ since the latest release tag; these features may already be available when insta
   acquisition without relaxing coverage checks or offline behavior. Simulation listing boundaries
   now require independent venue/contract launch metadata rather than a first observed candle;
   versioned preparation and offline proofs prevent reuse of older weak boundary attestations.
+
+- Leave unrecorded internal candle outages unavailable instead of interpreting
+  missing gap metadata as no-trade history. Keep bounded provisional continuity
+  explicit, and reject malformed KuCoin source rows as no-trade evidence.
+- Break periodic candle-cache health counts down by timeframe so hourly rollover
+  gaps remain distinguishable from missing one-minute history.
+
+- Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
+  retries, and lock contention leave missing inputs scoped to their consumers
+  instead of indefinitely delaying ordinary planning. Preserve completed pages
+  for retry and keep nonblocking fetch-lock ownership cancellation-safe.
 
 - Add offline portable data-cache snapshots with verified artifact transfer, catalog path relocation, conflict refusal, and rollback-protected imports.
 

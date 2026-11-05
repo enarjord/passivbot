@@ -6112,3 +6112,49 @@ async def test_kucoin_rejected_minute_is_not_verified_no_trade_omission(tmp_path
     assert rows["ts"].tolist() == [100 * minute, 102 * minute]
     gaps = cm._get_known_gaps_in_range("SPARSE/USDT:USDT", 101 * minute, 101 * minute)
     assert gaps and all(gap["reason"] == "fetch_failed" for gap in gaps)
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_cache_hole_repairs_from_real_source_and_recovers_ema(tmp_path):
+    minute = 60_000
+    requests = []
+
+    class RecoveredSource:
+        id = "bitunix"
+
+        async def fetch_ohlcv(self, symbol, *, since, limit, **kwargs):
+            requests.append(since)
+            return [
+                [i * minute, i, i + 1, i - 1, i, 3.0]
+                for i in range(max(100, since // minute), min(110, since // minute + limit))
+            ]
+
+    cm = CandlestickManager(
+        exchange=RecoveredSource(), exchange_name="bitunix", cache_dir=str(tmp_path),
+        archive_enabled=False,
+    )
+    cm._now_ms_callback = lambda: 110 * minute + 1000
+    symbol = "REPAIR/USDT:USDT"
+    original = np.array([
+        (100 * minute, 100, 101, 99, 100, 3),
+        (109 * minute, 109, 110, 108, 109, 3),
+    ], dtype=CANDLE_DTYPE)
+    cm._persist_batch(symbol, original, timeframe="1m", merge_cache=True)
+    assert cm._get_known_gaps_in_range(symbol, 100 * minute, 109 * minute) == []
+    assert math.isnan(await cm.get_latest_ema_close(
+        symbol, 10.0, allow_remote_fetch=False,
+        allow_provisional_internal_gaps=False,
+    ))
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+    assert requests == []
+
+    value = await cm.get_latest_ema_close(
+        symbol, 10.0, allow_remote_fetch=True,
+        allow_provisional_internal_gaps=False,
+    )
+    assert math.isfinite(value)
+    assert any(since <= 101 * minute for since in requests)
+    assert cm._cache[symbol]["ts"].tolist() == [i * minute for i in range(100, 110)]
+    assert cm._cache[symbol]["bv"].tolist() == [3.0] * 10
+    assert not cm._synthetic_timestamps.get(symbol)
+    assert cm._unverified_candle_gap_ranges(symbol, 100 * minute, 109 * minute) == []
