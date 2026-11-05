@@ -909,6 +909,7 @@ class Owner:
                         loop_start_ms=started_ms,
                         timings_ms=timings,
                         execution_owner="hsl",
+                        ordinary_executed=plan is not None,
                         ordinary_pending=self._ordinary is not None
                         and not self._ordinary.done(),
                         ordinary_prepare_elapsed_ms=ordinary_elapsed_ms,

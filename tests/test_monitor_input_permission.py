@@ -530,3 +530,73 @@ async def test_real_fake_ordinary_compute_has_complete_immutable_receipts(tmp_pa
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["accepted_empty", "accepted_sub_ms", "rejected", "absent"])
+async def test_cycle_completion_records_ordinary_path_separately_from_zero_timing(monkeypatch, case):
+    import asyncio
+    from dataclasses import replace
+    import time
+    import utils
+    from live import hsl_live
+    from test_hsl_runtime import NOW, bot as make_bot, quotes
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
+    monkeypatch.setattr(time, "perf_counter", lambda: 10.)
+    bot = make_bot("coin")
+    ledger = bot._ensure_freshness_ledger()
+    ledger.stamp("open_orders", now_ms=NOW - 200)
+    bot.freshness_ledger = ledger
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {"long": set(bot.positions), "short": set()}
+    bot._begin_live_event_cycle = lambda **_: setattr(bot, "_live_event_current_cycle_id", "cy_test")
+    events, executed = [], []
+    bot._emit_live_event = lambda kind, **data: events.append((kind, data))
+    owner = hsl_live.Owner(bot)
+    wave = replace(owner.capture(quotes()), ordinary_receipts=owner.ordinary_receipts())
+    assert owner._account_matches(wave, NOW)  # Use real admission/immutable facts.
+    owner.poll_inputs = owner.remember_position = owner.schedule_history = lambda: None
+    owner.schedule_sources = owner.schedule_account_reporting = lambda: None
+    async def protect(**kwargs):
+        return False
+    async def refresh(**kwargs):
+        return True
+    async def execute(cancels, creates):
+        executed.append((cancels, creates))
+        return None  # A returned execution path does not imply acknowledgement/writes.
+    async def pending():
+        await asyncio.Event().wait()
+    marker = object()
+    creates = [{"symbol": next(iter(bot.positions))}] if case == "accepted_sub_ms" else []
+    async def prepared():
+        return [], creates, marker, wave
+    owner.protect, owner._ordinary_plan = protect, pending
+    bot.refresh_protective_authoritative_state = refresh
+    bot.execute_order_plan_to_exchange = execute
+    if case != "absent":
+        owner._ordinary = asyncio.create_task(prepared())
+        await owner._ordinary
+    if case == "rejected":
+        bot._account_invalidation_generation = 1
+    try:
+        result = await owner.cycle()
+        data = [event["data"] for kind, event in events if kind == EventTypes.CYCLE_COMPLETED]
+        assert len(data) == 1
+        expected = case.startswith("accepted")
+        assert data[0]["ordinary_executed"] is result["ordinary_executed"] is expected
+        assert data[0]["timings_ms"]["ordinary_execute"] == 0
+        assert bool(executed) is expected
+        assert data[0]["execution_owner"] == "hsl"
+    finally:
+        owner._ordinary.cancel()
+        await asyncio.gather(owner._ordinary, return_exceptions=True)
+
+
+def test_other_execution_owner_omits_optional_ordinary_path_flag():
+    from live.event_emitters import emit_live_cycle_completed
+    events = []
+    bot = SimpleNamespace(_emit_live_event=lambda kind, **data: events.append(data))
+    emit_live_cycle_completed(bot, cycle_id="cy_test", loop_start_ms=1000, timings_ms={})
+    assert "ordinary_executed" not in events[0]["data"]
