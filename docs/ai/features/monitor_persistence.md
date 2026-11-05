@@ -22,6 +22,8 @@ malformed or non-finite values are `null`, never zero placeholders. Capture age 
 last prepared bundle, not independent proof of candle freshness. Missing inputs omit dependent
 native trailing calculations and retain explicit `entry_diagnostic_status` and
 `close_diagnostic_status`; diagnostic failure cannot discard unrelated snapshot sections.
+The snapshot-based trailing diagnostic tool rejects unavailable/non-finite indicator imports
+instead of replacing them with manual-wizard zeros; genuine observed log-range zeros remain valid.
 `market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
 readiness flag; it does not grant order permission.
 

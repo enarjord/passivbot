@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 from typing import Any, Mapping, Optional
 
@@ -582,6 +583,19 @@ def snapshot_payload(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
     return snapshot
 
 
+def _snapshot_indicator(value: Any, field: str, *, positive: bool = False) -> float:
+    """Snapshot imports cannot turn an unavailable observed input into a wizard default."""
+    try:
+        if value is None or isinstance(value, bool):
+            raise ValueError("unavailable")
+        result = float(value)
+        if not math.isfinite(result) or result < 0.0 or (positive and result == 0.0):
+            raise ValueError("unavailable")
+        return result
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"snapshot indicator unavailable: {field}; obtain a ready snapshot or use wizard mode") from None
+
+
 def build_trailing_inputs_from_snapshot(
     config: Mapping[str, Any],
     snapshot: Mapping[str, Any],
@@ -625,6 +639,21 @@ def build_trailing_inputs_from_snapshot(
         raise KeyError(
             f"snapshot missing market.c_mult for {symbol}; restart the bot with a newer monitor snapshot or use wizard mode"
         )
+    h1_log_range = _snapshot_indicator(
+        h1_by_side[pside], f"market.entry_log_range_ema_1h.{pside}"
+    )
+    observed_inputs = market_entry.get("strategy_inputs", {})
+    observed_side = observed_inputs.get(pside, {}) if isinstance(observed_inputs, Mapping) else {}
+    observed_values = {}
+    if isinstance(observed_side, Mapping):
+        for metric in ("m1_log_range", "h1_log_range"):
+            if metric not in observed_side:
+                continue
+            row = observed_side[metric]
+            field = f"market.strategy_inputs.{pside}.{metric}"
+            if not isinstance(row, Mapping) or row.get("status") != "available":
+                raise ValueError(f"snapshot indicator unavailable: {field}; obtain a ready snapshot or use wizard mode")
+            observed_values[metric] = _snapshot_indicator(row.get("value"), field)
     symbol_trailing = trailing.get(symbol, {}) if isinstance(trailing, Mapping) else {}
     side_trailing = symbol_trailing.get(pside, {}) if isinstance(symbol_trailing, Mapping) else {}
     if not isinstance(side_trailing, Mapping):
@@ -656,10 +685,12 @@ def build_trailing_inputs_from_snapshot(
             _float(market_entry.get("min_cost")),
         ),
         "c_mult": _float(market_entry.get("c_mult")),
-        "ema_lower": _float(side_band.get("lower")),
-        "ema_upper": _float(side_band.get("upper")),
-        "h1_log_range_ema": _float(h1_by_side.get(pside)),
+        "ema_lower": _snapshot_indicator(side_band.get("lower"), f"market.ema_bands.{pside}.lower", positive=True),
+        "ema_upper": _snapshot_indicator(side_band.get("upper"), f"market.ema_bands.{pside}.upper", positive=True),
+        "h1_log_range_ema": h1_log_range,
     }
+    if "m1_log_range" in observed_values:
+        out["m1_log_range_ema"] = observed_values["m1_log_range"]
     out.update(normalize_trailing_extrema(extrema_source))
     for key in sorted(set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS)):
         if key == "wallet_exposure_limit_ratio":
