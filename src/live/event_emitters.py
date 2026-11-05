@@ -4235,6 +4235,9 @@ def emit_execution_create_filter_event(
     data: dict | None = None,
 ) -> bool:
     """Emit a bounded event for create orders filtered before exchange write."""
+    from live.ordinary_diagnostics import observe_create_filter
+    observe_create_filter(bot, event_type=event_type, reason_code=reason_code,
+                          order_count=order_count, wave=wave, data=data, now_ms=utc_ms())
     try:
         order_wave_id, _action_id = _execution_event_ids(
             wave, action="create", index=None

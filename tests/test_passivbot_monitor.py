@@ -6808,6 +6808,12 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         def bot_value(self, pside, key):
             return self._coin_bot_values[(pside, key)]
 
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {
+                "log_range_ema_span_minutes": self._coin_bot_values[(pside, "entry_log_range_ema_span_minutes")],
+                "log_range_ema_span_1h_candles": self._coin_bot_values[(pside, "entry_log_range_ema_span_1h_candles")],
+            }
+
         def bp(self, pside, key, symbol=None):
             return self._coin_bot_values[(pside, key)]
 
