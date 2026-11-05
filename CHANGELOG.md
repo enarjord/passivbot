@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Bound live EMA and warmup remote-candle acquisition passes so slow pagination,
+  retries, and lock contention leave missing inputs scoped to their consumers
+  instead of indefinitely delaying ordinary planning. Preserve completed pages
+  for retry and keep nonblocking fetch-lock ownership cancellation-safe.
+
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and

@@ -47,7 +47,8 @@ import sys
 import time
 import zlib
 import atexit
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -1440,7 +1441,10 @@ class CandlestickManager:
         remaining = max(0.0, float(seconds))
         while remaining > 0.0:
             self._raise_if_shutdown_requested(stage)
+            budget_remaining = self._remote_fetch_time_remaining()
             chunk = min(remaining, 0.25)
+            if budget_remaining is not None:
+                chunk = min(chunk, budget_remaining)
             await asyncio.sleep(chunk)
             remaining -= chunk
         self._raise_if_shutdown_requested(stage)
@@ -1673,12 +1677,56 @@ class CandlestickManager:
         except Exception:
             return
 
+    @contextmanager
+    def remote_fetch_budget(self, seconds: float):
+        """Bound a live caller's remote work while keeping local reads available.
+
+        Child tasks inherit the same deadline. Nested budgets may shorten it but
+        never restart it. No deadline is installed for ordinary historical tools.
+        """
+        seconds = float(seconds)
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("remote candle budget must be finite and positive")
+        variable = getattr(self, "_remote_fetch_deadline", None)
+        if variable is None:
+            variable = self._remote_fetch_deadline = ContextVar(
+                "candle_remote_fetch_deadline", default=None
+            )
+        previous = variable.get()
+        deadline = time.monotonic() + seconds
+        if previous is not None:
+            deadline = min(deadline, previous)
+        token = variable.set(deadline)
+        try:
+            yield
+        finally:
+            variable.reset(token)
+            if time.monotonic() >= deadline:
+                self._throttled_warning(
+                    "remote_fetch_budget_expired",
+                    "remote_fetch_budget_expired",
+                    budget_seconds=seconds,
+                    action="defer_unavailable_inputs",
+                )
+
+    def _remote_fetch_time_remaining(self) -> float | None:
+        variable = getattr(self, "_remote_fetch_deadline", None)
+        deadline = None if variable is None else variable.get()
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("live candle acquisition budget expired")
+        return remaining
+
     async def _release_lock(
         self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
     ) -> None:
         """Release a portalocker lock safely and refresh its metadata."""
         try:
-            await asyncio.to_thread(lock.release)
+            # Unlocking is nonblocking. Keep acquisition/release in the owning
+            # task so cancellation cannot leave an unregistered OS lock behind.
+            lock.release()
         except portalocker.exceptions.LockException as exc:
             self._log(
                 "warning",
@@ -2442,9 +2490,15 @@ class CandlestickManager:
         while True:
             attempt += 1
             self._raise_if_shutdown_requested("fetch_lock_wait")
+            remaining_budget = self._remote_fetch_time_remaining()
+            if remaining_budget is not None:
+                deadline = min(deadline, time.monotonic() + remaining_budget)
             lock_obj = portalocker.Lock(lock_path, timeout=0, fail_when_locked=True)
             try:
-                await asyncio.to_thread(lock_obj.acquire)
+                # timeout=0/fail_when_locked makes this a single nonblocking
+                # attempt. A worker thread could acquire after caller cancellation
+                # and leak the lock before ownership is registered.
+                lock_obj.acquire()
                 acquired_at = time.time()
                 self._touch_lockfile(
                     lock_path,
@@ -2508,7 +2562,10 @@ class CandlestickManager:
                     attempt=attempt,
                     error_type=bounded_exception_type(exc),
                 )
-                await self._sleep_interruptible(backoff, stage="fetch_lock_wait")
+                await self._sleep_interruptible(
+                    min(backoff, max(0.0, deadline - time.monotonic())),
+                    stage="fetch_lock_wait",
+                )
                 backoff = min(backoff * 2.0, self._lock_backoff_max)
 
     @staticmethod
@@ -5414,6 +5471,7 @@ class CandlestickManager:
         tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
         for attempt in range(max_attempts):
             self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
+            self._remote_fetch_time_remaining()
             # Wait for global rate limit backoff if one is active
             await self._apply_rate_limit_backoff()
             try:
@@ -5478,13 +5536,23 @@ class CandlestickManager:
                     attempt=attempt + 1,
                     param_keys=_bounded_remote_fetch_param_keys(params),
                 )
-                if getattr(self, "_net_sem", None) is not None:
-                    async with self._net_sem:  # type: ignore[attr-defined]
-                        # Re-check rate limit after acquiring semaphore.
-                        # Tasks may have been queued before a 429 set the
-                        # global backoff; honour it now instead of firing
-                        # immediately after the semaphore unblocks.
-                        await self._apply_rate_limit_backoff()
+                remaining_budget = self._remote_fetch_time_remaining()
+                async with asyncio.timeout(remaining_budget):
+                    if getattr(self, "_net_sem", None) is not None:
+                        async with self._net_sem:  # type: ignore[attr-defined]
+                            # Re-check rate limit after acquiring semaphore.
+                            # Tasks may have been queued before a 429 set the
+                            # global backoff; honour it now instead of firing
+                            # immediately after the semaphore unblocks.
+                            await self._apply_rate_limit_backoff()
+                            res = await ex.fetch_ohlcv(
+                                symbol,
+                                timeframe=tf_norm,
+                                since=since_ms,
+                                limit=request_limit,
+                                params=params,
+                            )
+                    else:
                         res = await ex.fetch_ohlcv(
                             symbol,
                             timeframe=tf_norm,
@@ -5492,14 +5560,6 @@ class CandlestickManager:
                             limit=request_limit,
                             params=params,
                         )
-                else:
-                    res = await ex.fetch_ohlcv(
-                        symbol,
-                        timeframe=tf_norm,
-                        since=since_ms,
-                        limit=request_limit,
-                        params=params,
-                    )
                 first_ts = None
                 last_ts = None
                 if res:
@@ -5538,6 +5598,7 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
+                self._remote_fetch_time_remaining()
                 last_exc = e
                 raw_err_type = type(e).__name__
                 err_type = bounded_exception_type(e)
@@ -6241,6 +6302,7 @@ class CandlestickManager:
 
         while since < end_excl:
             self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
+            self._remote_fetch_time_remaining()
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
             probe_limit = None
             if (

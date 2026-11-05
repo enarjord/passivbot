@@ -311,3 +311,153 @@ async def test_stalled_refresh_preserves_pages_releases_lock_and_ws_can_extend(t
     ) == 1
     assert cm.get_last_final_ts(symbol) == 998 * minute
     assert cm._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_live_fetch_budget_cancels_fetch_releases_lock_and_allows_retry(tmp_path):
+    exchange = FakeExchange()
+    exchange._sleep = 10.0
+    cm = CandlestickManager(
+        exchange=exchange, exchange_name="fake", cache_dir=str(tmp_path),
+        default_window_candles=5, archive_enabled=False,
+    )
+    with cm.remote_fetch_budget(0.02):
+        with pytest.raises(TimeoutError, match="budget expired"):
+            await cm.refresh("BTC/USDT:USDT")
+    assert cm._held_fetch_locks == {}
+
+    # The deadline is caller-owned; a subsequent pass can acquire and fetch.
+    exchange._sleep = 0.0
+    await asyncio.wait_for(cm.refresh("BTC/USDT:USDT"), timeout=1.0)
+    assert cm._held_fetch_locks == {}
+    assert cm.get_last_final_ts("BTC/USDT:USDT") is not None
+
+
+@pytest.mark.asyncio
+async def test_live_fetch_budget_bounds_contended_lock_wait(tmp_path):
+    holder = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    waiter = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    key = ("BTC/USDT:USDT", "1m")
+    async with holder._acquire_fetch_lock(*key):
+        started = time.monotonic()
+        with waiter.remote_fetch_budget(0.02):
+            with pytest.raises(TimeoutError):
+                async with waiter._acquire_fetch_lock(*key):
+                    pytest.fail("contender acquired the holder's lock")
+        assert time.monotonic() - started < 0.25
+        assert key in holder._held_fetch_locks
+    assert waiter._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_live_budget_shared_by_children_preserves_cache_reads_after_expiry(tmp_path):
+    cm = CandlestickManager(
+        exchange=FakeExchange(), exchange_name="fake", cache_dir=str(tmp_path),
+        default_window_candles=5, archive_enabled=False,
+    )
+    minute = 60_000
+    cm._now_ms_callback = lambda: 1000 * minute + 1000
+    symbol = "CACHED/USDT:USDT"
+    rows = np.array([(i * minute, 1, 1, 1, 1, 1) for i in range(995, 1000)], dtype=CANDLE_DTYPE)
+    cm._cache[symbol] = rows.copy()
+
+    async def after_expiry():
+        await asyncio.sleep(0.03)
+        with pytest.raises(TimeoutError):
+            await cm._ccxt_fetch_ohlcv_once("MISSING/USDT:USDT", 995 * minute, 5)
+        # A later/narrower scope must not renew the inherited exhausted budget.
+        with cm.remote_fetch_budget(10.0):
+            with pytest.raises(TimeoutError):
+                cm._remote_fetch_time_remaining()
+        return await cm.get_candles(
+            symbol, start_ts=995 * minute, end_ts=999 * minute,
+            allow_remote_fetch=False, standardize=False,
+        )
+
+    with cm.remote_fetch_budget(0.01):
+        task = asyncio.create_task(after_expiry())
+        result = await task
+    np.testing.assert_array_equal(result, rows)
+    assert cm._remote_fetch_time_remaining() is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_at_lock_acquisition_releases_for_next_owner(tmp_path, monkeypatch):
+    import portalocker
+
+    cm = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    successor = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    original_acquire = portalocker.Lock.acquire
+    loop = asyncio.get_running_loop()
+    owner = None
+    cancel_once = True
+
+    def acquire_then_cancel(lock, *args, **kwargs):
+        nonlocal cancel_once
+        result = original_acquire(lock, *args, **kwargs)
+        if cancel_once:
+            cancel_once = False
+            loop.call_soon_threadsafe(owner.cancel)
+        return result
+
+    monkeypatch.setattr(portalocker.Lock, "acquire", acquire_then_cancel)
+    key = ("BTC/USDT:USDT", "1m")
+
+    async def hold():
+        async with cm._acquire_fetch_lock(*key):
+            await asyncio.sleep(10)
+
+    owner = asyncio.create_task(hold())
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+    assert cm._held_fetch_locks == {}
+    with successor.remote_fetch_budget(0.1):
+        async with successor._acquire_fetch_lock(*key):
+            assert key in successor._held_fetch_locks
+    assert successor._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_live_timeout_preserves_successful_pages_for_restart(tmp_path):
+    minute = 60_000
+
+    class SlowSecondPage(FakeExchange):
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_ohlcv(self, symbol, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                await asyncio.sleep(10)
+            return [[i * minute, 1, 1, 1, 1, 1] for i in range(995, 998)]
+
+    cm = CandlestickManager(
+        exchange=SlowSecondPage(), exchange_name="fake", cache_dir=str(tmp_path),
+        default_window_candles=5, archive_enabled=False,
+    )
+    cm._now_ms_callback = lambda: 1000 * minute + 1000
+    symbol = "PARTIAL/USDT:USDT"
+    with cm.remote_fetch_budget(0.02):
+        with pytest.raises(TimeoutError):
+            await cm.refresh(symbol)
+    assert cm._held_fetch_locks == {}
+    assert cm.get_last_final_ts(symbol) == 997 * minute
+
+    restarted = CandlestickManager(
+        exchange=None, exchange_name="fake", cache_dir=str(tmp_path),
+        default_window_candles=5, archive_enabled=False,
+    )
+    restarted._now_ms_callback = cm._now_ms_callback
+    rows = await restarted.get_candles(
+        symbol, start_ts=995 * minute, end_ts=999 * minute,
+        allow_remote_fetch=False, standardize=False,
+    )
+    assert rows["ts"].tolist() == [i * minute for i in range(995, 998)]

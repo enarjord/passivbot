@@ -509,6 +509,30 @@ The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
 
+### Live acquisition deadlines
+
+Ordinary live EMA preparation shares a ten-second remote acquisition budget across
+all symbols and metric families. Warmup shares ten seconds per timeframe pass,
+or 45 seconds for a background warmup pass. Child tasks inherit the caller's
+monotonic deadline; nested scopes cannot renew it. Network requests, request
+spacing/backoff, pagination, and fetch-lock waits honor the remaining budget.
+Expired acquisition raises `TimeoutError` through existing per-input availability
+handling. Complete cache reads remain available after expiry; a missing member
+stays in the planning cohort with explicit missing inputs for Rust's consumer and
+ranking policy. No neutral value, partial ranking universe, or candle is invented.
+
+Pages persisted before timeout remain useful to later reads. File-lock acquisition
+and release are nonblocking operations in the owning task, with no worker-thread
+handoff that can complete acquisition after cancellation. Historical callers keep
+their existing unbounded acquisition policy unless they explicitly install a budget.
+Protective HSL scheduling retains its independent current-fact requirements.
+
+Trailing reconstruction still requires a completed candle beginning strictly after
+the latest fill minute. Before that first source candle finalizes, a one-to-two
+minute wait can be intrinsic to the completed-bar contract. Missing that reset
+boundary must not be bridged by a projected candle; retrieval delay after finalization
+is a separate availability problem.
+
 ### Live EMA preparation pacing
 
 Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel

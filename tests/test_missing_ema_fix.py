@@ -3553,3 +3553,53 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     assert bot._orchestrator_unilateralness_unavailable[names[1]]["forager"] == [1.0]
     missing = None
     assert await selection() == [1]
+
+
+@pytest.mark.asyncio
+async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planning_bundle(tmp_path):
+    import passivbot as pb_mod
+
+    slow, ready = "SLOW/USDT:USDT", "READY/USDT:USDT"
+    symbols = [slow, ready]
+    bot = _BundleReproBot(slow, close_mode="value")
+    bot.PB_modes = {
+        "long": {symbol: "normal" for symbol in symbols},
+        "short": {symbol: "manual" for symbol in symbols},
+    }
+    bot.positions = {
+        symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
+        for symbol in symbols
+    }
+    # Held symbols are prepared first. Use that order to show that an expired
+    # remote budget does not skip the later symbol's valid local values.
+    bot.positions[slow]["long"]["size"] = 1.0
+    bot._get_fetch_delay_seconds = lambda: 1.0
+    manager = _make_cm(tmp_path)
+    budgets = []
+
+    def budget(seconds):
+        budgets.append(seconds)
+        return manager.remote_fetch_budget(0.01)
+
+    bot.cm.remote_fetch_budget = budget
+    attempted = set()
+
+    async def symbol_close(symbol, span, **_kwargs):
+        attempted.add(symbol)
+        if symbol == slow:
+            await asyncio.sleep(0.02)
+            manager._remote_fetch_time_remaining()
+        # Local complete input remains usable even when remote time is spent.
+        return 123.0
+
+    bot.cm.get_latest_ema_close = symbol_close
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, bot.PB_modes)
+    assert budgets == [10.0]
+    assert attempted == set(symbols)
+    assert set(result[0]) == set(symbols)
+    assert result[0][slow] == {}
+    assert set(result[0][ready].values()) == {123.0}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {slow}
+    # An unavailable member stays in the original cohort. Rust receives explicit
+    # absence and retains its existing ranking/consumer readiness authority.
+    assert bot._orchestrator_ema_unavailable_symbols == set()
