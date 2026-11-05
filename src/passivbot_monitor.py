@@ -1205,6 +1205,8 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             if isinstance(ema_bands, dict):
                 side_payload["ema_bands"] = deepcopy(ema_bands)
         out["sides"][pside] = side_payload
+    from live.unstuck_diagnostics import snapshot
+    out["decision"] = snapshot(self, utc_ms())
     return out
 
 

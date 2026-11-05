@@ -103,7 +103,9 @@ Default INFO console admission is based on operator value, not merely on the pro
 - Emit one periodic healthy summary per bot at most every 15 minutes. Degradation and recovery are
   immediate and do not wait for that cadence.
 - Emit held-position trailing, unstuck, HSL, WEL, and TWEL state on transition or material threshold
-  movement, not on every planning cycle.
+  movement, not on every planning cycle. Unstuck additionally prints an initial observation and a
+  20-minute unchanged reminder; candidate/numeric churn is coalesced over five minutes. Its detailed
+  materiality and plan-age rules are in `features/live_events.md`.
 
 The structured event remains durable even when its console projection is suppressed. Suppression
 must not alter event production, trading decisions, counters, or monitor history.
