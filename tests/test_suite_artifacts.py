@@ -1,4 +1,5 @@
 from config.schema import get_expanded_config_prototype
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -122,6 +123,180 @@ def test_suite_setup_uses_union_of_actual_scenario_coins(prepared, monkeypatch):
     assert coins == ["BTC", "XMR"]
     assert sources == ["combined"]
     assert [item["data"]["combined"]["coins"] for item in inputs] == [["BTC"], ["XMR"]]
+
+
+@pytest.mark.asyncio
+async def test_partial_combined_setup_fingerprints_executed_inputs(prepared, monkeypatch):
+    import backtest
+    from tools import iterative_backtester
+
+    config, combined, scenario = prepared
+    combined.timestamps += 12 * 60 * 60_000
+    combined.coin_exchange = {coin: "bybit" for coin in combined.coins}
+    for coin in combined.coins:
+        combined.mss[coin]["exchange"] = "bybit"
+    binance = deepcopy(combined)
+    binance.exchange = "binance"
+    binance.available_exchanges = ["binance"]
+    binance.coin_exchange = {coin: "binance" for coin in binance.coins}
+    binance.hlcvs *= 2
+    for coin in binance.coins:
+        binance.mss[coin]["exchange"] = "binance"
+    datasets = {"combined": combined, "binance": binance}
+    available = suite._compute_dataset_available_exchanges(datasets)
+
+    monkeypatch.setattr(
+        suite, "apply_scenario", lambda *args, **kwargs: (deepcopy(config), ["BTC"])
+    )
+    inputs, _, _, sources = suite._suite_session_inputs(
+        [scenario], config, datasets, combined.coins, [], available,
+        set(combined.coins), {}, combined.coins, [],
+    )
+    executed = {}
+
+    def build(hlcvs, mss, cfg, exchange, btc_prices, timestamps):
+        executed[exchange] = suite.materialized_dataset_identity(
+            cfg["backtest"]["coins"][exchange], hlcvs, btc_prices, timestamps, mss
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setattr(backtest, "build_backtest_payload", build)
+    monkeypatch.setattr(backtest, "execute_backtest", lambda *args: ([], [], {}))
+    monkeypatch.setattr(iterative_backtester, "combine_analyses", lambda analyses: {})
+    result = await suite.run_backtest_scenario(
+        scenario, config, datasets, combined.coins, [], available,
+        set(combined.coins), None, True,
+    )
+
+    assert sources == ["combined"]
+    assert list(result.per_exchange) == ["combined"]
+    assert executed == inputs[0]["data"]
+    assert suite._compute_effective_coin_exchange(
+        scenario, ["BTC"], datasets, available
+    ) == {"BTC": "bybit"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dataset_case", ["scenario_only_exchange", "cross_venue_settings"])
+async def test_suite_selection_preserves_dataset_identities(
+    prepared, monkeypatch, tmp_path, dataset_case
+):
+    import backtest
+    import utils
+    from tools import iterative_backtester
+
+    config, template, _ = prepared
+    config["bot"]["long"]["enabled"] = True
+    config["backtest"]["exchanges"] = ["binance", "bybit"]
+    set_side_universe_sources(config, "approved_coins", ["ETH"])
+    set_side_universe_sources(config, "ignored_coins", [])
+    scenario_configs = [
+        {"label": "base_pool", "coins": ["ETH"]},
+        {"label": "bitget_only", "coins": ["BTC"], "exchanges": ["bitget"],
+         "coin_sources": {"BTC": "bitget"}},
+    ]
+    combined = deepcopy(template)
+    combined.coins = ["ETH"]
+    combined.coin_index = {"ETH": 0}
+    combined.coin_exchange = {"ETH": "binance"}
+    combined.hlcvs = np.ones((3, 1, 4))
+    combined.mss = {"ETH": {"exchange": "binance", "qty_step": 1}}
+    bitget = deepcopy(combined)
+    bitget.exchange = "bitget"
+    bitget.available_exchanges = ["bitget"]
+    bitget.coins = ["BTC"]
+    bitget.coin_index = {"BTC": 0}
+    bitget.coin_exchange = {"BTC": "bitget"}
+    bitget.hlcvs *= 2
+    bitget.mss = {"BTC": {"exchange": "bitget", "qty_step": 1}}
+    datasets = {"combined": combined, "bitget": bitget}
+    cross_venue = dataset_case == "cross_venue_settings"
+    if cross_venue:
+        config["backtest"]["exchanges"] = ["binance"]
+        set_side_universe_sources(config, "approved_coins", ["BTC"])
+        scenario_configs = [{"label": "binance_only", "coins": ["BTC"]}]
+        datasets = {}
+
+        async def prepare_hlcvs_mss(cfg, exchange, *, inception_fact_coins=None):
+            assert exchange == "binance"
+            return (
+                ["BTC"], np.ones((3, 1, 4)),
+                {"BTC": {"exchange": "bybit", "ohlcv_source": "binance", "qty_step": 1}},
+                "", "", np.ones(3), template.timestamps,
+            )
+
+        monkeypatch.setattr(backtest, "prepare_hlcvs_mss", prepare_hlcvs_mss)
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        f"{coin}/USDT:USDT": {
+            "id": f"{coin}USDT", "symbol": f"{coin}/USDT:USDT", "base": coin,
+            "quote": "USDT", "settle": "USDT", "swap": True, "linear": True,
+            "active": True,
+        }
+        for coin in ("BTC", "ETH")
+    }
+    for exchange in ("binance", "bybit", "bitget"):
+        assert utils.create_coin_symbol_map_cache(exchange, markets, verbose=False)
+
+    async def noop(*args, **kwargs):
+        return None
+
+    original_prepare = suite.prepare_master_datasets
+
+    async def prepare(base_config, exchanges, **kwargs):
+        if cross_venue:
+            datasets.update(await original_prepare(base_config, exchanges, **kwargs))
+            assert datasets["binance"].available_exchanges == ["bybit"]
+        else:
+            assert base_config["backtest"]["exchanges"] == ["binance", "bybit"]
+            assert base_config["backtest"]["coin_sources"] == {"BTC": "bitget"}
+            assert set(exchanges) == {"binance", "bybit", "bitget"}
+            assert kwargs["needed_individual_exchanges"] == {"bitget"}
+        return datasets
+
+    for name in ("load_markets", "format_approved_ignored_coins",
+                 "reject_cross_exchange_market_identifier_collisions"):
+        monkeypatch.setattr(suite, name, noop)
+    monkeypatch.setattr(suite, "prepare_master_datasets", prepare)
+    executed = []
+
+    def build(hlcvs, mss, cfg, exchange, btc_prices, timestamps):
+        if cross_venue:
+            assert exchange == "binance"
+            assert mss["BTC"]["exchange"] == "bybit"
+            assert mss["BTC"]["ohlcv_source"] == "binance"
+        executed.append((exchange, suite.materialized_dataset_identity(
+            cfg["backtest"]["coins"][exchange], hlcvs, btc_prices, timestamps, mss
+        )))
+        return SimpleNamespace()
+
+    def post(*args, **kwargs):
+        (kwargs["output_directory"] / "config.json").write_text("{}")
+
+    monkeypatch.setattr(backtest, "build_backtest_payload", build)
+    monkeypatch.setattr(backtest, "execute_backtest", lambda *args: ([], [], {}))
+    monkeypatch.setattr(backtest, "post_process", post)
+    monkeypatch.setattr(backtest.BacktestPlotContext, "from_payload", lambda payload: None)
+    monkeypatch.setattr(iterative_backtester, "combine_analyses", lambda analyses: {})
+    summary = await suite.run_backtest_suite_async(
+        config, {"scenarios": scenario_configs}, disable_plotting=True,
+        suite_output_root=tmp_path / "output",
+    )
+
+    expected_labels = ["binance_only"] if cross_venue else ["base_pool", "bitget_only"]
+    expected_datasets = [["binance"]] if cross_venue else [["combined"], ["bitget"]]
+    assert [result.scenario.label for result in summary.scenarios] == expected_labels
+    assert [list(result.per_exchange) for result in summary.scenarios] == expected_datasets
+    session = json.loads((summary.output_dir / "session.json").read_text())
+    saved = session["setup"]["scenarios"]
+    assert [item["data"] for item in saved] == [{exchange: identity} for exchange, identity in executed]
+    available = suite._compute_dataset_available_exchanges(datasets)
+    assert available == (["binance"] if cross_venue else ["binance", "bitget", "bybit"])
+    assignments = [
+        suite._compute_effective_coin_exchange(result.scenario, result.scenario.coins, datasets, available)
+        for result in summary.scenarios
+    ]
+    assert assignments == ([{"BTC": "bybit"}] if cross_venue else [{"ETH": "binance"}, {"BTC": "bitget"}])
 
 
 def test_scenario_labels_cannot_collide_on_case_insensitive_filesystems():

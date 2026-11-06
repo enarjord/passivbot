@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Select suite datasets using executable exchange identities and each combined
+  dataset's configured source pool. Preserve single-exchange history, combined
+  portfolios, and saved input fingerprints when scenarios add exchanges or use
+  market settings from another venue. Align preload dates, coins, and scenario
+  history demand with the selected portfolios.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.

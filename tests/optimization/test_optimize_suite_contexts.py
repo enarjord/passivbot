@@ -445,6 +445,86 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
 
 
 @pytest.mark.asyncio
+async def test_prepare_suite_contexts_keeps_combined_pool_with_scenario_only_exchange(
+    monkeypatch,
+):
+    _stub_market_identity_validation(monkeypatch)
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance", "bybit"],
+        suite_enabled=True,
+        scenarios=[
+            {"label": "base_pool", "coins": ["ETH"]},
+            {
+                "label": "bitget_only",
+                "coins": ["BTC"],
+                "exchanges": ["bitget"],
+                "coin_sources": {"BTC": "bitget"},
+            },
+        ],
+    )
+    set_side_universe_sources(
+        config, "approved_coins", {"long": ["ETH"], "short": ["ETH"]}
+    )
+    set_side_universe_sources(config, "ignored_coins", {"long": [], "short": []})
+    combined = _make_lazy_dataset(
+        coins=("ETH",),
+        coin_exchange={"ETH": "binance"},
+        available_exchanges=["binance", "bybit"],
+    )
+    bitget = _make_lazy_dataset(exchange="bitget", coins=("BTC",))
+    captured = {}
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def prepare(_base_config, exchanges, **kwargs):
+        captured["exchanges"] = exchanges
+        captured["needed"] = kwargs["needed_individual_exchanges"]
+        captured["prepared_universes"] = kwargs["prepared_universes"]
+        return {"combined": combined, "bitget": bitget}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", noop)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", noop)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", prepare)
+
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config,
+        optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert captured["exchanges"] == ["binance", "bitget", "bybit"]
+    assert captured["needed"] == {"bitget"}
+    assert [context.label for context in contexts] == ["base_pool", "bitget_only"]
+    assert [context.exchanges for context in contexts] == [["combined"], ["bitget"]]
+    assert contexts[0].config["backtest"]["coins"] == {"combined": ["ETH"]}
+    assert contexts[0].msss["combined"]["ETH"]["exchange"] == "binance"
+    assert contexts[0].master_hlcvs_specs == {"combined": combined.hlcvs_spec}
+    assert contexts[1].config["backtest"]["coins"] == {"bitget": ["BTC"]}
+    assert contexts[1].config["backtest"]["coin_sources"] == {"BTC": "bitget"}
+    assert contexts[1].master_hlcvs_specs == {"bitget": bitget.hlcvs_spec}
+    assert [context.candle_coins for context in contexts] == [
+        {"combined": ("ETH",)}, {"bitget": ("BTC",)},
+    ]
+    for context, coin in zip(contexts, ("ETH", "BTC")):
+        assert require_side_universe_sources(context.config, "approved_coins") == {
+            side: [coin] for side in ("long", "short")
+        }
+        prepared = captured["prepared_universes"][context.label]
+        assert {
+            entry.side: entry.members
+            for entry in prepared.membership if entry.field == "approved_coins"
+        } == {side: (coin,) for side in ("long", "short")}
+    assert require_side_universe_sources(config, "approved_coins") == {
+        side: ["ETH"] for side in ("long", "short")
+    }
+
+
+@pytest.mark.asyncio
 async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_dataset(
     monkeypatch,
 ):
@@ -503,6 +583,59 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
 
     assert contexts[0].exchanges == ["bybit"]
     assert contexts[0].msss["bybit"]["HYPE"]["exchange"] == "bybit"
+
+
+@pytest.mark.asyncio
+async def test_prepare_suite_contexts_keeps_individual_exchange_with_other_market_settings(
+    monkeypatch,
+):
+    _stub_market_identity_validation(monkeypatch)
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance"],
+        market_settings_sources={"BTC": "bybit"},
+        suite_enabled=True,
+        scenarios=[{"label": "binance_only", "exchanges": ["binance"]}],
+    )
+    set_side_universe_sources(
+        config, "approved_coins", {"long": ["BTC"], "short": ["BTC"]}
+    )
+    set_side_universe_sources(config, "ignored_coins", {"long": [], "short": []})
+    dataset = _make_lazy_dataset(
+        exchange="binance",
+        coins=("BTC",),
+        coin_exchange={"BTC": "bybit"},
+        available_exchanges=["bybit"],
+    )
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def prepare(*_args, **_kwargs):
+        return {"binance": dataset}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", noop)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", noop)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", prepare)
+
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config,
+        optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert len(contexts) == 1
+    assert contexts[0].exchanges == ["binance"]
+    assert contexts[0].config["backtest"]["coins"] == {"binance": ["BTC"]}
+    assert contexts[0].msss["binance"]["BTC"]["exchange"] == "bybit"
+    assert contexts[0].master_hlcvs_specs == {"binance": dataset.hlcvs_spec}
+    assert contexts[0].candle_coins == {"binance": ("BTC",)}
+    assert require_side_universe_sources(contexts[0].config, "approved_coins") == {
+        side: ["BTC"] for side in ("long", "short")
+    }
 
 
 @pytest.mark.asyncio
