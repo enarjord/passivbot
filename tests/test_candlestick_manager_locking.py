@@ -561,7 +561,19 @@ async def test_archive_http_body_obeys_budget_and_emits_terminal_event(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_archive_prefetch_budget_keeps_completed_days_and_stops_new_batches(tmp_path):
+async def test_archive_prefetch_budget_keeps_completed_days_and_stops_new_batches(tmp_path, monkeypatch):
+    clock = [100.0]
+
+    class DeadlineClock:
+        def monotonic(self):
+            return clock[0]
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    # Isolate the manager's deadline clock from filesystem/index setup time.
+    # asyncio still uses its real clock to time out and cancel the blocked day.
+    monkeypatch.setattr("candlestick_manager.time", DeadlineClock())
     cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=str(tmp_path))
     cm._archive_supported = lambda: True
     day_ms, minute = 86_400_000, 60_000
@@ -577,24 +589,28 @@ async def test_archive_prefetch_budget_keeps_completed_days_and_stops_new_batche
         if day == "2020-01-01":
             return rows
         try:
-            await asyncio.sleep(0.15)
-        finally:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
             cancelled_days.append(day)
+            clock[0] += 0.031
+            raise
 
     cm._archive_fetch_day = fetch_day
     symbol = "BTC/USDT:USDT"
-    started = time.monotonic()
     with cm.remote_fetch_budget(0.03):
         with pytest.raises(TimeoutError):
-            await cm._prefetch_archives_for_range(
-                symbol, first, first + 3 * day_ms - minute, parallel_days=2,
+            await asyncio.wait_for(
+                cm._prefetch_archives_for_range(
+                    symbol, first, first + 3 * day_ms - minute, parallel_days=2,
+                ),
+                timeout=5.0,
             )
         # The expired remote budget does not prevent a factual local read.
         cached = await cm.get_candles(
             symbol, start_ts=first, end_ts=first + day_ms - minute,
             allow_remote_fetch=False, standardize=False,
         )
-    assert time.monotonic() - started < 0.2
+    assert clock[0] == 100.031
     assert started_days == ["2020-01-01", "2020-01-02"]
     assert cancelled_days == ["2020-01-02"]
     np.testing.assert_array_equal(cached, rows)

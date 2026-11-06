@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Pause new entries only on a Bitunix market returning structured product-admission error `710003`,
+  using the existing configurable symbol cooldown. Preserve the failed write's error accounting
+  and reconciliation, other markets, and management of existing positions.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.
