@@ -8,7 +8,7 @@ from typing import Iterable
 from live.freshness import ACCOUNT_SURFACES
 from live.market_snapshot import MarketSnapshot
 from live.events import run_diagnostic_step
-from live.planning_snapshot import PlanningSnapshot
+from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from utils import utc_ms
 
 
@@ -175,6 +175,32 @@ def handle_staged_execution_precondition_error(
     bot, exc: RuntimeError
 ) -> tuple[bool, dict]:
     """Classify staged precondition failures as safe live-loop defers."""
+    if isinstance(exc, PlanningSnapshotUnavailable):
+        invalid: dict[str, list] = {}
+        counts: dict[str, int] = {}
+        for item in exc.invalid_details:
+            surface = item["surface"]
+            counts[surface] = counts.get(surface, 0) + 1
+            rows = invalid.setdefault(surface, [])
+            if len(rows) < 8:
+                row = dict(item)
+                if "symbols" in row:
+                    symbols = row["symbols"]
+                    row["symbols"] = symbols[:12]
+                    row["symbols_count"] = len(symbols)
+                rows.append(row)
+        # The mutable provider may already be fresh. Preserve the failure of
+        # the exact immutable cohort that was rejected instead of re-reading it.
+        return True, {
+            "context": exc.context,
+            "epoch": exc.epoch,
+            "required": list(exc.required_surfaces),
+            "min_epochs": dict(exc.min_epochs),
+            "missing": sorted(invalid),
+            "invalid": invalid,
+            "invalid_counts": counts,
+            "defer_reason": "captured_planning_snapshot_unavailable",
+        }
     message = str(exc)
     transient_prefixes = (
         "staged planner precondition failed",

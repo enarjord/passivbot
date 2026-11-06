@@ -8,6 +8,28 @@ from live.freshness import FreshnessLedger
 from live.market_snapshot import MarketSnapshot
 
 
+class PlanningSnapshotUnavailable(RuntimeError):
+    """The captured input cohort failed its existing live readiness checks."""
+
+    def __init__(
+        self,
+        snapshot: "PlanningSnapshot",
+        *,
+        now_ms: int,
+        context: str,
+        invalid_details: list[dict[str, Any]],
+    ):
+        self.context = context
+        self.epoch = snapshot.epoch
+        self.required_surfaces = snapshot.required_surfaces
+        self.min_epochs = {stamp.name: stamp.min_epoch for stamp in snapshot.surfaces}
+        self.invalid_details = tuple(invalid_details)
+        self.snapshot_ts_ms = snapshot.ts_ms
+        self.checked_at_ms = int(now_ms)
+        # Do not retain the snapshot, its quotes, signatures or data packets.
+        super().__init__(f"planning snapshot invalid before {context}")
+
+
 @dataclass(frozen=True)
 class PlanningSurfaceStamp:
     name: str
@@ -182,8 +204,8 @@ class PlanningSnapshot:
     def raise_if_invalid(self, *, now_ms: int, context: str) -> None:
         invalid = self.invalid_details(now_ms=now_ms)
         if invalid:
-            raise RuntimeError(
-                f"planning snapshot invalid before {context}: {invalid[:8]}"
+            raise PlanningSnapshotUnavailable(
+                self, now_ms=now_ms, context=context, invalid_details=invalid
             )
 
     def last_prices(self) -> dict[str, float]:
