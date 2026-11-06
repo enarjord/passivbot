@@ -474,6 +474,12 @@
     return "";
   }
 
+  function trailingComparisonLabel(value) {
+    if (value === true) return "met";
+    if (value === false) return "wait";
+    return "unknown";
+  }
+
   function positionCounts(payload) {
     let longCount = 0;
     let shortCount = 0;
@@ -681,7 +687,7 @@
           <span class="pill ${trailingStatusTone(row.payload.status)}">${escapeHtml(row.payload.status)}</span>
         </p>
         <p class="subline mono">cur ${escapeHtml(fmtCompact(row.payload.current_price))} · thr ${escapeHtml(fmtCompact(row.payload.threshold_price))} · ret ${escapeHtml(fmtCompact(row.payload.retracement_price))}</p>
-        <p class="minor mono">thr ${escapeHtml(row.payload.threshold_met ? "met" : "wait")} · ret ${escapeHtml(row.payload.retracement_met ? "met" : "wait")} · qty ${escapeHtml(fmtCompact(row.payload.qty))} · px ${escapeHtml(fmtCompact(row.payload.price))}</p>
+        <p class="minor mono">thr ${escapeHtml(trailingComparisonLabel(row.payload.threshold_met))} · ret ${escapeHtml(trailingComparisonLabel(row.payload.retracement_met))} · qty ${escapeHtml(fmtCompact(row.payload.qty))} · px ${escapeHtml(fmtCompact(row.payload.price))}</p>
         <p class="minor mono">min_open ${escapeHtml(fmtCompact(row.payload.extrema?.min_since_open))} · max_min ${escapeHtml(fmtCompact(row.payload.extrema?.max_since_min))} · max_open ${escapeHtml(fmtCompact(row.payload.extrema?.max_since_open))} · min_max ${escapeHtml(fmtCompact(row.payload.extrema?.min_since_max))}</p>
       `;
       els.trailingList.appendChild(item);

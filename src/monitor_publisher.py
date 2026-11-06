@@ -130,6 +130,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
                 separators=(",", ":"),
                 sort_keys=True,
                 default=_json_default,
+                allow_nan=False,
             )
             f.write("\n")
             f.flush()
@@ -394,6 +395,7 @@ class MonitorPublisher:
             separators=(",", ":"),
             sort_keys=True,
             default=_json_default,
+            allow_nan=False,
         )
         seq_text = str(int(envelope["seq"]))
         digest = hashlib.blake2b(digest_size=_EVENT_RECOVERY_CHECKSUM_BYTES)
@@ -886,7 +888,6 @@ class MonitorPublisher:
         with self._lock:
             now_ms = self._now_ms() if ts is None else int(ts)
             try:
-                self._rotate_history_if_needed(stream, now_ms=now_ms)
                 envelope = {
                     "ts": now_ms,
                     "kind": str(kind),
@@ -901,16 +902,18 @@ class MonitorPublisher:
                     envelope["pside"] = str(pside)
                 if timeframe is not None:
                     envelope["timeframe"] = str(timeframe)
-                current_path = self._history_current_path(stream)
-                if not current_path.exists():
-                    current_path.touch()
-                    self.history_segment_started_ms[stream] = now_ms
                 line = json.dumps(
                     envelope,
                     separators=(",", ":"),
                     sort_keys=True,
                     default=_json_default,
+                    allow_nan=False,
                 )
+                self._rotate_history_if_needed(stream, now_ms=now_ms)
+                current_path = self._history_current_path(stream)
+                if not current_path.exists():
+                    current_path.touch()
+                    self.history_segment_started_ms[stream] = now_ms
                 with open(current_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
                 self._mark_manifest_dirty()
@@ -1020,9 +1023,10 @@ class MonitorPublisher:
                     symbol=symbol,
                     timeframe=timeframe,
                 )
-                if entry is not None:
-                    emitted.append(entry)
-            self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
+                if entry is None:
+                    break
+                emitted.append(entry)
+                self._last_candle_ts_by_key[key] = int(candle["ts"])
             return emitted
 
     def record_event(
@@ -1063,20 +1067,11 @@ class MonitorPublisher:
             timing["lock_wait_ns"] = max(0, time.monotonic_ns() - lock_wait_started_ns)
             now_ms = self._now_ms() if ts is None else int(ts)
             try:
-                rotation_started_ns = time.monotonic_ns()
-                try:
-                    self._rotate_events_if_needed(now_ms=now_ms)
-                finally:
-                    timing["rotation_ns"] = max(
-                        0, time.monotonic_ns() - rotation_started_ns
-                    )
-
                 persist_started_ns = time.monotonic_ns()
                 try:
-                    self.seq += 1
                     envelope = {
                         "ts": now_ms,
-                        "seq": self.seq,
+                        "seq": self.seq + 1,
                         "kind": str(kind),
                         "tags": [str(tag) for tag in tags],
                         "exchange": self.exchange,
@@ -1088,10 +1083,25 @@ class MonitorPublisher:
                     if pside is not None:
                         envelope["pside"] = str(pside)
                     line = self._serialize_event_line(envelope)
+                finally:
+                    timing["persist_ns"] = max(0, time.monotonic_ns() - persist_started_ns)
+
+                rotation_started_ns = time.monotonic_ns()
+                try:
+                    self._rotate_events_if_needed(now_ms=now_ms)
+                finally:
+                    timing["rotation_ns"] = max(
+                        0, time.monotonic_ns() - rotation_started_ns
+                    )
+
+                persist_started_ns = time.monotonic_ns()
+                try:
+                    # Reserve before append: an I/O failure may still leave a complete row.
+                    self.seq = envelope["seq"]
                     with open(self.current_events_path, "a", encoding="utf-8") as f:
                         f.write(line + "\n")
                 finally:
-                    timing["persist_ns"] = max(0, time.monotonic_ns() - persist_started_ns)
+                    timing["persist_ns"] += max(0, time.monotonic_ns() - persist_started_ns)
 
                 maintenance_started_ns = time.monotonic_ns()
                 try:

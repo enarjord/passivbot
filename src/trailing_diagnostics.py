@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from copy import deepcopy
 from typing import Any, Mapping, Optional
 
@@ -123,6 +124,108 @@ def trailing_status(
     if not retracement_met:
         return "waiting_retracement"
     return "armed"
+
+
+def _trailing_projection_fields(
+    *,
+    low_trigger: bool,
+    position_price: float,
+    current_price: float,
+    threshold_fraction: Optional[float],
+    retracement_fraction: Optional[float],
+    extrema: Mapping[str, float],
+) -> dict[str, Any]:
+    """Project optional prices without interpreting native initialization as a price.
+
+    Native calls keep the original bundle, including Rust's finite extrema sentinels.
+    These classifications describe only the separate human-facing projections.
+    """
+    out: dict[str, Any] = {}
+
+    def put(name, value, status="available", reason=None):
+        out[name] = value
+        out[f"{name}_status"] = status
+        if reason is not None:
+            out[f"{name}_reason"] = reason
+
+    def extremum_reason(key):
+        value = extrema[key]
+        if not math.isfinite(value):
+            return "trailing_extremum_non_finite"
+        if (key.startswith("min_") and value == sys.float_info.max) or (
+            key.startswith("max_") and value == 0.0
+        ):
+            return "trailing_extremum_uninitialized"
+        return None
+
+    trigger_key = "min_since_open" if low_trigger else "max_since_open"
+    recovery_key = "max_since_min" if low_trigger else "min_since_max"
+    for name, fraction, basis, basis_key, observed_key, direction in (
+        ("threshold", threshold_fraction, position_price, None, trigger_key, -1 if low_trigger else 1),
+        ("retracement", retracement_fraction, extrema[trigger_key], trigger_key, recovery_key, 1 if low_trigger else -1),
+    ):
+        price_key = f"{name}_price"
+        met_key = f"{name}_met"
+        change_key = f"current_price_change_from_{name}_fraction"
+        if fraction is None or not math.isfinite(fraction):
+            reason = "projection_fraction_unavailable" if fraction is None else "projection_fraction_non_finite"
+            put(f"{name}_fraction", None, "unavailable", reason)
+        else:
+            put(f"{name}_fraction", fraction)
+            reason = None
+        if reason is None and fraction <= 0.0:
+            put(price_key, None, "not_required")
+            put(met_key, True, "not_required")
+            put(change_key, None, "not_required")
+            continue
+        if reason is None:
+            reason = extremum_reason(basis_key) if basis_key is not None else (
+                None if math.isfinite(basis) else "position_price_non_finite"
+            )
+        projected = None if reason else basis * (1.0 + direction * fraction)
+        if reason is None and not math.isfinite(projected):
+            reason = "projected_price_overflow"
+        if reason:
+            put(price_key, None, "unavailable", reason)
+            put(met_key, None, "unavailable", reason)
+            put(change_key, None, "unavailable", reason)
+            continue
+        put(price_key, projected)
+        observation_reason = extremum_reason(observed_key)
+        if observation_reason:
+            put(met_key, None, "unavailable", observation_reason)
+        else:
+            observed = extrema[observed_key]
+            less_than = low_trigger if name == "threshold" else not low_trigger
+            put(met_key, observed < projected if less_than else observed > projected)
+        if projected <= 0.0:
+            put(change_key, None, "not_required")
+        elif not math.isfinite(current_price):
+            put(change_key, None, "unavailable", "current_price_non_finite")
+        else:
+            change = current_price / projected - 1.0
+            if math.isfinite(change):
+                put(change_key, change)
+            else:
+                put(change_key, None, "unavailable", "projected_change_overflow")
+    out["projection_status"] = (
+        "unavailable" if any(
+            value == "unavailable" for key, value in out.items() if key.endswith("_status")
+        ) else "available"
+    )
+    return out
+
+
+def _projected_trailing_status(triggered: bool, projection: Mapping[str, Any]) -> str:
+    if triggered:
+        return "triggered"
+    if projection["projection_status"] == "unavailable":
+        return "unavailable"
+    return trailing_status(
+        triggered=False,
+        threshold_met=projection["threshold_met"],
+        retracement_met=projection["retracement_met"],
+    )
 
 
 def selected_mode_from_order_type(order_type: str, *, has_order: bool) -> str:
@@ -289,32 +392,11 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     threshold_fraction = _float(inputs.get("entry_trailing_threshold_base_fraction")) * entry_multiplier
     retracement_fraction = _float(inputs.get("entry_trailing_retracement_base_fraction")) * entry_multiplier
 
-    if pside == "long":
-        threshold_price = position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
-        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
-        retracement_price = (
-            trailing_bundle["min_since_open"] * (1.0 + retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
-        retracement_met = (
-            True
-            if retracement_fraction <= 0.0
-            else trailing_bundle["max_since_min"] > float(retracement_price)
-        )
-    else:
-        threshold_price = position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
-        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
-        retracement_price = (
-            trailing_bundle["max_since_open"] * (1.0 - retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
-        retracement_met = (
-            True
-            if retracement_fraction <= 0.0
-            else trailing_bundle["min_since_max"] < float(retracement_price)
-        )
+    projection = _trailing_projection_fields(
+        low_trigger=pside == "long", position_price=position_price, current_price=current_price,
+        threshold_fraction=threshold_fraction, retracement_fraction=retracement_fraction,
+        extrema=trailing_bundle,
+    )
     triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "entry",
@@ -326,30 +408,11 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "wallet_exposure": wallet_exposure,
         "limit_cap": float(limit_cap),
         "triggered": triggered,
-        "status": trailing_status(
-            triggered=triggered,
-            threshold_met=bool(threshold_met),
-            retracement_met=bool(retracement_met),
-        ),
+        "status": _projected_trailing_status(triggered, projection),
         "qty": float(qty),
         "price": float(price),
         "current_price": float(current_price),
-        "threshold_fraction": float(threshold_fraction),
-        "threshold_price": float(threshold_price) if threshold_price is not None else None,
-        "threshold_met": bool(threshold_met),
-        "retracement_fraction": float(retracement_fraction),
-        "retracement_price": float(retracement_price) if retracement_price is not None else None,
-        "retracement_met": bool(retracement_met),
-        "current_price_change_from_threshold_fraction": (
-            float(current_price / threshold_price - 1.0)
-            if threshold_price and threshold_price > 0.0
-            else None
-        ),
-        "current_price_change_from_retracement_fraction": (
-            float(current_price / retracement_price - 1.0)
-            if retracement_price and retracement_price > 0.0
-            else None
-        ),
+        **projection,
         "extrema": deepcopy(trailing_bundle),
     }
 
@@ -414,32 +477,11 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     )
     threshold_fraction = _float(inputs.get("close_trailing_threshold_base_fraction")) * close_multiplier
     retracement_fraction = _float(inputs.get("close_trailing_retracement_base_fraction")) * close_multiplier
-    if pside == "long":
-        threshold_price = position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
-        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
-        retracement_price = (
-            trailing_bundle["max_since_open"] * (1.0 - retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
-        retracement_met = (
-            True
-            if retracement_fraction <= 0.0
-            else trailing_bundle["min_since_max"] < float(retracement_price)
-        )
-    else:
-        threshold_price = position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
-        threshold_met = True if threshold_fraction <= 0.0 else trailing_bundle["min_since_open"] < threshold_price
-        retracement_price = (
-            trailing_bundle["min_since_open"] * (1.0 + retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
-        retracement_met = (
-            True
-            if retracement_fraction <= 0.0
-            else trailing_bundle["max_since_min"] > float(retracement_price)
-        )
+    projection = _trailing_projection_fields(
+        low_trigger=pside == "short", position_price=position_price, current_price=current_price,
+        threshold_fraction=threshold_fraction, retracement_fraction=retracement_fraction,
+        extrema=trailing_bundle,
+    )
     triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "close",
@@ -448,30 +490,11 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         "selected_mode": selected_mode_from_order_type(order_type, has_order=has_order),
         "order_type": order_type,
         "triggered": triggered,
-        "status": trailing_status(
-            triggered=triggered,
-            threshold_met=bool(threshold_met),
-            retracement_met=bool(retracement_met),
-        ),
+        "status": _projected_trailing_status(triggered, projection),
         "qty": float(qty),
         "price": float(price),
         "current_price": float(current_price),
-        "threshold_fraction": float(threshold_fraction),
-        "threshold_price": float(threshold_price) if threshold_price is not None else None,
-        "threshold_met": bool(threshold_met),
-        "retracement_fraction": float(retracement_fraction),
-        "retracement_price": float(retracement_price) if retracement_price is not None else None,
-        "retracement_met": bool(retracement_met),
-        "current_price_change_from_threshold_fraction": (
-            float(current_price / threshold_price - 1.0)
-            if threshold_price and threshold_price > 0.0
-            else None
-        ),
-        "current_price_change_from_retracement_fraction": (
-            float(current_price / retracement_price - 1.0)
-            if retracement_price and retracement_price > 0.0
-            else None
-        ),
+        **projection,
         "extrema": deepcopy(trailing_bundle),
     }
 
@@ -494,48 +517,28 @@ def build_trailing_martingale_close_diagnostic(
     if not isinstance(payload, dict):
         raise TypeError("Rust trailing_martingale close diagnostic must return an object")
     pside = str(inputs.get("pside") or "long")
-    threshold_fraction = _float(payload.get("threshold_fraction"))
-    retracement_fraction = _float(payload.get("retracement_fraction"))
+    # serde represents a non-finite native diagnostic fraction as null. It is
+    # unavailable, not a zero coefficient that disables the condition.
+    threshold_fraction = payload.get("threshold_fraction")
+    retracement_fraction = payload.get("retracement_fraction")
     extrema = normalize_trailing_extrema(payload.get("extrema", {}))
-    if pside == "long":
-        threshold_price = (
-            position_price * (1.0 + threshold_fraction) if threshold_fraction > 0.0 else None
-        )
-        retracement_price = (
-            extrema["max_since_open"] * (1.0 - retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
-    else:
-        threshold_price = (
-            position_price * (1.0 - threshold_fraction) if threshold_fraction > 0.0 else None
-        )
-        retracement_price = (
-            extrema["min_since_open"] * (1.0 + retracement_fraction)
-            if retracement_fraction > 0.0
-            else None
-        )
+    projection = _trailing_projection_fields(
+        low_trigger=pside == "short", position_price=position_price, current_price=current_price,
+        threshold_fraction=threshold_fraction, retracement_fraction=retracement_fraction,
+        extrema=extrema,
+    )
     payload.update(
         {
             "symbol": str(inputs.get("symbol") or ""),
             "current_price": current_price,
             "position_price": position_price,
             "position_size": position_size,
-            "threshold_price": threshold_price,
-            "retracement_price": retracement_price,
-            "current_price_change_from_threshold_fraction": (
-                current_price / threshold_price - 1.0
-                if threshold_price is not None and threshold_price > 0.0
-                else None
-            ),
-            "current_price_change_from_retracement_fraction": (
-                current_price / retracement_price - 1.0
-                if retracement_price is not None and retracement_price > 0.0
-                else None
-            ),
+            **projection,
             "extrema": extrema,
         }
     )
+    if projection["projection_status"] == "unavailable" and not payload.get("triggered"):
+        payload["status"] = "unavailable"
     return payload
 
 

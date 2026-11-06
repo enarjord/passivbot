@@ -869,7 +869,7 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
     assert event is None
     assert timing == {
         "lock_wait_ns": 0,
-        "rotation_ns": 2_000_000,
+        "rotation_ns": 0,
         "persist_ns": 3_000_000,
         "maintenance_ns": 0,
         "manifest_checkpoint_count": 0,
