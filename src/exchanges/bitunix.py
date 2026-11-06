@@ -28,6 +28,7 @@ from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_bitunix_balance_composition
+from live.diagnostic_safety import bounded_exception_code
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
 from utils import symbol_to_coin
@@ -2256,6 +2257,27 @@ class BitunixBot(CCXTBot):
         self.custom_id_max_length = 36
         self.quote = "USDT"
         self.hedge_mode = True
+
+    def _classify_exchange_symbol_unavailable_error(
+        self, exc: BaseException
+    ) -> str | None:
+        """Back off the affected market after an exact product-admission rejection."""
+        if isinstance(exc, ExchangeError) and bounded_exception_code(exc) == "710003":
+            return "bitunix_product_permission_unavailable"
+        return None
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """Keep a product-entry cooldown from blocking an existing position's close."""
+        symbol = order.get("symbol")
+        if (
+            order.get("reduce_only") is True
+            and isinstance(symbol, str)
+            and symbol in self._active_exchange_symbol_unavailable_cooldowns([symbol])
+        ):
+            # CLOSE uses the authoritative positionId; it does not need a
+            # leverage or margin-mode change postponed by the entry cooldown.
+            return False
+        return super()._order_requires_exchange_config_before_create(order)
 
     def create_ccxt_sessions(self) -> None:
         ccxt_config = self._build_ccxt_config()
