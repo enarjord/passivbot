@@ -151,6 +151,15 @@ credentials, tokens, or tracebacks. Monitor persistence and cache-flush reportin
 independently best-effort; redaction does not change callback placement, throttling, suppression,
 completed disk persistence/load behavior, event schemas, or trading behavior.
 
+## Captured Planning Snapshot Readiness
+
+Captured planning-snapshot readiness failures use the existing `planning.unavailable` diagnostic
+with `defer_reason=captured_planning_snapshot_unavailable`. Its grouped `invalid` rows describe the
+rejected cohort, never a later provider refresh. Retain up to eight details per surface and twelve
+symbols within a missing-symbol detail; `invalid_counts` gives each full per-surface detail count,
+and `symbols_count` gives the full size of a sampled symbol list. These observations do not renew
+inputs or authorize an exchange action.
+
 ## Market Snapshot Diagnostic Skips
 
 `market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics

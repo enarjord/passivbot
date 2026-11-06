@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Defer ordinary planning when its captured quotes expire or required snapshot inputs are absent,
+  preserving the failed cohort's diagnostic details and retrying without restarting the bot.
+  Preserve failure propagation for unrelated errors and malformed native results, including in
+  protective planning.
+
 - Pause new entries only on a Bitunix market returning structured product-admission error `710003`,
   using the existing configurable symbol cooldown. Preserve the failed write's error accounting
   and reconciliation, other markets, and management of existing positions.
