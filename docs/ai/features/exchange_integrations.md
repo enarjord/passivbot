@@ -590,6 +590,26 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 [order detail](https://www.bitunix.com/api-docs/futures/trade/get_order_detail.html), and
 [history trades](https://www.bitunix.com/api-docs/futures/trade/get_history_trades.html).
 
+### Product-admission retry policy
+
+The native connector opts structured exchange error `710003` into the existing per-symbol
+API-unavailable cooldown. This is a local retry policy after an actual failed write, not a
+classification of every market sharing a public product label or proof of account-wide permission.
+The classifier reads the bounded structured exception code, never exception text.
+Bitunix's [stock-perpetual guide](https://www.bitunix.com/hub/helpcenter/article/introduction-to-stock-perpetuals?id=211)
+describes a separate product boundary; its
+[public error-code table](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html)
+does not define `710003`.
+
+Keep the original failure, ambiguous-write reconciliation, and execution error-budget charge.
+Only the affected symbol's entries are paused for
+`live.recovery.exchange_symbol_unavailable_cooldown_hours`; unrelated symbols continue.
+Held positions retain `tp_only` and stronger explicit modes. During an active cooldown, an explicit
+reduce-only close does not require the postponed leverage/margin configuration write: native
+`CLOSE` still requires its authoritative `positionId` and all normal account, fill, and risk guards.
+Outside that cooldown, the existing configuration prerequisite is unchanged. Expiry, disabling
+the cooldown, and a new process retain the shared recovery policy; no timer promises venue recovery.
+
 ### Live quotes and candles
 
 The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for

@@ -12,6 +12,15 @@ since the latest release tag; these features may already be available when insta
   market settings from another venue. Align preload dates, coins, and scenario
   history demand with the selected portfolios.
 
+- Defer ordinary planning when its captured quotes expire or required snapshot inputs are absent,
+  preserving the failed cohort's diagnostic details and retrying without restarting the bot.
+  Preserve failure propagation for unrelated errors and malformed native results, including in
+  protective planning.
+
+- Pause new entries only on a Bitunix market returning structured product-admission error `710003`,
+  using the existing configurable symbol cooldown. Preserve the failed write's error accounting
+  and reconciliation, other markets, and management of existing positions.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.

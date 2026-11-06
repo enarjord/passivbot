@@ -127,7 +127,7 @@ from live.market_snapshot import (
     SHARED_QUOTE_CLEANUP_SECONDS,
     SHARED_QUOTE_CANCEL_GRACE_SECONDS,
 )
-from live.planning_snapshot import PlanningSnapshot
+from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from passivbot_exceptions import RestartBotException, FatalBotException
 from live import exchange_params
 import passivbot_monitor as pb_monitor
@@ -10774,6 +10774,10 @@ class Passivbot:
                     "required": list(details.get("required") or []),
                     "min_epochs": dict(details.get("min_epochs") or {}),
                     "invalid": details.get("invalid") or {},
+                    **(
+                        {"invalid_counts": dict(details["invalid_counts"])}
+                        if details.get("invalid_counts") else {}
+                    ),
                     "defer_reason": details.get("defer_reason"),
                 },
                 ts_ms=utc_ms(),
@@ -14734,9 +14738,18 @@ class Passivbot:
                 self, symbols, market_snapshots
             )
         except RuntimeError as exc:
-            # Snapshot capture uses RuntimeError for unavailable/stale quotes
-            # and account epochs. Classify before entering Rust, whose output
-            # and validation failures must never become retryable input errors.
+            if isinstance(exc, PlanningSnapshotUnavailable):
+                _, details = self._handle_staged_execution_precondition_error(exc)
+                run_diagnostic_step(
+                    "log protective planning snapshot unavailability",
+                    lambda: self._log_staged_execution_defer(details),
+                )
+            elif not str(exc).startswith(
+                "protective planning snapshot invalid before capture:"
+            ):
+                raise
+            # Only known input readiness failures may defer before Rust.
+            # Structural failures and native output validation remain fatal.
             raise state_refresh.AuthoritativeSurfaceUnavailable(
                 "protective_planning_inputs", "current protective snapshot unavailable"
             ) from exc

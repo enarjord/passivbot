@@ -65,6 +65,14 @@ Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are 
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
 block protective management of held symbols.
 
+A captured planning snapshot that fails its existing epoch, quote-presence, or quote-age checks
+is unavailable input, not a structural failure. The live owner defers before submitting that order
+calculation to Rust or executing its exchange actions, then retries through normal scheduling.
+Preserve the rejected immutable cohort's readiness details even if a mutable provider has since
+refreshed. Direct protective planning scopes this known input failure to unavailable protective
+inputs. Never renew the captured facts or extend their freshness limits; unrelated structural
+failures and malformed native output continue to propagate to their existing failure boundary.
+
 A failed urgent candle refresh is therefore an availability observation, not an account-wide
 planning barrier. Live Python may explicitly mark a symbol's known missing EMA inputs or one
 position side's trailing extrema as unavailable. Rust remains strict by default, including
