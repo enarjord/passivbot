@@ -826,6 +826,79 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
 
 
 @pytest.mark.asyncio
+async def test_prepare_master_datasets_matches_configured_pool_for_windows_and_coins(
+    monkeypatch,
+):
+    from suite_runner import _determine_needed_individual_exchanges
+
+    base_exchanges = ["binance", "bybit"]
+    base_config = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-03",
+            "exchanges": base_exchanges,
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenarios, _ = build_scenarios(
+        {
+            "scenarios": [
+                {"label": "base_pool", "start_date": "2024-01-01",
+                 "end_date": "2024-01-02", "coins": ["ETH"]},
+                {"label": "expanded_pool", "start_date": "2024-01-02",
+                 "end_date": "2024-01-03", "coins": ["BTC"],
+                 "exchanges": ["binance", "bybit", "bitget"]},
+            ]
+        },
+        base_exchanges=base_exchanges,
+    )
+    individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
+    exchanges = sorted(set(base_exchanges) | individual)
+    calls = []
+
+    async def prepare(config, exchange):
+        start = config["backtest"]["start_date"]
+        end = config["backtest"]["end_date"]
+        coins = config["live"]["approved_coins"]["long"]
+        assert config["live"]["approved_coins"]["short"] == coins
+        calls.append((exchange, start, end, list(coins)))
+        timestamps = np.array([utils.date_to_ts(start), utils.date_to_ts(end)], dtype=np.int64)
+        source = base_exchanges[0] if exchange == "combined" else exchange
+        return (
+            coins,
+            np.ones((2, len(coins), 4), dtype=np.float64),
+            {coin: {"exchange": source} for coin in coins},
+            "",
+            f"/tmp/{exchange}",
+            np.ones(2, dtype=np.float64),
+            timestamps,
+        )
+
+    monkeypatch.setitem(sys.modules, "backtest", SimpleNamespace(prepare_hlcvs_mss=prepare))
+    datasets = await prepare_master_datasets(
+        base_config, exchanges, needed_individual_exchanges=individual, scenarios=scenarios
+    )
+
+    assert individual == {"binance", "bybit", "bitget"}
+    assert calls == [
+        ("combined", "2024-01-01", "2024-01-02", ["ETH"]),
+        ("binance", "2024-01-02", "2024-01-03", ["BTC"]),
+        ("bitget", "2024-01-02", "2024-01-03", ["BTC"]),
+        ("bybit", "2024-01-02", "2024-01-03", ["BTC"]),
+    ]
+    assert datasets["combined"].available_exchanges == base_exchanges
+    assert datasets["combined"].coins == ["ETH"]
+    assert {
+        exchange: dataset.coins for exchange, dataset in datasets.items()
+        if exchange != "combined"
+    } == {exchange: ["BTC"] for exchange in individual}
+
+
+@pytest.mark.asyncio
 async def test_prepare_master_datasets_preserves_combined_source_exchanges(monkeypatch):
     async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
         assert exchange == "combined"

@@ -614,8 +614,10 @@ def _derive_dataset_windows(
             windows.setdefault(str(exchange), base_window)
         return windows
 
-    exchange_set = {str(exchange) for exchange in exchanges}
-    use_combined = len(exchange_set) > 1
+    # The combined producer uses the configured pool. Extra scenario exchanges
+    # are prepared individually and must not change which windows it receives.
+    exchange_set = set(require_config_value(base_config, "backtest.exchanges"))
+    use_combined = len(set(exchanges)) > 1
     windows: Dict[str, DatasetWindow] = {}
 
     if use_combined:
@@ -1030,7 +1032,7 @@ async def prepare_master_datasets(
     use_combined = len(exchanges) > 1
 
     if use_combined:
-        exchange_set = {str(exchange) for exchange in exchanges}
+        exchange_set = set(require_config_value(base_config, "backtest.exchanges"))
         combined_scenarios = [
             scenario
             for scenario in (scenarios or [])
