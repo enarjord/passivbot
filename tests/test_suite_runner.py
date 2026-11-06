@@ -1353,6 +1353,20 @@ def test_available_exchanges_single_combined_keeps_real_exchanges():
     assert result == ["binance", "bybit"]
 
 
+@pytest.mark.parametrize("with_combined", [False, True])
+def test_individual_dataset_availability_uses_candle_exchange(with_combined):
+    datasets = {
+        "binance": _make_exchange_dataset("binance", ["bybit"], [0, 60_000])
+    }
+    expected = ["binance"]
+    if with_combined:
+        datasets["combined"] = _make_exchange_dataset(
+            "combined", ["bitget", "okx"], [0, 60_000]
+        )
+        expected += ["bitget", "okx"]
+    assert _compute_dataset_available_exchanges(datasets) == expected
+
+
 @pytest.mark.parametrize(
     "requested,has_combined,expected",
     [

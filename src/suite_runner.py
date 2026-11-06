@@ -1489,19 +1489,22 @@ def _apply_override(
 def _compute_dataset_available_exchanges(
     datasets: Dict[str, "ExchangeDataset"],
 ) -> List[str]:
-    """Return the union of real exchanges across prepared datasets.
+    """Return executable exchanges across prepared datasets.
 
-    Dataset keys (e.g. "combined") are labels, not exchanges; a "combined"
-    dataset covers every configured exchange, so its real exchanges live in
-    ``available_exchanges`` rather than in its key/``exchange`` label.
+    Combined datasets advertise their configured source pool. Individual datasets
+    execute under their own exchange label; their coin metadata may instead name
+    a different venue supplying market settings.
     """
-    if len(datasets) == 1 and "combined" in datasets:
-        return datasets["combined"].available_exchanges
     return sorted(
         {
             exchange
             for dataset in datasets.values()
-            for exchange in dataset.available_exchanges
+            for exchange in (
+                dataset.available_exchanges
+                if dataset.exchange == "combined"
+                else [dataset.exchange]
+            )
+            if exchange != "combined"
         }
     )
 

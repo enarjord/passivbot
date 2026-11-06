@@ -11,7 +11,8 @@ since the latest release tag; these features may already be available when insta
   the combined portfolio for scenarios matching its source pool, even when other
   scenarios add exchanges, with partial coverage, aggregated candles and matching
   saved dataset fingerprints. Align each portfolio's preloaded dates and coins
-  with its scenarios.
+  with its scenarios, and preserve individual data-exchange identities when
+  market settings come from another venue.
 
 - Recover trailing confirmation on Binance USDT-M when stale cached position
   residue prevents replay from matching the exchange. Recovery requires a fresh,

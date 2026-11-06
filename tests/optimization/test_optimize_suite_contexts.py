@@ -475,6 +475,52 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
 
 
 @pytest.mark.asyncio
+async def test_prepare_suite_contexts_keeps_individual_exchange_with_other_market_settings(
+    monkeypatch,
+):
+    _stub_market_identity_validation(monkeypatch)
+    config = get_template_config()
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance"],
+        market_settings_sources={"BTC": "bybit"},
+        suite_enabled=True,
+        scenarios=[{"label": "binance_only", "exchanges": ["binance"]}],
+    )
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["BTC"]}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    dataset = _make_lazy_dataset(
+        exchange="binance",
+        coins=("BTC",),
+        coin_exchange={"BTC": "bybit"},
+        available_exchanges=["bybit"],
+    )
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def prepare(*_args, **_kwargs):
+        return {"binance": dataset}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", noop)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", noop)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", prepare)
+
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config,
+        optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert len(contexts) == 1
+    assert contexts[0].exchanges == ["binance"]
+    assert contexts[0].config["backtest"]["coins"] == {"binance": ["BTC"]}
+    assert contexts[0].msss["binance"]["BTC"]["exchange"] == "bybit"
+    assert contexts[0].master_hlcvs_specs == {"binance": dataset.hlcvs_spec}
+
+
+@pytest.mark.asyncio
 async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
     monkeypatch,
 ):

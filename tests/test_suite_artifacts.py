@@ -175,7 +175,10 @@ async def test_partial_combined_setup_fingerprints_executed_inputs(prepared, mon
 
 
 @pytest.mark.asyncio
-async def test_scenario_only_exchange_preserves_combined_pool(prepared, monkeypatch, tmp_path):
+@pytest.mark.parametrize("dataset_case", ["scenario_only_exchange", "cross_venue_settings"])
+async def test_suite_selection_preserves_dataset_identities(
+    prepared, monkeypatch, tmp_path, dataset_case
+):
     import backtest
     import utils
     from tools import iterative_backtester
@@ -204,6 +207,22 @@ async def test_scenario_only_exchange_preserves_combined_pool(prepared, monkeypa
     bitget.hlcvs *= 2
     bitget.mss = {"BTC": {"exchange": "bitget", "qty_step": 1}}
     datasets = {"combined": combined, "bitget": bitget}
+    cross_venue = dataset_case == "cross_venue_settings"
+    if cross_venue:
+        config["backtest"]["exchanges"] = ["binance"]
+        config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["BTC"]}
+        scenario_configs = [{"label": "binance_only", "coins": ["BTC"]}]
+        datasets = {}
+
+        async def prepare_hlcvs_mss(cfg, exchange):
+            assert exchange == "binance"
+            return (
+                ["BTC"], np.ones((3, 1, 4)),
+                {"BTC": {"exchange": "bybit", "ohlcv_source": "binance", "qty_step": 1}},
+                "", "", np.ones(3), template.timestamps,
+            )
+
+        monkeypatch.setattr(backtest, "prepare_hlcvs_mss", prepare_hlcvs_mss)
     monkeypatch.chdir(tmp_path)
     markets = {
         f"{coin}/USDT:USDT": {
@@ -219,11 +238,17 @@ async def test_scenario_only_exchange_preserves_combined_pool(prepared, monkeypa
     async def noop(*args, **kwargs):
         return None
 
+    original_prepare = suite.prepare_master_datasets
+
     async def prepare(base_config, exchanges, **kwargs):
-        assert base_config["backtest"]["exchanges"] == ["binance", "bybit"]
-        assert base_config["backtest"]["coin_sources"] == {"BTC": "bitget"}
-        assert set(exchanges) == {"binance", "bybit", "bitget"}
-        assert kwargs["needed_individual_exchanges"] == {"bitget"}
+        if cross_venue:
+            datasets.update(await original_prepare(base_config, exchanges, **kwargs))
+            assert datasets["binance"].available_exchanges == ["bybit"]
+        else:
+            assert base_config["backtest"]["exchanges"] == ["binance", "bybit"]
+            assert base_config["backtest"]["coin_sources"] == {"BTC": "bitget"}
+            assert set(exchanges) == {"binance", "bybit", "bitget"}
+            assert kwargs["needed_individual_exchanges"] == {"bitget"}
         return datasets
 
     for name in ("load_markets", "format_approved_ignored_coins",
@@ -233,6 +258,10 @@ async def test_scenario_only_exchange_preserves_combined_pool(prepared, monkeypa
     executed = []
 
     def build(hlcvs, mss, cfg, exchange, btc_prices, timestamps):
+        if cross_venue:
+            assert exchange == "binance"
+            assert mss["BTC"]["exchange"] == "bybit"
+            assert mss["BTC"]["ohlcv_source"] == "binance"
         executed.append((exchange, suite.materialized_dataset_identity(
             cfg["backtest"]["coins"][exchange], hlcvs, btc_prices, timestamps, mss
         )))
@@ -251,17 +280,20 @@ async def test_scenario_only_exchange_preserves_combined_pool(prepared, monkeypa
         suite_output_root=tmp_path / "output",
     )
 
-    assert [result.scenario.label for result in summary.scenarios] == ["base_pool", "bitget_only"]
-    assert [list(result.per_exchange) for result in summary.scenarios] == [["combined"], ["bitget"]]
+    expected_labels = ["binance_only"] if cross_venue else ["base_pool", "bitget_only"]
+    expected_datasets = [["binance"]] if cross_venue else [["combined"], ["bitget"]]
+    assert [result.scenario.label for result in summary.scenarios] == expected_labels
+    assert [list(result.per_exchange) for result in summary.scenarios] == expected_datasets
     session = json.loads((summary.output_dir / "session.json").read_text())
     saved = session["setup"]["scenarios"]
     assert [item["data"] for item in saved] == [{exchange: identity} for exchange, identity in executed]
     available = suite._compute_dataset_available_exchanges(datasets)
+    assert available == (["binance"] if cross_venue else ["binance", "bitget", "bybit"])
     assignments = [
         suite._compute_effective_coin_exchange(result.scenario, result.scenario.coins, datasets, available)
         for result in summary.scenarios
     ]
-    assert assignments == [{"ETH": "binance"}, {"BTC": "bitget"}]
+    assert assignments == ([{"BTC": "bybit"}] if cross_venue else [{"ETH": "binance"}, {"BTC": "bitget"}])
 
 
 def test_scenario_labels_cannot_collide_on_case_insensitive_filesystems():
