@@ -1428,7 +1428,7 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
         return True
 
     bot.prepare_planning_universe = lambda: step("universe")
-    bot.refresh_market_state_if_needed = lambda: step("market")
+    bot.refresh_market_state_if_needed = lambda **kwargs: step("market")
     bot._staged_execution_ready_state = lambda **kwargs: (True, {})
     bot._current_planning_snapshot = object()
 
@@ -1437,7 +1437,8 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
         from types import SimpleNamespace
 
         bot._hsl_planning_wave = hsl_live.Wave(
-            NOW, NOW, (), (), (), "", (), bot.get_raw_balance(), 0
+            NOW, NOW, (), (), (), "", (), bot.get_raw_balance(), 0,
+            ordinary_receipts=instance.ordinary_receipts(),
         )
         await step("after_rust")
         return [], []
@@ -1501,7 +1502,9 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
 
     async def plan():
         plans.append(True)
-        return [], [dict(symbol="TEST/USDT:USDT")], object(), object()
+        return [], [dict(symbol="TEST/USDT:USDT")], object(), hsl_live.Wave(
+            0, 0, (), (), (), "", (), 0.0, 0
+        )
 
     async def write(*args):
         assert len(plans) == 1

@@ -6863,13 +6863,18 @@ class Passivbot:
             return False
         return await self.refresh_market_state_if_needed()
 
-    async def refresh_market_state_if_needed(self) -> bool:
+    async def refresh_market_state_if_needed(
+        self, *, trailing_acquisition_only: bool = False
+    ) -> bool:
         """Refresh market data needed before planning/execution."""
         if self.stop_signal_received:
             return False
         if not await self.update_ohlcvs_1m_for_actives():
             return False
-        await self.update_trailing_data()
+        if trailing_acquisition_only:
+            await self._preload_trailing_candles()
+        else:
+            await self.update_trailing_data()
         return True
 
     def _market_snapshot_ticker_strategy(self) -> str:
@@ -8661,7 +8666,59 @@ class Passivbot:
 
     # Legacy: dump_ohlcvs_1m_to_cache removed
 
-    async def update_trailing_data(self) -> None:
+    async def _preload_trailing_candles(
+        self, *, allow_remote_fetch: bool = True
+    ) -> dict:
+        """Acquire possible trailing candles without confirming fill-derived state.
+
+        A later cache-only derivation owns the actual current fill/position
+        cohort. Failed acquisition remains an explicit missing input there.
+        """
+        from ccxt.base.errors import NetworkError
+        from candlestick_manager import OhlcvFetchError
+
+        expected_io = (NetworkError, OSError, OhlcvFetchError)
+        anchors = self._get_last_position_change_anchors()
+        requests = []
+        for symbol, sides in anchors.items():
+            starts = [
+                (int(anchor["timestamp"]) // ONE_MIN_MS + 1) * ONE_MIN_MS
+                for pside, anchor in sides.items()
+                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside)
+            ]
+            if starts:
+                requests.append((symbol, min(starts)))
+        budget = getattr(self.cm, "remote_fetch_budget", None)
+        with budget(10.0) if allow_remote_fetch and callable(budget) else nullcontext():
+            # One owned gather preserves the complete cohort's concurrent turn.
+            # Cancellation propagates through the gather to its children; no
+            # unbounded finally-drain or detached task is introduced.
+            outcomes = await asyncio.gather(*(
+                self.cm.get_candles_with_resolution_ladder(
+                    symbol, start_ts=start, end_ts=None, strict=False,
+                    **({"allow_remote_fetch": False} if not allow_remote_fetch else {}),
+                ) for symbol, start in requests
+            ), return_exceptions=True)
+        results = {}
+        for (symbol, _), outcome in zip(requests, outcomes):
+            if isinstance(outcome, expected_io):
+                results[symbol] = outcome
+                # Acquisition is not readiness. The final derivation will
+                # classify unavailable candle data by symbol and side.
+                logging.debug(
+                    "[trailing] candle preload unavailable | error_type=%s "
+                    "action=derive_from_available_cache",
+                    bounded_exception_type(outcome),
+                )
+            elif isinstance(outcome, BaseException):
+                raise outcome
+            else:
+                results[symbol] = outcome
+        return results
+
+    async def update_trailing_data(
+        self, *, allow_remote_fetch: bool = True, prepared_candles: dict | None = None
+    ) -> None:
         """Update trailing price metrics using CandlestickManager candles.
 
         For each symbol and side with a trailing position, iterate candles since the
@@ -8670,8 +8727,18 @@ class Passivbot:
         - min_since_max: lowest low after the most recent new high
         - min_since_open: lowest low since open
         - max_since_min: highest high (or close per legacy) after the most recent new low
-        Fetches per-symbol candles concurrently to reduce latency.
+        Fetches per-symbol candles concurrently to reduce latency. Cache-only
+        final derivation uses already acquired candle results and never yields
+        after consuming fill or pending-confirmation facts.
         """
+        if prepared_candles is None:
+            # Acquire first, then consume current fill/confirmation facts in one
+            # nonyielding derivation for both ordinary HSL and legacy callers.
+            prepared_candles = await self._preload_trailing_candles(
+                allow_remote_fetch=allow_remote_fetch
+            )
+        elif allow_remote_fetch:
+            raise ValueError("prepared trailing candles require cache-only derivation")
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         unavailable_reasons: dict[str, set[str]] = defaultdict(set)
@@ -8737,6 +8804,25 @@ class Passivbot:
             for pside in psides:
                 anchor = position_change_anchors.get(symbol, {}).get(pside)
                 epoch_key = (symbol, pside)
+                if (
+                    epoch_key not in pending_fill_confirmations
+                    and epoch_key in associated_fill_epochs
+                ):
+                    # A previously confirmed fill identity is not a permanent
+                    # proof of its mutable after-state or reconstruction tape.
+                    # Reuse the complete canonical matcher, including explicit
+                    # opening-boundary replay, rather than a partial digest.
+                    position = self.positions[symbol][pside]
+                    expected = (float(position["size"]), float(position["price"]))
+                    if self._fill_anchor_position_state_match_kind(
+                        symbol, pside, expected, anchor
+                    ) is None:
+                        # This is correction repair, not a new position-change
+                        # identity requirement. The same ID may recover after a
+                        # genuine fetch repairs the current canonical facts.
+                        pending_fill_confirmations[epoch_key] = None
+                        pending_fill_min_generations[epoch_key] = fill_fetch_generation
+                        pending_position_states[epoch_key] = expected
                 if epoch_key in pending_fill_confirmations:
                     baseline_epoch = pending_fill_confirmations[epoch_key]
                     current_epoch = None if anchor is None else str(anchor["epoch"])
@@ -8863,19 +8949,19 @@ class Passivbot:
             start_ts = int(min(starts))
             fetch_plan[symbol] = start_ts
 
-        tasks = {
-            sym: asyncio.create_task(
-                self.cm.get_candles_with_resolution_ladder(
-                    sym, start_ts=st, end_ts=None, strict=False
-                )
-            )
-            for sym, st in fetch_plan.items()
-        }
-
         results = {}
-        for sym, task in tasks.items():
+        for sym in fetch_plan:
             try:
-                result = await task
+                # No awaits after the first fill/confirmation consumer: every
+                # cleared confirmation belongs to this actual factual cohort.
+                result = prepared_candles.get(sym)
+                if isinstance(result, BaseException):
+                    raise result
+                if result is None:
+                    unavailable_reasons["missing_exact_trailing_candles"].add(sym)
+                    unavailable_psides[sym].update(required_trailing.get(sym, set()))
+                    results[sym] = None
+                    continue
                 if int(result.source_counts.get("1m", 0)) <= 0:
                     if "1m" in result.failures:
                         unavailable_reasons["candle_fetch_failed"].add(sym)
@@ -17632,7 +17718,10 @@ class Passivbot:
             )
         )
         if not symbols:
-            self._hsl_planning_wave = hsl_live.owner(self).capture()
+            hsl = hsl_live.owner(self)
+            self._hsl_planning_wave = hsl.capture(
+                ordinary_receipts=hsl.ordinary_receipts()
+            )
             return {}
         hsl = hsl_live.owner(self)
         prepared_account = hsl.account_facts() if hsl_live.runtime.enabled(self) else None
@@ -17699,7 +17788,15 @@ class Passivbot:
                 # retaining their real acquisition timestamps.
                 market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
             hsl.require_ordinary_account(prepared_account)
-        wave = hsl.capture(market_snapshots)
+        # Remote acquisition may renew the factual fill tape. Rebuild every
+        # fill-derived trailing input from the current cohort, without remote
+        # I/O, before consuming HSL or native strategy inputs. An observation
+        # replaced after this point still invalidates even an equal payload.
+        receipts = await hsl.prepare_ordinary_consumption(prepared_account)
+        trailing_unavailable_symbols = set(
+            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
+        )
+        wave = hsl.capture(market_snapshots, ordinary_receipts=receipts)
         self._hsl_planning_wave = wave
         self._hsl_mode_override_reasons = {}
         for side in ("long", "short"):

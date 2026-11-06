@@ -64,6 +64,13 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    significant-digit price ladder. It is derived from both compared prices so the
    narrower, lower-side interval governs discrepancies that cross a power-of-ten
    boundary; the inclusive boundary admits only floating-point representation slack.
+   Each trailing derivation revalidates a previously confirmed side with the complete canonical
+   after-state or opening-boundary replay predicate. A changed raw after-state or replay cohort
+   cannot inherit confirmation from an unchanged fill ID, timestamp, or partial ledger signature.
+   Correction pending may recover from a genuinely repaired same-ID fill without inventing a new
+   position change or advancing an observation time. Candle acquisition completes before any
+   pending-confirmation mutation; derivation then consumes its current fill/position cohort without
+   yielding. An abandoned asynchronous read must not clear confirmation state.
    Quantity and fill identity remain strict. The explicit position-opening replay retains
    the ordinary half-tick comparison because it has no reconstructed VWAP rounding
    evidence. Acceptance outside that comparison but within one full tick emits one

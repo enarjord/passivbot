@@ -503,8 +503,12 @@ def _make_dummy_bot(config, *, last_price=100.0):
             async def _get_last_prices(symbols, max_age_ms=None):
                 return {s: last_price for s in symbols}
 
+            async def _missing_candles(*args, **kwargs):
+                return _make_candles([])
+
             self.cm = types.SimpleNamespace(
                 get_last_prices=_get_last_prices,
+                get_candles=_missing_candles,
                 get_ema_bounds=lambda symbol, span0, span1, max_age_ms=None: (
                     last_price - 10,
                     last_price + 10,
@@ -531,12 +535,13 @@ def _make_dummy_bot(config, *, last_price=100.0):
             )
 
             async def _get_candles_with_resolution_ladder(
-                symbol, *, start_ts, end_ts=None, strict=False
+                symbol, *, start_ts, end_ts=None, strict=False, allow_remote_fetch=True
             ):
                 from candlestick_manager import CandleResolutionResult
 
                 candles = await self.cm.get_candles(
-                    symbol, start_ts=start_ts, end_ts=end_ts, strict=strict
+                    symbol, start_ts=start_ts, end_ts=end_ts, strict=strict,
+                    **({"allow_remote_fetch": False} if not allow_remote_fetch else {}),
                 )
                 return CandleResolutionResult(
                     candles=candles,
@@ -871,7 +876,8 @@ async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavaila
     secret = "credential=trailing-secret\nTraceback (most recent call last)"
 
     async def fail_get_candles(*args, **kwargs):
-        raise RuntimeError(secret)
+        from ccxt.base.errors import NetworkError
+        raise NetworkError(secret)
 
     bot.cm.get_candles = fail_get_candles
 
@@ -889,7 +895,7 @@ async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavaila
     assert "[trailing]" in records[0].message
     assert "symbol=TEST" in records[0].message
     assert "action=mark_unavailable" in records[0].message
-    assert records[0].getMessage().endswith("error_type=RuntimeError")
+    assert records[0].getMessage().endswith("error_type=NetworkError")
     assert secret not in records[0].getMessage()
     assert "Traceback" not in records[0].getMessage()
 
