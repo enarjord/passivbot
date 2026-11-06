@@ -91,10 +91,28 @@ origin is factually proven. Attenuation is a disclosed estimate, not exact-histo
 or safety proof; losing the initializer declares a new bounded bootstrap.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
-Ordinary preparation retains the actual immutable HSL candle-source and fill receipts,
-including for empty plans. A replacement receipt invalidates preparation and completed-plan
-acceptance after protection, even when its payload is equal. Quotes refreshed by preparation
-do not invalidate that receipt. These references belong only to the outstanding plan.
+Ordinary HSL acquisition completes remote candle/EMA, quote and confirming account reads before
+freezing the immutable HSL candle-source and fill receipts actually consumed by its decision.
+Early trailing work only preloads the factual candle cohort under one shared bounded remote
+budget; it cannot confirm a fill transition or mutate derived trailing readiness. Complete local
+candle acquisition before freezing the consumed receipts. Derive the complete trailing inputs and
+pending-confirmation predicates from current canonical fills and the owned candle results without
+yielding after the first fill/confirmation read. A discarded asynchronous cache-read cohort must
+never clear a pending confirmation. This acquire-then-derive rule also applies to ordinary trailing
+callers with HSL disabled. Recheck exact receipt identities and account facts before synchronous
+HSL/native consumption. Revalidate previously confirmed trailing evidence under the
+[canonical fill-confirmation contract](fill_events_manager.md); an unchanged fill ID or partial
+ledger signature cannot certify corrected after-state or replay inputs. Missing cached coverage stays explicitly unavailable;
+no provisional bundle grants permission. A receipt renewed before this consumption does not
+invalidate unconsumed work. A replacement after consumption invalidates even empty plans,
+reconciliation, completed-plan acceptance after protection, and connector admission, even when
+its payload is equal. Quotes refreshed by preparation do not invalidate these source receipts.
+HSL-disabled ordinary preparation keeps its existing initial-receipt and readiness checks.
+The active plan strongly owns consumed receipts through execution. Per-order wave history retains
+only weak references, and discarded or completed plans explicitly retire their receipt identities;
+a retained diagnostic traceback cannot keep an old order authorized. Expired or retired references
+fail closed. Bounded ordinary-defer diagnostics report the discard phase and reason without raw
+input payloads.
 Slow ordinary preparation must not consume the current-account freshness budget before
 permission capture. After EMA and quote preparation, confirm a fresh account cohort without
 changing the prepared position, order, snapped-balance or required-fill facts. An unchanged

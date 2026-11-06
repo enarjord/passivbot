@@ -218,7 +218,8 @@ async def test_resolution_ladder_rejects_coarse_bucket_crossing_1m_boundary():
 
 
 @pytest.mark.asyncio
-async def test_manager_resolution_ladder_reuses_canonical_candle_reads(tmp_path):
+@pytest.mark.parametrize("allow_remote_fetch", [True, False])
+async def test_manager_resolution_ladder_reuses_canonical_candle_reads(tmp_path, allow_remote_fetch):
     manager = CandlestickManager(exchange=None, cache_dir=str(tmp_path))
     manager._now_ms_callback = lambda: 13 * ONE_MIN_MS
     calls = []
@@ -227,6 +228,7 @@ async def test_manager_resolution_ladder_reuses_canonical_candle_reads(tmp_path)
         symbol, *, start_ts, end_ts, strict, timeframe=None, **_kwargs
     ):
         calls.append((symbol, timeframe or "1m", start_ts, end_ts, strict))
+        assert _kwargs["allow_remote_fetch"] is allow_remote_fetch
         if timeframe is None:
             return _resolution_candles(10, 11)
         if timeframe == "5m":
@@ -236,7 +238,8 @@ async def test_manager_resolution_ladder_reuses_canonical_candle_reads(tmp_path)
     manager.get_candles = fake_get_candles
 
     result = await manager.get_candles_with_resolution_ladder(
-        "TEST/USDT", start_ts=0, end_ts=11 * ONE_MIN_MS, strict=False
+        "TEST/USDT", start_ts=0, end_ts=11 * ONE_MIN_MS, strict=False,
+        allow_remote_fetch=allow_remote_fetch,
     )
 
     assert [call[1] for call in calls] == ["1m", "5m"]

@@ -7991,6 +7991,7 @@ class CandlestickManager:
         start_ts: int,
         end_ts: Optional[int] = None,
         strict: bool = False,
+        allow_remote_fetch: bool = True,
     ) -> CandleResolutionResult:
         """Return exact recent 1m candles with a coarser historical prefix.
 
@@ -8030,6 +8031,7 @@ class CandlestickManager:
                 end_ts=end_ts,
                 strict=strict,
                 timeframe=None if timeframe == "1m" else timeframe,
+                allow_remote_fetch=allow_remote_fetch,
             )
 
         return await fetch_candles_with_resolution_ladder(

@@ -329,10 +329,12 @@ def test_process_recovery_is_once_and_isolates_sink_failure(caplog, monkeypatch)
 )
 async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     import asyncio
-    from unittest.mock import AsyncMock
-    from live.hsl_live import Owner
+    from unittest.mock import AsyncMock, Mock
+    from live.freshness import FreshnessLedger
+    from live.hsl_live import Owner, Wave
 
     state = {"signature": "prior-failure"}
+    ledger = FreshnessLedger(now_ms=0)
     bot = SimpleNamespace(
         _process_failure_state=state,
         stop_signal_received=False,
@@ -340,6 +342,8 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
         refresh_protective_authoritative_state=AsyncMock(return_value=False),
         execute_order_plan_to_exchange=AsyncMock(),
         _handle_staged_execution_precondition_error=lambda exc: (False, {}),
+        _ensure_freshness_ledger=lambda: ledger,
+        _log_staged_execution_defer=Mock(),
     )
     if outcome == "write_failed":
         bot.execute_order_plan_to_exchange.side_effect = RuntimeError("ordinary failure")
@@ -351,13 +355,15 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     instance = Owner(bot)
     instance.protect = AsyncMock(return_value=False)
     instance._account_matches = lambda *args: outcome != "rejected"
+    instance._account_mismatch_reason = lambda *args: "account_facts_changed"
     if outcome != "pending":
         instance._ordinary = asyncio.get_running_loop().create_future()
         if outcome == "failed":
             instance._ordinary.set_exception(RuntimeError("ordinary failure"))
         else:
             creates = [] if outcome == "noop" else [{"symbol": "TEST/USDT:USDT"}]
-            instance._ordinary.set_result(([], creates, object(), object()))
+            wave = Wave(0, 0, (), (), (), "", (), 0.0, 0)
+            instance._ordinary.set_result(([], creates, object(), wave))
     with caplog.at_level(logging.INFO):
         if outcome in {"failed", "write_failed"}:
             with pytest.raises(RuntimeError, match="ordinary failure"):
@@ -367,6 +373,7 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     recovered = outcome in {"admitted", "noop"}
     assert bool(state) == (not recovered)
     assert ("ordinary execution resumed" in caplog.text) is recovered
+    assert bot._log_staged_execution_defer.call_count == int(outcome == "rejected")
     assert bot.execute_order_plan_to_exchange.await_count == int(
         recovered or outcome in {"write_failed", "shutdown", "shutdown_in_progress"}
     )

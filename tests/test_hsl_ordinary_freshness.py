@@ -46,7 +46,7 @@ def planning_bot(monkeypatch, *, mode="coin", stage="ema", change=None, refresh_
             await release.wait()
         await asyncio.sleep(0)
 
-    async def noop():
+    async def noop(**kwargs):
         return True
 
     async def warmup(symbols):
@@ -100,6 +100,12 @@ def planning_bot(monkeypatch, *, mode="coin", stage="ema", change=None, refresh_
         raise AssertionError("test boundary was not reached")
 
     bot.prepare_planning_universe = noop
+    bot.update_trailing_data = noop
+
+    async def cached_candles(**kwargs):
+        return {}
+
+    bot._preload_trailing_candles = cached_candles
     bot.refresh_market_state_if_needed = noop
     bot._warmup_new_forager_normal_symbols = warmup
     bot._load_orchestrator_ema_bundle = ema
@@ -279,7 +285,8 @@ async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["source", "fill"])
-async def test_equal_immutable_receipt_replacement_still_invalidates_preparation(monkeypatch, kind):
+@pytest.mark.parametrize("stage", ["before_consumption", "during_trailing"])
+async def test_equal_receipt_replacement_tracks_actual_consumption(monkeypatch, kind, stage):
     from dataclasses import replace
     from live.hsl_candles import Sources
     from live.hsl_runtime import observe_fills
@@ -287,23 +294,32 @@ async def test_equal_immutable_receipt_replacement_still_invalidates_preparation
     fixture = planning_bot(monkeypatch)
     fixture.owner.sources[SYMBOL] = Sources((), (), 0)
     fixture.bot._hsl_fill_observation = observe_fills(fixture.bot, (NOW, NOW))
-    refresh = fixture.bot.refresh_protective_authoritative_state
+    attribute = (
+        "refresh_protective_authoritative_state"
+        if stage == "before_consumption" else "update_trailing_data"
+    )
+    original = getattr(fixture.bot, attribute)
 
     async def replace_receipt(**kwargs):
-        result = await refresh(**kwargs)
+        result = await original(**kwargs)
         if kind == "source":
             fixture.owner.sources[SYMBOL] = replace(fixture.owner.sources[SYMBOL])
         else:
             fixture.bot._hsl_fill_observation = replace(fixture.bot._hsl_fill_observation)
         return result
 
-    fixture.bot.refresh_protective_authoritative_state = replace_receipt
+    setattr(fixture.bot, attribute, replace_receipt)
     task = asyncio.create_task(fixture.owner._ordinary_plan())
     await asyncio.wait_for(fixture.entered.wait(), 1.0)
     fixture.clock[0] += 15_000
     fixture.release.set()
-    assert await task is None
-    assert fixture.captures[-1].permission(SYMBOL, "long")[0] == "normal"
+    plan = await task
+    assert (plan is not None) == (stage == "before_consumption")
+    if stage == "before_consumption":
+        assert fixture.captures[-1].permission(SYMBOL, "long")[0] == "normal"
+    else:
+        assert not fixture.captures
+        assert fixture.defers[-1]["defer_reason"] == f"hsl_{'candle' if kind == 'source' else 'fill'}_receipt_replaced"
 
 
 @pytest.mark.asyncio

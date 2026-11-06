@@ -14,6 +14,7 @@ from config.hsl import generated_template
 from config_utils import load_config
 from test_run_fake_live import REPO_ROOT, _cleanup_fake_user_state
 import tools.run_fake_live as runner
+from live.hsl_live import Wave
 
 
 @pytest.mark.asyncio
@@ -552,7 +553,9 @@ async def test_fake_ordinary_execution_has_one_finite_extra_budget(kind, tmp_pat
 
     async def ordinary():
         cancels, creates = ([{}], []) if kind == "cancel" else ([], [{}])
-        return cancels, creates, bot._current_planning_snapshot, object()
+        return cancels, creates, bot._current_planning_snapshot, Wave(
+            0, 0, (), (), (), "", (), 0.0, 0
+        )
 
     instance.protect, instance._ordinary_plan = protect, ordinary
     try:
@@ -676,13 +679,16 @@ async def test_fake_protective_write_confirmation_survives_failed_account_refres
         return True
 
     async def prepared():
-        return [], [], bot._current_planning_snapshot, object()
+        return [], [], bot._current_planning_snapshot, Wave(
+            0, 0, (), (), (), "", (), 0.0, 0
+        )
 
     bot.execute_orders = write
     bot.refresh_protective_authoritative_state = refresh
     instance = owner(bot)
     instance.protect = protect
     instance._account_matches = lambda *args: False
+    instance._account_mismatch_reason = lambda *args: "account_facts_changed"
     instance._ordinary = asyncio.create_task(prepared())
     await instance._ordinary
     try:
@@ -815,7 +821,9 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
     instance.protect = protect
 
     async def prepared():
-        return [], [dict(raw_at_rust=bot.raw)], object(), object()
+        return [], [dict(raw_at_rust=bot.raw)], object(), Wave(
+            0, 0, (), (), (), "", (), bot.raw, 0
+        )
 
     async def execute(cancels, creates):
         events.append("write")

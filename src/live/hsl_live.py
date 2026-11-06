@@ -7,6 +7,7 @@ must be admitted again from current facts immediately before a connector write.
 from dataclasses import dataclass, replace
 from functools import wraps
 import logging
+import weakref
 from uuid import uuid4
 
 from live import hsl_runtime as runtime
@@ -98,21 +99,25 @@ class OrdinaryPlanDeferred(RuntimeError):
 
 @dataclass(frozen=True, eq=False)
 class OrdinaryReceipts:
-    """Strong references to the immutable HSL acquisitions used in preparation."""
+    """Strong references retained from actual ordinary input consumption."""
 
     sources: tuple
     fills: object
 
+    def mismatch_reason(self, other):
+        if self.fills is not other.fills:
+            return "hsl_fill_receipt_replaced"
+        if len(self.sources) != len(other.sources) or any(
+            symbol != current_symbol or receipt is not current_receipt
+            for (symbol, receipt), (current_symbol, current_receipt)
+            in zip(self.sources, other.sources)
+        ):
+            return "hsl_candle_receipt_replaced"
+        return None
+
     def matches(self, other):
-        return (
-            self.fills is other.fills
-            and len(self.sources) == len(other.sources)
-            and all(
-                symbol == current_symbol and receipt is current_receipt
-                for (symbol, receipt), (current_symbol, current_receipt)
-                in zip(self.sources, other.sources)
-            )
-        )
+        return self.mismatch_reason(other) is None
+
 
 
 @dataclass(frozen=True)
@@ -129,6 +134,7 @@ class Wave:
     required_fills: tuple | None = None
     ordinary_receipts: OrdinaryReceipts | None = None
     balance_observed_ms: int | None = None
+    ordinary_receipt_ref: object | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -162,6 +168,7 @@ class Owner:
         self.sources = {}
         self.quotes = {}
         self._waves = {}
+        self._retired_ordinary_receipts = weakref.WeakSet()
         self._quote_tasks = {}
         self._quote_started = {}
         self._discard_quote_tasks = set()
@@ -172,7 +179,7 @@ class Owner:
         self._observation_clock_offset = getattr(bot, "_hsl_observation_clock_offset", None)
         self._account_clock_projector = getattr(bot, "_hsl_account_clock_projector", None)
 
-    def capture(self, quotes=None, *, target=None):
+    def capture(self, quotes=None, *, target=None, ordinary_receipts=None):
         # Factual caches only. The adapter clips every observation again to the
         # current window; neither prior GREEN nor prior RED is an input.
         bot = self.bot
@@ -217,6 +224,7 @@ class Owner:
             bot.get_raw_balance(),
             int(getattr(bot, "_account_invalidation_generation", 0)),
             balance_observed_ms=balance_observed_ms,
+            ordinary_receipts=ordinary_receipts,
         )
         return wave
 
@@ -252,21 +260,32 @@ class Owner:
         record(self.bot, wave)
 
     def _account_matches(self, wave, now):
+        return self._account_mismatch_reason(wave, now) is None
+
+    def _account_mismatch_reason(self, wave, now):
         bot = self.bot
-        if self._shutdown_requested() or self._refresh_lock.locked():
-            return False
-        if (
-            wave.ordinary_receipts is not None
-            and not wave.ordinary_receipts.matches(self.ordinary_receipts())
-        ):
-            return False
+        if self._shutdown_requested():
+            return "shutdown"
+        if self._refresh_lock.locked():
+            return "account_refresh_in_progress"
+        receipts = wave.ordinary_receipts
+        if wave.ordinary_receipt_ref is not None:
+            receipts = wave.ordinary_receipt_ref()
+            if receipts is None:
+                return "ordinary_plan_retired"
+        if receipts is not None:
+            if receipts in self._retired_ordinary_receipts:
+                return "ordinary_plan_retired"
+            reason = receipts.mismatch_reason(self.ordinary_receipts())
+            if reason is not None:
+                return reason
         if (
             wave.required_fills is not None
             and wave.required_fills != self.required_fill_facts()
         ):
-            return False
+            return "required_fill_facts_changed"
         if self._current_account_unavailable(now):
-            return False
+            return "current_account_inputs_unavailable"
         # Every write requires the current account generation. Changed size/basis
         # requires replanning, including for a panic close.
         if (
@@ -274,10 +293,46 @@ class Owner:
             or wave.positions != runtime.observe_positions(bot).payload
             or wave.open_orders != runtime.observe_open_orders(bot)
         ):
-            return False
+            return "account_facts_changed"
         if wave.balance != bot.get_raw_balance():
-            return False
-        return True
+            return "raw_balance_changed"
+        return None
+
+    def _defer_ordinary(self, reason, *, phase, missing=()):
+        # This describes an existing discard, never an admission decision.
+        from live.events import run_diagnostic_step
+
+        bot = self.bot
+        details = dict(
+            context=f"ordinary {phase}: {reason}",
+            defer_reason=reason,
+            missing=list(missing),
+            required=["balance", "positions", "open_orders"],
+            invalid={"ordinary_plan": [{"reason": reason}]},
+            epoch=bot._ensure_freshness_ledger().epoch,
+        )
+        run_diagnostic_step(
+            "observe ordinary plan discard",
+            lambda: bot._log_staged_execution_defer(details),
+        )
+
+    async def prepare_ordinary_consumption(self, prepared_account):
+        """Rebuild fill-dependent inputs after remote work, then freeze their cohort."""
+        candles = await self.bot._preload_trailing_candles(allow_remote_fetch=False)
+        if prepared_account is not None:
+            self.require_ordinary_account(prepared_account)
+        receipts = self.ordinary_receipts()
+        # The prepared-candle route is a complete nonyielding derivation: no
+        # confirmation state can leak from an abandoned cache-read cohort.
+        await self.bot.update_trailing_data(
+            allow_remote_fetch=False, prepared_candles=candles
+        )
+        if prepared_account is not None:
+            self.require_ordinary_account(prepared_account)
+        reason = receipts.mismatch_reason(self.ordinary_receipts())
+        if reason is not None:
+            raise OrdinaryPlanDeferred(reason)
+        return receipts
 
     def _current_account_unavailable(self, now):
         bot = self.bot
@@ -395,7 +450,15 @@ class Owner:
 
     def bind(self, wave, cancels, creates, *, ordinary=False):
         if ordinary:
-            wave = replace(wave, required_fills=self.required_fill_facts())
+            wave = replace(
+                wave,
+                required_fills=self.required_fill_facts(),
+                ordinary_receipt_ref=(
+                    weakref.ref(wave.ordinary_receipts)
+                    if wave.ordinary_receipts is not None else None
+                ),
+                ordinary_receipts=None,
+            )
         # A fresh owner must not recycle an old order's receipt identifier.
         token = uuid4().hex
         self._waves[token] = wave
@@ -717,41 +780,67 @@ class Owner:
     async def _ordinary_plan(self):
         bot = self.bot
         account = self.account_facts()
-        receipts = self.ordinary_receipts()
+        hsl_enabled = runtime.enabled(bot)
+        initial_receipts = None if hsl_enabled else self.ordinary_receipts()
+        plan = None
+        try:
+            plan = await self._prepare_ordinary_plan(account, initial_receipts)
+            return plan
+        finally:
+            # The active returned plan owns these references until execution
+            # finishes. The bot and bounded per-order wave history must not keep
+            # old source tapes alive after an attempt has retired.
+            wave = getattr(bot, "_hsl_planning_wave", None)
+            if isinstance(wave, Wave) and wave.ordinary_receipts is not None:
+                if plan is None:
+                    self._retired_ordinary_receipts.add(wave.ordinary_receipts)
+                bot._hsl_planning_wave = replace(wave, ordinary_receipts=None)
+
+    async def _prepare_ordinary_plan(self, account, initial_receipts):
+        bot = self.bot
         await bot.prepare_planning_universe()
         if not self.same_account_facts(account, self.account_facts()):
+            self._defer_ordinary("account_facts_changed", phase="preparation")
             return None
-        if not await bot.refresh_market_state_if_needed():
+        if not await bot.refresh_market_state_if_needed(trailing_acquisition_only=True):
+            self._defer_ordinary("market_inputs_unavailable", phase="preparation")
             return None
         if not self.same_account_facts(account, self.account_facts()):
+            self._defer_ordinary("account_facts_changed", phase="preparation")
             return None
-        ready, _ = bot._staged_execution_ready_state(
+        ready, details = bot._staged_execution_ready_state(
             include_market_snapshot=False, context="hsl ordinary planning"
         )
         if not ready:
+            self._defer_ordinary(
+                "staged_inputs_unavailable", phase="preparation",
+                missing=details.get("missing", ()),
+            )
             return None
         try:
             cancels, creates = await bot.calc_orders_to_cancel_and_create()
         except OrdinaryPlanDeferred as exc:
-            bot._log_staged_execution_defer(
-                dict(
-                    context="ordinary HSL capture",
-                    defer_reason=exc.reason,
-                    missing=list(exc.missing),
-                    required=["balance", "positions", "open_orders"],
-                    invalid={"hsl_account": [{"reason": exc.reason}]},
-                    epoch=bot._ensure_freshness_ledger().epoch,
-                )
-            )
+            self._defer_ordinary(exc.reason, phase="consumption", missing=exc.missing)
             return None
         if not self.same_account_facts(account, self.account_facts()):
+            self._defer_ordinary("account_facts_changed", phase="after_reconciliation")
             return None
-        if not receipts.matches(self.ordinary_receipts()):
+        receipts = bot._hsl_planning_wave.ordinary_receipts
+        if not isinstance(receipts, OrdinaryReceipts):
+            raise RuntimeError("ordinary plan is missing its consumed input receipt")
+        current_receipts = self.ordinary_receipts()
+        reason = (
+            initial_receipts.mismatch_reason(current_receipts)
+            if initial_receipts is not None else None
+        ) or receipts.mismatch_reason(current_receipts)
+        if reason is not None:
+            self._defer_ordinary(reason, phase="after_reconciliation")
             return None
         # Preparation may span confirming raw-balance changes. Ordinary Rust
         # risk consumes the latest raw balance at its actual calculation, so
         # reconciliation and submission must retain that exact observation.
         if bot._hsl_planning_wave.balance != bot.get_raw_balance():
+            self._defer_ordinary("raw_balance_changed", phase="after_reconciliation")
             return None
         # Empty plans need the same immutable receipt as nonempty plans. An
         # order dictionary is not the authority for the completed calculation.
@@ -869,6 +958,7 @@ class Owner:
         timings = dict(authoritative=0, protection=0, ordinary_execute=0)
         cycle_id = None
         ordinary_elapsed_ms = None
+        completed_receipts = None
         try:
             bot._begin_live_event_cycle(loop_start_ms=started_ms)
             cycle_id = getattr(bot, "_live_event_current_cycle_id", None)
@@ -887,6 +977,8 @@ class Owner:
                 completed, self._ordinary = self._ordinary, None
                 try:
                     plan = completed.result()
+                    if plan is not None:
+                        completed_receipts = plan[3].ordinary_receipts
                 except RuntimeError as exc:
                     handled, details = bot._handle_staged_execution_precondition_error(
                         exc
@@ -926,6 +1018,11 @@ class Owner:
                         (perf_counter() - phase_started) * 1000
                     )
                 else:
+                    self._defer_ordinary(
+                        self._account_mismatch_reason(wave, int(utc_ms()))
+                        or "current_inputs_changed",
+                        phase="after_protection",
+                    )
                     plan = None
             phase_started = perf_counter()
             refreshed = await bot.refresh_protective_authoritative_state(
@@ -973,6 +1070,8 @@ class Owner:
             )
             return dict(updated=False, current_io_unavailable=True)
         finally:
+            if completed_receipts is not None:
+                self._retired_ordinary_receipts.add(completed_receipts)
             self._running = was_running
             self._cycle_running = False
             for wave in reports:

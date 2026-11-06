@@ -1,4 +1,4 @@
-"""An ordinary plan retains the actual HSL acquisitions it prepared against."""
+"""An ordinary plan retains the acquisitions consumed by its final calculation."""
 
 import asyncio
 from dataclasses import replace
@@ -25,14 +25,19 @@ def planning_bot(*, empty):
     bot._hsl_fill_observation = hsl_runtime.observe_fills(bot, (NOW, NOW))
     bot._current_planning_snapshot = object()
 
-    async def ready():
+    async def ready(**kwargs):
         return True
+
+    bot._log_staged_execution_defer = lambda details: None
+    bot._after_ordinary_consumption = ready
 
     async def reconcile():
         bot._hsl_planning_wave = hsl_live.Wave(
             NOW, NOW, (), (), (), hsl_runtime.observe_positions(bot).payload,
             hsl_runtime.observe_open_orders(bot), bot.get_raw_balance(), 0,
+            ordinary_receipts=instance.ordinary_receipts(),
         )
+        await bot._after_ordinary_consumption()
         return [], [] if empty else [dict(symbol=SYMBOL, qty=1.0)]
 
     bot.prepare_planning_universe = ready
@@ -57,22 +62,23 @@ def change_receipt(bot, instance, change):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("empty", [False, True])
-@pytest.mark.parametrize("stage", ["universe", "market", "reconcile"])
+@pytest.mark.parametrize("stage", ["universe", "market", "reconcile", "after_capture"])
 @pytest.mark.parametrize("change", ["source", "fill", "quote", "unchanged"])
-async def test_ordinary_preparation_retains_acquisition_identity(empty, stage, change):
+async def test_ordinary_consumption_retains_acquisition_identity(empty, stage, change):
     bot, instance = planning_bot(empty=empty)
     entered, release = asyncio.Event(), asyncio.Event()
     attribute = {
         "universe": "prepare_planning_universe",
         "market": "refresh_market_state_if_needed",
         "reconcile": "calc_orders_to_cancel_and_create",
+        "after_capture": "_after_ordinary_consumption",
     }[stage]
     original = getattr(bot, attribute)
 
-    async def pause():
+    async def pause(**kwargs):
         entered.set()
         await release.wait()
-        return await original()
+        return await original(**kwargs)
 
     setattr(bot, attribute, pause)
     task = asyncio.create_task(instance._ordinary_plan())
@@ -80,7 +86,8 @@ async def test_ordinary_preparation_retains_acquisition_identity(empty, stage, c
     change_receipt(bot, instance, change)
     release.set()
     result = await task
-    assert (result is not None) == (change in {"quote", "unchanged"})
+    allowed = stage != "after_capture" or change in {"quote", "unchanged"}
+    assert (result is not None) == allowed
     # Only the returned plan owns this receipt, never the per-order risk wave.
     if result is not None:
         assert len(result) == 4
