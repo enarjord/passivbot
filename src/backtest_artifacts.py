@@ -49,29 +49,6 @@ def _resolve_artifact_path(
     return None
 
 
-def _read_csv_if_exists(path: Path, *, compression: str | None = None) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(path)
-    return pd.read_csv(path, compression=compression)
-
-
-def _normalize_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "timestamp" not in out.columns:
-        first_col = out.columns[0] if len(out.columns) else None
-        if first_col is not None and str(first_col).startswith("Unnamed"):
-            out = out.rename(columns={first_col: "timestamp"})
-    else:
-        generated_index_cols = [
-            col for col in out.columns if str(col).startswith("Unnamed")
-        ]
-        if generated_index_cols:
-            out = out.drop(columns=generated_index_cols)
-    if "timestamp" in out.columns:
-        out["timestamp"] = pd.to_datetime(out["timestamp"], errors="raise")
-    return out
-
-
 @dataclass(frozen=True)
 class BacktestArtifact:
     artifact_dir: Path
