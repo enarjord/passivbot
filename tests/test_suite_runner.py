@@ -25,6 +25,8 @@ from suite_runner import (
     _run_combined_dataset,
     summarize_scenario_metrics,
     validate_suite_side_coin_lists,
+    _compute_dataset_available_exchanges,
+    run_backtest_scenario,
 )
 
 
@@ -824,6 +826,79 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
 
 
 @pytest.mark.asyncio
+async def test_prepare_master_datasets_matches_configured_pool_for_windows_and_coins(
+    monkeypatch,
+):
+    from suite_runner import _determine_needed_individual_exchanges
+
+    base_exchanges = ["binance", "bybit"]
+    base_config = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-03",
+            "exchanges": base_exchanges,
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenarios, _ = build_scenarios(
+        {
+            "scenarios": [
+                {"label": "base_pool", "start_date": "2024-01-01",
+                 "end_date": "2024-01-02", "coins": ["ETH"]},
+                {"label": "expanded_pool", "start_date": "2024-01-02",
+                 "end_date": "2024-01-03", "coins": ["BTC"],
+                 "exchanges": ["binance", "bybit", "bitget"]},
+            ]
+        },
+        base_exchanges=base_exchanges,
+    )
+    individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
+    exchanges = sorted(set(base_exchanges) | individual)
+    calls = []
+
+    async def prepare(config, exchange):
+        start = config["backtest"]["start_date"]
+        end = config["backtest"]["end_date"]
+        coins = config["live"]["approved_coins"]["long"]
+        assert config["live"]["approved_coins"]["short"] == coins
+        calls.append((exchange, start, end, list(coins)))
+        timestamps = np.array([utils.date_to_ts(start), utils.date_to_ts(end)], dtype=np.int64)
+        source = base_exchanges[0] if exchange == "combined" else exchange
+        return (
+            coins,
+            np.ones((2, len(coins), 4), dtype=np.float64),
+            {coin: {"exchange": source} for coin in coins},
+            "",
+            f"/tmp/{exchange}",
+            np.ones(2, dtype=np.float64),
+            timestamps,
+        )
+
+    monkeypatch.setitem(sys.modules, "backtest", SimpleNamespace(prepare_hlcvs_mss=prepare))
+    datasets = await prepare_master_datasets(
+        base_config, exchanges, needed_individual_exchanges=individual, scenarios=scenarios
+    )
+
+    assert individual == {"binance", "bybit", "bitget"}
+    assert calls == [
+        ("combined", "2024-01-01", "2024-01-02", ["ETH"]),
+        ("binance", "2024-01-02", "2024-01-03", ["BTC"]),
+        ("bitget", "2024-01-02", "2024-01-03", ["BTC"]),
+        ("bybit", "2024-01-02", "2024-01-03", ["BTC"]),
+    ]
+    assert datasets["combined"].available_exchanges == base_exchanges
+    assert datasets["combined"].coins == ["ETH"]
+    assert {
+        exchange: dataset.coins for exchange, dataset in datasets.items()
+        if exchange != "combined"
+    } == {exchange: ["BTC"] for exchange in individual}
+
+
+@pytest.mark.asyncio
 async def test_prepare_master_datasets_preserves_combined_source_exchanges(monkeypatch):
     async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
         assert exchange == "combined"
@@ -1166,7 +1241,11 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
         pass
 
     async def datasets(*args, **kwargs):
-        return {"bybit": SimpleNamespace(exchange="bybit", coins=["BTC"])}
+        return {
+            "bybit": SimpleNamespace(
+                exchange="bybit", coins=["BTC"], available_exchanges=["bybit"]
+            )
+        }
 
     observed = []
 
@@ -1233,3 +1312,245 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
     assert observed == [["bybit"]]
     assert resumed[0].exchanges == observed[0]
     assert config["backtest"]["exchanges"] == ["binance"]
+
+
+def _make_exchange_dataset(exchange, available_exchanges, timestamps, coins=("BTC",)):
+    coins = list(coins)
+    n = len(timestamps)
+    return ExchangeDataset(
+        exchange=exchange,
+        coins=coins,
+        coin_index={c: i for i, c in enumerate(coins)},
+        coin_exchange={c: exchange for c in coins},
+        available_exchanges=list(available_exchanges),
+        hlcvs=np.zeros((n, len(coins), 4), dtype=np.float64),
+        mss={c: {} for c in coins},
+        btc_usd_prices=np.ones(n, dtype=np.float64),
+        timestamps=np.asarray(timestamps, dtype=np.int64),
+        cache_dir="",
+    )
+
+
+def test_available_exchanges_uses_real_exchanges_not_labels():
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1637953920000, 1640995200000]
+    )
+    binance = _make_exchange_dataset(
+        "binance", ["binance"], [1570147200000, 1578000000000]
+    )
+    result = _compute_dataset_available_exchanges(
+        {"combined": combined, "binance": binance}
+    )
+    assert result == ["binance", "bybit"]
+    assert "combined" not in result
+
+
+def test_available_exchanges_single_combined_keeps_real_exchanges():
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1637953920000, 1640995200000]
+    )
+    result = _compute_dataset_available_exchanges({"combined": combined})
+    assert result == ["binance", "bybit"]
+
+
+@pytest.mark.parametrize("with_combined", [False, True])
+def test_individual_dataset_availability_uses_candle_exchange(with_combined):
+    datasets = {
+        "binance": _make_exchange_dataset("binance", ["bybit"], [0, 60_000])
+    }
+    expected = ["binance"]
+    if with_combined:
+        datasets["combined"] = _make_exchange_dataset(
+            "combined", ["bitget", "okx"], [0, 60_000]
+        )
+        expected += ["bitget", "okx"]
+    assert _compute_dataset_available_exchanges(datasets) == expected
+
+
+@pytest.mark.parametrize(
+    "requested,has_combined,expected",
+    [
+        ({"binance", "bybit"}, True, True),
+        ({"binance"}, True, False),
+        ({"bitget"}, True, False),
+        ({"binance", "bybit", "bitget"}, True, False),
+        ({"binance", "bybit"}, False, False),
+    ],
+)
+def test_combined_selection_matches_its_source_pool(requested, has_combined, expected):
+    from suite_runner import _scenario_uses_combined_dataset
+
+    datasets = {
+        "bitget": _make_exchange_dataset("bitget", ["bitget"], [0, 60_000])
+    }
+    if has_combined:
+        datasets["combined"] = _make_exchange_dataset(
+            "combined", ["binance", "bybit"], [0, 60_000]
+        )
+    assert _scenario_uses_combined_dataset(requested, datasets) is expected
+
+
+def _run_scenario_dataset_decision(monkeypatch, datasets, scenario):
+    import suite_runner as suite
+    from tools import iterative_backtester
+
+    calls = {"combined": False, "multi": False, "multi_keys": None}
+
+    def fake_combined(*args, **kwargs):
+        calls["combined"] = True
+        return {"combined": {}}
+
+    def fake_multi(filtered_datasets, *args, **kwargs):
+        calls["multi"] = True
+        calls["multi_keys"] = sorted(filtered_datasets.keys())
+        return {"x": {}}
+
+    monkeypatch.setattr(suite, "_run_combined_dataset", fake_combined)
+    monkeypatch.setattr(suite, "_run_multi_dataset", fake_multi)
+    monkeypatch.setattr(
+        suite,
+        "apply_scenario",
+        lambda *a, **kw: ({"backtest": {}}, ["BTC"]),
+    )
+    monkeypatch.setattr(iterative_backtester, "combine_analyses", lambda analyses: {})
+
+    base_config = {
+        "backtest": {"start_date": "2019-01-01", "end_date": "2026-12-31"}
+    }
+
+    asyncio.run(
+        run_backtest_scenario(
+            scenario,
+            base_config,
+            datasets,
+            master_coins=["BTC"],
+            master_ignored=[],
+            available_exchanges=_compute_dataset_available_exchanges(datasets),
+            available_coins={"BTC"},
+            results_root=None,
+            disable_plotting=True,
+        )
+    )
+    return calls
+
+
+def test_single_exchange_scenario_picks_per_exchange_dataset(monkeypatch):
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1637953920000, 1640995200000]
+    )
+    binance = _make_exchange_dataset(
+        "binance", ["binance"], [1570147200000, 1578000000000]
+    )
+    scenario = SuiteScenario(
+        label="binance_only",
+        start_date="2019-10-04",
+        end_date="2020-01-02",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance"],
+    )
+    calls = _run_scenario_dataset_decision(
+        monkeypatch,
+        {"combined": combined, "binance": binance},
+        scenario,
+    )
+    assert calls["multi"] is True
+    assert calls["combined"] is False
+    assert calls["multi_keys"] == ["binance"]
+
+
+def test_multi_exchange_scenario_covering_combined_range_picks_combined(monkeypatch):
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1637953920000, 1650000000000]
+    )
+    binance = _make_exchange_dataset(
+        "binance", ["binance"], [1570147200000, 1650000000000]
+    )
+    scenario = SuiteScenario(
+        label="multi",
+        start_date="2022-01-01",
+        end_date="2022-03-01",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance", "bybit"],
+    )
+    calls = _run_scenario_dataset_decision(
+        monkeypatch,
+        {"combined": combined, "binance": binance},
+        scenario,
+    )
+    assert calls["combined"] is True
+    assert calls["multi"] is False
+
+
+def test_single_combined_dataset_still_uses_combined(monkeypatch):
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1637953920000, 1650000000000]
+    )
+    scenario = SuiteScenario(
+        label="full",
+        start_date="2022-01-01",
+        end_date="2022-03-01",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance", "bybit"],
+    )
+    calls = _run_scenario_dataset_decision(
+        monkeypatch,
+        {"combined": combined},
+        scenario,
+    )
+    assert calls["combined"] is True
+    assert calls["multi"] is False
+
+
+@pytest.mark.parametrize("individual_exchanges", [("binance",), ("binance", "bybit")])
+def test_partial_combined_range_keeps_combined_portfolio(monkeypatch, individual_exchanges):
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], [1643673600000, 1650000000000]
+    )
+    datasets = {"combined": combined}
+    for exchange in individual_exchanges:
+        datasets[exchange] = _make_exchange_dataset(
+            exchange, [exchange], [1640995200000, 1650000000000]
+        )
+    scenario = SuiteScenario(
+        label="early_multi",
+        start_date="2022-01-01",
+        end_date="2022-03-01",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance", "bybit"],
+    )
+    calls = _run_scenario_dataset_decision(monkeypatch, datasets, scenario)
+    assert calls["combined"] is True
+    assert calls["multi"] is False
+
+
+def test_aggregated_combined_range_keeps_combined_portfolio(monkeypatch):
+    from suite_runner import _apply_candle_aggregation
+
+    start = 1640995200000
+    end = start + 24 * 60 * 60_000
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], np.arange(start, end + 60_000, 60_000)
+    )
+    combined.hlcvs[:] = 1
+    combined.hlcvs, combined.timestamps, combined.btc_usd_prices = _apply_candle_aggregation(
+        combined.hlcvs, combined.timestamps, combined.btc_usd_prices, combined.mss, 5
+    )
+    assert combined.timestamps[-1] == end - 5 * 60_000
+    binance = _make_exchange_dataset("binance", ["binance"], [start, end])
+    scenario = SuiteScenario(
+        label="five_minute_multi",
+        start_date="2022-01-01",
+        end_date="2022-01-02",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance", "bybit"],
+    )
+    calls = _run_scenario_dataset_decision(
+        monkeypatch, {"combined": combined, "binance": binance}, scenario
+    )
+    assert calls["combined"] is True
+    assert calls["multi"] is False
