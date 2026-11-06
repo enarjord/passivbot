@@ -7,6 +7,7 @@ import pytest
 
 import passivbot as pb
 from candlestick_manager import CandlestickManager, ONE_MIN_MS
+from config.schema import get_expanded_config_prototype
 from live.hsl_live import Owner
 
 
@@ -35,8 +36,13 @@ async def test_candidate_native_surfaces_recover_without_admitted_ordinary_plan(
 
     exchange = PublicFixture()
     bot = pb.Passivbot.__new__(pb.Passivbot)
-    bot.config = {'live': {'candles': {'max_ohlcv_fetches_per_minute': 8}},
-                  'bot': {'portfolio': {'warmup': {'max_minutes': None}}}}
+    bot.config = get_expanded_config_prototype()
+    bot.config['live']['candles']['max_ohlcv_fetches_per_minute'] = 8
+    bot.config['bot']['portfolio']['warmup']['max_minutes'] = None
+    bot.config['bot']['portfolio']['hsl']['scope'] = 'coin'
+    for side in ('long', 'short'):
+        bot.config['bot'][side]['hsl']['enabled'] = False
+    bot.coin_overrides = {}
     bot.stop_signal_received = bot._shutdown_in_progress = False
     bot.ws_enabled = False
     bot.monitor_publisher = None
@@ -64,7 +70,8 @@ async def test_candidate_native_surfaces_recover_without_admitted_ordinary_plan(
     ordinary.account_facts = lambda: (fact, (), 100.0, None)
     bot.prepare_planning_universe = lambda: asyncio.sleep(0)
 
-    async def ready():
+    async def ready(*, trailing_acquisition_only):
+        assert trailing_acquisition_only is True
         return True
 
     bot.refresh_market_state_if_needed = ready
