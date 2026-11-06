@@ -702,8 +702,10 @@ def _derive_dataset_windows(
             windows.setdefault(str(exchange), base_window)
         return windows
 
-    exchange_set = {str(exchange) for exchange in exchanges}
-    use_combined = len(exchange_set) > 1
+    # The combined producer uses the configured pool. Extra scenario exchanges
+    # are prepared individually and must not change which windows it receives.
+    exchange_set = set(require_config_value(base_config, "backtest.exchanges"))
+    use_combined = len(set(exchanges)) > 1
     windows: Dict[str, DatasetWindow] = {}
 
     if use_combined:
@@ -1141,7 +1143,7 @@ async def prepare_master_datasets(
     use_combined = len(exchanges) > 1
 
     if use_combined:
-        exchange_set = {str(exchange) for exchange in exchanges}
+        exchange_set = set(require_config_value(base_config, "backtest.exchanges"))
         combined_scenarios = [
             scenario
             for scenario in (scenarios or [])
@@ -1656,7 +1658,6 @@ def _compute_effective_coin_exchange(
     available_exchanges: List[str],
 ) -> Dict[str, str]:
     """Return effective coin->exchange assignment for a scenario."""
-    has_combined = "combined" in datasets
     raw_scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else None
     actual_exchanges_set = {ex for ex in available_exchanges if ex != "combined"}
 
@@ -1667,7 +1668,7 @@ def _compute_effective_coin_exchange(
     else:
         scenario_exchanges = actual_exchanges_set
 
-    use_combined = has_combined and scenario_exchanges == actual_exchanges_set
+    use_combined = _scenario_uses_combined_dataset(scenario_exchanges, datasets)
     coin_exchange: Dict[str, str] = {}
 
     if use_combined:
@@ -1738,6 +1739,38 @@ def _apply_override(
     target[final_key] = value
 
 
+def _compute_dataset_available_exchanges(
+    datasets: Dict[str, "ExchangeDataset"],
+) -> List[str]:
+    """Return executable exchanges across prepared datasets.
+
+    Combined datasets advertise their configured source pool. Individual datasets
+    execute under their own exchange label; their coin metadata may instead name
+    a different venue supplying market settings.
+    """
+    return sorted(
+        {
+            exchange
+            for dataset in datasets.values()
+            for exchange in (
+                dataset.available_exchanges
+                if dataset.exchange == "combined"
+                else [dataset.exchange]
+            )
+            if exchange != "combined"
+        }
+    )
+
+
+def _scenario_uses_combined_dataset(
+    scenario_exchanges: Set[str],
+    datasets: Dict[str, ExchangeDataset],
+) -> bool:
+    """Match the combined source pool, independently of other prepared datasets."""
+    combined = datasets.get("combined")
+    return combined is not None and scenario_exchanges == set(combined.available_exchanges)
+
+
 async def run_backtest_scenario(
     scenario: SuiteScenario,
     base_config: Dict[str, Any],
@@ -1786,7 +1819,6 @@ async def run_backtest_scenario(
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine which dataset(s) to use based on scenario's exchange restriction
-    has_combined = "combined" in datasets
     raw_scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else None
     # Compute actual exchanges (excluding "combined" which is a synthetic dataset label)
     actual_exchanges_set = {ex for ex in available_exchanges if ex != "combined"}
@@ -1809,10 +1841,9 @@ async def run_backtest_scenario(
     else:
         scenario_exchanges = actual_exchanges_set
 
-    # Use combined dataset when:
-    # 1. It exists, AND
-    # 2. Scenario uses all actual exchanges (not a strict subset)
-    use_combined = has_combined and scenario_exchanges == actual_exchanges_set
+    # Match the combined dataset's own pool; other scenarios may prepare extra
+    # exchanges. Coverage affects completion, not the portfolio selection.
+    use_combined = _scenario_uses_combined_dataset(scenario_exchanges, datasets)
 
     if use_combined:
         dataset = datasets["combined"]
@@ -2320,7 +2351,7 @@ def _suite_session_inputs(
         )
         allowed = (set(scenario.exchanges) & actual) if scenario.exchanges else actual
         allowed = allowed or actual
-        combined = "combined" in datasets and allowed == actual
+        combined = _scenario_uses_combined_dataset(allowed, datasets)
         candidates = (
             {"combined": datasets["combined"]}
             if combined
@@ -2458,10 +2489,7 @@ async def run_backtest_suite_async(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    if len(datasets) == 1 and "combined" in datasets:
-        dataset_available_exchanges = datasets["combined"].available_exchanges
-    else:
-        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
+    dataset_available_exchanges = _compute_dataset_available_exchanges(datasets)
 
     # Deduplicate scenarios that resolve to identical effective inputs.
     seen_signatures: Dict[str, str] = {}

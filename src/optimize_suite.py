@@ -40,6 +40,8 @@ from suite_runner import (
     _determine_needed_individual_exchanges,
     _coalesce_master_coins,
     _prepare_scenario_universes,
+    _compute_dataset_available_exchanges,
+    _scenario_uses_combined_dataset,
 )
 from utils import (
     format_approved_ignored_coins,
@@ -206,25 +208,7 @@ async def prepare_suite_contexts(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    has_combined = "combined" in datasets
-    # A combined dataset may cover exchanges for which no individual dataset
-    # was prepared. Include its full source identity when deciding whether an
-    # explicit scenario restriction truly selects the whole exchange pool.
-    # Otherwise a bybit-only scenario can be misclassified as "all exchanges"
-    # merely because bybit is the only separately materialized dataset, and it
-    # may then consume combined candles selected from another exchange.
-    dataset_available_exchanges = sorted(
-        {
-            exchange
-            for dataset in datasets.values()
-            for exchange in (
-                dataset.available_exchanges
-                if dataset.exchange == "combined"
-                else [dataset.exchange]
-            )
-            if exchange != "combined"
-        }
-    )
+    dataset_available_exchanges = _compute_dataset_available_exchanges(datasets)
 
     contexts: List[ScenarioEvalContext] = []
 
@@ -398,10 +382,7 @@ async def prepare_suite_contexts(
         else:
             scenario_exchanges = all_exchanges_set
 
-        # Use combined dataset when:
-        # 1. It exists, AND
-        # 2. Scenario uses all available exchanges (or doesn't restrict)
-        use_combined = has_combined and scenario_exchanges == all_exchanges_set
+        use_combined = _scenario_uses_combined_dataset(scenario_exchanges, datasets)
 
         if use_combined:
             dataset = datasets["combined"]

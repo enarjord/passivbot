@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Select suite datasets using executable exchange identities and each combined
+  dataset's configured source pool. Preserve single-exchange history, combined
+  portfolios, and saved input fingerprints when scenarios add exchanges or use
+  market settings from another venue. Align preload dates, coins, and scenario
+  history demand with the selected portfolios.
+
 - Defer ordinary planning when its captured quotes expire or required snapshot inputs are absent,
   preserving the failed cohort's diagnostic details and retrying without restarting the bot.
   Preserve failure propagation for unrelated errors and malformed native results, including in
