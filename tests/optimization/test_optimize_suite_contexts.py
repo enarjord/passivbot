@@ -354,6 +354,67 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
 
 
 @pytest.mark.asyncio
+async def test_prepare_suite_contexts_keeps_combined_pool_with_scenario_only_exchange(
+    monkeypatch,
+):
+    _stub_market_identity_validation(monkeypatch)
+    config = get_template_config()
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance", "bybit"],
+        suite_enabled=True,
+        scenarios=[
+            {"label": "base_pool", "coins": ["ETH"]},
+            {
+                "label": "bitget_only",
+                "coins": ["BTC"],
+                "exchanges": ["bitget"],
+                "coin_sources": {"BTC": "bitget"},
+            },
+        ],
+    )
+    config["live"]["approved_coins"] = {"long": ["ETH"], "short": ["ETH"]}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    combined = _make_lazy_dataset(
+        coins=("ETH",),
+        coin_exchange={"ETH": "binance"},
+        available_exchanges=["binance", "bybit"],
+    )
+    bitget = _make_lazy_dataset(exchange="bitget", coins=("BTC",))
+    captured = {}
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def prepare(_base_config, exchanges, **kwargs):
+        captured["exchanges"] = exchanges
+        captured["needed"] = kwargs["needed_individual_exchanges"]
+        return {"combined": combined, "bitget": bitget}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", noop)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", noop)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", prepare)
+
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config,
+        optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert captured["exchanges"] == ["binance", "bitget", "bybit"]
+    assert captured["needed"] == {"bitget"}
+    assert [context.label for context in contexts] == ["base_pool", "bitget_only"]
+    assert [context.exchanges for context in contexts] == [["combined"], ["bitget"]]
+    assert contexts[0].config["backtest"]["coins"] == {"combined": ["ETH"]}
+    assert contexts[0].msss["combined"]["ETH"]["exchange"] == "binance"
+    assert contexts[0].master_hlcvs_specs == {"combined": combined.hlcvs_spec}
+    assert contexts[1].config["backtest"]["coins"] == {"bitget": ["BTC"]}
+    assert contexts[1].config["backtest"]["coin_sources"] == {"BTC": "bitget"}
+    assert contexts[1].master_hlcvs_specs == {"bitget": bitget.hlcvs_spec}
+
+
+@pytest.mark.asyncio
 async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_dataset(
     monkeypatch,
 ):

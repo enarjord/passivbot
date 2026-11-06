@@ -1280,6 +1280,29 @@ def test_available_exchanges_single_combined_keeps_real_exchanges():
     assert result == ["binance", "bybit"]
 
 
+@pytest.mark.parametrize(
+    "requested,has_combined,expected",
+    [
+        ({"binance", "bybit"}, True, True),
+        ({"binance"}, True, False),
+        ({"bitget"}, True, False),
+        ({"binance", "bybit", "bitget"}, True, False),
+        ({"binance", "bybit"}, False, False),
+    ],
+)
+def test_combined_selection_matches_its_source_pool(requested, has_combined, expected):
+    from suite_runner import _scenario_uses_combined_dataset
+
+    datasets = {
+        "bitget": _make_exchange_dataset("bitget", ["bitget"], [0, 60_000])
+    }
+    if has_combined:
+        datasets["combined"] = _make_exchange_dataset(
+            "combined", ["binance", "bybit"], [0, 60_000]
+        )
+    assert _scenario_uses_combined_dataset(requested, datasets) is expected
+
+
 def _run_scenario_dataset_decision(monkeypatch, datasets, scenario):
     import suite_runner as suite
     from tools import iterative_backtester

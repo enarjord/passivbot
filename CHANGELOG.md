@@ -8,8 +8,9 @@ since the latest release tag; these features may already be available when insta
 
 - Select suite datasets using their real source exchanges, so a single-exchange
   scenario uses its own history when a combined dataset is also prepared. Preserve
-  the combined portfolio for multi-exchange scenarios, including partial coverage
-  and aggregated candles, with matching saved dataset fingerprints.
+  the combined portfolio for scenarios matching its source pool, even when other
+  scenarios add exchanges, with partial coverage, aggregated candles and matching
+  saved dataset fingerprints.
 
 - Recover trailing confirmation on Binance USDT-M when stale cached position
   residue prevents replay from matching the exchange. Recovery requires a fresh,

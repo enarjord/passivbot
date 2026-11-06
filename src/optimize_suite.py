@@ -38,6 +38,7 @@ from suite_runner import (
     _normalize_date_to_ts,
     _determine_needed_individual_exchanges,
     _coalesce_master_coins,
+    _scenario_uses_combined_dataset,
 )
 from utils import (
     format_approved_ignored_coins,
@@ -176,7 +177,6 @@ async def prepare_suite_contexts(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    has_combined = "combined" in datasets
     # A combined dataset may cover exchanges for which no individual dataset
     # was prepared. Include its full source identity when deciding whether an
     # explicit scenario restriction truly selects the whole exchange pool.
@@ -328,10 +328,7 @@ async def prepare_suite_contexts(
         else:
             scenario_exchanges = all_exchanges_set
 
-        # Use combined dataset when:
-        # 1. It exists, AND
-        # 2. Scenario uses all available exchanges (or doesn't restrict)
-        use_combined = has_combined and scenario_exchanges == all_exchanges_set
+        use_combined = _scenario_uses_combined_dataset(scenario_exchanges, datasets)
 
         if use_combined:
             dataset = datasets["combined"]
