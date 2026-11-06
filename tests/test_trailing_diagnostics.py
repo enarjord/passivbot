@@ -288,7 +288,10 @@ def test_trailing_martingale_reset_extrema_cannot_emit_ordinary_trailing_close(
     assert reset["order_type"] == "close_trailing_long"
     assert reset["qty"] == pytest.approx(0.0)
     assert reset["triggered"] is False
-    assert reset["status"] == "waiting_retracement"
+    assert reset["status"] == "unavailable"
+    assert reset["retracement_price"] is None
+    assert reset["retracement_price_reason"] == "trailing_extremum_uninitialized"
+    assert reset["retracement_met"] is None
     assert seeded is not None
     assert seeded["order_type"] == "close_trailing_long"
     assert seeded["qty"] < 0.0

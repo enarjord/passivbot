@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep monitor output valid strict JSON: report unavailable trailing diagnostic prices explicitly
+  instead of publishing infinity from uninitialized extrema or arithmetic overflow. Reject other
+  non-finite snapshot, event and history writes visibly while preserving the previous valid data
+  and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
+
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
   portfolios, and saved input fingerprints when scenarios add exchanges or use

@@ -5,6 +5,23 @@
 `src/monitor_publisher.py` owns monitor appends, snapshots, manifest checkpoints, rotation,
 retention, and startup recovery. Persistence failures stay visible but never alter trading behavior.
 
+New snapshots, event rows and history rows must serialize as strict JSON. Unexpected NaN or
+infinity, including values produced by NumPy conversion, rejects that write through the existing
+visible persistence-failure policy. A failed snapshot leaves the previous snapshot and its
+checkpoint unchanged; a failed event/history serialization appends no partial row. Later valid
+writes recover normally. Rejection precedes event sequence reservation and segment rotation;
+uncertain append I/O still reserves its sequence to prevent reuse. Candle history advances its
+cursor only through successfully persisted rows and stops at a failed row so corrected data can
+retry without skipping a gap. Do not replace unknown non-finite observations with zero or silently
+change trading inputs to make a diagnostic serializable.
+
+Trailing projected prices distinguish available values, disabled/not-required projections, and
+unavailable extrema or arithmetic overflow. Unavailable projected prices and their dependent
+price-change observations are null with explicit diagnostic status/reason. Native trailing
+sentinels and native order results keep their trading semantics; monitor projection is not order
+authority. Structured trailing events preserve that absence and classification; dashboard
+comparisons show unknown rather than an observed negative when their value is null or absent.
+
 `state.latest.json` is refreshed by a serialized background maintainer, independent
 of whether the trading loop reaches a valid planning snapshot. Successful and
 degraded cycles may also request a flush; concurrent requests serialize and the

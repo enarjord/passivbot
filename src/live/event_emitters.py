@@ -4889,10 +4889,12 @@ def _trailing_threshold_projection(
     if threshold_price <= 0.0 or retracement_fraction < 0.0:
         return None
     if (kind == "entry" and pside == "long") or (kind == "close" and pside == "short"):
-        return threshold_price * (1.0 + retracement_fraction)
-    if (kind == "entry" and pside == "short") or (kind == "close" and pside == "long"):
-        return threshold_price * (1.0 - retracement_fraction)
-    return None
+        projected = threshold_price * (1.0 + retracement_fraction)
+    elif (kind == "entry" and pside == "short") or (kind == "close" and pside == "long"):
+        projected = threshold_price * (1.0 - retracement_fraction)
+    else:
+        return None
+    return projected if math.isfinite(projected) else None
 
 
 def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -4911,13 +4913,13 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "order_type": str(payload.get("order_type") or "") or None,
         "triggered": bool(payload.get("triggered", False)),
         "threshold_met": (
-            bool(payload.get("threshold_met", False))
-            if "threshold_met" in payload
+            bool(payload["threshold_met"])
+            if payload.get("threshold_met") is not None
             else None
         ),
         "retracement_met": (
-            bool(payload.get("retracement_met", False))
-            if "retracement_met" in payload
+            bool(payload["retracement_met"])
+            if payload.get("retracement_met") is not None
             else None
         ),
         "threshold_fraction": _safe_float(payload.get("threshold_fraction")),
@@ -4943,7 +4945,31 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "changed": bool(payload.get("changed", False)),
         "operator_visible": bool(payload.get("operator_visible", True)),
     }
-    return {key: value for key, value in out.items() if value is not None}
+    summary = {key: value for key, value in out.items() if value is not None}
+    # Preserve explicit diagnostic absence rather than turning it into a negative
+    # comparison or omitting the producer's availability explanation.
+    for name in ("threshold", "retracement"):
+        for field in (
+            f"{name}_fraction", f"{name}_price", f"{name}_met",
+            f"current_price_change_from_{name}_fraction",
+        ):
+            if field in payload and payload[field] is None:
+                summary[field] = None
+            status = payload.get(f"{field}_status")
+            if status in ("available", "unavailable", "not_required"):
+                summary[f"{field}_status"] = status
+            reason = payload.get(f"{field}_reason")
+            if reason in (
+                "projection_fraction_unavailable", "projection_fraction_non_finite",
+                "trailing_extremum_non_finite",
+                "trailing_extremum_uninitialized", "position_price_non_finite",
+                "projected_price_overflow", "current_price_non_finite",
+                "projected_change_overflow",
+            ):
+                summary[f"{field}_reason"] = reason
+    if payload.get("projection_status") in ("available", "unavailable"):
+        summary["projection_status"] = payload["projection_status"]
+    return summary
 
 
 def emit_trailing_status_event(
