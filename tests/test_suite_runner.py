@@ -26,7 +26,6 @@ from suite_runner import (
     summarize_scenario_metrics,
     validate_suite_side_coin_lists,
     _compute_dataset_available_exchanges,
-    _dataset_covers_scenario_range,
     run_backtest_scenario,
 )
 
@@ -1281,7 +1280,7 @@ def test_available_exchanges_single_combined_keeps_real_exchanges():
     assert result == ["binance", "bybit"]
 
 
-def _run_scenario_dataset_decision(monkeypatch, datasets, available_exchanges, scenario):
+def _run_scenario_dataset_decision(monkeypatch, datasets, scenario):
     import suite_runner as suite
     from tools import iterative_backtester
 
@@ -1316,7 +1315,7 @@ def _run_scenario_dataset_decision(monkeypatch, datasets, available_exchanges, s
             datasets,
             master_coins=["BTC"],
             master_ignored=[],
-            available_exchanges=available_exchanges,
+            available_exchanges=_compute_dataset_available_exchanges(datasets),
             available_coins={"BTC"},
             results_root=None,
             disable_plotting=True,
@@ -1343,7 +1342,6 @@ def test_single_exchange_scenario_picks_per_exchange_dataset(monkeypatch):
     calls = _run_scenario_dataset_decision(
         monkeypatch,
         {"combined": combined, "binance": binance},
-        ["binance", "bybit"],
         scenario,
     )
     assert calls["multi"] is True
@@ -1369,7 +1367,6 @@ def test_multi_exchange_scenario_covering_combined_range_picks_combined(monkeypa
     calls = _run_scenario_dataset_decision(
         monkeypatch,
         {"combined": combined, "binance": binance},
-        ["binance", "bybit"],
         scenario,
     )
     assert calls["combined"] is True
@@ -1391,37 +1388,59 @@ def test_single_combined_dataset_still_uses_combined(monkeypatch):
     calls = _run_scenario_dataset_decision(
         monkeypatch,
         {"combined": combined},
-        ["binance", "bybit"],
         scenario,
     )
     assert calls["combined"] is True
     assert calls["multi"] is False
 
 
-def test_multi_exchange_scenario_outside_combined_range_falls_back(monkeypatch):
+@pytest.mark.parametrize("individual_exchanges", [("binance",), ("binance", "bybit")])
+def test_partial_combined_range_keeps_combined_portfolio(monkeypatch, individual_exchanges):
     combined = _make_exchange_dataset(
-        "combined", ["binance", "bybit"], [1637953920000, 1650000000000]
+        "combined", ["binance", "bybit"], [1643673600000, 1650000000000]
     )
-    binance = _make_exchange_dataset(
-        "binance", ["binance"], [1570147200000, 1600000000000]
-    )
-    bybit = _make_exchange_dataset(
-        "bybit", ["bybit"], [1570147200000, 1600000000000]
-    )
+    datasets = {"combined": combined}
+    for exchange in individual_exchanges:
+        datasets[exchange] = _make_exchange_dataset(
+            exchange, [exchange], [1640995200000, 1650000000000]
+        )
     scenario = SuiteScenario(
         label="early_multi",
-        start_date="2020-01-01",
-        end_date="2020-03-01",
+        start_date="2022-01-01",
+        end_date="2022-03-01",
+        coins=["BTC"],
+        ignored_coins=None,
+        exchanges=["binance", "bybit"],
+    )
+    calls = _run_scenario_dataset_decision(monkeypatch, datasets, scenario)
+    assert calls["combined"] is True
+    assert calls["multi"] is False
+
+
+def test_aggregated_combined_range_keeps_combined_portfolio(monkeypatch):
+    from suite_runner import _apply_candle_aggregation
+
+    start = 1640995200000
+    end = start + 24 * 60 * 60_000
+    combined = _make_exchange_dataset(
+        "combined", ["binance", "bybit"], np.arange(start, end + 60_000, 60_000)
+    )
+    combined.hlcvs[:] = 1
+    combined.hlcvs, combined.timestamps, combined.btc_usd_prices = _apply_candle_aggregation(
+        combined.hlcvs, combined.timestamps, combined.btc_usd_prices, combined.mss, 5
+    )
+    assert combined.timestamps[-1] == end - 5 * 60_000
+    binance = _make_exchange_dataset("binance", ["binance"], [start, end])
+    scenario = SuiteScenario(
+        label="five_minute_multi",
+        start_date="2022-01-01",
+        end_date="2022-01-02",
         coins=["BTC"],
         ignored_coins=None,
         exchanges=["binance", "bybit"],
     )
     calls = _run_scenario_dataset_decision(
-        monkeypatch,
-        {"combined": combined, "binance": binance, "bybit": bybit},
-        ["binance", "bybit"],
-        scenario,
+        monkeypatch, {"combined": combined, "binance": binance}, scenario
     )
-    assert calls["combined"] is False
-    assert calls["multi"] is True
-    assert calls["multi_keys"] == ["binance", "bybit"]
+    assert calls["combined"] is True
+    assert calls["multi"] is False

@@ -123,6 +123,57 @@ def test_suite_setup_uses_union_of_actual_scenario_coins(prepared, monkeypatch):
     assert [item["data"]["combined"]["coins"] for item in inputs] == [["BTC"], ["XMR"]]
 
 
+@pytest.mark.asyncio
+async def test_partial_combined_setup_fingerprints_executed_inputs(prepared, monkeypatch):
+    import backtest
+    from tools import iterative_backtester
+
+    config, combined, scenario = prepared
+    combined.timestamps += 12 * 60 * 60_000
+    combined.coin_exchange = {coin: "bybit" for coin in combined.coins}
+    for coin in combined.coins:
+        combined.mss[coin]["exchange"] = "bybit"
+    binance = deepcopy(combined)
+    binance.exchange = "binance"
+    binance.available_exchanges = ["binance"]
+    binance.coin_exchange = {coin: "binance" for coin in binance.coins}
+    binance.hlcvs *= 2
+    for coin in binance.coins:
+        binance.mss[coin]["exchange"] = "binance"
+    datasets = {"combined": combined, "binance": binance}
+    available = suite._compute_dataset_available_exchanges(datasets)
+
+    monkeypatch.setattr(
+        suite, "apply_scenario", lambda *args, **kwargs: (deepcopy(config), ["BTC"])
+    )
+    inputs, _, _, sources = suite._suite_session_inputs(
+        [scenario], config, datasets, combined.coins, [], available,
+        set(combined.coins), {}, combined.coins, [],
+    )
+    executed = {}
+
+    def build(hlcvs, mss, cfg, exchange, btc_prices, timestamps):
+        executed[exchange] = suite.materialized_dataset_identity(
+            cfg["backtest"]["coins"][exchange], hlcvs, btc_prices, timestamps, mss
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setattr(backtest, "build_backtest_payload", build)
+    monkeypatch.setattr(backtest, "execute_backtest", lambda *args: ([], [], {}))
+    monkeypatch.setattr(iterative_backtester, "combine_analyses", lambda analyses: {})
+    result = await suite.run_backtest_scenario(
+        scenario, config, datasets, combined.coins, [], available,
+        set(combined.coins), None, True,
+    )
+
+    assert sources == ["combined"]
+    assert list(result.per_exchange) == ["combined"]
+    assert executed == inputs[0]["data"]
+    assert suite._compute_effective_coin_exchange(
+        scenario, ["BTC"], datasets, available
+    ) == {"BTC": "bybit"}
+
+
 def test_scenario_labels_cannot_collide_on_case_insensitive_filesystems():
     with pytest.raises(ValueError, match="filesystem"):
         suite.build_scenarios({"scenarios": [{"label": "Base"}, {"label": "base"}]})
