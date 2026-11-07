@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Drop the unused Numba dependency from Python 3.12 installations.
+
 - Keep monitor output valid strict JSON: report unavailable trailing diagnostic prices explicitly
   instead of publishing infinity from uninitialized extrema or arithmetic overflow. Reject other
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
