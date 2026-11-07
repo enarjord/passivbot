@@ -484,6 +484,81 @@ async def test_create_requires_exact_rest_confirmation_without_resubmission():
         await x.close()
 
 
+# 2**53 + 1 is the first integer binary64 cannot represent. The second value is
+# the reported reproducer: float() turns it into 30000000000000000.
+EXACT_ORDER_INDEXES = (2**53 + 1, 30000000000000002)
+
+
+def _capture_signer(x, signed, method_name):
+    def capture_sign(_signer, request):
+        signed.update(request)
+        return [15, "{}"]
+
+    x.options["chainId"] = 0
+    x.get_lighter_private_key = lambda *_args, **_kwargs: "ab" * 40
+    x.load_account = AsyncMock(return_value=object())
+    x.fetch_nonce = AsyncMock(return_value=1)
+    setattr(x, method_name, capture_sign)
+    x.publicPostSendTx = AsyncMock(
+        return_value={"order_id": "1", "market_index": "0", "status": "open"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_id", EXACT_ORDER_INDEXES)
+async def test_parse_to_int_preserves_exact_integers_above_float64_range(order_id):
+    x = exchange()
+    try:
+        assert int(float(order_id)) != order_id
+        assert x.parse_to_int(order_id) == order_id
+        assert x.parse_to_int(str(order_id)) == order_id
+        # A float has already lost the low bits. Keep CCXT's conversion for it.
+        assert x.parse_to_int(float(order_id)) == int(float(order_id))
+        assert x.parse_to_int("10.9") == int(float("10.9"))
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_id", EXACT_ORDER_INDEXES)
+async def test_cancel_signs_exact_order_index_above_float64_exact_range(order_id):
+    x = exchange()
+    signed = {}
+    order_key = str(order_id)
+    try:
+        _capture_signer(x, signed, "lighter_sign_cancel_order")
+        x.fetch_open_orders = AsyncMock(return_value=[])
+        with patch("exchanges.lighter.asyncio.sleep", new=AsyncMock()):
+            result = await x.cancel_order(order_key, SYMBOL)
+        assert type(signed["order_index"]) is int
+        assert signed["order_index"] == order_id
+        assert signed["order_index"] != int(float(order_id))
+        assert result["id"] == order_key
+        assert x.fetch_open_orders.await_count >= 1
+        assert x.publicPostSendTx.await_count == 1
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_id", EXACT_ORDER_INDEXES)
+async def test_modify_signs_exact_order_index_and_ordinary_amount_price(order_id):
+    x = exchange()
+    signed = {}
+    try:
+        _capture_signer(x, signed, "lighter_sign_modify_order")
+        await x.edit_order(str(order_id), SYMBOL, "limit", "buy", 0.01, 2000)
+        assert type(signed["index"]) is int
+        assert signed["index"] == order_id
+        assert signed["index"] != int(float(order_id))
+        # Same scaling as an ordinary create: 0.01 -> 100, 2000 -> 200000.
+        assert signed["base_amount"] == 100
+        assert signed["price"] == 200000
+        assert signed["trigger_price"] == 0
+    finally:
+        await x.close()
+
+
 @pytest.mark.asyncio
 async def test_cancel_waits_for_authoritative_absence():
     x = exchange()
