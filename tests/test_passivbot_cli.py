@@ -890,6 +890,22 @@ def test_requires_full_command_fails_immediately_without_full_install(monkeypatc
     assert "passivbot backtest requires the full Passivbot install." in captured.err
 
 
+def test_requires_full_command_runs_without_removed_dependencies(monkeypatch):
+    removed_dependencies = {"colorama", "dictdiffer", "websockets"}
+
+    def find_spec(name):
+        return None if name in removed_dependencies else object()
+
+    def invoke_module_main(module_name):
+        assert module_name == "backtest"
+        return True, 0
+
+    monkeypatch.setattr(cli_main.importlib.util, "find_spec", find_spec)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", invoke_module_main)
+
+    assert cli_main.main(["backtest", "-s", "XMR"]) == 0
+
+
 def test_run_module_falls_back_to_runpy_when_module_has_no_main(monkeypatch):
     captured = {}
 

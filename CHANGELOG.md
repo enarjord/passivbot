@@ -9,6 +9,9 @@ since the latest release tag; these features may already be available when insta
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 
+- Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
+  development install profiles and the CLI dependency checks.
+
 - Validate the CCXT version for installed wheels using Passivbot's package metadata.
 
 - Drop the unused Numba dependency from Python 3.12 installations.

@@ -327,10 +327,8 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
 
 FULL_INSTALL_MODULE_HINTS = {
     "aiohttp",
-    "colorama",
     "dash",
     "dash_bootstrap_components",
-    "dictdiffer",
     "matplotlib",
     "msgpack",
     "plotly",
@@ -341,7 +339,7 @@ FULL_INSTALL_MODULE_HINTS = {
 }
 
 
-FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS | {"websockets"}))
+FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS))
 ENV_MISMATCH_IGNORE_ENV = "PASSIVBOT_IGNORE_ENV_MISMATCH"
 ENV_REEXEC_GUARD_ENV = "PASSIVBOT_ENV_REEXEC"
 VERSION_FLAGS = {"-V", "--version"}
