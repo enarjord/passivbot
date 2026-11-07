@@ -1,6 +1,7 @@
 pytest>=8.2,<9
 pytest-asyncio>=1.2,<2
 jsonschema>=4.18,<5
+packaging>=24.0
 setuptools>=68.2
 wheel
 prospector==1.17.3

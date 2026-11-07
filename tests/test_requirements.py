@@ -75,12 +75,11 @@ def test_project_pins_satisfy_ccxt_runtime_dependencies():
         )
 
 
-def test_full_requirements_declare_packaging_for_evaluator_identity():
-    requirements = [
-        Requirement(row)
-        for row in _requirements("requirements-full.txt")
-        if not row.startswith("-")
-    ]
-    assert any(
-        requirement.name.casefold() == "packaging" for requirement in requirements
-    )
+def test_packaging_is_declared_for_development_tests_only():
+    for profile in ("live", "full", "dev"):
+        names = {
+            Requirement(row).name.casefold()
+            for row in _requirements(f"requirements-{profile}.txt")
+            if not row.startswith("-")
+        }
+        assert ("packaging" in names) == (profile == "dev")
