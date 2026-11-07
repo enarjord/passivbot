@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Remove the unused Rust `memmap` crate from native builds. The changed native fingerprint
+  requires fresh evaluation when adopting the new build for an optimizer run.
+
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 
