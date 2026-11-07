@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Sign Lighter cancels and modifications with the exact order index. Indexes above the
+  binary64 integer range are no longer rounded before they reach the signer.
+
 - Authorize routine, evidence-backed replies in existing PR review threads for assigned
   implementation and review work without per-reply approval, preserving explicit user restrictions,
   privacy boundaries and disputed-thread resolution requirements.
