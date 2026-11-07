@@ -6072,9 +6072,18 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     bot.logging_level = 0
     bot._health_rate_limits = 0
 
+    async def acquire_under_fill_lock(generation):
+        assert bot._pnls_refresh_lock.locked()
+        assert generation == bot._trailing_fill_refresh_started_generation
+
+    bot._refresh_trailing_reset_evidence = AsyncMock(
+        side_effect=acquire_under_fill_lock
+    )
+
     result = await bot.update_pnls(source="routine_prefetch:trailing_recovery")
 
     assert result is True
+    bot._refresh_trailing_reset_evidence.assert_awaited_once()
     bot._pnls_manager.refresh.assert_awaited_once_with(
         start_ms=position_anchor_ms - 5 * 60 * 1000,
         end_ms=None,

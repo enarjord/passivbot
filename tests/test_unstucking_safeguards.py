@@ -1718,6 +1718,214 @@ def test_explicit_position_open_time_rebases_polluted_fill_after_state():
     assert diagnostic_events == []
 
 
+def _supply_fresh_reset_evidence(bot, symbol, pside, *, generation=1):
+    from fill_events_manager import TrailingResetEvidence
+
+    event = [
+        event
+        for event in bot._pnls_manager.get_events()
+        if event.symbol == symbol and event.position_side == pside
+    ][-1]
+    bot._trailing_pending_fill_min_generations = {(symbol, pside): 1}
+    bot._trailing_reset_evidence = {
+        (symbol, pside): (
+            generation,
+            bot._pnls_manager,
+            TrailingResetEvidence(event, event.timestamp, event.timestamp),
+        )
+    }
+
+
+def test_position_update_boundary_rebases_stale_fill_residue():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {
+        "size": 0.661,
+        "price": 606.47,
+        "updateTime": 180_000,
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                120_000,
+                "stale-residue",
+                psize=0.674,
+                pprice=593.31,
+                qty=0.674,
+                price=593.31,
+                source_ids=["stale-residue"],
+            ),
+            _DummyFillEvent(
+                symbol,
+                "long",
+                180_000,
+                "opening-fill",
+                psize=1.335,
+                pprice=599.80,
+                qty=0.661,
+                price=606.47,
+                source_ids=["opening-fill"],
+            ),
+        ]
+    )
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+    # Timestamp/size/price equality without a fresh bounded receipt is insufficient.
+    assert (
+        bot._fill_anchor_position_state_match_kind(
+            symbol, "long", (0.661, 606.47), anchor
+        )
+        is None
+    )
+    _supply_fresh_reset_evidence(bot, symbol, "long")
+
+    assert (
+        bot._fill_anchor_position_state_match_kind(
+            symbol, "long", (0.661, 606.47), anchor
+        )
+        == "position_update_boundary"
+    )
+
+    bot.positions[symbol]["short"] = {
+        "size": -0.655,
+        "price": 612.78,
+        "updateTime": 180_000,
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "short",
+                120_000,
+                "stale-residue-short",
+                psize=-0.674,
+                pprice=593.31,
+                side="sell",
+                qty=-0.674,
+                price=593.31,
+                source_ids=["stale-residue-short"],
+            ),
+            _DummyFillEvent(
+                symbol,
+                "short",
+                180_000,
+                "opening-short",
+                psize=-1.329,
+                pprice=612.78,
+                side="sell",
+                qty=-0.655,
+                price=612.78,
+                source_ids=["opening-short"],
+            ),
+        ]
+    )
+    short_anchor = bot._latest_fill_position_change_anchors()[(symbol, "short")]
+    _supply_fresh_reset_evidence(bot, symbol, "short")
+
+    assert (
+        bot._fill_anchor_position_state_match_kind(
+            symbol, "short", (-0.655, 612.78), short_anchor
+        )
+        == "position_update_boundary"
+    )
+
+
+def test_position_update_boundary_requires_snapshot_after_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "updateTime": 120_000,
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                180_000,
+                "opening-fill",
+                psize=9.0,
+                pprice=90.0,
+                qty=1.0,
+                price=100.0,
+                source_ids=["opening-fill"],
+            )
+        ]
+    )
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.0, 100.0), anchor
+    )
+
+
+def test_position_update_boundary_rejects_coalesced_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "updateTime": 180_000,
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                180_000,
+                "fill-a+fill-b",
+                psize=9.0,
+                pprice=90.0,
+                qty=1.0,
+                price=100.0,
+                source_ids=["fill-a", "fill-b"],
+            )
+        ]
+    )
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.0, 100.0), anchor
+    )
+
+
+def test_position_update_boundary_rejects_reduction_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "updateTime": 180_000,
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                180_000,
+                "reduce-fill",
+                psize=9.0,
+                pprice=90.0,
+                side="sell",
+                qty=-1.0,
+                price=100.0,
+                source_ids=["reduce-fill"],
+            )
+        ]
+    )
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.0, 100.0), anchor
+    )
+
+
 def test_position_open_recovery_rejects_coalesced_multi_source_fill():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -1924,6 +2132,102 @@ async def test_restart_confirms_trailing_from_explicit_position_open_replay(capl
     assert "recovered polluted cached after-state" in caplog.text
     assert diagnostic_events[0][0] == "fill.position_open_boundary_recovery_used"
     assert diagnostic_events[0][2]["recovery"] == "position_open_single_fill"
+
+
+@pytest.mark.asyncio
+async def test_restart_confirms_trailing_from_position_update_single_fill(caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    diagnostic_events = []
+    bot._monitor_record_event = lambda kind, tags, payload, **kwargs: (
+        diagnostic_events.append((kind, tags, payload, kwargs))
+    )
+    symbol = _set_basic_state(bot)
+    bot.c_mults[symbol] = 0.1
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                120_000,
+                "stale-residue",
+                psize=6.3,
+                pprice=58.9,
+                qty=63.0,
+                price=58.9,
+                c_mult=0.1,
+            ),
+            _DummyFillEvent(
+                symbol,
+                "long",
+                180_000,
+                "opening-fill",
+                psize=6.6,
+                pprice=59.44296,
+                qty=3.0,
+                price=60.442,
+                source_ids=["opening-fill"],
+                c_mult=0.1,
+            ),
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 3.0,
+                "price": 60.442,
+                # No open time: only the latest position update is available.
+                "updateTime": 180_000,
+            }
+        ]
+    )
+
+    async def complete_post_open_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (240_000, 60.0, 61.0, 59.0, 60.5, 1.0),
+                (300_000, 60.5, 61.5, 60.0, 61.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = complete_post_open_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations
+    assert diagnostic_events == []
+    assert "recovered polluted cached after-state" not in caplog.text
+
+    bot._trailing_fill_fetch_generation = 1
+    await bot.update_trailing_data()
+    assert bot._trailing_pending_fill_confirmations
+    assert diagnostic_events == []
+
+    from fill_events_manager import TrailingResetEvidence
+
+    event = bot._pnls_manager.get_events()[-1]
+    bot._pnls_manager.fetch_trailing_reset_evidence = AsyncMock(
+        return_value=TrailingResetEvidence(event, 180_000, 180_000)
+    )
+    await bot._refresh_trailing_reset_evidence(1)
+    await bot.update_trailing_data()
+
+    bot._pnls_manager.fetch_trailing_reset_evidence.assert_awaited_once_with(
+        symbol, "long", 180_000
+    )
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:180000:opening-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert "recovered polluted cached after-state" in caplog.text
+    assert "position_update_ts=180000" in caplog.text
+    assert diagnostic_events[0][0] == "fill.position_open_boundary_recovery_used"
+    assert diagnostic_events[0][2]["recovery"] == "position_update_fresh_single_fill"
 
 
 def test_fill_history_recovery_starts_before_open_even_outside_pnl_window():

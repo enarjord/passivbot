@@ -55,9 +55,24 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    position-update timestamp, then require its zero-state replay to match the
    authoritative position. Multi-fill cohorts and later position updates remain pending
    because final size/VWAP equality cannot prove omitted round trips are absent. Generic
-   and update-only position timestamps do not establish this boundary. Successful use
-   emits a warning and a structured fallback diagnostic only after every confirmation
-   predicate, including the required post-snapshot fill generation, has cleared.
+   and update-only position timestamps alone do not establish this boundary.
+   For connectors implementing the explicit complete-cohort query capability
+   (currently Binance USDT-M), an alternative proof is a fresh inclusive trade
+   query with both bounds equal to the authoritative position update timestamp.
+   Its unsaturated response must identify exactly one fill for the coin-side;
+   that fill must also be the singleton cached cohort and exact anchor identity,
+   with matching execution fields. Its additive replay from flat must reproduce
+   current size and price at half-tick tolerance. The anchor timestamp must equal
+   the update time and any explicit opening time. This proves only the trailing
+   reset point: it never rebases historical fills, PnL or coverage metadata.
+   Acquisition uses the existing fill single-flight lock after the mandatory
+   post-snapshot refresh. Each recovery pass rotates through at most four
+   unresolved coin-sides; losing a receipt, restarting, replacing the manager,
+   or observing another position state requires fresh evidence. A failed query
+   leaves the affected trailing input unavailable without revoking ordinary
+   fills/PnL readiness. Successful use emits a warning and structured fallback
+   diagnostic only after every confirmation predicate, including the required
+   post-snapshot fill generation, has cleared.
    Ordinary recorded after-state price comparison accepts at most one effective
    executable price tick because exchanges may round or truncate a sub-tick reconstructed
    VWAP. The effective tick is connector-aware, including Hyperliquid's decimal and

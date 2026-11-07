@@ -9,6 +9,23 @@ since the latest release tag; these features may already be available when insta
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 
+- Select suite datasets using their real source exchanges, so a single-exchange
+  scenario uses its own history when a combined dataset is also prepared. Preserve
+  the combined portfolio for scenarios matching its source pool, even when other
+  scenarios add exchanges, with partial coverage, aggregated candles and matching
+  saved dataset fingerprints. Align each portfolio's preloaded dates and coins
+  with its scenarios, and preserve individual data-exchange identities when
+  market settings come from another venue.
+
+- Recover trailing confirmation on Binance USDT-M when stale cached position
+  residue prevents replay from matching the exchange. Recovery requires a fresh,
+  complete trade query at the exact position update millisecond, one identified
+  additive fill matching the position, and post-snapshot confirmation. Later
+  updates, conflicting opening times, incomplete or multi-fill cohorts remain
+  pending. Historical fills and PnL are preserved; successful recovery emits
+  `fill.position_open_boundary_recovery_used` with
+  `recovery=position_update_fresh_single_fill`.
+
 - Authorize routine, evidence-backed replies in existing PR review threads for assigned
   implementation and review work without per-reply approval, preserving explicit user restrictions,
   privacy boundaries and disputed-thread resolution requirements.

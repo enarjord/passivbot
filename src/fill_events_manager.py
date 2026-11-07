@@ -2421,6 +2421,17 @@ class BaseFetcher:
 
     pnl_observations: List[PnlObservation] = []
 
+    async def fetch_position_update_cohort(
+        self, symbol: str, timestamp: int
+    ) -> Optional[List[Dict[str, object]]]:
+        """Return a complete fresh trade cohort, or None when unsupported.
+
+        This is a connector capability, not a generic inference from a position
+        timestamp. Implementations must query the whole inclusive millisecond
+        and reject saturated or otherwise incomplete responses.
+        """
+        return None
+
     async def fetch(
         self,
         since_ms: Optional[int],
@@ -3037,6 +3048,38 @@ class BinanceFetcher(BaseFetcher):
         self._unsupported_symbols.add(symbol)
         logger.debug("[fills] BinanceFetcher skipping unsupported symbol %s", symbol)
 
+    async def fetch_position_update_cohort(
+        self, symbol: str, timestamp: int
+    ) -> Optional[List[Dict[str, object]]]:
+        # Query trades directly: merged income rows and the historical cache do
+        # not prove which executions occurred at the position update boundary.
+        if self._stop_requested():
+            raise asyncio.CancelledError(
+                "shutdown requested before trailing fill query"
+            )
+        limit = min(1000, max(1, self.trade_limit))
+        trades = await self.api.fetch_my_trades(
+            symbol,
+            limit=limit,
+            params={"startTime": int(timestamp), "endTime": int(timestamp)},
+        )
+        if len(trades) >= limit:
+            return None  # The final millisecond may have additional executions.
+        events = []
+        for trade in trades:
+            info = trade.get("info") or {}
+            if trade.get("id") in (None, "") and info.get("id") in (None, ""):
+                return None
+            event = self._normalize_trade(trade)
+            if (
+                event["timestamp"] != timestamp
+                or event["symbol"] != symbol
+                or event["position_side"] not in ("long", "short")
+            ):
+                return None
+            events.append(event)
+        return events
+
     async def fetch(
         self,
         since_ms: Optional[int],
@@ -3628,6 +3671,15 @@ class BinanceFetcher(BaseFetcher):
 # ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TrailingResetEvidence:
+    """A singleton execution freshly read from a complete update-time cohort."""
+
+    fill: FillEvent
+    start_ms: int
+    end_ms: int
 
 
 class FillEventsManager:
@@ -5831,6 +5883,36 @@ class FillEventsManager:
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
         return list(events)
+
+    async def fetch_trailing_reset_evidence(
+        self, symbol: str, pside: str, timestamp: int
+    ) -> Optional[TrailingResetEvidence]:
+        """Acquire structural trailing evidence without rebasing fill/PnL history.
+
+        The caller owns post-snapshot ordering and single-flight acquisition.
+        Cache coverage, a successful unrelated fetch, and a cached singleton
+        are insufficient. Unsupported connectors return no evidence.
+        """
+        cohort = await self.fetcher.fetch_position_update_cohort(symbol, timestamp)
+        if cohort is None:
+            return None
+        cohort = deepcopy(cohort)
+        ensure_qty_signage(cohort)
+        events = [FillEvent.from_dict(row) for row in cohort]
+        if any(
+            event.symbol != symbol
+            or event.timestamp != timestamp
+            or event.position_side not in ("long", "short")
+            for event in events
+        ):
+            return None
+        events = [event for event in events if event.position_side == pside]
+        if len(events) != 1:
+            return None
+        event = events[0]
+        if not event.id or len(event.source_ids) != 1:
+            return None
+        return TrailingResetEvidence(event, int(timestamp), int(timestamp))
 
     @staticmethod
     def pending_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:

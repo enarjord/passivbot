@@ -8471,6 +8471,14 @@ class Passivbot:
             qty_tolerance=qty_tolerance,
         ):
             return "position_open_boundary"
+        if self._position_update_boundary_single_fill_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+        ):
+            return "position_update_boundary"
         return None
 
     def _position_open_fill_replay_matches_state(
@@ -8522,6 +8530,8 @@ class Passivbot:
         if not events:
             return False
         events.sort(key=lambda event: int(event.timestamp))
+        if sum(int(event.timestamp) == anchor_ts for event in events) != 1:
+            return False
 
         # Start at the first additive fill tied closely to the exchange's
         # opening timestamp. A distant first event means the available history
@@ -8569,57 +8579,167 @@ class Passivbot:
         ):
             return False
 
-        psize = 0.0
-        pprice = 0.0
-        for event in events:
-            try:
-                qty = float(event.qty)
-                price = float(event.price)
-                c_mult = float(getattr(event, "c_mult", 1.0) or 1.0)
-            except (AttributeError, TypeError, ValueError, OverflowError):
-                return False
-            if (
-                not all(math.isfinite(value) for value in (qty, price, c_mult))
-                or price <= 0.0
-                or c_mult <= 0.0
-            ):
-                return False
-            effective_qty = qty * c_mult
-            if pside == "short":
-                add_amount = max(-effective_qty, 0.0)
-                reduce_amount = max(effective_qty, 0.0)
-            else:
-                add_amount = max(effective_qty, 0.0)
-                reduce_amount = max(-effective_qty, 0.0)
-            if add_amount > 0.0:
-                pprice = (
-                    price
-                    if psize <= 0.0
-                    else (psize * pprice + add_amount * price) / (psize + add_amount)
-                )
-                psize += add_amount
-            if reduce_amount > 0.0:
-                psize = max(0.0, psize - reduce_amount)
-                if psize <= 1e-12:
-                    psize = 0.0
-                    pprice = 0.0
-
-        position_size, position_price = state
-        c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
-        expected_size = abs(position_size) * c_mult
-        effective_price_tick = self._effective_position_price_tick(
-            symbol, position_price, pprice
+        return self._singleton_fill_replay_matches_state(
+            symbol, pside, state, anchor, latest_event, qty_tolerance=qty_tolerance
         )
-        strict_price_tolerance = max(
-            effective_price_tick * 0.5,
-            abs(position_price) * 1e-9,
-            1e-12,
+
+    def _position_update_boundary_single_fill_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+    ) -> bool:
+        """Use a fresh complete update-time cohort, never timestamp equality alone."""
+        position = self.positions.get(symbol, {}).get(pside, {})
+        update_ts = self._position_update_timestamp_from_row(position)
+        open_ts = self._position_open_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        if (
+            anchor_ts <= 0
+            or update_ts != anchor_ts
+            or (open_ts is not None and open_ts != anchor_ts)
+        ):
+            return False
+        receipt = getattr(self, "_trailing_reset_evidence", {}).get((symbol, pside))
+        if receipt is None:
+            return False
+        generation, manager, evidence = receipt
+        minimum_generation = getattr(
+            self, "_trailing_pending_fill_min_generations", {}
+        ).get((symbol, pside))
+        if (
+            manager is not getattr(self, "_pnls_manager", None)
+            or minimum_generation is None
+            or generation < minimum_generation
+            or evidence.start_ms != anchor_ts
+            or evidence.end_ms != anchor_ts
+        ):
+            return False
+        # The fresh response must not hide a contradictory cached cohort.
+        cohort = [
+            event
+            for event in manager.get_events()
+            if event.symbol == symbol
+            and event.position_side == pside
+            and int(event.timestamp) == anchor_ts
+        ]
+        if (
+            len(cohort) != 1
+            or len(cohort[0].source_ids) != 1
+            or set(cohort[0].source_ids) != set(evidence.fill.source_ids)
+            or any(
+                getattr(cohort[0], field) != getattr(evidence.fill, field)
+                for field in ("qty", "price", "c_mult", "side")
+            )
+        ):
+            return False
+        return self._singleton_fill_replay_matches_state(
+            symbol, pside, state, anchor, evidence.fill, qty_tolerance=qty_tolerance
+        )
+
+    def _singleton_fill_replay_matches_state(
+        self, symbol, pside, state, anchor, event, *, qty_tolerance
+    ) -> bool:
+        """Shared numeric/identity check after the caller proves a boundary."""
+        if (
+            not getattr(event, "id", None)
+            or len(getattr(event, "source_ids", None) or []) != 1
+            or self._fill_position_change_epoch(event) != str(anchor.get("epoch") or "")
+        ):
+            return False
+        try:
+            qty = float(event.qty)
+            price = float(event.price)
+            event_c_mult = float(event.c_mult)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if (
+            not all(math.isfinite(value) for value in (qty, price, event_c_mult))
+            or price <= 0.0
+            or event_c_mult <= 0.0
+            or event.side != ("buy" if pside == "long" else "sell")
+            or (pside == "long" and qty <= 0.0)
+            or (pside == "short" and qty >= 0.0)
+        ):
+            return False
+        position_size, position_price = state
+        position_c_mult = abs(float(self.c_mults[symbol]))
+        effective_price_tick = self._effective_position_price_tick(
+            symbol, position_price, price
+        )
+        price_tolerance = max(
+            effective_price_tick * 0.5, abs(position_price) * 1e-9, 1e-12
         )
         return abs(
-            psize - expected_size
+            abs(qty) * event_c_mult - abs(position_size) * position_c_mult
         ) <= qty_tolerance and self._within_absolute_tolerance(
-            pprice, position_price, strict_price_tolerance
+            price, position_price, price_tolerance
         )
+
+
+    async def _refresh_trailing_reset_evidence(self, generation: int) -> None:
+        """Query bounded reset evidence under the existing fill single-flight lock.
+
+        Limit each recovery pass to four unresolved coin-sides. Existing history
+        recovery/backoff continues independently if no boundary can be proven.
+        """
+        manager = self._pnls_manager
+        acquire = getattr(manager, "fetch_trailing_reset_evidence", None)
+        if not callable(acquire):
+            return
+        receipts = {}
+        attempts = 0
+        anchors = self._latest_fill_position_change_anchors()
+        pending = sorted(
+            getattr(self, "_trailing_fill_confirmation_diagnostics", {}).items()
+        )
+        cursor = getattr(self, "_trailing_reset_probe_cursor", None)
+        if cursor is not None:
+            pending = [item for item in pending if item[0] > cursor] + [
+                item for item in pending if item[0] <= cursor
+            ]
+        for key, detail in pending:
+            if "fill_after_state_mismatch" not in detail.get("failed_predicates", []):
+                continue
+            if "post_snapshot_fill_refresh_pending" in detail.get(
+                "failed_predicates", []
+            ):
+                continue
+            symbol, pside = key
+            position = self.positions.get(symbol, {}).get(pside, {})
+            anchor = anchors.get(key)
+            timestamp = self._position_update_timestamp_from_row(position)
+            open_ts = self._position_open_timestamp_from_row(position)
+            if (
+                anchor is None
+                or timestamp != anchor["timestamp"]
+                or (open_ts is not None and open_ts != timestamp)
+            ):
+                continue
+            self._trailing_reset_probe_cursor = key
+            try:
+                evidence = await acquire(symbol, pside, int(timestamp))
+            except (ccxt_errors.BaseError, ValueError) as exc:
+                # This optional proof is unavailable; ordinary fills/PnL and
+                # independent risk consumers retain their existing readiness.
+                logging.warning(
+                    "[fills] trailing reset query unavailable | symbol=%s pside=%s "
+                    "error_type=%s action=keep_trailing_pending",
+                    self._log_symbol(symbol),
+                    pside,
+                    bounded_exception_type(exc),
+                )
+                evidence = None
+            if evidence is not None:
+                receipts[key] = (generation, manager, evidence)
+            attempts += 1
+            if attempts >= 4:
+                break
+        self._trailing_reset_evidence = receipts
+
 
     def _emit_position_open_fill_recovery_used(
         self, symbol: str, pside: str, anchor: dict
@@ -8644,6 +8764,38 @@ class Passivbot:
                 {
                     "recovery": "position_open_single_fill",
                     "open_timestamp": int(open_ts),
+                    "position_update_timestamp": int(update_ts),
+                    "fill_timestamp": int(anchor_ts),
+                    "cohort_fill_count": 1,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
+
+    def _emit_position_update_fill_recovery_used(
+        self, symbol: str, pside: str, anchor: dict
+    ) -> None:
+        """Report stale-cache residue recovery only after confirmation clears."""
+        update_ts = self._position_update_timestamp_ms(symbol, pside)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        logging.warning(
+            "[fills] recovered polluted cached after-state from explicit position "
+            "update boundary confirmed by a complete fresh trade cohort | "
+            "symbol=%s pside=%s fill_ts=%s position_update_ts=%s",
+            self._log_symbol(symbol),
+            pside,
+            anchor_ts,
+            update_ts,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "position_update_fresh_single_fill",
                     "position_update_timestamp": int(update_ts),
                     "fill_timestamp": int(anchor_ts),
                     "cohort_fill_count": 1,
@@ -8990,6 +9142,10 @@ class Passivbot:
                         continue
                     if position_match_kind == "position_open_boundary":
                         self._emit_position_open_fill_recovery_used(
+                            symbol, pside, anchor
+                        )
+                    elif position_match_kind == "position_update_boundary":
+                        self._emit_position_update_fill_recovery_used(
                             symbol, pside, anchor
                         )
                     elif position_match_kind == "recorded_after_state_price_tolerance":
@@ -12040,6 +12196,19 @@ class Passivbot:
                 continue
             symbol, pside = str(raw_key[0]), str(raw_key[1])
             cohort = (symbol, pside)
+            if cohort in getattr(self, "_trailing_reset_evidence", {}):
+                expected = getattr(self, "_trailing_pending_position_states", {}).get(
+                    cohort
+                )
+                anchor = self._latest_fill_position_change_anchors().get(cohort)
+                if (
+                    expected is not None
+                    and self._fill_anchor_position_state_match_kind(
+                        symbol, pside, expected, anchor
+                    )
+                    == "position_update_boundary"
+                ):
+                    continue  # A fresh reset proof needs no broad history repair.
             cohort_state = dict(previous_cohort_states.get(cohort, {}) or {})
             cohort_states[cohort] = cohort_state
             # First satisfy the mandatory fetch generation after the position
@@ -12203,6 +12372,7 @@ class Passivbot:
             + 1
         )
         self._trailing_fill_refresh_started_generation = fill_refresh_attempt_generation
+        self._trailing_reset_evidence = {}
         refresh_started_ms = utc_ms()
         ledger = self._ensure_freshness_ledger()
         position_observation = ledger.surfaces["positions"]
@@ -12549,6 +12719,10 @@ class Passivbot:
                     # bounded recent path. Potentially expensive history
                     # widening is reserved for the nonblocking trailing
                     # recovery prefetch.
+                    if trailing_recovery_refresh:
+                        await self._refresh_trailing_reset_evidence(
+                            fill_refresh_attempt_generation
+                        )
                     recovery_start_ms = (
                         self._trailing_fill_history_recovery_start_ms(pnl_age_limit)
                         if trailing_recovery_refresh
