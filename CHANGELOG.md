@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Sign Lighter cancels and modifications with the exact order index. Indexes above the
+  binary64 integer range are no longer rounded before they reach the signer.
+
 - Drop the unused Numba dependency from Python 3.12 installations.
 
 - Keep monitor output valid strict JSON: report unavailable trailing diagnostic prices explicitly
