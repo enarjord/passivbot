@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
+  development install profiles and the CLI dependency checks.
+
 - Validate the CCXT version for installed wheels using Passivbot's package metadata.
 
 - Drop the unused Numba dependency from Python 3.12 installations.
