@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix the live Docker wheel build by copying the Rust lockfile, build script, and pinned toolchain
+  into the builder stage.
+
 - Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
   development install profiles and the CLI dependency checks.
 

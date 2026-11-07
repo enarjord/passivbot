@@ -29,7 +29,10 @@ COPY requirements-full.txt requirements-full.txt
 COPY requirements-live.txt requirements-live.txt
 COPY requirements-rust.txt requirements-rust.txt
 COPY src src
+COPY rust-toolchain.toml rust-toolchain.toml
 COPY passivbot-rust/Cargo.toml passivbot-rust/Cargo.toml
+COPY passivbot-rust/Cargo.lock passivbot-rust/Cargo.lock
+COPY passivbot-rust/build.rs passivbot-rust/build.rs
 COPY passivbot-rust/src passivbot-rust/src
 
 # Install build requirements and build the wheel without dependency resolution
