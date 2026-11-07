@@ -7,6 +7,8 @@ since the latest release tag; these features may already be available when insta
 ## Unreleased
 
 - Move the direct `packaging` dependency from the full install profile to development.
+  Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
+  fitness needs reevaluation when adopting this revision.
 
 - Remove the unused Rust `memmap` crate from native builds. The changed native fingerprint
   requires fresh evaluation when adopting the new build for an optimizer run.
