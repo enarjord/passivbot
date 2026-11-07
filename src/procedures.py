@@ -5,6 +5,7 @@ import logging
 import os
 import asyncio
 from datetime import datetime, timezone
+from importlib import metadata
 from time import time
 import numpy as np
 import pprint
@@ -878,28 +879,46 @@ def assert_correct_ccxt_version(version=None, ccxt=None):
     if ccxt is None:
         import ccxt
 
-    assert (
-        ccxt.__version__ == version
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{version} manually"
+    if ccxt.__version__ != version:
+        raise AssertionError(
+            f"Currently ccxt {ccxt.__version__} is installed. "
+            f"Please pip reinstall requirements.txt or install ccxt v{version} manually"
+        )
 
 
 def load_ccxt_version():
+    module_path = Path(__file__).resolve()
     try:
-        # Get the directory of the current script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Construct the path to the requirements.txt file
-        requirements_path = os.path.join(script_dir, "..", "requirements-live.txt")
+        package = metadata.distribution("passivbot")
+    except metadata.PackageNotFoundError:
+        package = None
 
-        # Open and read the requirements.txt file
-        with open(requirements_path, "r") as f:
-            lines = f.readlines()
+    # Editable installs and source runs read the checkout's own pin.
+    if (
+        package is not None
+        and package.read_text("WHEEL") is not None
+        and Path(package.locate_file("procedures.py")).resolve() == module_path
+    ):
+        source = "Passivbot package metadata"
+        requirements = package.requires or []
+    else:
+        source = "requirements-live.txt"
+        requirements_path = module_path.parents[1] / source
+        manifest = requirements_path.read_text(encoding="utf-8")
+        requirements = [line.split("#", 1)[0].strip() for line in manifest.splitlines()]
 
-        # Find the line with 'ccxt' and extract the version number
-        ccxt_line = [line for line in lines if "ccxt" in line][0].strip()
-        return ccxt_line[ccxt_line.find("==") + 2 :]
-    except Exception as e:
-        print(f"failed to load ccxt version {e}")
-        return None
+    ccxt_requirements = [
+        requirement
+        for requirement in requirements
+        if re.match(r"ccxt(?![a-z0-9_.-])", requirement, re.IGNORECASE)
+    ]
+    if len(ccxt_requirements) == 1:
+        pin = re.fullmatch(
+            r"ccxt\s*==\s*([0-9]+(?:\.[0-9]+)+)", ccxt_requirements[0], re.IGNORECASE
+        )
+        if pin:
+            return pin.group(1)
+    raise RuntimeError(f"Expected exactly one unconditional numeric CCXT version pin in {source}")
 
 
 def get_size(obj: Any, seen: Set = None) -> int:
