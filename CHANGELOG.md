@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Validate the CCXT version for installed wheels using Passivbot's package metadata.
+
 - Drop the unused Numba dependency from Python 3.12 installations.
 
 - Keep monitor output valid strict JSON: report unavailable trailing diagnostic prices explicitly
