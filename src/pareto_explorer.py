@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import tempfile
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -174,35 +173,6 @@ def _summarize_anchor_files(anchor_files: Sequence[str], *, preview: int = 4) ->
     return f"{shown} ... (+{hidden} more)"
 
 
-def _abbreviate_path(path: Path | str, *, max_len: int = 100) -> str:
-    value = str(path)
-    home = str(Path.home())
-    if value.startswith(home):
-        value = "~" + value[len(home) :]
-    if len(value) <= max_len:
-        return value
-    parts = value.split(os.sep)
-    if len(parts) <= 3:
-        keep = max(0, max_len - 3)
-        return f"...{value[-keep:]}"
-    prefix = parts[0]
-    suffix = parts[-2:]
-    middle = parts[1:-2]
-    candidate = os.sep.join([prefix, "...", *suffix])
-    while len(candidate) > max_len and suffix:
-        suffix = suffix[1:]
-        candidate = os.sep.join([prefix, "...", *suffix]) if suffix else f"{prefix}{os.sep}..."
-    if len(candidate) <= max_len:
-        return candidate
-    if middle:
-        tail = os.sep.join(parts[-1:])
-        keep = max(0, max_len - len(prefix) - len(tail) - 6)
-        mid_joined = os.sep.join(middle)
-        return f"{prefix}{os.sep}...{mid_joined[-keep:]}{os.sep}{tail}"
-    keep = max(0, max_len - 3)
-    return f"...{value[-keep:]}"
-
-
 def _display_path(path: Path | str, *, base_dir: Path | None = None) -> str:
     resolved = Path(path).resolve()
     search_bases: List[Path] = []
@@ -266,11 +236,6 @@ def _format_limit_entry(entry: Mapping[str, Any]) -> str:
     if mode == "inside_range" and isinstance(range_value, Sequence) and len(range_value) == 2:
         return f"{metric} inside [{range_value[0]}, {range_value[1]}]"
     return str(dict(entry))
-
-
-def _wrap_csv(values: Sequence[str], *, width: int = 104, indent: str = "") -> List[str]:
-    text = ", ".join(str(value) for value in values)
-    return textwrap.wrap(text, width=width, subsequent_indent=indent) or [""]
 
 
 def _format_metric_value(value: Any) -> str:
