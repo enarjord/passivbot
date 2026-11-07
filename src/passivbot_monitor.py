@@ -1430,20 +1430,6 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
     }
 
 
-def _monitor_wallet_exposure_limit_ratio_with_allowance(
-    self, pside: str, symbol: str
-) -> float:
-    wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
-    allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
-    twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
-    effective_allowance_fraction = effective_we_excess_allowance_fraction(
-        wallet_exposure_limit_ratio=wel,
-        risk_we_excess_allowance_fraction=allowance_fraction,
-        total_wallet_exposure_limit_ratio=twel,
-    )
-    return wel * (1.0 + effective_allowance_fraction)
-
-
 def _monitor_strategy_params(self, pside, symbol, strategy_cache=None):
     key = (pside, symbol)
     if strategy_cache is not None and key in strategy_cache:
@@ -1495,23 +1481,6 @@ def _monitor_strategy_value(
     return float(self.bp(pside, key, symbol))
 
 
-def _monitor_entry_trailing_limit_cap(
-    self,
-    pside: str,
-    symbol: str,
-    wallet_exposure: float,
-) -> tuple[Optional[float], Optional[str]]:
-    allowed_limit = _monitor_wallet_exposure_limit_ratio_with_allowance(self, pside, symbol)
-    if allowed_limit <= 0.0:
-        return None, None
-    retracement = _monitor_strategy_value(
-        self, pside, "entry.retracement_base_fraction", symbol
-    )
-    if retracement > 0.0:
-        return allowed_limit, "trailing_only"
-    return None, "grid_only"
-
-
 def _monitor_logrange_for_span(self, symbol: str, span: float, timeframe: str) -> Optional[float]:
     cache = getattr(self, f"_monitor_runtime_{timeframe}_log_range_emas", {})
     try:
@@ -1524,14 +1493,6 @@ def _monitor_logrange_for_span(self, symbol: str, span: float, timeframe: str) -
         return value if math.isfinite(value) and value >= 0.0 else None
     except (TypeError, ValueError, OverflowError):
         return None
-
-
-def _monitor_h1_logrange_for_span(self, symbol: str, span: float) -> Optional[float]:
-    return _monitor_logrange_for_span(self, symbol, span, "h1")
-
-
-def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> Optional[float]:
-    return _monitor_logrange_for_span(self, symbol, span, "m1")
 
 
 def _monitor_logrange_inputs(self, pside, symbol, *, strategy_cache=None, now_ms=None, branch=None):
@@ -1576,18 +1537,6 @@ def _monitor_diagnostic_logrange_values(inputs):
                  else row["value"] for row in (inputs["h1_log_range"], inputs["m1_log_range"]))
 
 
-def _monitor_h1_entry_logrange(
-    self, pside: str, symbol: str, *, strategy_cache=None
-) -> Optional[float]:
-    return _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)["h1_log_range"]["value"]
-
-
-def _monitor_m1_entry_logrange(
-    self, pside: str, symbol: str, *, strategy_cache=None
-) -> Optional[float]:
-    return _monitor_logrange_inputs(self, pside, symbol, strategy_cache=strategy_cache)["m1_log_range"]["value"]
-
-
 def _monitor_trailing_extrema(bundle: dict[str, Any]) -> dict[str, float]:
     return normalize_trailing_extrema(bundle)
 
@@ -1598,21 +1547,6 @@ def _monitor_optional_payload(builder, *args, **kwargs):
     except Exception:
         # A native diagnostic or config projection failure cannot discard the rest of a snapshot.
         return None
-
-
-def _monitor_trailing_status(
-    *,
-    triggered: bool,
-    threshold_met: bool,
-    retracement_met: bool,
-) -> str:
-    if triggered:
-        return "triggered"
-    if not threshold_met:
-        return "waiting_threshold"
-    if not retracement_met:
-        return "waiting_retracement"
-    return "armed"
 
 
 def _build_monitor_trailing_entry_payload(
