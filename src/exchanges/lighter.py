@@ -43,6 +43,19 @@ def decode_client_id(value) -> str:
 
 
 class _LighterMixin:
+    def parse_to_int(self, number):
+        # CCXT's parse_to_int goes through float64. Above 2**53 that changes
+        # any integer that is not aligned to the float spacing, so a Lighter
+        # cancel or modify is signed for a different order index.
+        if isinstance(number, int) and not isinstance(number, bool):
+            return number
+        if isinstance(number, str):
+            text = number.strip()
+            digits = text[1:] if text.startswith(("+", "-")) and len(text) > 1 else text
+            if digits.isdecimal():
+                return int(text)
+        return super().parse_to_int(number)
+
     def _validate_order_owner(self, order):
         if str(order["owner_account_index"]) != str(self.options["accountIndex"]):
             raise ValueError("Lighter order belongs to an unexpected account")

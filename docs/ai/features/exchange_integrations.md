@@ -769,7 +769,9 @@ specified in [the setup guide](../../exchanges/lighter.md). Never pass that key 
 
 Lighter is one-way. Normalize authoritative buy/sell plus explicit `reduce_only` into position
 side; every close must be reduce-only. Encode Passivbot client IDs into the exchange's 48-bit
-integer range with a namespace and reversible order-type marker. Do not infer ownership from
+integer range with a namespace and reversible order-type marker. Pass order and client
+indexes to the signer as exact integers; binary64 cannot represent every index above
+2^53, and a rounded index cancels or modifies a different order. Do not infer ownership from
 side, price, or quantity. Quantities are base units, not `quote_multiplier` contracts.
 
 Serialize signed writes and propagate failures. A `sendTx` receipt is pending transaction evidence,

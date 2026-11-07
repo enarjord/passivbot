@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Sign Lighter cancels and modifications with the exact order index. Indexes above the
+  binary64 integer range are no longer rounded before they reach the signer.
+
 - Select suite datasets using their real source exchanges, so a single-exchange
   scenario uses its own history when a combined dataset is also prepared. Preserve
   the combined portfolio for scenarios matching its source pool, even when other
