@@ -79,6 +79,14 @@ At most 128 held/restricted-prioritized rows accompany complete mode/scope/restr
 and an explicit omitted count. Health summaries show the ordinary observation status/age and held
 restriction count separately from strategy close-wait conditions.
 
+`health.ordinary_progress` measures a later boundary. An accepted ordinary plan advances its
+timestamp after reconciliation returns, including valid no-op plans. This proves progress through
+reconciliation without implying a connector call or exchange acknowledgement. The payload keeps
+the age of the last acceptance, the age of the last completed outer cycle, and the elapsed span of
+outer cycle completions without an acceptance. Unknown ages are null. The last defer after
+acceptance retains only known ordinary phase, reason, and missing input surface classifications.
+Capture is independent of event sink success.
+
 `ordinary.pending_confirmations` reports current required account surfaces with requested and
 observed epochs. `last_create_filter` and `last_cancel_first_barrier` retain only bounded reason,
 count, wave id, required surface names and observation age. These are labelled last observed

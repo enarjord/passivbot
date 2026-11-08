@@ -159,12 +159,12 @@ fn scope_budget(
     order: i64,
     reasons: &mut BTreeSet<String>,
 ) -> Result<f64, String> {
-    if let Some(fact) = input
+    // Continuity validates this ordering before replay and reconstructs retained
+    // observations from the ordered ledger. Keep fill phases at the same clock.
+    let end = input
         .budget_observations
-        .iter()
-        .rev()
-        .find(|f| (f.timestamp, f.order) <= (timestamp, order))
-    {
+        .partition_point(|f| (f.timestamp, f.order) <= (timestamp, order));
+    if let Some(fact) = input.budget_observations[..end].last() {
         if fact.estimated {
             reasons.insert("historical_budget_estimate".into());
         }

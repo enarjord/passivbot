@@ -1417,6 +1417,7 @@ def test_state_debug_profile_adds_bounded_refresh_shape():
 
 def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     import passivbot as pb_mod
+    from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
 
     class FakePipeline:
         def __init__(self):
@@ -1529,6 +1530,8 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
 
     bot = FakeBot()
     bot._health_asyncio_errors = 4
+    observe_ordinary_acceptance(bot, 159_100)
+    observe_ordinary_outer_cycle(bot, 159_700, accepted=True)
     payload = bot._build_health_summary_payload(now_ms=160_000)
 
     assert payload["uptime_ms"] == 60_000
@@ -1538,6 +1541,10 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["quote"] == "USDT"
     assert payload["error_budget_max"] == 10
     assert payload["async_errors_total"] == 4
+    assert payload["ordinary_progress"] == dict(
+        last_accepted_age_ms=900, last_outer_cycle_age_ms=300,
+        without_acceptance_ms=None, stalled=False, last_defer=None,
+    )
     assert "slow_phases" not in payload
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5

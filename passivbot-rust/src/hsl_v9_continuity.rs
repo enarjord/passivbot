@@ -1855,6 +1855,48 @@ mod tests {
         serde_json::to_value(&value.risk).unwrap()
     }
 
+    #[test]
+    fn budget_lookup_preserves_same_clock_fill_phases_and_estimates() {
+        let mut input: Input = serde_json::from_value(facts(120_000, 0, 100.0)).unwrap();
+        let estimated = &input.budget_observations[0];
+        let first = BudgetFact {
+            timestamp: 60_000,
+            balance: 900.0,
+            estimated: false,
+            ..estimated.clone()
+        };
+        input.budget_observations.extend([
+            first.clone(),
+            BudgetFact {
+                order: 0,
+                balance: 800.0,
+                ..first.clone()
+            },
+            BudgetFact {
+                order: i64::MAX,
+                balance: 700.0,
+                ..first
+            },
+        ]);
+        for (timestamp, order, expected, estimated) in [
+            (0, -2, 1000.0, true),
+            (59_999, i64::MAX, 1000.0, true),
+            (60_000, -2, 1000.0, true),
+            (60_000, -1, 900.0, false),
+            (60_000, 0, 800.0, false),
+            (60_000, 1, 800.0, false),
+            (60_000, i64::MAX, 700.0, false),
+            (120_000, -1, 700.0, false),
+        ] {
+            let mut reasons = BTreeSet::new();
+            assert_eq!(
+                scope_budget(&input, timestamp, order, &mut reasons),
+                Ok(expected)
+            );
+            assert_eq!(reasons.contains("historical_budget_estimate"), estimated);
+        }
+    }
+
     fn sparse_account_facts(now: i64, size: f64, mode: &str, short: bool, slow: f64) -> Value {
         let mut value = facts(now, 0, if short { 110.0 } else { 90.0 });
         value["snapshot"]["balance"] = json!(100.0);

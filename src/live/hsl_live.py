@@ -12,7 +12,9 @@ from uuid import uuid4
 
 from live import hsl_runtime as runtime
 from live import position_fill_sync
+from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
 from live.diagnostic_safety import log_process_recovery
+from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
 
 
@@ -1013,6 +1015,10 @@ class Owner:
                     phase_started = perf_counter()
                     await bot.execute_order_plan_to_exchange(cancels, creates)
                     if not self._shutdown_requested():
+                        run_diagnostic_step(
+                            "record ordinary acceptance",
+                            lambda: observe_ordinary_acceptance(bot, int(utc_ms())),
+                        )
                         log_process_recovery(bot)
                     timings["ordinary_execute"] += int(
                         (perf_counter() - phase_started) * 1000
@@ -1077,6 +1083,12 @@ class Owner:
             for wave in reports:
                 self.report(wave)
             if completed_cycle:
+                run_diagnostic_step(
+                    "record ordinary cycle progress",
+                    lambda: observe_ordinary_outer_cycle(
+                        bot, int(utc_ms()), accepted=plan is not None
+                    ),
+                )
                 try:
                     from live.event_emitters import emit_live_cycle_completed
 
