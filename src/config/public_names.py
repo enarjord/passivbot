@@ -29,6 +29,8 @@ PUBLIC_PATH_RENAMES = {
     ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
+    ("logging", "max_bytes_mb"): ("logging", "max_bytes_mib"),
+    ("monitor", "event_rotation_mb"): ("monitor", "event_rotation_mib"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),
     ("live", "startup", "startup_phase_budgets", "*", "elapsed_ms"): ("live", "startup", "startup_phase_budgets", "*", "elapsed_milliseconds"),
     ("live", "startup", "startup_phase_budgets", "*", "since_previous_ms"): ("live", "startup", "startup_phase_budgets", "*", "since_previous_milliseconds"),

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
+  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
+  The v8 migration tool converts the old field names without rescaling.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
