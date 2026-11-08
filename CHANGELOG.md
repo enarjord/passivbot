@@ -69,6 +69,8 @@ since the latest release tag; these features may already be available when insta
   using the existing configurable symbol cooldown. Preserve the failed write's error accounting
   and reconciliation, other markets, and management of existing positions.
 
+- Preserve the ordinary planning quote cohort when a passive single-symbol HSL quote read finishes.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.

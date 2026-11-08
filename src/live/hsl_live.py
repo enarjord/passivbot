@@ -602,7 +602,9 @@ class Owner:
         for symbol in ordered:
             if symbol not in self._quote_tasks and len(self._quote_tasks) < 8:
                 self._quote_tasks[symbol] = asyncio.create_task(
-                    self.bot._get_orchestrator_market_snapshots([symbol])
+                    self.bot._get_orchestrator_market_snapshots(
+                        [symbol], record_surface=False
+                    )
                 )
                 self._quote_started[symbol] = monotonic()
                 self._quote_cursor += 1

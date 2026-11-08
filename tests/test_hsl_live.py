@@ -121,10 +121,10 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
 
             original_quotes = bot._get_orchestrator_market_snapshots
 
-            async def scoped_quote_gap(symbols):
+            async def scoped_quote_gap(symbols, **kwargs):
                 if "RETIRED/USDT:USDT" in symbols:
                     raise NetworkError("flat market unavailable")
-                return await original_quotes(symbols)
+                return await original_quotes(symbols, **kwargs)
 
             bot._get_orchestrator_market_snapshots = scoped_quote_gap
             if path == "flat_order_reason_gap":
@@ -595,10 +595,10 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
         if obstacle == "missing_quote":
             original_quotes = bot._get_orchestrator_market_snapshots
 
-            async def quotes(symbols):
+            async def quotes(symbols, **kwargs):
                 if first in symbols:
                     raise MarketSnapshotUnavailable("offline quote outage")
-                return await original_quotes(symbols)
+                return await original_quotes(symbols, **kwargs)
 
             bot._get_orchestrator_market_snapshots = quotes
         bot.cca.get_current_step()["prices"][second] = 80.0
@@ -637,7 +637,8 @@ async def test_resistant_quote_read_is_bounded_and_does_not_suspend_peer():
     release = asyncio.Event()
     calls = Counter()
 
-    async def read(symbols):
+    async def read(symbols, *, record_surface):
+        assert record_surface is False
         (symbol,) = symbols
         calls[symbol] += 1
         if symbol == "blocked":
@@ -671,7 +672,8 @@ async def test_quote_read_can_finish_after_the_wave_time_slice():
     release = asyncio.Event()
     started = 0
 
-    async def read(symbols):
+    async def read(symbols, *, record_surface):
+        assert record_surface is False
         nonlocal started
         started += 1
         await release.wait()
