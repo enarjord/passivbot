@@ -12,9 +12,9 @@ services:
       - ./:/app/
     working_dir: /app
     # Default command runs src/main.py; override as needed
-    #command: python src/main.py configs/examples/forager_long_only.json
-    #command: python src/backtest.py configs/examples/top20mcap.json
-    #command: python src/optimize.py configs/examples/forager_long_only.json
+    #command: python src/main.py /app/configs/live.json
+    #command: python src/backtest.py configs/examples/default_trailing_martingale_long.json
+    #command: python src/optimize.py configs/examples/default_trailing_martingale_long.json
     
   passivbot-live:
     profiles:

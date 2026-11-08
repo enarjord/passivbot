@@ -183,9 +183,9 @@ def rms_side_enabled(params, pside, *, bounds=None):
 def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=False, ranking_possible=True):
     if not rms_side_enabled(params, pside, bounds=None if for_trade_activation else bounds):
         return 0
-    scoring = params.get("forager_score_weights", {}).get("unilateralness", 0.0)
+    scoring = params.get("forager_score_weights", {}).get("rms_directionality", 0.0)
     adverse = params.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0.0)
-    span = params.get("unilateralness_ema_span_minutes")
+    span = params.get("rms_directionality_ema_span_minutes")
     if bounds and not for_trade_activation:
         def upper(key, fixed):
             raw = bounds.get(f"{pside}_{key}")
@@ -194,9 +194,9 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
             high = _to_float(Bound.from_config(key, raw).high, context=f"{pside}_{key}")
             return max(fixed, high) if fixed is not None else high
 
-        scoring = upper("forager_score_weights_unilateralness", scoring)
+        scoring = upper("forager_score_weights_rms_directionality", scoring)
         adverse = upper("entry_cooldown_weights_minutes_adverse_directionality", adverse)
-        span = upper("unilateralness_ema_span_minutes", span)
+        span = upper("rms_directionality_ema_span_minutes", span)
     from config.entry_cooldown import constant_duration
     duration_params = dict(params)
     if bounds and not for_trade_activation:
@@ -211,7 +211,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         adverse = 0.0
     if adverse <= 0.0 and (for_trade_activation or not ranking_possible or scoring <= 0.0):
         return 0
-    n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_minutes") * 20.0)
+    n_returns = math.ceil(_to_float(span, context=f"{pside}.rms_directionality_ema_span_minutes") * 20.0)
     # N returns need N+1 closes, available at offset N from the first valid close.
     return n_returns if for_trade_activation else n_returns + 1
 

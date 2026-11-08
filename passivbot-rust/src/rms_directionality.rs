@@ -6,7 +6,7 @@ pub fn backtest_enabled(params: &crate::types::BotParams, ranking_possible: bool
     params.entry_eligible
         && params.total_wallet_exposure_limit_ratio > 0.0
         && params.n_positions > 0
-        && ((ranking_possible && params.forager_score_weights.unilateralness > 0.0)
+        && ((ranking_possible && params.forager_score_weights.rms_directionality > 0.0)
             || crate::entry_cooldown::uses_adverse_rms(params))
 }
 
@@ -46,7 +46,7 @@ pub fn backtest_enabled_sides(
 
 pub fn warmup_returns(span: f64) -> Result<usize, String> {
     if !span.is_finite() || !(1.0..=100_000.0).contains(&span) {
-        return Err("unilateralness span must be finite and between 1 and 100000".into());
+        return Err("RMS directionality span must be finite and between 1 and 100000".into());
     }
     Ok((span * 20.0).ceil() as usize)
 }
@@ -54,7 +54,7 @@ pub fn warmup_returns(span: f64) -> Result<usize, String> {
 pub fn signed_rms(closes: &[f64], span: f64) -> Result<f64, String> {
     let n = warmup_returns(span)?;
     if closes.len() < n + 1 {
-        return Err("incomplete unilateralness warmup".into());
+        return Err("incomplete RMS directionality warmup".into());
     }
     let closes = &closes[closes.len() - n - 1..];
     let alpha = 2.0 / (span + 1.0);
@@ -62,7 +62,7 @@ pub fn signed_rms(closes: &[f64], span: f64) -> Result<f64, String> {
     let mut square = 0.0;
     for pair in closes.windows(2) {
         if pair.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-            return Err("invalid unilateralness close".into());
+            return Err("invalid RMS directionality close".into());
         }
         let r = pair[1].ln() - pair[0].ln();
         mean += alpha * (r - mean);
@@ -116,7 +116,7 @@ impl RollingRms {
 
     pub(crate) fn push_close(&mut self, close: f64) -> Result<(), String> {
         if !close.is_finite() || close <= 0.0 {
-            return Err("invalid unilateralness close".into());
+            return Err("invalid RMS directionality close".into());
         }
         let log_close = close.ln();
         let previous = self.previous_log.replace(log_close);
@@ -173,7 +173,7 @@ impl RollingRms {
 }
 
 #[pyo3::prelude::pyfunction]
-pub fn calc_signed_unilateralness(closes: Vec<f64>, span: f64) -> pyo3::PyResult<f64> {
+pub fn calc_signed_rms_directionality(closes: Vec<f64>, span: f64) -> pyo3::PyResult<f64> {
     signed_rms(&closes, span).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -220,7 +220,7 @@ mod tests {
             bp.entry_eligible = true;
             bp.n_positions = 2;
             bp.total_wallet_exposure_limit_ratio = 1.0;
-            bp.forager_score_weights.unilateralness = 1.0;
+            bp.forager_score_weights.rms_directionality = 1.0;
         }
         assert_eq!(
             backtest_enabled_sides(

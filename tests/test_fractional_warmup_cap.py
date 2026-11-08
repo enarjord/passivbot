@@ -150,7 +150,7 @@ def test_fractional_cap_preserves_independently_required_rms_history():
     config = _ema_anchor_config(True)
     config["bot"]["portfolio"]["warmup"]["max_minutes"] = 0.5
     config["optimize"]["bounds"] = {}
-    config["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 2.25
+    config["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 2.25
     config["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
     config["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
     original = deepcopy(config)

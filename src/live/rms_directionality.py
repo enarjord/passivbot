@@ -12,7 +12,7 @@ from config.entry_cooldown import uses_adverse_rms
 
 
 def scoring_enabled(bot, side, symbols):
-    if bot.bot_value(side, "forager_score_weights")["unilateralness"] <= 0:
+    if bot.bot_value(side, "forager_score_weights")["rms_directionality"] <= 0:
         return False
     if bot.is_forager_mode(side):
         return True
@@ -67,7 +67,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         for symbol, cached in replay_cache.items():
             if symbol not in result:
                 for key in list(cached):
-                    if key[0] == "signed_unilateralness":
+                    if key[0] == "signed_rms_directionality":
                         del cached[key]
     source_ends = {}
     ages = forager_age_by_symbol or {}
@@ -82,7 +82,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         for side in ("long", "short"):
             if not bot.is_pside_enabled(side):
                 continue
-            span = float(bot.bot_value(side, "unilateralness_ema_span_minutes"))
+            span = float(bot.bot_value(side, "rms_directionality_ema_span_minutes"))
             if adverse_enabled(bot, side, symbol):
                 current_spans.add(span)
             if side in scoring_sides:
@@ -91,13 +91,13 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         required[symbol] = (current_spans, forager_spans)
         cached = replay_cache.get(symbol, {}) if replay_cache is not None else {}
         for key in list(cached):
-            if key[0] == "signed_unilateralness" and key[1] not in spans:
+            if key[0] == "signed_rms_directionality" and key[1] not in spans:
                 del cached[key]
         if not spans:
             continue
         if any(not math.isfinite(s) or not 1 <= s <= 100_000 for s in spans):
-            raise ValueError("unilateralness EMA span must be between 1 and 100000")
-        keys = {span: ("signed_unilateralness", span, "60000") for span in spans}
+            raise ValueError("RMS directionality EMA span must be between 1 and 100000")
+        keys = {span: ("signed_rms_directionality", span, "60000") for span in spans}
         allowed_age = max(0, int(ages.get(symbol, 0)))
         if all(
             key in cached and (
@@ -128,7 +128,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             )
         except (ccxt.NetworkError, OhlcvFetchError, OSError, asyncio.TimeoutError) as exc:
             logging.warning(
-                "[ema] unilateralness unavailable | symbol=%s error_type=%s",
+                "[ema] RMS directionality unavailable | symbol=%s error_type=%s",
                 symbol,
                 type(exc).__name__,
             )
@@ -150,7 +150,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             stop = int(ends[-1])
             window = rows[stop - n:stop]
             # Rust rejects malformed prices. Missing history stays absent, never a zero score.
-            value = passivbot_rust.calc_signed_unilateralness(
+            value = passivbot_rust.calc_signed_rms_directionality(
                 window["c"].astype(float).tolist(), span
             )
             source_end = int(window["ts"][-1])
@@ -166,7 +166,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
                 result[symbol][span] = value
             else:
                 logging.debug(
-                    "[ema] cached unilateralness | symbol=%s span=%s source=completed_candles age_ms=%d max_age_ms=%d",
+                    "[ema] cached rms_directionality | symbol=%s span=%s source=completed_candles age_ms=%d max_age_ms=%d",
                     symbol,
                     span,
                     end - int(window["ts"][-1]),

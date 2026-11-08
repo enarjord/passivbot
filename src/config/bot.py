@@ -26,7 +26,7 @@ DEFAULT_FORAGER_SCORE_WEIGHTS = {
     "volume": 0.0,
     "ema_readiness": 0.0,
     "log_range": 1.0,
-    "unilateralness": 0.0,
+    "rms_directionality": 0.0,
 }
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
@@ -551,7 +551,7 @@ def ensure_optimize_bounds_for_bot(
                 "volume": 0.0,
                 "ema_readiness": 0.0,
                 "log_range": 1.0,
-                "unilateralness": 0.0,
+                "rms_directionality": 0.0,
             }
             forager_cfg["score_weights"] = weights
             if tracker is not None:
@@ -559,7 +559,7 @@ def ensure_optimize_bounds_for_bot(
 
 
 def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
-    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "rms_directionality"}
     if not isinstance(weights, dict):
         raise TypeError(f"{path} must be a dict")
     missing = sorted(required_weight_keys - set(weights))
@@ -571,7 +571,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
 
     normalized = {}
     total = 0.0
-    for key in ("volume", "ema_readiness", "log_range", "unilateralness"):
+    for key in ("volume", "ema_readiness", "log_range", "rms_directionality"):
         try:
             value = float(weights[key])
         except (TypeError, ValueError) as exc:
@@ -582,11 +582,11 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0}
+        return {"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "rms_directionality": 0.0}
 
     return {
         key: normalized[key] / total
-        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "rms_directionality")
     }
 
 
@@ -599,7 +599,7 @@ def forager_score_weights_are_normalized(
     normalized = normalize_forager_score_weights(weights, path=path)
     return all(
         math.isclose(normalized[key], weights[key], rel_tol=0.0, abs_tol=abs_tol)
-        for key in ("volume", "ema_readiness", "log_range", "unilateralness")
+        for key in ("volume", "ema_readiness", "log_range", "rms_directionality")
     )
 
 
@@ -625,13 +625,13 @@ def normalize_bot_forager_config(
         policy = reconciled_bot_policy(result)
     logical = replace(policy, _normalized=()).effective_view() if policy is not None else None
     aliases = result["bot"]._runtime_aliases if policy is not None else frozenset()
-    required_weight_keys = {"volume", "ema_readiness", "log_range", "unilateralness"}
+    required_weight_keys = {"volume", "ema_readiness", "log_range", "rms_directionality"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         weights = (deepcopy(logical[pside]["forager"]["score_weights"])
                    if logical is not None else forager_cfg["score_weights"])
         if isinstance(weights, dict):
-            weights.setdefault("unilateralness", 0.0)
+            weights.setdefault("rms_directionality", 0.0)
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
         normalized = normalize_forager_score_weights(
             weights, path=f"bot.{pside}.forager.score_weights"
@@ -832,7 +832,7 @@ def validate_forager_config(
         )
         raw_weight_total = sum(
             float(forager_cfg["score_weights"][key])
-            for key in ("volume", "ema_readiness", "log_range", "unilateralness")
+            for key in ("volume", "ema_readiness", "log_range", "rms_directionality")
         )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],

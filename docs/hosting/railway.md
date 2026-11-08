@@ -38,10 +38,11 @@ If you want monitor output or file logs to persist across restarts, attach a Rai
 ### Simple Hosted Mode
 
 - env-generated credentials
-- schema defaults or inline config
-- optional `PB_APPROVED_COINS`
+- reviewed inline v9 config with explicit side activation
+- optional `PB_APPROVED_COINS` universe override
 
-Useful for demos and simple deployments.
+If the inline config is omitted, both position sides default to disabled for new entries.
+Starting this container still runs the live exchange connector.
 
 ### Operator Mode
 

@@ -14922,7 +14922,7 @@ class Passivbot:
             "entry_cooldown_min_duration_minutes",
             "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes",
-            "unilateralness_ema_span_minutes",
+            "rms_directionality_ema_span_minutes",
             "n_positions",
             "total_wallet_exposure_limit_ratio",
             "wallet_exposure_limit_ratio",
@@ -14976,7 +14976,7 @@ class Passivbot:
                     "volume": float(val["volume"]),
                     "ema_readiness": float(val["ema_readiness"]),
                     "log_range": float(val["log_range"]),
-                    "unilateralness": float(val["unilateralness"]),
+                    "rms_directionality": float(val["rms_directionality"]),
                 }
             elif key == "entry_cooldown_weights_minutes":
                 out[out_key] = {
@@ -15324,9 +15324,9 @@ class Passivbot:
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
         self._monitor_runtime_forager_hints = {}
-        self._orchestrator_signed_unilateralness = {}
-        self._orchestrator_forager_signed_unilateralness = {}
-        self._orchestrator_unilateralness_unavailable = {}
+        self._orchestrator_signed_rms_directionality = {}
+        self._orchestrator_forager_signed_rms_directionality = {}
+        self._orchestrator_rms_directionality_unavailable = {}
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
@@ -17574,28 +17574,28 @@ class Passivbot:
             for s in symbols
             if lr_span_long in forager_m1_log_range_emas[s]
         }
-        from live import unilateralness
+        from live import rms_directionality
 
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         directional_scoring_sides = {
             side for side in ("long", "short")
             if self.is_pside_enabled(side)
-            and unilateralness.scoring_enabled(self, side, symbols)
+            and rms_directionality.scoring_enabled(self, side, symbols)
         }
         directional_enabled = any(
             side in directional_scoring_sides
-            or unilateralness.adverse_enabled(self, side, symbol)
+            or rms_directionality.adverse_enabled(self, side, symbol)
             for side in ("long", "short")
             for symbol in symbols
             if self.is_pside_enabled(side)
         )
         if directional_enabled:
-            directional, ranking_directional, missing_directional = await unilateralness.load(
+            directional, ranking_directional, missing_directional = await rms_directionality.load(
                 self, symbols, cache_only_symbols, forager_cached_metric_max_age_by_symbol
             )
-            self._orchestrator_signed_unilateralness = directional
-            self._orchestrator_forager_signed_unilateralness = ranking_directional
-            self._orchestrator_unilateralness_unavailable = missing_directional
+            self._orchestrator_signed_rms_directionality = directional
+            self._orchestrator_forager_signed_rms_directionality = ranking_directional
+            self._orchestrator_rms_directionality_unavailable = missing_directional
         else:
             directional = {}
             ranking_directional = {}
@@ -17608,7 +17608,7 @@ class Passivbot:
             ("short", vol_span_short, lr_span_short),
         ):
             if pside in directional_scoring_sides:
-                span = float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
+                span = float(self.bot_value(pside, "rms_directionality_ema_span_minutes"))
                 rank_feature_unavailable_by_side[pside].update(
                     s for s in symbols if span not in ranking_directional.get(s, {})
                 )
@@ -17997,15 +17997,15 @@ class Passivbot:
                     "allow_missing_strategy_inputs": (
                         symbol in allow_missing_strategy_inputs_symbols
                     ),
-                    "unilateralness_unavailable": getattr(
-                        self, "_orchestrator_unilateralness_unavailable", {}
+                    "rms_directionality_unavailable": getattr(
+                        self, "_orchestrator_rms_directionality_unavailable", {}
                     ).get(symbol, {}),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
                         "m1": {
-                            "signed_unilateralness": sorted(
-                                getattr(self, "_orchestrator_signed_unilateralness", {})
+                            "signed_rms_directionality": sorted(
+                                getattr(self, "_orchestrator_signed_rms_directionality", {})
                                 .get(symbol, {})
                                 .items()
                             ),
@@ -18016,8 +18016,8 @@ class Passivbot:
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
                     },
                     "forager_m1": {
-                        "signed_unilateralness": sorted(
-                            getattr(self, "_orchestrator_forager_signed_unilateralness", {})
+                        "signed_rms_directionality": sorted(
+                            getattr(self, "_orchestrator_forager_signed_rms_directionality", {})
                             .get(symbol, {})
                             .items()
                         ),

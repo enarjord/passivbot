@@ -372,10 +372,10 @@ def _tick_window_fixture(sides, hsl):
         bot["entry_cooldown"]["weights_minutes"].update(
             adverse_directionality=3.0, exposure_ratio=2.0,
         )
-        bot["forager"].update(unilateralness_ema_span_minutes=3.25,
+        bot["forager"].update(rms_directionality_ema_span_minutes=3.25,
                                volume_ema_span_minutes=7.5,
                                log_range_ema_span_minutes=11.25)
-        bot["forager"]["score_weights"]["unilateralness"] = 0.35
+        bot["forager"]["score_weights"]["rms_directionality"] = 0.35
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25)
         strategy.update(log_range_ema_span_minutes=9.5, log_range_ema_span_1h_candles=2.5)

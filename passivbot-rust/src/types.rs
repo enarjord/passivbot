@@ -509,7 +509,7 @@ pub struct ForagerScoreWeights {
     pub ema_readiness: f64,
     pub log_range: f64,
     #[serde(default)]
-    pub unilateralness: f64,
+    pub rms_directionality: f64,
 }
 
 impl Default for ForagerScoreWeights {
@@ -518,7 +518,7 @@ impl Default for ForagerScoreWeights {
             volume: 0.0,
             ema_readiness: 0.0,
             log_range: 1.0,
-            unilateralness: 0.0,
+            rms_directionality: 0.0,
         }
     }
 }
@@ -529,7 +529,7 @@ impl ForagerScoreWeights {
             self.volume,
             self.ema_readiness,
             self.log_range,
-            self.unilateralness,
+            self.rms_directionality,
         ];
         if values
             .iter()
@@ -537,20 +537,20 @@ impl ForagerScoreWeights {
         {
             return Err("forager_score_weights must be finite and non-negative".to_string());
         }
-        let total = self.volume + self.ema_readiness + self.log_range + self.unilateralness;
+        let total = self.volume + self.ema_readiness + self.log_range + self.rms_directionality;
         if total <= 0.0 {
             return Ok(Self {
                 volume: 0.0,
                 ema_readiness: 1.0,
                 log_range: 0.0,
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
             });
         }
         Ok(Self {
             volume: self.volume / total,
             ema_readiness: self.ema_readiness / total,
             log_range: self.log_range / total,
-            unilateralness: self.unilateralness / total,
+            rms_directionality: self.rms_directionality / total,
         })
     }
 }
@@ -625,8 +625,8 @@ pub struct BotParams {
     pub entry_cooldown_max_duration_minutes: Option<f64>,
     #[serde(default)]
     pub entry_cooldown_weights_minutes: crate::entry_cooldown::CooldownWeights,
-    #[serde(default = "default_unilateralness_span")]
-    pub unilateralness_ema_span_minutes: f64,
+    #[serde(default = "default_rms_directionality_span")]
+    pub rms_directionality_ema_span_minutes: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_limit_ratio: f64, // per-position base limit (without excess allowance)
@@ -686,7 +686,7 @@ impl Default for BotParams {
             entry_cooldown_min_duration_minutes: 0.0,
             entry_cooldown_max_duration_minutes: None,
             entry_cooldown_weights_minutes: Default::default(),
-            unilateralness_ema_span_minutes: 60.0,
+            rms_directionality_ema_span_minutes: 60.0,
             n_positions: 0,
             total_wallet_exposure_limit_ratio: 0.0,
             wallet_exposure_limit_ratio: 0.0,
@@ -914,6 +914,6 @@ pub struct Fill {
     pub twe_net: f64,   // twe_long + twe_short
 }
 
-fn default_unilateralness_span() -> f64 {
+fn default_rms_directionality_span() -> f64 {
     60.0
 }

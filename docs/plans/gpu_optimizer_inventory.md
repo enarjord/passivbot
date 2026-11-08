@@ -9,17 +9,17 @@ gates in [the development contract](gpu_optimizer_contract.md).
 - The starting legacy GPU backend mixed request preparation, suite scheduling, proxy fitness,
   evolution, exact-worker pools, drift gates and CPU-evaluated result publication. Its
   replacement is prepared locally; final retirement remains acceptance-gated.
-- [`service.py`](../../src/optimization/gpu/service.py) packs prepared backtest payloads,
+- [`service.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/service.py) packs prepared backtest payloads,
   selects replay kernels and reduces compact output to scalar metrics. Its synchronous
   `evaluate(candidates)` methods are the transitional asynchronous-service adapters.
-- [`mps_kernel.py`](../../src/optimization/gpu/mps_kernel.py) owns shader specialization,
+- [`mps_kernel.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/mps_kernel.py) owns shader specialization,
   dispatch, mutable replay buffers and temporal chunking. Rust-owned shader sources
-  run on CUDA through [`cuda_kernel.py`](../../src/optimization/gpu/cuda_kernel.py).
-- Native [`gpu_backend.py`](../../src/optimization/backends/gpu_backend.py)
+  run on CUDA through [`cuda_kernel.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/cuda_kernel.py).
+- Native [`gpu_backend.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/backends/gpu_backend.py)
   owns search and persistence through `NativeCandidatePlanner`, `NativeEvaluationSession`
   and `CanonicalResultScorer`. CPU preparation/scoring does not invoke simulation.
-  [`native.py`](../../src/optimization/gpu/native.py) owns resident replay behind prepared
-  descriptors; [`executor.py`](../../src/optimization/gpu/executor.py) receives requests
+  [`native.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/native.py) owns resident replay behind prepared
+  descriptors; [`executor.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/executor.py) receives requests
   and completes their futures. Device implementation and tuning remain service-owned.
 - CPU scoring/limits and scenario reduction remain with the existing evaluator helpers.
   Reusing their metric-processing methods must not call their CPU simulation methods.
@@ -40,8 +40,8 @@ gates in [the development contract](gpu_optimizer_contract.md).
 | Metrics | Supported names in `metrics.SUPPORTED_METRICS`; exact-only exclusions in `metric_registry.GPU_EXACT_ONLY_METRICS` | Audit reducers and sentinels; do not export omitted metrics as neutral defaults |
 
 The complete name lists remain code-owned in
-[`metrics.py`](../../src/optimization/gpu/metrics.py) and
-[`metric_registry.py`](../../src/optimization/gpu/metric_registry.py). Requested objective
+[`metrics.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/metrics.py) and
+[`metric_registry.py`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/metric_registry.py). Requested objective
 and limit names must remain explicit. Standalone CPU backtests emit a broader surface;
 the replacement must not claim to have computed those additional metrics.
 

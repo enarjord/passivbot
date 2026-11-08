@@ -327,7 +327,7 @@ the optimizer's final effective limits, including config limits and CLI `--limit
 `--clear-limits` changes:
 
 ```shell
-passivbot optimize configs/examples/suite_example.json \
+passivbot optimize path/to/suite-config.json \
   -t optimize_results/.../pareto \
   --filter-starting-configs \
   -l 'cagr_fraction_strategy_equity>0.0' \
@@ -340,7 +340,7 @@ Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`
 as `passivbot tool pareto-compress N`. Compression may also be used without filtering:
 
 ```shell
-passivbot optimize configs/examples/suite_example.json \
+passivbot optimize path/to/suite-config.json \
   -t optimize_results/.../pareto \
   --filter-starting-configs \
   --compress-starting-configs 60 \
@@ -363,7 +363,7 @@ optimization.
 
 ```shell
 passivbot tool iterative-backtester configs/your_config.json --auto-run
-passivbot tool iterative-backtester configs/examples/ema_anchor.json --auto-run \
+passivbot tool iterative-backtester configs/examples/default_trailing_martingale_long.json --auto-run \
   --override backtest.start_date=2022-01-01 \
   --override backtest.end_date=now \
   --quit-after-run
@@ -594,8 +594,8 @@ metadata stays unknown. `--optimize` applies fixed runtime settings and existing
 overrides. `--coin` inspects the validated file/inline coin pins after those layers. Reports remain
 separate from config objects and are not accepted as authored configuration.
 
-The new authoring views accept valid sparse configs and preserve whole-section omission: omitting
-`bot` keeps the default profile, while an explicit `bot: {}` disables both omitted sides. Search
+The authoring views accept valid sparse configs and preserve whole-section omission.
+Both sides default to disabled when `bot` is omitted or empty. Search
 treatment distinguishes a sampled gene from effective fixed/runtime/scenario shadowing and retains
 the original gene status and bounds. Omitted independent genes are fixed at their configured values;
 enabled optimizer relationships report their actual derived targets and dependency paths, including
@@ -621,6 +621,10 @@ the shared config pipeline rather than adding a second migration implementation.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_martingale_long.json`).
 - `passivbot tool cache-integrity-doctor` – Read-only local cache smoke report for missing roots, file counts/sizes, cache-family summaries, report-only warm-cache readiness evidence, v2 candle coverage/gap evidence with interior/boundary gap summaries, fill/HSL metadata evidence, and empty or corrupt JSON/NDJSON/NPY artifacts.
 - `passivbot tool candle-doctor` – Audits legacy `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs before importing into the v2 store.
+- `passivbot tool ohlcvs-doctor` – Audits current v2 data chunks and their SQLite catalog.
+  `--repair-catalog` indexes valid chunks and rebuilds bounds, while `--prune-missing-catalog`
+  removes catalog rows for missing chunk files. Opening an existing catalog can initialize its
+  SQLite metadata. Use `cache-integrity-doctor` for a read-only inventory.
 - `passivbot tool import-historical-data` – Explicitly imports validated legacy daily-cache or historical shards into the current OHLCV store. Dry run is the default; `--execute` writes missing rows while preserving valid current rows and every source file. Startup never performs this conversion.
 
 
@@ -1165,6 +1169,31 @@ Recommended usage:
   startup-state handling, or combined position-plus-order effects.
 
 ## Repro and diagnostics helpers
+
+### Compare two saved backtests
+
+Use completed runs over the same data and dates to inspect the effect of a migration or policy
+change. The tool compares recorded dataset identity, fills and strategy equity at common sample
+times. It computes metric deltas only when both runs use the current metric definitions.
+
+```sh
+passivbot tool compare-backtests path/to/baseline-run path/to/candidate-run \
+  --output comparison.json
+```
+
+The tool reads local artifacts. Use `--json` to print the report instead of the text summary.
+Check data identity and the number of common equity samples before interpreting any deltas.
+
+### Inspect local log exposure
+
+```sh
+passivbot tool log-secret-inventory logs --summary
+```
+
+The read-only inventory reports classes and counts of secret-like content without emitting
+the matched values. `--summary` also omits per-file paths and hashes.
+
+### Replay and memory diagnostics
 
 `src/repro_harness.py` replays a stored config or Pareto JSON through both the optimizer-evaluation path and the backtest path in one process, then compares the resulting metrics and Rust binary provenance.
 

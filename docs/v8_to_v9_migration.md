@@ -9,11 +9,17 @@ The explicit offline converter writes config and a change report. It makes no ex
 requests and starts no bot. Keep original source/config pairs and inspect the report
 before backtesting a proposed replacement.
 
+The converter uses a frozen v8.6.0 baseline for omitted settings. Earlier v8 tags
+can have different defaults. For example, v8.1.0 used `threshold` as its default
+HSL restart policy. Confirm the effective policy from the original revision before
+converting a sparse config. Review any change to entry permissions or permanent
+stop behavior before using the output.
+
 ## Structural changes
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.portfolio.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
+| `live.hsl_signal_mode` | `bot.portfolio.hsl.scope` selects `coin`, `position_side`, or `portfolio`. `pside` becomes `position_side`. Earlier `unified` configs shared a signal across side policies. Review those policies and choose a single portfolio policy and bounds for v9. |
 | `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_threshold_fraction`, with the same fractional value |
 | `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.portfolio.hsl` alongside its scope |
@@ -27,10 +33,12 @@ before backtesting a proposed replacement.
 | EMA-anchor `entry_double_down_factor`, `offset_psize_weight` | `entry_qty_exposure_coefficient`, `inventory_offset_exposure_coefficient`; same-side sizing and signed inventory shifts retain their original formulas |
 | Strategy `*_volatility_1m_weight` / `*_volatility_1h_weight` | Corresponding `*_log_range_1m_coefficient` / `*_log_range_1h_coefficient`; the indicator remains EMA of `ln(high / low)` |
 | Forager `score_weights.volatility` | `score_weights.log_range`, preserving relative weights and their normalization |
+| Forager `score_weights.unilateralness`, `unilateralness_ema_span_1m` | `score_weights.rms_directionality`, `rms_directionality_ema_span_minutes`. Weights, spans and scoring are unchanged. |
 | Forager/strategy log-range span names containing `volatility` | Corresponding names containing `log_range`, retaining the same minute or hourly-candle unit |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
+| `logging.max_bytes_mb`, `monitor.event_rotation_mb` | `logging.max_bytes_mib`, `monitor.event_rotation_mib`. The size was already measured in mebibytes, so values are unchanged |
 | `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_fraction` |
 | `bot.<side>.risk.total_wallet_exposure_limit` | `bot.<side>.risk.total_wallet_exposure_limit_ratio`, with the same notional-to-balance value |
 | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
@@ -156,7 +164,7 @@ The converter preserves sparse file inheritance and reports materialized referen
 patches; file values precede inline values. Conflicting aliases fail rather than choosing
 one by insertion order.
 
-Core metric definition version 1 changes observation populations, clocks and formulas.
+The current core metric catalog changes observation populations, clocks and formulas.
 Strict migration requires `--acknowledge-metric-formula-change` for every selected
 released metric, including retained names such as `loss_profit_ratio`. Each newly
 retired selector also requires an explicit `--metric-replacement OLD=NEW` choice:
@@ -245,7 +253,7 @@ are emitted as choices are made, including before a later validation failure.
 | `position_held_hours_max` | Infer `position_held_max_days`; divide scalar and range bounds by 24 |
 | `long_short_profit_ratio` or `pnl_ratio_long_short` | Infer short net profit contribution with the complement transformations below |
 | Other verified retired metric selectors, including median growth, unsupported weighted/currency/per-side metrics and HSL restart counts | Remove the entire objective/limit and its stale named reducer rules; record the full original entry and path with `new: null` |
-| Retained metric selector crossing core definition version 1 | Report the changed definition and require fresh thresholds/results |
+| Retained metric selector crossing the v8-to-v9 metric boundary | Report the changed definition and require fresh thresholds/results |
 | EW half-life absent or `null`, with CAGR EW explicitly selected | Resolve and report the native 180-day default |
 | Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
 | Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |
@@ -326,7 +334,8 @@ and result metadata. During v8 conversion, the same allowlist applies to saved-r
 metadata in referenced coin files before their policy is validated.
 
 Reload the output through the normal loader and backtest the exact intended dates, fees,
-market data and scenarios. Freshly evaluate every optimizer seed; old fitness and incompatible
+market data and scenarios. [Compare the saved backtests](tools.md#compare-two-saved-backtests)
+to inspect changes in fills and equity. Freshly evaluate every optimizer seed; old fitness and incompatible
 checkpoints cannot be resumed. Public examples now select ordinary metrics explicitly and
 are starting points, not translations of a private trading policy.
 

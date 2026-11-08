@@ -12,7 +12,7 @@ FEATURES = (
     "volatility", "exposure_weight", "entry_trailing",
     "close_trailing", "gate_disabled", "gate_all", "gate_reentry", "one_way",
     "loss_gate", "min_cost", "fill_buffer", "slippage", "dynamic_wel_off",
-    "eligibility", "equity_metrics", "forager_unilateral", "forager_hysteresis",
+    "eligibility", "equity_metrics", "forager_rms_directionality", "forager_hysteresis",
     "btc_collateral", "total_enforcer_portfolio", "coarse_candles",
 )
 TM_FEATURES = {"exposure_weight", "entry_trailing", "close_trailing",

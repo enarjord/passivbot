@@ -45,7 +45,7 @@ diffs, test output, or exchange data.
 ## Review Feedback Adjudication
 
 Use the standing PR-reply authority and its exceptions in
-[`AGENTS.md`](../../../AGENTS.md#working-and-validation). The procedure below governs how to
+[`AGENTS.md`](https://github.com/enarjord/passivbot/blob/HEAD/AGENTS.md?plain=1#working-and-validation). The procedure below governs how to
 address review feedback within that authority.
 
 Do not silently treat disputed reviewer feedback as addressed. When an agent disagrees with a

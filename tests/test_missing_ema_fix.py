@@ -526,7 +526,7 @@ class _BundleReproBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "rms_directionality": 0.0}
         if key in (
             "filter_volume_ema_span",
             "forager_volume_ema_span_minutes",
@@ -3070,7 +3070,7 @@ class _PacingProbeBot:
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
-            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}
+            return {"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "rms_directionality": 0.0}
         return 0.0
 
 
@@ -3361,7 +3361,7 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
 @pytest.mark.asyncio
 async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monkeypatch):
     from passivbot import Passivbot
-    from live import unilateralness
+    from live import rms_directionality
 
     symbol = "BTC/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode="value")
@@ -3369,22 +3369,22 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
     bot.is_forager_mode = lambda side=None: side in (None, "long")
     original = bot.bot_value
     bot.bot_value = lambda side, key: (
-        {"volume": 0.0, "log_range": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+        {"volume": 0.0, "log_range": 1.0, "ema_readiness": 0.0, "rms_directionality": 1.0}
         if key == "forager_score_weights" else original(side, key)
     )
     missing = {symbol: {"current": [60.0], "forager": []}}
     async def load(*args):
         return {symbol: {}}, {symbol: {60.0: 0.2}}, missing
-    monkeypatch.setattr(unilateralness, "load", load)
+    monkeypatch.setattr(rms_directionality, "load", load)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
-    assert bot._orchestrator_unilateralness_unavailable == missing
+    assert bot._orchestrator_rms_directionality_unavailable == missing
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == set()
     # A subsequent complete bundle clears the RMS marker too.
     async def ready(*args):
         return {symbol: {60.0: 0.2}}, {symbol: {60.0: 0.2}}, {}
-    monkeypatch.setattr(unilateralness, "load", ready)
+    monkeypatch.setattr(rms_directionality, "load", ready)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
-    assert bot._orchestrator_unilateralness_unavailable == {}
+    assert bot._orchestrator_rms_directionality_unavailable == {}
 
 
 @pytest.mark.asyncio
@@ -3395,7 +3395,7 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
 async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, side, ranking, adverse, approved):
     import numpy as np
     from candlestick_manager import CANDLE_DTYPE
-    from live import unilateralness
+    from live import rms_directionality
     from passivbot import Passivbot
 
     symbol = "BTC/USDT:USDT"
@@ -3409,8 +3409,8 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
 
     def bot_value(pside, key):
         if key == "forager_score_weights":
-            return {**original_bot_value(pside, key), "unilateralness": 1.0}
-        if key == "unilateralness_ema_span_minutes":
+            return {**original_bot_value(pside, key), "rms_directionality": 1.0}
+        if key == "rms_directionality_ema_span_minutes":
             # The opposite side never ranks or consumes adverse RMS. Its huge
             # configured span must not enlarge an active side's candle request.
             return 1.0 if pside == side else 100000.0
@@ -3444,14 +3444,14 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
     if not ranking and not consumes_adverse:
         async def unexpected_load(*args, **kwargs):
             pytest.fail("unused score-only RMS must skip the loader entirely")
-        monkeypatch.setattr(unilateralness, "load", unexpected_load)
+        monkeypatch.setattr(rms_directionality, "load", unexpected_load)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
     assert len(calls) == int(ranking or consumes_adverse)
     if ranking or consumes_adverse:
-        assert bot._orchestrator_signed_unilateralness == {symbol: {1.0: 0.0}}
+        assert bot._orchestrator_signed_rms_directionality == {symbol: {1.0: 0.0}}
     else:
-        assert bot._orchestrator_signed_unilateralness == {}
-    assert bot._orchestrator_unilateralness_unavailable == {}
+        assert bot._orchestrator_signed_rms_directionality == {}
+    assert bot._orchestrator_rms_directionality_unavailable == {}
 
 
 @pytest.mark.asyncio
@@ -3493,10 +3493,10 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     bot.is_pside_enabled = lambda s: s == side
     bot.get_exchange_time = lambda: 21 * 60000
     original = bot.bot_value
-    weights = {"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+    weights = {"volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0, "rms_directionality": 1.0}
 
     def bot_value(s, key):
-        values = {"forager_score_weights": weights, "unilateralness_ema_span_minutes": span,
+        values = {"forager_score_weights": weights, "rms_directionality_ema_span_minutes": span,
                   "total_wallet_exposure_limit_ratio": 1.0, "n_positions": slots}
         return values[key] if key in values else original(s, key)
 
@@ -3515,7 +3515,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
     bot.cm.get_candles = candles
     params = {"n_positions": slots, "total_wallet_exposure_limit_ratio": 1.0,
-              "forager_score_weights": weights, "unilateralness_ema_span_minutes": span}
+              "forager_score_weights": weights, "rms_directionality_ema_span_minutes": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     symbols[0]["tradable"] = held_eligibility in {"approved", "age", "zero_exposure"}
     if held_eligibility == "zero_exposure":
@@ -3528,9 +3528,9 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     async def selection():
         await Passivbot._load_orchestrator_ema_bundle(bot, names, bot.PB_modes)
         for name, symbol in zip(names, symbols):
-            symbol["emas"]["m1"]["signed_unilateralness"] = sorted(bot._orchestrator_signed_unilateralness.get(name, {}).items())
-            symbol["forager_m1"] = {**symbol["emas"]["m1"], "signed_unilateralness": sorted(bot._orchestrator_forager_signed_unilateralness.get(name, {}).items())}
-            symbol["unilateralness_unavailable"] = bot._orchestrator_unilateralness_unavailable.get(name, {})
+            symbol["emas"]["m1"]["signed_rms_directionality"] = sorted(bot._orchestrator_signed_rms_directionality.get(name, {}).items())
+            symbol["forager_m1"] = {**symbol["emas"]["m1"], "signed_rms_directionality": sorted(bot._orchestrator_forager_signed_rms_directionality.get(name, {}).items())}
+            symbol["rms_directionality_unavailable"] = bot._orchestrator_rms_directionality_unavailable.get(name, {})
         out = compute(pbr, inp)
         result = next(x for x in out["diagnostics"]["forager_selections"] if x["pside"] == side)
         assert result["ranking_required"] == (held_eligibility not in {"approved", "age"})
@@ -3549,8 +3549,8 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     assert await selection() == [1]
     missing = names[1]
     assert await selection() == []
-    assert bot._orchestrator_forager_signed_unilateralness[names[1]] == {}
-    assert bot._orchestrator_unilateralness_unavailable[names[1]]["forager"] == [1.0]
+    assert bot._orchestrator_forager_signed_rms_directionality[names[1]] == {}
+    assert bot._orchestrator_rms_directionality_unavailable[names[1]]["forager"] == [1.0]
     missing = None
     assert await selection() == [1]
 

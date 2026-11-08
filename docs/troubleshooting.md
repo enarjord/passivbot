@@ -91,71 +91,45 @@ python3 -m pip install -e ".[full]"
 
 ## `passivbot_rust` missing or stale
 
-Activate the venv and rebuild the Rust extension:
+Activate the intended venv and reinstall the profile you use:
 
 ```bash
 source venv/bin/activate
-maturin develop --release
-```
-
-If you recently pulled new commits, refresh the install too:
-
-```bash
 python3 -m pip install -e .
 # or: python3 -m pip install -e ".[full]"
 # or: python3 -m pip install -e ".[dev]"
 ```
 
-## `python3 -m pip install -e ".[full]"` fails with `feature edition2024 is required`
+If an import still loads a stale extension, follow the
+[locked rebuild and verification procedure](ai/runbooks/rust_extension.md#rebuild-and-verify)
+from the checkout root. It selects the crate, removes shadowing local copies, and verifies the
+loaded artifact against the current Rust sources.
 
-This is a Rust toolchain issue, not a Python dependency issue.
+## Rust build fails with `feature edition2024 is required`
 
-If the Rust build logs include errors like:
-
-- `feature edition2024 is required`
-- `cargo metadata ... failed`
-- `failed to parse manifest` inside `~/.cargo/registry/...`
-
-then your local Cargo is too old for the crates it resolved during the build.
-
-Check your toolchain:
+From the checkout root, check the active Cargo and Rust versions against `rust-toolchain.toml`.
+The repository supplies a Cargo lockfile and a pinned toolchain.
 
 ```bash
+command -v cargo
+rustup show active-toolchain
 cargo --version
 rustc --version
 ```
 
-Update to the current stable Rust toolchain and retry:
-
-```bash
-rustup update stable
-python3 -m pip install -e ".[full]"
-```
-
-If Rust was installed from system packages instead of `rustup`, prefer switching to the `rustup`-managed toolchain.
+If the shell resolves a distro Cargo or another override, switch to the Rustup-managed pinned
+toolchain and retry the same install profile.
 
 ## `maturin develop` says it could not find a virtualenv or conda environment
 
-This usually means the build is running outside the project venv.
-
-Activate the venv first:
+Activate the environment first and verify which interpreter it selects.
 
 ```bash
 source venv/bin/activate
-which python
 python -m pip --version
+python -c "import sys; print(sys.executable)"
 ```
 
-Expected result:
-
-- `which python` should point to `.../venv/bin/python`
-- `python -m pip --version` should reference the same venv
-
-Then rerun:
-
-```bash
-maturin develop --release
-```
-
-If you are still seeing the wrong interpreter, recreate the venv with a supported interpreter
-(Python 3.12 or 3.14; not 3.13) and reinstall Passivbot inside that venv.
+Both paths should belong to the intended venv. Then follow the
+[locked rebuild and verification procedure](ai/runbooks/rust_extension.md#rebuild-and-verify).
+If necessary, recreate the venv with Python 3.12 or 3.14 and reinstall.

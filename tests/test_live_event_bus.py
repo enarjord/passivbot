@@ -61,7 +61,7 @@ def _make_monitor_publisher(tmp_path, **overrides):
         "root_dir": str(tmp_path),
         "snapshot_interval_seconds": 1.0,
         "checkpoint_interval_minutes": 10.0,
-        "event_rotation_mb": 128.0,
+        "event_rotation_mib": 128.0,
         "event_rotation_minutes": 60.0,
         "retain_days": 7.0,
         "max_total_bytes": 1_000_000,

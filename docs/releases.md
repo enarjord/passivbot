@@ -3,10 +3,10 @@
 The latest tagged release is **[v8.1.0](https://github.com/enarjord/passivbot/releases/tag/v8.1.0)**,
 published on 2026-08-10. The [release notes](release_notes_v8.1.0.md) describe that tag.
 
-`master` also contains subsequent changes. A normal `git clone` or a pull on `master` includes
-those changes. The development package reports `8.2.0.dev0`; this is not a new tagged release. Read
-[Unreleased in the changelog](https://github.com/enarjord/passivbot/blob/master/CHANGELOG.md#unreleased) for the net changes since the tag.
-`Unreleased` does not mean unmerged or unavailable on `master`.
+Development branches contain subsequent changes and can differ in config compatibility. Read
+`CHANGELOG.md` under **Unreleased** at the revision you intend to install. The v9 development
+revision uses schema v9 while its package still reports `8.2.0.dev0`. Record the exact Git commit
+alongside `passivbot --version` when comparing development checkouts.
 
 | Version surface | Meaning |
 |---|---|
@@ -14,12 +14,10 @@ those changes. The development package reports `8.2.0.dev0`; this is not a new t
 | Package version (`passivbot --version`) | The package's declared version; record the Git commit too when using `master` |
 | `config_version` | Config schema compatibility, independent of the package/release number |
 
-This revision uses the final config schema **v9.0.0** layout. Released v8 configurations require explicit
-[v9 migration](v8_to_v9_migration.md) before ordinary loading. These schema numbers do not
-imply corresponding published releases. Use
-examples and documentation from the same revision as the installed runtime. A config saved by a
-newer runtime may not load in an older tagged release; retain the original when upgrading.
-See [Config Workflow](config_workflow.md) for migration and review steps.
+This revision uses config schema **v9.0.0**. Use the
+[v8 migration guide](v8_to_v9_migration.md) to identify supported inputs and prepare a
+compatible config before switching to v9. Keep the original config, checkout, and environment
+together for rollback. Use examples and documentation from the installed revision.
 
 The v9 risk model is an incompatible behavior change: choose new loss-memory spans,
 retune and re-backtest migrated configurations, and discard old optimizer fitness/checkpoints.
@@ -28,8 +26,9 @@ auto-unstuck memory, and a schema change does not itself publish a package relea
 
 ## Choose an installation revision
 
-A fresh clone defaults to `master`. To install the tagged release instead, select it before
-installing dependencies:
+A fresh clone selects the default branch. To evaluate the v9 development branch explicitly, use
+`git clone --branch v9 https://github.com/enarjord/passivbot.git`. To install the tagged release,
+select the tag before installing dependencies.
 
 ```bash
 git clone https://github.com/enarjord/passivbot.git

@@ -162,9 +162,9 @@ _FIELDS_BY_TYPE = {
             order_replacement_churn_gate_window_minutes risk_bootstrap_max_lookback_minutes
             warmup_jitter_seconds
         """,
-        "logging": "max_bytes_mb memory_snapshot_interval_minutes volume_refresh_info_threshold_seconds",
+        "logging": "max_bytes_mib memory_snapshot_interval_minutes volume_refresh_info_threshold_seconds",
         "monitor": """
-            checkpoint_interval_minutes event_rotation_mb event_rotation_minutes
+            checkpoint_interval_minutes event_rotation_mib event_rotation_minutes
             retain_days snapshot_interval_seconds
         """,
         "optimize.prefilter": "adverse_directionality_score log_range_ema_1m log_range_ema_1h penalty_weight",
@@ -250,9 +250,9 @@ _SHARED_SIDE_FIELDS = {
     FieldType.ARRAY: "forager.always_include",
     FieldType.FLOAT: """
         universe.minimum_coin_age_days
-        forager.score_weights.unilateralness forager.score_weights.ema_readiness
+        forager.score_weights.rms_directionality forager.score_weights.ema_readiness
         forager.score_weights.log_range forager.score_weights.volume
-        forager.unilateralness_ema_span_minutes forager.log_range_ema_span_minutes
+        forager.rms_directionality_ema_span_minutes forager.log_range_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
         hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes

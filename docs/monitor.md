@@ -25,7 +25,9 @@ For an authenticated HTTPS reverse proxy, add `--allowed-origin https://monitor.
 and preserve the public `Host` header. Repeat this option for additional public origins.
 Forwarded headers do not grant trust. HTTP requests also require an allowed host to prevent
 DNS rebinding. Native clients without an `Origin` header remain supported on allowed hosts.
-The relay does not authenticate clients; keep it on a trusted interface or behind authenticated access.
+The relay does not authenticate clients. Keep it on loopback or behind authenticated access.
+Monitor files and the relay feed can contain account, position, and order details. Keep these
+operator data private and share sanitized reproductions for public issue reports.
 
 The relay is intended to be a single long-running process per repo checkout:
 
@@ -84,6 +86,23 @@ Example initial-focus URL:
 ```text
 http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01&symbol=BTC/USDT:USDT
 ```
+
+### Reading trade readiness
+
+When a bot appears to wait, compare the observations for the same bot and symbol.
+
+1. Check the last ordinary Rust computation's status and input age in the `ordinary` snapshot.
+   A computed plan precedes write admission. Its captured quote and account inputs may have
+   expired or been superseded even if the relay remains active.
+2. Check `hsl` separately for the most recent protective observation. An HSL reading can come
+   from a different capture than the ordinary plan. An unavailable reading and a current GREEN
+   assessment represent different states.
+3. Check `ordinary.pending_confirmations` for the account surfaces still awaiting a refresh.
+   Order submission, authoritative order acknowledgement, and a fill are distinct events.
+   Use the account and fill observations to confirm what actually happened.
+
+See [monitor persistence](ai/features/monitor_persistence.md) for field semantics and
+[monitor tools](tools.md#monitor-tooling) for local event queries and smoke reports.
 
 ## Terminal TUI
 
