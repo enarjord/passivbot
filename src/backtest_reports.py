@@ -157,9 +157,12 @@ def create_equity_overview(store, options):
     )
     axes[1].plot(x, data["drawdown_fraction"] * 100, color="tab:red", linewidth=1)
     maximum = float(np.nanmax(data["drawdown_fraction"])) if len(x) else None
+    analysis = store.json("analysis.json", optional=True) or {}
+    recovery_days = analysis.get("peak_recovery_max_days_strategy_equity")
     axes[1].set_title(
         "Strategy equity drawdown"
         + (f" — maximum {maximum:.3%}" if maximum is not None else "")
+        + (f" · max recovery {recovery_days:.3f} days" if recovery_days is not None else "")
     )
     axes[1].set_ylabel("Drawdown (%)")
     if options.btc:
