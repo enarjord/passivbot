@@ -1593,7 +1593,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         )?);
     }
     if backtest_params.candle_interval_minutes != 1
-        && crate::unilateralness::backtest_enabled_sides(
+        && crate::rms_directionality::backtest_enabled_sides(
             &bot_params_vec,
             backtest_params.dynamic_wel_by_tradability,
             backtest_params.side_activation,
@@ -1603,7 +1603,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         .any(|enabled| *enabled)
     {
         return Err(PyValueError::new_err(
-            "RMS unilateralness requires completed one-minute candles",
+            "RMS directionality requires completed one-minute candles",
         ));
     }
 
@@ -2499,6 +2499,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         "filter_volume_drop_pct",
         "risk_twel_entry_gate_enabled",
         "unilateralness_ema_span_1m",
+        "unilateralness_ema_span_minutes",
     ] {
         if dict.contains(key)? {
             return Err(PyValueError::new_err(format!(
@@ -2611,7 +2612,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             }
             None => Default::default(),
         },
-        unilateralness_ema_span_minutes: match dict.get_item("unilateralness_ema_span_minutes")? {
+        rms_directionality_ema_span_minutes: match dict.get_item("rms_directionality_ema_span_minutes")? {
             Some(v) => v.extract()?,
             None => 60.0,
         },
@@ -2643,7 +2644,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         unstuck_exposure_trigger_ratio: extract_value(dict, "unstuck_exposure_trigger_ratio")?,
     };
     crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
-    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_minutes)
+    crate::rms_directionality::warmup_returns(params.rms_directionality_ema_span_minutes)
         .map_err(PyValueError::new_err)?;
     Ok(params)
 }
@@ -2664,7 +2665,7 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
         volume: extract_value(weights_dict, "volume")?,
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
         log_range: extract_value(weights_dict, "log_range")?,
-        unilateralness: extract_optional_f64(weights_dict, "unilateralness")?,
+        rms_directionality: crate::coin_selection::extract_rms_directionality_weight(weights_dict)?,
     };
     weights.canonicalize().map_err(PyValueError::new_err)
 }
@@ -4193,7 +4194,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     for symbol in &input.symbols {
         for side in [&symbol.long, &symbol.short] {
             crate::entry_cooldown::validate(&side.bot_params).map_err(PyValueError::new_err)?;
-            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_minutes)
+            crate::rms_directionality::warmup_returns(side.bot_params.rms_directionality_ema_span_minutes)
                 .map_err(PyValueError::new_err)?;
         }
     }

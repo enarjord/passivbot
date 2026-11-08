@@ -146,14 +146,14 @@ def test_whole_positive_weight_group_keeps_normalization_and_zero_omission():
     result = build_optimizer_vector_config([bound.high for bound in bounds.values()], config)
     weights = result["bot"]["long"]["forager"]["score_weights"]
     assert sum(weights.values()) == pytest.approx(1.0)
-    assert weights["unilateralness"] == 0.0
+    assert weights["rms_directionality"] == 0.0
 
 
 @pytest.mark.parametrize("low,allowed", [(0.1, True), (0.0, False)])
 def test_omitted_zero_weight_is_safe_except_at_an_unauthorized_fallback(low, allowed):
     source = weight_source({"score_weights": {"volume": [low, 1.0]}})
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 0.0,
+        "volume": 1.0, "log_range": 0.0, "ema_readiness": 0.0, "rms_directionality": 0.0,
     }
     if allowed:
         config = prepare_config(source, verbose=False)
@@ -198,7 +198,7 @@ def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, m
 @pytest.mark.parametrize("patch", [
     {"bot.long.forager.score_weights.volume": 0.5},
     {"bot": {"long": {"forager": {"score_weights": {"volume": 0.5}}}}},
-    {"bot.long.forager.score_weights.unilateralness": 0.5},
+    {"bot.long.forager.score_weights.rms_directionality": 0.5},
 ])
 def test_scenario_weight_pins_fail_before_evaluation(patch):
     source = get_expanded_config_prototype()
@@ -215,9 +215,9 @@ def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
     source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "short-active", "overrides": {
         "bot.short.risk.total_wallet_exposure_limit_ratio": 1.0,
-        "bot.short.forager.score_weights.unilateralness": 0.5,
+        "bot.short.forager.score_weights.rms_directionality": 0.5,
     }}])
-    with pytest.raises(ValueError, match=r"short-active.*bot.short.forager.score_weights.*unilateralness"):
+    with pytest.raises(ValueError, match=r"short-active.*bot.short.forager.score_weights.*rms_directionality"):
         prepare_config(source, verbose=False)
 
 
@@ -242,7 +242,7 @@ def mirrored_weight_candidate(config, volume):
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("weight", ["volume", "unilateralness"])
+@pytest.mark.parametrize("weight", ["volume", "rms_directionality"])
 def test_mirrored_short_scenario_pins_validate_the_active_source_domains(strategy, weight):
     source = mirrored_weight_source(strategy)
     assert source["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
@@ -281,7 +281,7 @@ def test_source_runtime_pins_fix_mirrored_domains_before_scenario_pins():
     from optimization.warmup import _apply_config_overrides
 
     source = mirrored_weight_source()
-    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "rms_directionality": 0.1}
     source["optimize"]["fixed_runtime_overrides"] = {
         f"bot.long.forager.score_weights.{name}": value for name, value in fixed.items()
     }
@@ -303,7 +303,7 @@ def test_postmirror_long_scenario_pins_do_not_fix_short_source_domains():
     from optimization.warmup import _apply_config_overrides
 
     source = mirrored_weight_source()
-    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "rms_directionality": 0.1}
     patch = {"bot.long.forager.score_weights": fixed}
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "postmirror", "overrides": patch}])
     config = prepare_config(source, verbose=False)
@@ -363,7 +363,7 @@ def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forag
     side = "short" if mirrored else "long"
     if mirrored:
         source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
-    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    fixed = {"volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "rms_directionality": 0.1}
     path, value = f"bot.{side}.forager.score_weights", fixed
     if whole_forager:
         path, value = f"bot.{side}.forager", deepcopy(source["bot"][side]["forager"])
@@ -450,12 +450,12 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
 
     source = generated_template(get_expanded_config_prototype(), scope)
     source["bot"]["portfolio"]["strategy_kind"] = strategy
-    source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.5
+    source["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 0.5
     source["optimize"]["bounds"] = {}
     prescribed = apply_recommended_bounds(source)
     assert prescribed["bot"]["portfolio"]["strategy_kind"] == strategy
     assert prescribed["bot"]["portfolio"]["hsl"]["scope"] == scope
-    assert flattened(prescribed)["long_forager_score_weights_unilateralness"] == [0.0, 1.0, 0.01]
+    assert flattened(prescribed)["long_forager_score_weights_rms_directionality"] == [0.0, 1.0, 0.01]
     assert gene_bounds(prepare_config(prescribed, verbose=False)) == gene_bounds(prescribed)
 
 
@@ -474,7 +474,7 @@ def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missi
     assert bounds["long_entry_ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
     assert bounds["long_hsl_drawdown_threshold_fraction"] == [0.15, 0.15, 0.001]
     assert bounds["long_unstuck_ema_distance_fraction"] == [-0.2, 0.01, 0.0001]
-    assert bounds["long_unilateralness_ema_span_minutes"] == [42.5, 42.5]
+    assert bounds["long_rms_directionality_ema_span_minutes"] == [42.5, 42.5]
     assert any("materialized released-v8 inherited search" in item["reason"] for item in migrated.changes)
 
 
@@ -482,7 +482,7 @@ def test_v8_positive_omitted_weight_keeps_its_domain_and_requires_an_explicit_re
     source = released_v8_policy()
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.5
     for best_effort in (False, True):
-        with pytest.raises(ValueError, match=r"bot.long.forager.score_weights.*unilateralness.*freeze the whole"):
+        with pytest.raises(ValueError, match=r"bot.long.forager.score_weights.*rms_directionality.*freeze the whole"):
             migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
 
 

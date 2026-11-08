@@ -26,12 +26,12 @@ Raw selector inputs are `volume_ema`, `log_range_ema` (the EMA of `ln(high / low
 Cross-candidate normalization produces the existing score components. `weights.log_range`
 is a relative ranking weight, while `score_hysteresis_margin` is an absolute gap in normalized
 score units. Neither raw EMAs nor the margin acquire a `[0, 1]` bound through naming changes;
-the unilateralness score retains its existing unit-interval validation.
+the RMS directionality score retains its existing unit-interval validation.
 
 Native forager volume and log-range durations use `_ema_span_minutes`. GPU parameter packing
 divides these floating durations by the replay interval exactly once. Decoded shader fields use
 `_ema_span_candles` for the resulting floating candle counts; column positions and EMA arithmetic
-remain unchanged. Native `unilateralness_ema_span_minutes` retains the floating one-minute
+remain unchanged. Native `rms_directionality_ema_span_minutes` retains the floating one-minute
 exponential RMS span and its existing 20-span observation window; enabled consumers still require
 completed one-minute candles. Released-v8 conversion owns the old span and weight vocabulary
 independently of current native bindings.
@@ -189,7 +189,7 @@ Seed evaluation contract:
 Public price, unstuck and base-stream log-range/volume EMA horizons use `_minutes`, including
 `ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
 these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
-candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
+candles do not reinterpret the configured horizon as a larger number of minutes. RMS directionality
 also uses minutes and requires completed one-minute candles. Hourly log-range indicators use
 `log_range_ema_span_1h_candles` or `offset_log_range_ema_span_1h_candles`: these are floating
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
@@ -514,11 +514,11 @@ behavior patches.
 - `tests/test_orchestrator_integration.py`
 - `tests/test_auto_unstuck_allowance.py`
 
-## Adaptive entry timing and unilateralness
+## Adaptive entry timing and RMS directionality
 
 Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
 and additive cooldown minutes. The shared side-level float span lives under
-`forager.unilateralness_ema_span_minutes`. Both runtimes use the same last
+`forager.rms_directionality_ema_span_minutes`. Both runtimes use the same last
 `ceil(20 * span) + 1` completed one-minute closes with zero-seeded exponential weights.
 Live replays the window. CPU uses rolling aggregate stacks with amortized constant
 work per candle, agreeing with replay within floating-point roundoff; all-flat windows
@@ -564,7 +564,7 @@ Forager may carry a complete cached observation only within the existing candida
 age budget, without feeding invented flat returns. Cooldown requires a current
 completed window. Their values remain separate in the input envelope. Missing
 RMS is scoped to the consuming entry or ranking branch; closes remain independent.
-Live `unilateralness_unavailable` carries separate `current` and `forager` span
+Live `rms_directionality_unavailable` carries separate `current` and `forager` span
 lists. RMS transport failures must not set the generic missing-strategy-input
 permission. A valid cached ranking value does not satisfy current cooldown input.
 CPU history requests include RMS only for reachable consumers; scoring alone needs no
@@ -577,7 +577,7 @@ remain authoritative. Rust's zero global warmup retains its automatic non-RMS
 fallback. Python sends the minimum positive budget when it explicitly computes a
 zero activation budget for an adverse-RMS consumer.
 The backtest marks exact spans still warming from known listing history in
-`unilateralness_warmup_spans`. A missing score at a marked span defers only required
+`rms_directionality_warmup_spans`. A missing score at a marked span defers only required
 ranking or the side/order branch consuming adverse cooldown. If any compared
 candidate lacks required RMS, defer the whole ranking decision, not just that
 candidate; never select from a history-ready subset. Closes and unrelated

@@ -161,7 +161,7 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
-        span = bot_side["forager"]["unilateralness_ema_span_minutes"]
+        span = bot_side["forager"]["rms_directionality_ema_span_minutes"]
         if (
             isinstance(span, bool)
             or not isinstance(span, (int, float))
@@ -169,7 +169,7 @@ def validate_config(
             or not 1 <= span <= 100_000
         ):
             raise ValueError(
-                f"bot.{pside}.forager.unilateralness_ema_span_minutes must be between 1 and 100000"
+                f"bot.{pside}.forager.rms_directionality_ema_span_minutes must be between 1 and 100000"
             )
         from .optimize_bounds import flatten_optimize_bounds
         from optimization.bounds import Bound

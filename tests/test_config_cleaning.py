@@ -108,13 +108,13 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
         "BTC": {"bot": {"long": {"risk": {"max_positions": 1.0}}}, "_note": ["private"]}
     }
     source["optimize"]["bounds"]["long"]["forager"]["score_weights"] = {
-        "unilateralness": [0.0, 0.5]
+        "rms_directionality": [0.0, 0.5]
     }
     if sparse:
         source["bot"]["portfolio"]["hsl"] = {"scope": mode}
         source["bot"]["long"]["entry_cooldown"] = {"max_duration_minutes": 12.5}
         source["optimize"]["bounds"] = {
-            "long": {"forager": {"score_weights": {"unilateralness": [0.0, 0.5]}}}
+            "long": {"forager": {"score_weights": {"rms_directionality": [0.0, 0.5]}}}
         }
     original = deepcopy(source)
 
@@ -129,7 +129,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned["live"]["startup"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
-        "unilateralness"
+        "rms_directionality"
     ] == [0.0, 0.5]
     assert cleaned["bot"]["long"]["strategy"] == source["bot"]["long"]["strategy"]
     if sparse and mode == "portfolio":
@@ -143,7 +143,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     changed_source = deepcopy(source)
     cleaned['bot']["short"]['universe']['approved_coins'].append("SOL")
     cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
-        "unilateralness"
+        "rms_directionality"
     ][0] = 0.1
     assert source == changed_source
     assert repeated == saved_output

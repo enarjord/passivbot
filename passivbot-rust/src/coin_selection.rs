@@ -11,7 +11,7 @@ pub struct CoinFeature {
     pub enabled: bool,
     pub volume_ema: f64,
     pub log_range_ema: f64,
-    pub unilateralness_score: f64,
+    pub rms_directionality_score: f64,
     pub ema_entry_price_gap_fraction: f64,
 }
 
@@ -48,7 +48,7 @@ pub struct ForagerCandidate {
     pub enabled: bool,
     pub volume_ema: f64,
     pub log_range_ema: f64,
-    pub unilateralness_score: f64,
+    pub rms_directionality_score: f64,
     pub bid: f64,
     pub ask: f64,
     pub ema_lower: f64,
@@ -73,7 +73,7 @@ pub struct ForagerScoredCandidate {
     pub volume_component: f64,
     pub ema_readiness_component: f64,
     pub log_range_component: f64,
-    pub unilateralness_component: f64,
+    pub rms_directionality_component: f64,
     pub selected: bool,
     pub incumbent: bool,
     pub rank: usize,
@@ -240,7 +240,7 @@ fn build_coin_features(
                     enabled: false,
                     volume_ema: 0.0,
                     log_range_ema: 0.0,
-                    unilateralness_score: 0.0,
+                    rms_directionality_score: 0.0,
                     ema_entry_price_gap_fraction: 0.0,
                 });
             }
@@ -262,8 +262,8 @@ fn build_coin_features(
             } else {
                 candidate.log_range_ema
             };
-            let unilateralness_score = if cfg.require_forager && cfg.weights.unilateralness > 0.0 {
-                validate_unit_interval("unilateralness_score", candidate.unilateralness_score)?
+            let rms_directionality_score = if cfg.require_forager && cfg.weights.rms_directionality > 0.0 {
+                validate_unit_interval("rms_directionality_score", candidate.rms_directionality_score)?
             } else {
                 0.0
             };
@@ -277,7 +277,7 @@ fn build_coin_features(
                 enabled: candidate.enabled,
                 volume_ema,
                 log_range_ema,
-                unilateralness_score,
+                rms_directionality_score,
                 ema_entry_price_gap_fraction,
             })
         })
@@ -397,11 +397,11 @@ fn score_forager_candidates(
             .collect::<Vec<f64>>(),
     );
 
-    let unilateralness_scores = if cfg.weights.unilateralness > 0.0 {
+    let rms_directionality_scores = if cfg.weights.rms_directionality > 0.0 {
         normalize_lower_is_better(
             &positions
                 .iter()
-                .map(|&pos| features[pos].unilateralness_score)
+                .map(|&pos| features[pos].rms_directionality_score)
                 .collect::<Vec<f64>>(),
         )
     } else {
@@ -414,14 +414,14 @@ fn score_forager_candidates(
             let score = cfg.weights.volume * volume_scores[i]
                 + cfg.weights.ema_readiness * ema_readiness_scores[i]
                 + cfg.weights.log_range * log_range_scores[i]
-                + cfg.weights.unilateralness * unilateralness_scores[i];
+                + cfg.weights.rms_directionality * rms_directionality_scores[i];
             ScoredPosition {
                 pos,
                 score,
                 volume_component: volume_scores[i],
                 ema_readiness_component: ema_readiness_scores[i],
                 log_range_component: log_range_scores[i],
-                unilateralness_component: unilateralness_scores[i],
+                rms_directionality_component: rms_directionality_scores[i],
             }
         })
         .collect();
@@ -464,7 +464,7 @@ fn score_forager_candidates(
                 volume_component: item.volume_component,
                 ema_readiness_component: item.ema_readiness_component,
                 log_range_component: item.log_range_component,
-                unilateralness_component: item.unilateralness_component,
+                rms_directionality_component: item.rms_directionality_component,
                 selected: selected_set.contains(&index),
                 incumbent: cfg.incumbent_indices.contains(&index),
                 rank: rank + 1,
@@ -485,7 +485,7 @@ struct ScoredPosition {
     volume_component: f64,
     ema_readiness_component: f64,
     log_range_component: f64,
-    unilateralness_component: f64,
+    rms_directionality_component: f64,
 }
 
 fn apply_score_hysteresis(
@@ -627,7 +627,7 @@ pub struct CoinFeatureInput {
     pub enabled: bool,
     pub volume_ema: f64,
     pub log_range_ema: f64,
-    pub unilateralness_score: f64,
+    pub rms_directionality_score: f64,
     pub ema_entry_price_gap_fraction: f64,
 }
 
@@ -643,7 +643,7 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
             enabled,
             volume_ema,
             log_range_ema,
-            unilateralness_score: optional_feature(ob, "unilateralness_score")?,
+            rms_directionality_score: extract_rms_directionality_score(ob)?,
             ema_entry_price_gap_fraction,
         })
     }
@@ -652,7 +652,7 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
 impl From<CoinFeatureInput> for CoinFeature {
     fn from(value: CoinFeatureInput) -> Self {
         CoinFeature {
-            unilateralness_score: value.unilateralness_score,
+            rms_directionality_score: value.rms_directionality_score,
             index: value.index,
             enabled: value.enabled,
             volume_ema: value.volume_ema,
@@ -668,7 +668,9 @@ impl<'source> FromPyObject<'source> for ForagerScoreWeights {
             volume: ob.get_item("volume")?.extract::<f64>()?,
             ema_readiness: ob.get_item("ema_readiness")?.extract::<f64>()?,
             log_range: ob.get_item("log_range")?.extract::<f64>()?,
-            unilateralness: optional_score(ob, "unilateralness")?,
+            rms_directionality: extract_rms_directionality_weight(
+                ob.downcast::<pyo3::types::PyDict>()?,
+            )?,
         })
     }
 }
@@ -680,7 +682,7 @@ impl<'source> FromPyObject<'source> for ForagerCandidate {
             enabled: ob.get_item("enabled")?.extract::<bool>()?,
             volume_ema: ob.get_item("volume_ema")?.extract::<f64>()?,
             log_range_ema: ob.get_item("log_range_ema")?.extract::<f64>()?,
-            unilateralness_score: optional_feature(ob, "unilateralness_score")?,
+            rms_directionality_score: extract_rms_directionality_score(ob)?,
             bid: ob.get_item("bid")?.extract::<f64>()?,
             ask: ob.get_item("ask")?.extract::<f64>()?,
             ema_lower: ob.get_item("ema_lower")?.extract::<f64>()?,
@@ -710,9 +712,9 @@ pub fn select_coin_indices_py(
         score_hysteresis_margin: 0.0,
         incumbent_indices: HashSet::new(),
     };
-    if require_forager && cfg.weights.unilateralness > 0.0 {
+    if require_forager && cfg.weights.rms_directionality > 0.0 {
         for f in features.iter().filter(|f| f.enabled) {
-            validate_unit_interval("unilateralness_score", f.unilateralness_score)
+            validate_unit_interval("rms_directionality_score", f.rms_directionality_score)
                 .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("{err:?}")))?;
         }
     }
@@ -778,7 +780,7 @@ mod tests {
         ask: f64,
     ) -> ForagerCandidate {
         ForagerCandidate {
-            unilateralness_score: 0.0,
+            rms_directionality_score: 0.0,
             index,
             enabled: true,
             volume_ema: volume,
@@ -823,7 +825,7 @@ mod tests {
 
     fn make_feature(index: usize, volume: f64, log_range: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
-            unilateralness_score: 0.0,
+            rms_directionality_score: 0.0,
             index,
             enabled: true,
             volume_ema: volume,
@@ -857,7 +859,7 @@ mod tests {
     fn returns_enabled_indices_when_not_forager() {
         let features = vec![
             CoinFeature {
-                unilateralness_score: 0.0,
+                rms_directionality_score: 0.0,
                 index: 0,
                 enabled: true,
                 volume_ema: 0.1,
@@ -865,7 +867,7 @@ mod tests {
                 ema_entry_price_gap_fraction: 0.1,
             },
             CoinFeature {
-                unilateralness_score: 0.0,
+                rms_directionality_score: 0.0,
                 index: 1,
                 enabled: false,
                 volume_ema: 1.0,
@@ -873,7 +875,7 @@ mod tests {
                 ema_entry_price_gap_fraction: 1.0,
             },
             CoinFeature {
-                unilateralness_score: 0.0,
+                rms_directionality_score: 0.0,
                 index: 2,
                 enabled: true,
                 volume_ema: 0.2,
@@ -935,7 +937,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 log_range: 0.0,
@@ -965,7 +967,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 2,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 0.0,
                 ema_readiness: 0.0,
                 log_range: 0.0,
@@ -985,7 +987,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 2,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 log_range: 0.0,
@@ -1005,7 +1007,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 log_range: 0.0,
@@ -1036,7 +1038,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 log_range: 0.0,
@@ -1063,7 +1065,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 log_range: 0.0,
@@ -1085,7 +1087,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 log_range: 0.0,
@@ -1107,7 +1109,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
-                unilateralness: 0.0,
+                rms_directionality: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 log_range: 0.0,
@@ -1124,17 +1126,26 @@ mod tests {
     }
 }
 
-fn optional_score(ob: &PyAny, key: &str) -> PyResult<f64> {
-    let dict = ob.downcast::<pyo3::types::PyDict>()?;
-    match dict.get_item(key)? {
+pub(crate) fn extract_rms_directionality_weight(dict: &pyo3::types::PyDict) -> PyResult<f64> {
+    if dict.contains("unilateralness")? {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "unilateralness is retired; use rms_directionality",
+        ));
+    }
+    match dict.get_item("rms_directionality")? {
         Some(v) => v.extract(),
         None => Ok(0.0),
     }
 }
 
-fn optional_feature(ob: &PyAny, key: &str) -> PyResult<f64> {
+fn extract_rms_directionality_score(ob: &PyAny) -> PyResult<f64> {
     let dict = ob.downcast::<pyo3::types::PyDict>()?;
-    match dict.get_item(key)? {
+    if dict.contains("unilateralness_score")? {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "unilateralness_score is retired; use rms_directionality_score",
+        ));
+    }
+    match dict.get_item("rms_directionality_score")? {
         Some(v) => v.extract(),
         None => Ok(f64::NAN),
     }

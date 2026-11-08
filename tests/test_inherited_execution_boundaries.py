@@ -204,13 +204,13 @@ def test_scenario_coupling_preserves_transformed_candidate_before_explicit_overr
 def test_normalization_retains_effective_numeric_types_without_rewriting_source_types():
     raw = source()
     raw["bot"]["global"].update({
-        "forager": {"score_weights": {"unilateralness": 0, "ema_readiness": 1, "volume": 0, "log_range": 0}},
+        "forager": {"score_weights": {"rms_directionality": 0, "ema_readiness": 1, "volume": 0, "log_range": 0}},
         "risk": {"max_positions": 7.0}})
     prepared = load(raw)
-    assert type(prepared["bot"]["long"]["forager"]["score_weights"]["unilateralness"]) is float
+    assert type(prepared["bot"]["long"]["forager"]["score_weights"]["rms_directionality"]) is float
     assert type(prepared["bot"]["long"]["risk"]["max_positions"]) is int
     retained = bot_policy_source_view(prepared)["bot"]["global"]
-    assert type(retained["forager"]["score_weights"]["unilateralness"]) is int
+    assert type(retained["forager"]["score_weights"]["rms_directionality"]) is int
     assert type(retained["risk"]["max_positions"]) is float
 
 
@@ -315,7 +315,7 @@ def test_runtime_patch_snapshot_preserves_unrelated_mirror_and_reusable_base(tmp
     assert get_bot_policy(candidate)._derived
     expected_short = deepcopy(candidate["bot"]["short"]["forager"]["score_weights"])
     patch = {"bot.long.forager.score_weights": {
-        "volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}}
+        "volume": 0.2, "log_range": 0.3, "ema_readiness": 0.4, "rms_directionality": 0.1}}
     _apply_config_overrides(candidate, patch, preserve_prepared_universe=True)
     normalize_bot_forager_config(candidate, verbose=False)
     assert candidate["bot"]["short"]["forager"]["score_weights"] == expected_short

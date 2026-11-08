@@ -47,11 +47,11 @@
                 "score_hysteresis_margin": 0.02,
                 "score_weights": {
                     "ema_readiness": 0.34146341463414637,
-                    "unilateralness": 0.0,
+                    "rms_directionality": 0.0,
                     "log_range": 0.42682926829268286,
                     "volume": 0.23170731707317072
                 },
-                "unilateralness_ema_span_minutes": 60.0,
+                "rms_directionality_ema_span_minutes": 60.0,
                 "log_range_ema_span_minutes": 59.0,
                 "volume_ema_span_minutes": 2764.0
             },
@@ -124,11 +124,11 @@
                 "always_include": [],
                 "score_weights": {
                     "ema_readiness": 0.34146341463414637,
-                    "unilateralness": 0.0,
+                    "rms_directionality": 0.0,
                     "log_range": 0.42682926829268286,
                     "volume": 0.23170731707317072
                 },
-                "unilateralness_ema_span_minutes": 60.0,
+                "rms_directionality_ema_span_minutes": 60.0,
                 "log_range_ema_span_minutes": 59.0,
                 "volume_ema_span_minutes": 2764.0
             },
@@ -289,11 +289,11 @@
                 "forager": {
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
-                        "unilateralness": [0.0, 0.0],
+                        "rms_directionality": [0.0, 0.0],
                         "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
-                    "unilateralness_ema_span_minutes": [60.0, 60.0],
+                    "rms_directionality_ema_span_minutes": [60.0, 60.0],
                     "log_range_ema_span_minutes": [10, 1440, 1],
                     "volume_ema_span_minutes": [180, 2880, 1]
                 },
@@ -342,11 +342,11 @@
                 "forager": {
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
-                        "unilateralness": [0.0, 0.0],
+                        "rms_directionality": [0.0, 0.0],
                         "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
-                    "unilateralness_ema_span_minutes": [60.0, 60.0],
+                    "rms_directionality_ema_span_minutes": [60.0, 60.0],
                     "log_range_ema_span_minutes": [10, 1440, 1],
                     "volume_ema_span_minutes": [180, 2880, 1]
                 },

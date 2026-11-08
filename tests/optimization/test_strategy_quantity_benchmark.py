@@ -35,7 +35,7 @@ def test_feature_flags_and_frozen_zero_sensitivities_match_native_packets(kind, 
             "volume": 0.3 if topology == "forager" else 0.0,
             "ema_readiness": 0.4 if topology == "forager" else 0.0,
             "log_range": 0.3 if topology == "forager" else 0.0,
-            "unilateralness": 0.0,
+            "rms_directionality": 0.0,
         }
         if kind == "trailing_martingale":
             assert native[side]["entry"]["reentry_qty_multiplier"] == 1.375

@@ -96,8 +96,8 @@ def validate_authored_config(config, template, *, policy_context=None):
         for key in ("min_duration_minutes", "max_duration_minutes"):
             cooldown[key] = []
         cooldown["weights_minutes"] = {"exposure_ratio": [], "adverse_directionality": []}
-        bounds[side]["forager"].setdefault("score_weights", {})["unilateralness"] = []
-        bounds[side]["forager"]["unilateralness_ema_span_minutes"] = []
+        bounds[side]["forager"].setdefault("score_weights", {})["rms_directionality"] = []
+        bounds[side]["forager"]["rms_directionality_ema_span_minutes"] = []
     bounds["global"] = deepcopy(bounds["long"])
     # Optional dimensions must remain absent from default searches.
     bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
