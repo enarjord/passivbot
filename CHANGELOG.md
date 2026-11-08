@@ -566,6 +566,10 @@ since the latest release tag; these features may already be available when insta
   Convert numeric fee strings to the same finite numeric values. Editor validation now accepts
   the existing `visible_metrics: null` policy for derived metrics.
 
+- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
+  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
+  The v8 migration tool converts the old field names without rescaling.
+
 - Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
   millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
   Preserve floating values, native identifiers and candle-interval behavior;

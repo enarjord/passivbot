@@ -76,6 +76,14 @@ def test_resolve_live_log_file_settings_preserves_explicit_rotation_false():
     assert settings["rotation"] is False
 
 
+def test_resolve_live_log_file_settings_uses_binary_rotation_units():
+    settings = resolve_live_log_file_settings(
+        {"logging": {"max_bytes_mib": 1.5}},
+        user="bitget_01",
+    )
+    assert settings["max_bytes"] == 1_572_864
+
+
 def test_resolve_live_log_file_settings_disables_file_handler_when_requested():
     settings = resolve_live_log_file_settings(
         {"logging": {"persist_to_file": False, "dir": "logs"}},

@@ -115,6 +115,8 @@ def enrich_fields(fields):
             ("monitor", "price_tick_min_interval_milliseconds"),
         }:
             data["unit"] = "milliseconds"
+        if path in {("logging", "max_bytes_mib"), ("monitor", "event_rotation_mib")}:
+            data["unit"] = "MiB"
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
 

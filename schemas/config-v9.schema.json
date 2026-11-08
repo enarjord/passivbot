@@ -6303,9 +6303,10 @@
                 "type": "string"
               }
             },
-            "max_bytes_mb": {
+            "max_bytes_mib": {
               "type": "number",
-              "default": 10.0
+              "default": 10.0,
+              "x-passivbot-unit": "MiB"
             },
             "memory_snapshot_interval_minutes": {
               "type": "number",
@@ -6345,9 +6346,10 @@
               "type": "boolean",
               "default": true
             },
-            "event_rotation_mb": {
+            "event_rotation_mib": {
               "type": "number",
-              "default": 128.0
+              "default": 128.0,
+              "x-passivbot-unit": "MiB"
             },
             "event_rotation_minutes": {
               "type": "number",
@@ -19472,8 +19474,8 @@
         "logging.live_event_debug_profiles": {
           "$ref": "#/$defs/config/properties/logging/properties/live_event_debug_profiles"
         },
-        "logging.max_bytes_mb": {
-          "$ref": "#/$defs/config/properties/logging/properties/max_bytes_mb"
+        "logging.max_bytes_mib": {
+          "$ref": "#/$defs/config/properties/logging/properties/max_bytes_mib"
         },
         "logging.memory_snapshot_interval_minutes": {
           "$ref": "#/$defs/config/properties/logging/properties/memory_snapshot_interval_minutes"
@@ -19502,8 +19504,8 @@
         "monitor.enabled": {
           "$ref": "#/$defs/config/properties/monitor/properties/enabled"
         },
-        "monitor.event_rotation_mb": {
-          "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_mb"
+        "monitor.event_rotation_mib": {
+          "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_mib"
         },
         "monitor.event_rotation_minutes": {
           "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_minutes"
@@ -24955,8 +24957,8 @@
         "live_event_debug_profiles": {
           "$ref": "#/$defs/config/properties/logging/properties/live_event_debug_profiles"
         },
-        "max_bytes_mb": {
-          "$ref": "#/$defs/config/properties/logging/properties/max_bytes_mb"
+        "max_bytes_mib": {
+          "$ref": "#/$defs/config/properties/logging/properties/max_bytes_mib"
         },
         "memory_snapshot_interval_minutes": {
           "$ref": "#/$defs/config/properties/logging/properties/memory_snapshot_interval_minutes"
@@ -24989,8 +24991,8 @@
         "enabled": {
           "$ref": "#/$defs/config/properties/monitor/properties/enabled"
         },
-        "event_rotation_mb": {
-          "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_mb"
+        "event_rotation_mib": {
+          "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_mib"
         },
         "event_rotation_minutes": {
           "$ref": "#/$defs/config/properties/monitor/properties/event_rotation_minutes"
