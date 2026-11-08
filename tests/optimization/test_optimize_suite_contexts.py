@@ -165,8 +165,8 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable
     if rms_search:
         config['bot']["portfolio"]['warmup']['max_minutes'] = 3
         forager = config["optimize"]["bounds"]["long"]["forager"]
-        forager["unilateralness_ema_span_minutes"] = [1.0, 60.0]
-        forager["score_weights"]["unilateralness"] = [0.0, 1.0]
+        forager["rms_directionality_ema_span_minutes"] = [1.0, 60.0]
+        forager["score_weights"]["rms_directionality"] = [0.0, 1.0]
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}

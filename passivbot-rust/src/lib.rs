@@ -27,7 +27,7 @@ mod risk;
 mod strategies;
 mod trailing;
 mod types;
-mod unilateralness;
+mod rms_directionality;
 mod utils;
 
 use coin_selection::{select_coin_indices_py, select_forager_candidates_py};
@@ -147,7 +147,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_class::<HlcvsBundlePy>()?;
     m.add_function(wrap_pyfunction!(
-        unilateralness::calc_signed_unilateralness,
+        rms_directionality::calc_signed_rms_directionality,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(

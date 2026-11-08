@@ -12,6 +12,7 @@ import numpy as np
 import passivbot_rust as pbr
 
 from live.event_bus import EventTypes, ReasonCodes
+from live.console_health import ordinary_progress_payload
 from live import ordinary_diagnostics
 from trailing_diagnostics import (
     build_trailing_close_diagnostic,
@@ -536,6 +537,7 @@ def _build_health_summary_payload(
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
     }
+    payload.update(ordinary_progress_payload(self, now_ms))
     loop_ms = payload["last_loop_duration_ms"]
     loop_timings = getattr(self, "_last_loop_timing_ms", {}) or {}
     if loop_ms >= 60_000 and isinstance(loop_timings, dict):
@@ -941,7 +943,7 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             "next_symbol": pending_symbols[0] if pending_symbols else None,
             "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
         }
-        if float(out[pside]["score_weights"].get("unilateralness", 0.0)) > 0.0:
+        if float(out[pside]["score_weights"].get("rms_directionality", 0.0)) > 0.0:
             # Enabled RMS totals come from the same Rust selection that placed
             # orders, including pruning, normalization and tie ordering. Never
             # synthesize a three-component total while its fourth input is absent.
@@ -949,7 +951,7 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             if (
                 hint
                 and hint["weights"] == out[pside]["score_weights"]
-                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_minutes"))
+                and hint["span"] == float(self.bot_value(pside, "rms_directionality_ema_span_minutes"))
             ):
                 out[pside]["ranking"] = deepcopy(hint["ranking"])
             continue
@@ -1390,13 +1392,13 @@ def _update_monitor_runtime_hints(
         if not selection.get("ranking_required") or not top_scores:
             continue
         weights = dict(self.bot_value(pside, "forager_score_weights"))
-        if float(weights.get("unilateralness", 0.0)) <= 0.0:
+        if float(weights.get("rms_directionality", 0.0)) <= 0.0:
             continue
         top = top_scores[0]
         score = float(top["score"])
         self._monitor_runtime_forager_hints[pside] = {
             "weights": weights,
-            "span": float(self.bot_value(pside, "unilateralness_ema_span_minutes")),
+            "span": float(self.bot_value(pside, "rms_directionality_ema_span_minutes")),
             "ranking": {
                 "source": "rust_orchestrator",
                 "observed_at_ms": int(utc_ms()),
@@ -1411,7 +1413,7 @@ def _update_monitor_runtime_hints(
                             "volume_component",
                             "log_range_component",
                             "ema_readiness_component",
-                            "unilateralness_component",
+                            "rms_directionality_component",
                         )
                     },
                 },

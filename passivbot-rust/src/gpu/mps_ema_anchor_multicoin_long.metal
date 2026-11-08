@@ -1042,8 +1042,8 @@ inline void update_ema_multicoin_side_selection(
             }
         }
     }
-    float unilateral_min = INFINITY;
-    float unilateral_max = -INFINITY;
+    float rms_directionality_min = INFINITY;
+    float rms_directionality_max = -INFINITY;
     float volume_min = INFINITY;
     float volume_max = -INFINITY;
     float ready_min = INFINITY;
@@ -1068,8 +1068,8 @@ inline void update_ema_multicoin_side_selection(
                 : close / threshold - 1.0f)
             : INFINITY;
         if (config.adaptive.score_weight > 0.0f) {
-            unilateral_min = fmin(unilateral_min, fabs(side.adaptive[c].score));
-            unilateral_max = fmax(unilateral_max, fabs(side.adaptive[c].score));
+            rms_directionality_min = fmin(rms_directionality_min, fabs(side.adaptive[c].score));
+            rms_directionality_max = fmax(rms_directionality_max, fabs(side.adaptive[c].score));
         }
         volume_min = fmin(volume_min, forager_volume_ema[c]);
         volume_max = fmax(volume_max, forager_volume_ema[c]);
@@ -1106,16 +1106,16 @@ inline void update_ema_multicoin_side_selection(
             ? (forager_log_range_ema[c] - log_range_min)
                 / (log_range_max - log_range_min)
             : 1.0f;
-        float unilateral_component = 0.0f;
+        float rms_directionality_component = 0.0f;
         if (config.adaptive.score_weight > 0.0f) {
-            unilateral_component = unilateral_max > unilateral_min
-                ? (unilateral_max - fabs(side.adaptive[c].score)) / (unilateral_max - unilateral_min)
+            rms_directionality_component = rms_directionality_max > rms_directionality_min
+                ? (rms_directionality_max - fabs(side.adaptive[c].score)) / (rms_directionality_max - rms_directionality_min)
                 : 1.0f;
         }
         score[c] = config.w_volume * volume_component
             + config.w_ready * ready_component
             + config.w_log_range * log_range_component
-            + config.adaptive.score_weight * unilateral_component;
+            + config.adaptive.score_weight * rms_directionality_component;
     }
     for (int pick = 0; pick < slots; ++pick) {
         int best = -1;

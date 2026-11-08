@@ -5,11 +5,34 @@ import logging
 import sys
 from typing import Iterable
 
+from live.console_health import observe_ordinary_defer
 from live.freshness import ACCOUNT_SURFACES
 from live.market_snapshot import MarketSnapshot
 from live.events import run_diagnostic_step
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from utils import utc_ms
+
+
+class StagedPlannerInputsUnavailable(RuntimeError):
+    """Required live planner inputs failed readiness before snapshot capture."""
+
+    def __init__(self, message: str, *, context: str, details: dict):
+        invalid, invalid_counts = _group_invalid_details(
+            dict(row, surface=surface)
+            for surface, rows in details["invalid"].items()
+            for row in rows
+        )
+        self.details = {
+            "context": context,
+            "epoch": details["epoch"],
+            "required": details["required"],
+            "min_epochs": details["min_epochs"],
+            "missing": details["missing"],
+            "invalid": invalid,
+            "invalid_counts": invalid_counts,
+            "defer_reason": "staged_planner_inputs_not_fresh",
+        }
+        super().__init__(message)
 
 
 def _utc_ms() -> int:
@@ -65,12 +88,16 @@ def staged_planner_precondition_state(
         include_market_snapshot=include_market_snapshot
     )
     min_epochs = bot._staged_planner_surface_min_epochs(required)
-    missing = sorted(
-        surface
-        for surface in required
-        if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
-    )
+    missing = []
     invalid: dict[str, list] = {}
+    for surface in required:
+        epoch = ledger.surface_epoch(surface)
+        minimum = min_epochs[surface]
+        if epoch < minimum:
+            missing.append(surface)
+            invalid[surface] = [
+                {"reason": "surface_epoch_too_old", "epoch": epoch, "min_epoch": minimum}
+            ]
     if (
         include_market_snapshot
         and "market_snapshot" in required
@@ -111,10 +138,12 @@ def assert_staged_planner_preconditions(
         return
     missing = ",".join(details["missing"])
     required = ",".join(details["required"])
-    raise RuntimeError(
+    raise StagedPlannerInputsUnavailable(
         f"staged planner precondition failed before {context}: "
         f"missing current-epoch surfaces={missing} epoch={details['epoch']} "
-        f"required={required}"
+        f"required={required}",
+        context=context,
+        details=details,
     )
 
 
@@ -171,24 +200,31 @@ def format_staged_execution_defer_message(bot, details: dict) -> str:
     return " | ".join(parts)
 
 
+def _group_invalid_details(items: Iterable[dict]) -> tuple[dict, dict]:
+    invalid: dict[str, list] = {}
+    counts: dict[str, int] = {}
+    for item in items:
+        surface = item["surface"]
+        counts[surface] = counts.get(surface, 0) + 1
+        rows = invalid.setdefault(surface, [])
+        if len(rows) < 8:
+            row = dict(item)
+            if "symbols" in row:
+                symbols = row["symbols"]
+                row["symbols"] = symbols[:12]
+                row["symbols_count"] = len(symbols)
+            rows.append(row)
+    return invalid, counts
+
+
 def handle_staged_execution_precondition_error(
     bot, exc: RuntimeError
 ) -> tuple[bool, dict]:
     """Classify staged precondition failures as safe live-loop defers."""
+    if isinstance(exc, StagedPlannerInputsUnavailable):
+        return True, exc.details
     if isinstance(exc, PlanningSnapshotUnavailable):
-        invalid: dict[str, list] = {}
-        counts: dict[str, int] = {}
-        for item in exc.invalid_details:
-            surface = item["surface"]
-            counts[surface] = counts.get(surface, 0) + 1
-            rows = invalid.setdefault(surface, [])
-            if len(rows) < 8:
-                row = dict(item)
-                if "symbols" in row:
-                    symbols = row["symbols"]
-                    row["symbols"] = symbols[:12]
-                    row["symbols_count"] = len(symbols)
-                rows.append(row)
+        invalid, counts = _group_invalid_details(exc.invalid_details)
         # The mutable provider may already be fresh. Preserve the failure of
         # the exact immutable cohort that was rejected instead of re-reading it.
         return True, {
@@ -220,6 +256,9 @@ def handle_staged_execution_precondition_error(
 
 def log_staged_execution_defer(bot, details: dict) -> None:
     """Log a throttled non-trading defer while staged inputs settle."""
+    run_diagnostic_step(
+        "record ordinary planning defer", lambda: observe_ordinary_defer(bot, details)
+    )
     missing = tuple(details.get("missing", ()))
     required = tuple(details.get("required", ()))
     context = str(details.get("context") or "planning")
@@ -274,7 +313,11 @@ def build_staged_planning_snapshot(
         include_market_snapshot=True, symbols=ordered_symbols
     )
     if not ok:
-        raise RuntimeError(f"planning snapshot invalid before capture: {details}")
+        raise StagedPlannerInputsUnavailable(
+            "planning snapshot invalid before capture",
+            context="rust order calculation",
+            details=details,
+        )
     ledger = bot._ensure_freshness_ledger()
     required = bot._staged_planner_required_surfaces(include_market_snapshot=True)
     min_epochs = bot._staged_planner_surface_min_epochs(required)

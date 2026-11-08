@@ -672,12 +672,12 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
                     params["entry_eligible"]
                     and rms_side_enabled(params, side)
                     and (
-                        (ranking_possible and params["forager_score_weights"]["unilateralness"] > 0.0)
+                        (ranking_possible and params["forager_score_weights"]["rms_directionality"] > 0.0)
                         or uses_adverse_rms(params)
                     )
                 ):
                     raise ValueError(
-                        "RMS unilateralness requires completed one-minute candles for the entire optimizer search"
+                        "RMS directionality requires completed one-minute candles for the entire optimizer search"
                     )
 
 

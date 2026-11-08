@@ -237,9 +237,9 @@ def _scale_directional_minute_parameters(
         raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
-        span_col = offset + keys.index("unilateralness_ema_span_minutes")
+        span_col = offset + keys.index("rms_directionality_ema_span_minutes")
         adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
-        score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
+        score = scaled[:, offset + keys.index("forager_score_weights_rms_directionality")]
         ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]
         floor = scaled[:, offset + keys.index("entry_cooldown_min_duration_minutes")]
         base = scaled[:, offset + keys.index("entry_cooldown_minutes")]
@@ -269,7 +269,7 @@ def _scale_directional_minute_parameters(
                 ranking &= (count > 1) & (dynamic_wel_by_tradability | (count > slots))
                 # Match Rust's dormant scoring policy. Aggregated candles must
                 # never update a one-minute indicator that cannot be consumed.
-                scaled[~ranking, offset + keys.index("forager_score_weights_unilateralness")] = 0.0
+                scaled[~ranking, offset + keys.index("forager_score_weights_rms_directionality")] = 0.0
         adverse_demand = (adverse > 0.0) & ~constant
         if cooldown_coin_overrides is not None:
             # Override rows are unscaled base/floor/ceiling/adverse/WEL pins.
@@ -298,9 +298,9 @@ def _scale_directional_minute_parameters(
         spans = scaled[:, span_col]
         if np.any(rms & (~np.isfinite(spans) | (spans < 1.0) | (spans > 100000.0))):
             raise ValueError(
-                "GPU unilateralness spans must be finite and between 1 and 100000"
+                "GPU RMS directionality spans must be finite and between 1 and 100000"
             )
-        scaled[:, offset + keys.index("unilateralness_window")] = np.ceil(20.0 * spans)
+        scaled[:, offset + keys.index("rms_directionality_window")] = np.ceil(20.0 * spans)
         for key in minute_keys:
             column = offset + keys.index(key)
             if key == "entry_cooldown_max_duration_minutes":

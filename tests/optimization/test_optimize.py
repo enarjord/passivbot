@@ -1635,7 +1635,7 @@ class TestIndividualToConfig:
                         "log_range_ema_span_minutes": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
-                            "unilateralness": 0.0,
+                            "rms_directionality": 0.0,
                             "volume": 0.0,
                             "ema_readiness": 0.0,
                             "log_range": 1.0,
@@ -1665,7 +1665,7 @@ class TestIndividualToConfig:
                         "log_range_ema_span_minutes": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
-                            "unilateralness": 0.0,
+                            "rms_directionality": 0.0,
                             "volume": 0.2,
                             "ema_readiness": 0.3,
                             "log_range": 0.5,

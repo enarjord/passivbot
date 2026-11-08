@@ -3443,7 +3443,7 @@ def test_forager_respects_n_positions_selects_one_coin():
             "n_positions": 1,
             "total_wallet_exposure_limit_ratio": 1.0,
             "forager_volume_ema_span_minutes": 10.0,
-            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
             "forager_log_range_ema_span_minutes": 10.0,
         }
     )
@@ -3463,7 +3463,7 @@ def test_forager_respects_n_positions_selects_one_coin():
         ),
         long_bp={
             "forager_volume_ema_span_minutes": 10.0,
-            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
             "forager_log_range_ema_span_minutes": 10.0,
         },
     )
@@ -3482,7 +3482,7 @@ def test_forager_respects_n_positions_selects_one_coin():
         ),
         long_bp={
             "forager_volume_ema_span_minutes": 10.0,
-            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+            "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
             "forager_log_range_ema_span_minutes": 10.0,
         },
     )
@@ -3511,7 +3511,7 @@ def test_single_eligible_coin_does_not_require_forager_feature_bundle():
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_volume_ema_span_minutes": 10.0,
-        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
     }
     symbol = make_symbol(
         0,
@@ -3551,7 +3551,7 @@ def test_forager_ranks_remaining_candidates_after_ineligible_position_consumes_s
         "n_positions": 2,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_volume_ema_span_minutes": 10.0,
-        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
         "forager_log_range_ema_span_minutes": 10.0,
     }
     held_ineligible = make_symbol(
@@ -3609,7 +3609,7 @@ def test_live_authorized_missing_forager_feature_scopes_only_candidate_side():
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_volume_ema_span_minutes": 10.0,
-        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+        "forager_score_weights": {"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
         "forager_log_range_ema_span_minutes": 10.0,
     }
     global_bp = bot_params_pair(long_overrides=side_params)

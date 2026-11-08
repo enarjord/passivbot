@@ -478,8 +478,8 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
     ordinary_ema_bootstrapped: Vec<bool>,
-    unilateralness: Vec<Vec<(f64, crate::unilateralness::RollingRms)>>,
-    unilateralness_step: Option<usize>,
+    rms_directionality: Vec<Vec<(f64, crate::rms_directionality::RollingRms)>>,
+    rms_directionality_step: Option<usize>,
     orchestrator_ema_slots: Vec<OrchestratorEmaSlots>,
     needs_volume_ema_long: bool,
     needs_volume_ema_short: bool,
@@ -1254,7 +1254,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     idx
                 );
 
-                m1.signed_unilateralness = self.unilateralness_at(idx, k);
+                m1.signed_rms_directionality = self.rms_directionality_at(idx, k);
                 m1.volume.push((vol_span_long, self.emas[idx].vol_long));
                 m1.volume.push((vol_span_short, self.emas[idx].vol_short));
                 m1.log_range
@@ -1301,8 +1301,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     exchange,
                     tradable,
                     allow_missing_strategy_inputs: false,
-                    unilateralness_warmup_spans: self.unilateralness_warmup_spans(idx, k),
-                    unilateralness_unavailable: Default::default(),
+                    rms_directionality_warmup_spans: self.rms_directionality_warmup_spans(idx, k),
+                    rms_directionality_unavailable: Default::default(),
                     next_candle,
                     effective_min_cost,
                     emas,
@@ -1487,8 +1487,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             sym.long.mode = mode_long;
             sym.short.mode = mode_short;
 
-            sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
-            sym.unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
+            sym.emas.m1.signed_rms_directionality = self.rms_directionality_at(idx, k);
+            sym.rms_directionality_warmup_spans = self.rms_directionality_warmup_spans(idx, k);
             // Update EMA values (spans are stable; we overwrite only values).
             // m1.close: 3 long then 3 short.
             if sym.emas.m1.close.len() >= 6 {
@@ -1878,7 +1878,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .any(|sp| strategy_needs_log_range_1h(&sp.short));
         let btc_collateral_initialized = !balance.use_btc_collateral;
 
-        let rms_enabled = crate::unilateralness::backtest_enabled_sides(
+        let rms_enabled = crate::rms_directionality::backtest_enabled_sides(
             &bot_params,
             backtest_params.dynamic_wel_by_tradability,
             backtest_params.side_activation,
@@ -1905,7 +1905,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             ema_alphas,
             emas: initial_emas,
             ordinary_ema_bootstrapped: vec![false; n_coins],
-            unilateralness: bot_params
+            rms_directionality: bot_params
                 .iter()
                 .zip(rms_enabled.iter())
                 .map(|(pair, enabled)| {
@@ -1914,21 +1914,21 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         if *enabled
                             && !trackers
                                 .iter()
-                                .any(|(span, _)| *span == bp.unilateralness_ema_span_minutes)
+                                .any(|(span, _)| *span == bp.rms_directionality_ema_span_minutes)
                         {
                             trackers.push((
-                                bp.unilateralness_ema_span_minutes,
-                                crate::unilateralness::RollingRms::new(
-                                    bp.unilateralness_ema_span_minutes,
+                                bp.rms_directionality_ema_span_minutes,
+                                crate::rms_directionality::RollingRms::new(
+                                    bp.rms_directionality_ema_span_minutes,
                                 )
-                                .expect("validated unilateralness span"),
+                                .expect("validated RMS directionality span"),
                             ));
                         }
                     }
                     trackers
                 })
                 .collect(),
-            unilateralness_step: None,
+            rms_directionality_step: None,
             orchestrator_ema_slots,
             needs_volume_ema_long: bot_params
                 .iter()
@@ -2065,7 +2065,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 }
             }
             if let Some((first, last)) = self.coin_valid_range(idx) {
-                let requires_rms = !self.unilateralness[idx].is_empty();
+                let requires_rms = !self.rms_directionality[idx].is_empty();
                 for k in first..=last {
                     if requires_rms && self.hlcvs_value(k, idx, CLOSE) <= 0.0 {
                         return Err(format!(
@@ -2105,7 +2105,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
         self.validate_candle_coverage()?;
         self.initialize_hsl()?;
-        self.update_unilateralness(0)?;
+        self.update_rms_directionality(0)?;
         let n_timesteps = self.hlcvs.shape()[0];
 
         // --- register first & last valid candle for every coin ---
@@ -2127,7 +2127,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.current_step = k;
             self.begin_core_metrics_if_due(k)?;
             self.validate_held_position_valuation(k)?;
-            self.update_unilateralness(k)?;
+            self.update_rms_directionality(k)?;
             for idx in 0..self.n_coins {
                 if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
                     self.trade_activation_logged[idx] = true;
@@ -3860,44 +3860,44 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
     }
 
-    fn unilateralness_warmup_spans(&self, idx: usize, k: usize) -> Vec<f64> {
+    fn rms_directionality_warmup_spans(&self, idx: usize, k: usize) -> Vec<f64> {
         let Some((start, end)) = self.coin_valid_range(idx) else {
             return Vec::new();
         };
-        self.unilateralness[idx]
+        self.rms_directionality[idx]
             .iter()
             .filter(|(span, _)| {
                 k <= end
                     && k < start.saturating_add(
-                        crate::unilateralness::warmup_returns(*span)
-                            .expect("validated unilateralness span"),
+                        crate::rms_directionality::warmup_returns(*span)
+                            .expect("validated RMS directionality span"),
                     )
             })
             .map(|(span, _)| *span)
             .collect()
     }
 
-    fn update_unilateralness(&mut self, k: usize) -> Result<(), String> {
+    fn update_rms_directionality(&mut self, k: usize) -> Result<(), String> {
         for idx in 0..self.n_coins {
-            if self.unilateralness[idx].is_empty() || !self.coin_is_valid_at(idx, k) {
+            if self.rms_directionality[idx].is_empty() || !self.coin_is_valid_at(idx, k) {
                 continue;
             }
             let close = self.hlcvs_value(k, idx, CLOSE);
-            for (_, tracker) in &mut self.unilateralness[idx] {
+            for (_, tracker) in &mut self.rms_directionality[idx] {
                 tracker.push_close(close)?;
             }
         }
-        self.unilateralness_step = Some(k);
+        self.rms_directionality_step = Some(k);
         Ok(())
     }
 
     #[inline]
-    fn unilateralness_at(&self, idx: usize, k: usize) -> Vec<(f64, f64)> {
-        if self.unilateralness_step == Some(k) {
+    fn rms_directionality_at(&self, idx: usize, k: usize) -> Vec<(f64, f64)> {
+        if self.rms_directionality_step == Some(k) {
             if !self.coin_is_valid_at(idx, k) {
                 return Vec::new();
             }
-            return self.unilateralness[idx]
+            return self.rms_directionality[idx]
                 .iter()
                 .filter_map(|(span, tracker)| tracker.score().map(|value| (*span, value)))
                 .collect();
@@ -3905,10 +3905,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         // Standalone snapshots may request another index. Replay that window
         // rather than use a cached score from a different candle.
         let mut out = Vec::new();
-        for (span, _) in &self.unilateralness[idx] {
+        for (span, _) in &self.rms_directionality[idx] {
             let span = *span;
             let n =
-                crate::unilateralness::warmup_returns(span).expect("validated unilateralness span");
+                crate::rms_directionality::warmup_returns(span).expect("validated RMS directionality span");
             let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));
             if k < start.saturating_add(n) || k > end {
                 continue;
@@ -3916,8 +3916,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             let closes: Vec<f64> = (k - n..=k)
                 .map(|j| self.hlcvs_value(j, idx, CLOSE))
                 .collect();
-            let score = crate::unilateralness::signed_rms(&closes, span)
-                .expect("validated unilateralness candle window");
+            let score = crate::rms_directionality::signed_rms(&closes, span)
+                .expect("validated rms_directionality candle window");
             out.push((span, score));
         }
         out

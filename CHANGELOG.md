@@ -9,6 +9,9 @@ since the latest release tag; these features may already be available when insta
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 
+- Preserve the original epoch, missing quote, or quote age in staged planning deferral diagnostics
+  when market data recovers before the execution loop handles the failure.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
@@ -33,6 +36,9 @@ since the latest release tag; these features may already be available when insta
   instead of publishing infinity from uninitialized extrema or arithmetic overflow. Reject other
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
   and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
+
+- Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
+  a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
 
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
@@ -71,6 +77,10 @@ since the latest release tag; these features may already be available when insta
   expiry from its consumed account and complete quote receipts under their respective freshness limits.
   Distinguish completed ordinary execution paths from skipped plans even when integer timing is zero.
 
+- Report how long it has been since the last accepted ordinary plan. Warn when outer cycles
+  keep completing for five minutes without ordinary reconciliation, with the last observed defer
+  phase and reason when available.
+
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
   settings to use shared or side-owned layouts. Preserve existing output by default and
@@ -104,6 +114,10 @@ since the latest release tag; these features may already be available when insta
   cancellation or timeout, and close clients whose market discovery failed. Reuse
   loaded market snapshots and page Gate daily history forward to discover contracts
   listed beyond the first bounded page.
+
+- Use elapsed monotonic time for live execution and retry waits so delayed event-loop
+  wakeups count toward the requested delay. Keep the existing shutdown checks.
+
 - Include bounded structural reasons when rejecting malformed Bitunix candle
   updates, without exposing raw field contents or relaxing candle validation.
 - Fetch real KuCoin futures bid/ask quotes and last trades from the bulk ticker
@@ -187,6 +201,9 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce repeated candle shard parsing by reusing bounded validated NPY headers,
   while reading current payload bytes and preserving corruption checks.
+
+- Reduce CPU time spent synthesizing sparse one-minute candle windows. Preserve real rows,
+  excluded gaps, synthetic candle provenance, and the existing readiness policy.
 
 - Reduce standalone setup overhead with a conservative source and installed-runtime
   identity manifest. The versioned identity deliberately invalidates prior evaluation
@@ -324,7 +341,7 @@ since the latest release tag; these features may already be available when insta
 
 - Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
   price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
-  replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing
+  replay spans and monitor fields without changing
   ranking, normalization, limits or GPU slots.
   Released-v8 native span and optimizer identifiers remain confined to explicit conversion.
 
@@ -546,6 +563,10 @@ since the latest release tag; these features may already be available when insta
   without changing the shared live cap.
   Convert numeric fee strings to the same finite numeric values. Editor validation now accepts
   the existing `visible_metrics: null` policy for derived metrics.
+
+- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
+  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
+  The v8 migration tool converts the old field names without rescaling.
 
 - Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
   millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
@@ -1185,7 +1206,11 @@ since the latest release tag; these features may already be available when insta
   fills at their causal execution boundary. Keep malformed valuation inputs fatal
   rather than replacing them with neutral risk.
 
-- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+- Name the Forager score weight `rms_directionality` and its one-minute EMA span
+  `rms_directionality_ema_span_minutes`. Optimizer fields, native inputs and
+  diagnostics use the same terminology. The score and trading behavior are unchanged.
+
+- Hydrate missing Forager RMS directionality weight/span and adaptive entry cooldown
   weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
   value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
   a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
@@ -1230,7 +1255,7 @@ since the latest release tag; these features may already be available when insta
   for dozens of full-history batches.
   Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
 
-- Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
+- Add opt-in adaptive entry cooldown and Forager RMS directionality scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
   decays during flat prices. Keep the base duration under `bot.<side>.entry_cooldown`,
@@ -1252,7 +1277,7 @@ since the latest release tag; these features may already be available when insta
   that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
   results on candle repairs or gap evidence; cache-only ranking uses the latest complete
   contiguous window within its original source-age allowance, including before an internal gap.
-  Report enabled unilateralness ranking totals from Rust diagnostics in the monitor.
+  Report enabled RMS directionality ranking totals from Rust diagnostics in the monitor.
   Document all four scoring weights, configuration, benchmarks, effective cooldown inspection,
   and unchanged partial-fill semantics.
 

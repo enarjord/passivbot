@@ -161,8 +161,8 @@ def test_old_forager_log_range_spellings_are_rejected(scope, channel, old, value
 
 @pytest.mark.parametrize("scope", ["global", "long", "short"])
 @pytest.mark.parametrize("weights", [
-    {"volume": 2.0, "ema_readiness": 3.0, "log_range": 5.0, "unilateralness": 7.0},
-    {"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0},
+    {"volume": 2.0, "ema_readiness": 3.0, "log_range": 5.0, "rms_directionality": 7.0},
+    {"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0},
 ])
 def test_forager_weights_preserve_normalization_order_native_packet_and_exports(scope, weights):
     config = source("trailing_martingale")
@@ -185,11 +185,11 @@ def test_forager_weights_preserve_normalization_order_native_packet_and_exports(
 
 
 def test_trusted_shared_matching_native_weights_remain_detached():
-    weights = {"volume": 1.0, "ema_readiness": 2.0, "log_range": 3.0, "unilateralness": 4.0}
+    weights = {"volume": 1.0, "ema_readiness": 2.0, "log_range": 3.0, "rms_directionality": 4.0}
     original = deepcopy(weights)
     side = {"forager_score_weights": weights}
     canonicalize_shared_bot_side(side)
-    assert side == {"forager": {"score_weights": {"volume": 1.0, "ema_readiness": 2.0, "log_range": 3.0, "unilateralness": 4.0}}}
+    assert side == {"forager": {"score_weights": {"volume": 1.0, "ema_readiness": 2.0, "log_range": 3.0, "rms_directionality": 4.0}}}
     assert weights == original
     assert flatten_shared_bot_side(side)["forager_score_weights"] == original
     set_grouped_bot_value(side, "forager_score_weights", weights)

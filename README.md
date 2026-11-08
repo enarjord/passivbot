@@ -41,7 +41,7 @@ For trailing entries, the bot waits for the price to move beyond a specified thr
 Grid and trailing orders may be combined, such that the robot enters or closes a whole or a part of the position as grid orders and/or as trailing orders.
 
 ### Forager
-The Forager feature dynamically chooses which approved markets may open positions. It ranks eligible markets with configurable weights for quote volume, EMA readiness, 1m log-range volatility and unilateralness.
+The Forager feature dynamically chooses which approved markets may open positions. It ranks eligible markets with configurable weights for quote volume, EMA readiness, 1m log-range volatility and RMS directionality.
 
 ### Unstucking Mechanism
 Passivbot manages underperforming, or "stuck", positions by realizing small losses over time. If multiple positions are stuck, the bot prioritizes positions with the smallest gap between the entry price and current market price for "unstucking". A continuous net-realized loss memory limits its allowance, with a separate account-wide loss gate for non-panic closes.

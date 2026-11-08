@@ -312,7 +312,7 @@ def resolve_live_log_file_settings(
         }
 
     log_dir = str(logging_cfg.get("dir", "logs")).strip() or "logs"
-    max_bytes_mb = float(logging_cfg.get("max_bytes_mb", 10.0))
+    max_bytes_mib = float(logging_cfg.get("max_bytes_mib", 10.0))
     backup_count = int(logging_cfg.get("backup_count", 5))
     effective_command_args: Sequence[object]
     if command_args:
@@ -323,6 +323,6 @@ def resolve_live_log_file_settings(
         "log_file": str(build_command_log_path(effective_command_args, log_dir)),
         "current_log_file": str(Path(log_dir).expanduser() / f"{user}.log"),
         "rotation": bool(logging_cfg.get("rotation", True)),
-        "max_bytes": max(1, int(max_bytes_mb * 1024 * 1024)),
+        "max_bytes": max(1, int(max_bytes_mib * 1024 * 1024)),
         "backup_count": max(0, backup_count),
     }

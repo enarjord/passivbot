@@ -29,6 +29,8 @@ PUBLIC_PATH_RENAMES = {
     ("optimize", "pymoo", "shared", "mutation_prob_per_variable"): ("optimize", "pymoo", "shared", "mutation_probability_per_variable"),
     ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
     ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
+    ("logging", "max_bytes_mb"): ("logging", "max_bytes_mib"),
+    ("monitor", "event_rotation_mb"): ("monitor", "event_rotation_mib"),
     ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),
     ("live", "startup", "startup_phase_budgets", "*", "elapsed_ms"): ("live", "startup", "startup_phase_budgets", "*", "elapsed_milliseconds"),
     ("live", "startup", "startup_phase_budgets", "*", "since_previous_ms"): ("live", "startup", "startup_phase_budgets", "*", "since_previous_milliseconds"),
@@ -48,9 +50,10 @@ PUBLIC_PATH_RENAMES = {
 
 SHARED_SIDE_PATH_RENAMES = {
     ("forager", "score_weights", "volatility"): ("forager", "score_weights", "log_range"),
+    ("forager", "score_weights", "unilateralness"): ("forager", "score_weights", "rms_directionality"),
     ("forager", "volume_ema_span_1m"): ("forager", "volume_ema_span_minutes"),
     ("forager", "volatility_ema_span_1m"): ("forager", "log_range_ema_span_minutes"),
-    ("forager", "unilateralness_ema_span_1m"): ("forager", "unilateralness_ema_span_minutes"),
+    ("forager", "unilateralness_ema_span_1m"): ("forager", "rms_directionality_ema_span_minutes"),
     ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
     ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
     ("hsl", "cooldown_minutes_after_red"): ("hsl", "cooldown_after_red_minutes"),
@@ -80,6 +83,7 @@ def _public_path_renames():
                     mappings[(*root, "strategy", kind, *old)] = (*root, "strategy", kind, *new)
         root = ("optimize", "bounds", side, "forager")
         mappings[(*root, "score_weights_volatility")] = (*root, "score_weights_log_range")
+        mappings[(*root, "score_weights_unilateralness")] = (*root, "score_weights_rms_directionality")
     return mappings
 
 

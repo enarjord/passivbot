@@ -441,7 +441,7 @@ def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
 
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("field", ["unilateralness", "ema_readiness"])
+@pytest.mark.parametrize("field", ["rms_directionality", "ema_readiness"])
 def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field):
     outputs = []
     for number in (int, float):

@@ -1417,6 +1417,7 @@ def test_state_debug_profile_adds_bounded_refresh_shape():
 
 def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     import passivbot as pb_mod
+    from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
 
     class FakePipeline:
         def __init__(self):
@@ -1529,6 +1530,8 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
 
     bot = FakeBot()
     bot._health_asyncio_errors = 4
+    observe_ordinary_acceptance(bot, 159_100)
+    observe_ordinary_outer_cycle(bot, 159_700, accepted=True)
     payload = bot._build_health_summary_payload(now_ms=160_000)
 
     assert payload["uptime_ms"] == 60_000
@@ -1538,6 +1541,10 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["quote"] == "USDT"
     assert payload["error_budget_max"] == 10
     assert payload["async_errors_total"] == 4
+    assert payload["ordinary_progress"] == dict(
+        last_accepted_age_ms=900, last_outer_cycle_age_ms=300,
+        without_acceptance_ms=None, stalled=False, last_defer=None,
+    )
     assert "slow_phases" not in payload
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
@@ -7726,7 +7733,7 @@ def test_unstuck_monitor_renderer_uses_independent_bounds(pside, strategy_availa
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("volume_weight", [0.0, 0.2])
 @pytest.mark.parametrize("volatility_drop_pct", [0.0, 0.34])
-async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weight, volatility_drop_pct):
+async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_weight, volatility_drop_pct):
     from types import SimpleNamespace
     import passivbot_rust as pbr
     import passivbot_monitor as monitor
@@ -7737,18 +7744,18 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         "volume": volume_weight,
         "log_range": 0.0,
         "ema_readiness": 0.0,
-        "unilateralness": 1.0 - volume_weight,
+        "rms_directionality": 1.0 - volume_weight,
     }
     params = {
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
         "filter_volatility_drop_pct": volatility_drop_pct,
-        "unilateralness_ema_span_minutes": 60.0,
+        "rms_directionality_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
     for symbol, score, volume in zip(symbols, [0.9, -0.1, 0.6], [900.0, 100.0, 600.0]):
-        symbol["emas"]["m1"]["signed_unilateralness"] = [[60.0, score]]
+        symbol["emas"]["m1"]["signed_rms_directionality"] = [[60.0, score]]
         symbol["emas"]["m1"]["volume"] = [[10.0, volume]]
     result = compute(
         pbr,
@@ -7795,7 +7802,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "unilateralness_ema_span_minutes" else volatility_drop_pct)
+            else (60.0 if key == "rms_directionality_ema_span_minutes" else volatility_drop_pct)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,
@@ -7816,12 +7823,12 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
     total = section["ranking"]["top_total"]
     assert total["symbol"] == names[top["symbol_idx"]]
     assert total["total_score"] == pytest.approx(top["score"])
-    assert total["unilateralness_component"] == pytest.approx(top["unilateralness_component"])
+    assert total["rms_directionality_component"] == pytest.approx(top["rms_directionality_component"])
     assert section["ranking"]["source"] == "rust_orchestrator"
     assert calls == []  # Rendering diagnostics performs no feature fetch/recalculation.
     # A config change cannot relabel the previous selection with a new span.
     original = bot.bot_value
-    bot.bot_value = lambda s, key: 61.0 if key == "unilateralness_ema_span_minutes" else original(s, key)
+    bot.bot_value = lambda s, key: 61.0 if key == "rms_directionality_ema_span_minutes" else original(s, key)
     assert "ranking" not in (await monitor._build_monitor_forager_section(bot))[side]
     bot.bot_value = original
     # No scoring diagnostic means no fabricated or retained legacy total.

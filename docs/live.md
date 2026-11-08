@@ -31,7 +31,7 @@ continues following it when a later run refreshes the stable path.
 
 - `logging.persist_to_file = true` keeps on-disk live logs enabled
 - `logging.dir` chooses the target directory for both the timestamped archive and the stable alias
-- `logging.rotation`, `logging.max_bytes_mb`, and `logging.backup_count`
+- `logging.rotation`, `logging.max_bytes_mib`, and `logging.backup_count`
   control file rotation, which is enabled by default for new/generated configs
 
 Disable file persistence only if you explicitly want console-only live logging:

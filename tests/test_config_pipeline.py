@@ -1371,7 +1371,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["bot"]["long"]["forager"]["score_weights"] == {
-        "unilateralness": 0.0,
+        "rms_directionality": 0.0,
         "volume": 0.0,
         "ema_readiness": 1.0,
         "log_range": 0.0,
@@ -1393,7 +1393,7 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["bot"]["short"]["forager"]["score_weights"] == {
-        "unilateralness": 0.0,
+        "rms_directionality": 0.0,
         "volume": 0.0,
         "ema_readiness": 0.0,
         "log_range": 0.0,
