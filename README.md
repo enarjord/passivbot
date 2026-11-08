@@ -5,9 +5,9 @@
 :warning: **Used at one's own risk** :warning:
 
 Latest tagged release: **[v8.1.0](docs/release_notes_v8.1.0.md)**.
-A clone of `master` includes subsequent changes listed under
-[Unreleased](CHANGELOG.md#unreleased). See [release status and version meanings](docs/releases.md)
-before choosing a revision; these docs describe the revision you are viewing.
+These instructions describe the v9 development revision. See
+[release status and revision selection](docs/releases.md) for the tagged release and
+[Unreleased](CHANGELOG.md#unreleased) for development changes.
 
 > **V9 configuration transition:** this revision accepts the final canonical v9 layout.
 > Use the [explicit released-v8 converter](docs/v8_to_v9_migration.md), review semantic
@@ -55,11 +55,11 @@ dependency set.
 
 ### Configuration upgrades
 
-Start new configurations from `configs/examples/default_trailing_martingale_long.json`
-or `configs/examples/ema_anchor.json`. Convert released v8 inputs with
-`passivbot tool migrate-config-v9`; follow the [migration guide](docs/v8_to_v9_migration.md)
-for explicit spans, metric formulas and search-policy acknowledgments. Normal loading performs
-no legacy migration. Pre-v8 and unreleased intermediate layouts are unsupported.
+Copy the [maintained template](configs/examples/default_trailing_martingale_long.json) to a
+private file and review the strategy, market universe, and exposure before use. Follow the
+[v8 migration guide](docs/v8_to_v9_migration.md) for supported source versions, explicit spans,
+metric formulas, and search-policy acknowledgments. Preserve the original config and matching
+checkout for rollback. Normal loading requires a v9 config.
 
 ### Step 1: Clone the Repository
 
@@ -70,7 +70,9 @@ git clone https://github.com/enarjord/passivbot.git
 cd passivbot
 ```
 
-This checks out `master`. For a fixed tagged version, follow [release selection](docs/releases.md).
+This checks out the default branch. Use `git clone --branch v9 https://github.com/enarjord/passivbot.git`
+to select the v9 development branch explicitly, or follow
+[release selection](docs/releases.md) for a fixed tag. Read the docs from the revision you install.
 
 
 ### Step 2: Install Rust
@@ -132,15 +134,8 @@ python3 -m pip install -e .
 
 ### Step 5 (optional): Build Rust Extensions
 
-Passivbot will attempt to build the necessary Rust extensions automatically, but they can also be built manually by navigating to the `passivbot-rust` directory and using `maturin`:
-
-```sh
-cd passivbot-rust
-maturin develop --release
-cd ..
-```
-
-If changes in the Rust source are detected, recompilation is needed, which Passivbot will attempt to do automatically when starting. To manually recompile, use the commands given above.
+Editable installation builds the Rust extension. To rebuild after a Rust change and verify the
+loaded artifact against the checkout, follow the [Rust extension runbook](docs/ai/runbooks/rust_extension.md#rebuild-and-verify).
 
 ### Step 6: Add API keys
 
@@ -150,7 +145,8 @@ Make a copy of the api-keys template file:
 cp api-keys.json.example api-keys.json
 ```
 
-Add your keys to api-keys.json.
+Add your keys to `api-keys.json` and restrict access to that file. Keep the file, private configs,
+and runtime logs out of commits, public issues, and Docker build contexts.
 
 ### Step 7: Run Passivbot
 
@@ -158,21 +154,20 @@ Add your keys to api-keys.json.
 > To ensure cache folder names are Windows-compatible (even outside Windows), set the environment variable `WINDOWS_COMPATIBILITY=1`.   
 > This is only required in certain scenarios, e.g., running under Docker (Linux) while mounting the `caches` folder to a Windows host.
 
-To start the bot with the default settings, run:
+Use a reviewed private config with the intended `live.account.user`, explicit side activation,
+and an approved coin universe. Inspect it offline with
+[`live-config-preflight`](docs/tools.md#monitor-tooling) and backtest it before starting live.
 
 ```sh
-passivbot live -u {account_name_from_api-keys.json}
+passivbot live configs/private/live.json
 ```
 
-or make a new configuration file, using `configs/examples/default_trailing_martingale_long.json` as a starting point, and start the bot with:
+A live launch can contact the exchange, change account settings, and place or cancel orders.
+Omitting the config path leaves both position sides disabled for new entries and still starts
+the live runtime. Use the [offline fake harness](docs/fake_live.md) to test without an exchange.
 
-
-```sh
-passivbot live path/to/config.json
-```
-
-Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src/backtest.py ...`,
-and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
+The direct-script entrypoints `python3 src/main.py ...`, `python3 src/backtest.py ...`,
+and `python3 src/optimize.py ...` also accept the current configuration.
 
 The canonical hardcoded defaults live in `src/config/schema.py`. The example config
 `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile, so

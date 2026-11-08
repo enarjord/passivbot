@@ -2,7 +2,6 @@ from copy import deepcopy
 
 import pytest
 
-from config import load_prepared_config
 from config_utils import format_config, get_template_config
 from suite_runner import extract_suite_config
 
@@ -200,7 +199,9 @@ def test_optimizer_limit_basis_round_trip_preserves_named_and_null_scenarios():
 
 def test_optimizer_preserves_explicit_hsl_reducer_config():
     """Optimizer must not inherit template metric-specific reducer overrides."""
-    cfg = load_prepared_config("configs/examples/hsl_npos1.json", verbose=False)
+    config = get_template_config()
+    config["backtest"]["reducer"] = {"default": "mean"}
+    cfg = format_config(config, verbose=False)
     suite_cfg = extract_suite_config(cfg, suite_override=None)
 
     assert suite_cfg["reducer"] == {"default": "mean"}

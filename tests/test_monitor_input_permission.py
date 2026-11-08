@@ -240,18 +240,31 @@ def test_nullable_diagnostics_remain_renderable_in_tui():
 
 
 def native_diagnostic_bot(unused="1m"):
-    from pathlib import Path
-    from config.load import load_prepared_config
+    from config import CONFIG_SCHEMA_VERSION, prepare_config
     from passivbot import Passivbot
     bot = strategy_bot()
-    bot.config = load_prepared_config(str(Path(__file__).parents[1] / "configs/examples/suite_example.json"),
-        live_only=True, target="canonical", verbose=False, log_info=False)
-    # Keep the example's unused metrics, while selecting its optional entry diagnostic.
-    bot.config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["retracement_base_fraction"] = .01
-    if unused == "1h":
-        for branch in ("entry", "close"):
-            for consumer in ("threshold", "retracement"):
-                bot.config["bot"]["long"]["strategy"]["trailing_martingale"][branch][f"{consumer}_log_range_1h_coefficient"] = 0.
+    strategy = {
+        "log_range_ema_span_minutes": 60.0,
+        "log_range_ema_span_1h_candles": 24.0,
+        "entry": {"retracement_base_fraction": 0.01},
+        "close": {},
+    }
+    for branch in ("entry", "close"):
+        strategy[branch].update(
+            threshold_log_range_1m_coefficient=0.0,
+            retracement_log_range_1m_coefficient=0.0,
+            threshold_log_range_1h_coefficient=0.0 if unused == "1h" else 1.0,
+            retracement_log_range_1h_coefficient=0.0,
+        )
+    bot.config = prepare_config(
+        {
+            "config_version": CONFIG_SCHEMA_VERSION,
+            "bot": {"long": {"enabled": True, "strategy": {"trailing_martingale": strategy}}},
+        },
+        live_only=True,
+        target="canonical",
+        verbose=False,
+    )
     symbol = "BTC/USDT:USDT"
     bot._strategy_params_to_rust_dict = Passivbot._strategy_params_to_rust_dict.__get__(bot)
     bot._monitor_runtime_m1_log_range_emas = {symbol: {999.: .99}}  # Different forager span.
@@ -282,7 +295,7 @@ def diagnostic_payloads(bot, symbol):
     )
 
 
-def test_unused_public_example_metric_keeps_real_native_diagnostics():
+def test_unused_log_range_keeps_real_native_diagnostics():
     bot, symbol = native_diagnostic_bot()
     inputs = monitor._monitor_logrange_inputs(bot, "long", symbol, now_ms=2000)
     assert inputs["m1_log_range"]["status"] == "not_required"

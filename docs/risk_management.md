@@ -158,7 +158,7 @@ grants no excess headroom.
 
 In coin HSL mode, `bot.<side>.hsl.scale_budget_with_excess_allowance=true` also
 multiplies the balance budget by `1 + effective_we_excess_allowance_fraction`. It defaults
-to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
+to `false`. See [HSL budgets](equity_hard_stop_loss.md#scopes-and-budgets).
 
 * **Example:** If WEL is `0.20` and allowance is `0.10` (10%), the position can grow to `0.22` before the bot considers it "full."
 * **Motivation:** In a multi-coin setup, this lets the bot boost performance on active positions by utilizing the unused capacity of inactive positions.

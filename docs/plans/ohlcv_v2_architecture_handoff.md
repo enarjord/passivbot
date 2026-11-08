@@ -28,7 +28,7 @@ This handoff is written for a fresh agent with no prior thread context.
 ### What exists today
 
 1. Persistent symbol/timeframe OHLCV storage and fetch orchestration:
-   - [candlestick_manager.py](/Users/eiriknarjord/repos/passivbot-3/src/candlestick_manager.py)
+   - [candlestick_manager.py](https://github.com/enarjord/passivbot/blob/HEAD/src/candlestick_manager.py)
    - handles:
      - disk shard storage
      - remote pagination
@@ -37,13 +37,13 @@ This handoff is written for a fresh agent with no prior thread context.
      - live OHLCV access
 
 2. Backtest HLCV preparation:
-   - [hlcv_preparation.py](/Users/eiriknarjord/repos/passivbot-3/src/hlcv_preparation.py)
+   - [hlcv_preparation.py](https://github.com/enarjord/passivbot/blob/HEAD/src/hlcv_preparation.py)
    - computes warmup-adjusted ranges
    - fetches per coin
    - unifies candles into dense arrays for Rust
 
 3. Exact-slice backtest dataset cache:
-   - [backtest.py](/Users/eiriknarjord/repos/passivbot-3/src/backtest.py)
+   - [backtest.py](https://github.com/enarjord/passivbot/blob/HEAD/src/backtest.py)
    - persists one cache directory per coin set / date range / config hash under `caches/hlcvs_data/`
    - loads quickly once built
    - duplicates data already present in the canonical OHLCV cache
@@ -332,7 +332,7 @@ Persistent verified gaps:
 - only retried if user explicitly requests force-refetch
 
 This extends the existing good ideas already present in
-[candlestick_manager.py](/Users/eiriknarjord/repos/passivbot-3/src/candlestick_manager.py#L2461)
+[candlestick_manager.py](https://github.com/enarjord/passivbot/blob/HEAD/src/candlestick_manager.py)
 into a formal storage/catalog contract.
 
 ## SQLite Catalog Contract
@@ -477,7 +477,7 @@ Responsibilities:
 - use async concurrency
 - enforce exchange-aware rate limiting
 - preserve the good retry/backoff behavior of the current
-  [candlestick_manager.py](/Users/eiriknarjord/repos/passivbot-3/src/candlestick_manager.py#L3010)
+  [candlestick_manager.py](https://github.com/enarjord/passivbot/blob/HEAD/src/candlestick_manager.py)
 - write canonical chunks and catalog updates directly
 
 This should remain Python orchestration.

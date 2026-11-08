@@ -1,4 +1,4 @@
-"""Load the canonical synthetic offline HSL example."""
+"""Load the canonical synthetic offline HSL fixture."""
 
 from pathlib import Path
 from config import prepare_config
@@ -6,10 +6,12 @@ import json
 from config_utils import clean_config
 
 
+FAKE_HSL_CONFIG_PATH = Path(__file__).with_name("fixtures") / "fake_live_hsl.json"
+
+
 def load_fake_hsl_config():
-    path = Path(__file__).resolve().parents[1] / "configs/examples/fake_live_hsl.json"
     return prepare_config(
-        json.loads(path.read_text()), target="canonical", runtime=None, verbose=False
+        json.loads(FAKE_HSL_CONFIG_PATH.read_text()), target="canonical", runtime=None, verbose=False
     )
 
 

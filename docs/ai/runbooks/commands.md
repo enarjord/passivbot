@@ -39,7 +39,7 @@ create or cancel orders.
 
 ```bash
 PYTHONPATH=src python src/tools/run_fake_live.py \
-  configs/examples/fake_live_hsl.json \
+  tests/fixtures/fake_live_hsl.json \
   scenarios/fake_live/hsl_long_red_restart.hjson \
   --user fake_hsl_restart_test
 pytest tests/test_run_fake_live.py -m fake_live
@@ -52,7 +52,7 @@ sandbox, or paper-trading sessions as this offline fake-live tier.
 
 ```bash
 passivbot backtest path/to/config.json
-passivbot backtest configs/examples/btc_long.json --suite
+passivbot backtest configs/examples/default_trailing_martingale_long.json -s BTC --suite n
 ```
 
 ## Optimize
@@ -82,7 +82,7 @@ only the fine-tune selectors are optimized. Runtime policy from the base config 
 seed/anchor values outside `optimize.bounds` are clamped with aggregated source/key logging.
 
 CPU optimizers evaluate every deduplicated `--start` config with Rust CPU backtests.
-The CUDA GPU optimizer fully evaluates every deduplicated seed through its GPU service
+The native GPU optimizer fully evaluates every deduplicated seed through its GPU service
 before population trimming, without CPU validation. Seed evaluations are additional to
 `optimize.iters`; suite scenario screening applies only to later offspring.
 Explicitly enabled config prefilters may complete seeds or offspring with penalty-only evaluations
@@ -90,11 +90,8 @@ before replay. See `../../config_prefilter.md`; all checks are disabled by defau
 
 ## Rust
 
-```bash
-cd passivbot-rust && maturin develop --release && cd ..
-cd passivbot-rust && cargo test --no-default-features && cd ..
-cd passivbot-rust && cargo check --tests && cd ..
-```
+Follow the [Rust extension runbook](rust_extension.md) for the locked build,
+source-fingerprint check, and both Cargo test modes.
 
 ## Useful Tools
 
@@ -114,7 +111,7 @@ passivbot tool clean-config input.json resolved.json --mode resolved
 passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes --json
 passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
-passivbot tool migrate-config-v9 config_v8.json config_v9.json --lookback-ema-span-minutes 43200.0 --report migration-report.json
+passivbot tool migrate-config-v9 config_v8.json --best-effort --dry-run --diff
 passivbot tool optimizer-bounds input.json search.json --preset recommended
 passivbot tool compare-backtests path/to/v8/result path/to/v9/result
 ```

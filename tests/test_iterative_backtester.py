@@ -198,7 +198,7 @@ def test_async_main_rejects_quit_after_run_without_auto_run(monkeypatch):
     monkeypatch.setattr(
         ib.sys,
         "argv",
-        ["iterative_backtester.py", "configs/examples/ema_anchor.json", "--quit-after-run"],
+        ["iterative_backtester.py", "configs/examples/default_trailing_martingale_long.json", "--quit-after-run"],
     )
 
     with pytest.raises(SystemExit):
@@ -228,7 +228,7 @@ def test_async_main_passes_cli_overrides_to_session(monkeypatch):
         "argv",
         [
             "iterative_backtester.py",
-            "configs/examples/ema_anchor.json",
+            "configs/examples/default_trailing_martingale_long.json",
             "--auto-run",
             "--quit-after-run",
             "--override",
@@ -240,7 +240,7 @@ def test_async_main_passes_cli_overrides_to_session(monkeypatch):
 
     asyncio.run(ib.async_main())
 
-    assert captured["config_path"] == Path("configs/examples/ema_anchor.json")
+    assert captured["config_path"] == Path("configs/examples/default_trailing_martingale_long.json")
     assert captured["auto_run"] is True
     assert captured["quit_after_run"] is True
     assert captured["cli_overrides"] == [

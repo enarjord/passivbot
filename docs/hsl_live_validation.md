@@ -10,12 +10,15 @@ launch command and intervention scope.
    complete effective HSL policy. Preserve the previous reviewed release, its source-verified native extension, launch command
    and compatible configuration separately for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
-2. Validate configuration through the canonical loader. Coin/position_side policies belong under
-   `bot.long.hsl` and `bot.short.hsl`; portfolio requires an explicitly supplied `bot.hsl` block.
-   Confirm the chosen slow/fast EMA spans, the bounded bootstrap horizon, the independent
-   rolling loss-gate window and raw balance/coin-slot budget. There is no Never policy.
-   A pre-final-fill RED or final-accounting RED qualifies a fixed finite cooldown.
-   See [configuration migration](v8_to_v9_migration.md).
+2. Validate the config with `passivbot tool live-config-preflight configs/private/live.json`.
+   In coin or position-side scope, HSL parameters inherit from `bot.global.hsl` with optional
+   side overrides under `bot.long.hsl` and `bot.short.hsl`. Portfolio scope uses the explicit
+   `bot.portfolio.hsl` policy. Confirm the slow and fast EMA spans, bounded bootstrap horizon,
+   independent realized-loss-gate memory span if enabled, and raw balance or coin-slot budget.
+   `cooldown_after_red_minutes` starts when the scope becomes flat if the assessment immediately
+   before the final fill or after final accounting is RED.
+   See [configuration migration](v8_to_v9_migration.md) and the
+   [cooldown rule](equity_hard_stop_loss.md#qualified-finite-cooldown).
 3. Run a representative offline backtest and the fake runner using the intended mode, order type
    and scope count. Include both a panic and an ordinary-entry path. Verify the rebuilt extension,
    effective config, native scope diagnostics and resulting orders, not only process exit status.
