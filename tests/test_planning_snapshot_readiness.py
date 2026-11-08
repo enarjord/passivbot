@@ -1,4 +1,4 @@
-"""Captured planning-input absence defers without changing snapshot authority."""
+"""Planning-input absence defers without changing snapshot authority."""
 
 import asyncio
 from types import SimpleNamespace
@@ -172,7 +172,7 @@ async def run_fake(tmp_path, monkeypatch, exercise):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["expiry", "unknown", "malformed_native"])
+@pytest.mark.parametrize("failure", ["expiry", "pre_capture_expiry", "pre_capture_epoch", "unknown", "malformed_native"])
 async def test_actual_owner_defers_only_snapshot_readiness_then_recovers(tmp_path, monkeypatch, failure):
     async def exercise(bot, clock):
         import passivbot_rust as pbr
@@ -200,6 +200,22 @@ async def test_actual_owner_defers_only_snapshot_readiness_then_recovers(tmp_pat
             return result
 
         monkeypatch.setattr(bot, "_planning_data_packets", packets)
+        if failure.startswith("pre_capture_"):
+            original_quotes = bot._get_orchestrator_market_snapshots
+            requested = []
+
+            async def quotes(symbols):
+                result = await original_quotes(symbols)
+                if expiring[0]:
+                    expiring[0] = False
+                    requested.extend(symbols)
+                    if failure == "pre_capture_expiry":
+                        clock[0] += 10_001
+                    else:
+                        bot._ensure_freshness_ledger().begin_epoch()
+                return result
+
+            monkeypatch.setattr(bot, "_get_orchestrator_market_snapshots", quotes)
         if failure == "unknown":
             def broken_capture(**kwargs):
                 raise RuntimeError("synthetic structural snapshot failure")
@@ -210,11 +226,16 @@ async def test_actual_owner_defers_only_snapshot_readiness_then_recovers(tmp_pat
         instance._ordinary = task
         await asyncio.wait_for(asyncio.wait({task}), 5.0)
         assert task.done()
-        expected = {"expiry": PlanningSnapshotUnavailable, "unknown": RuntimeError,
-                    "malformed_native": FatalBotException}[failure]
+        expected = {
+            "expiry": PlanningSnapshotUnavailable,
+            "pre_capture_expiry": planning_gates.StagedPlannerInputsUnavailable,
+            "pre_capture_epoch": planning_gates.StagedPlannerInputsUnavailable,
+            "unknown": RuntimeError,
+            "malformed_native": FatalBotException,
+        }[failure]
         assert type(task.exception()) is expected
         requests = len(bot.cca.export_request_log())
-        if failure != "expiry":
+        if failure in {"unknown", "malformed_native"}:
             with pytest.raises(expected):
                 await instance.cycle()
             assert not deferred
@@ -222,10 +243,21 @@ async def test_actual_owner_defers_only_snapshot_readiness_then_recovers(tmp_pat
             assert not [row for row in bot.cca.export_request_log()[requests:]
                         if row["method"] in {"create_order", "cancel_order"}]
             return
+        if failure.startswith("pre_capture_"):
+            # Market data may already have recovered when the owner observes
+            # the failed background task. Report the original rejection.
+            await original_quotes(requested)
+            assert bot._staged_planner_precondition_state(symbols=requested)[0]
         result = await instance.cycle()
         assert result["ordinary_completed"] and not result["ordinary_executed"]
-        assert deferred[-1]["invalid"]["market_snapshot"][0]["reason"] == "snapshot_too_old"
-        assert deferred[-1]["invalid"]["market_snapshot"][0]["age_ms"] > 10_000
+        detail = deferred[-1]["invalid"]["market_snapshot"][0]
+        assert deferred[-1]["missing"] == ["market_snapshot"]
+        if failure == "pre_capture_epoch":
+            assert detail["reason"] == "surface_epoch_too_old"
+            assert detail["epoch"] < detail["min_epoch"] == deferred[-1]["epoch"]
+        else:
+            assert detail["reason"] == ("stale" if failure == "pre_capture_expiry" else "snapshot_too_old")
+            assert detail["age_ms"] > 10_000
         native.assert_not_called()
         assert not [row for row in bot.cca.export_request_log()[requests:]
                     if row["method"] in {"create_order", "cancel_order"}]
