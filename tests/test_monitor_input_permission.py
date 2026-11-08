@@ -7,7 +7,12 @@ import pytest
 
 from config.strategy_spec import get_strategy_defaults
 from live import ordinary_diagnostics as ordinary
-from live.console_health import readiness_payload
+from live.console_health import (
+    observe_ordinary_acceptance,
+    observe_ordinary_outer_cycle,
+    ordinary_progress_payload,
+    readiness_payload,
+)
 from live.event_bus import EventTypes, ReasonCodes, format_periodic_health_summary
 from live.freshness import FreshnessLedger
 from live.hsl_live import Wave
@@ -533,7 +538,11 @@ async def test_real_fake_ordinary_compute_has_complete_immutable_receipts(tmp_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["accepted_empty", "accepted_sub_ms", "rejected", "absent"])
+@pytest.mark.parametrize(
+    "case",
+    ["accepted_empty", "accepted_sub_ms", "rejected", "absent",
+     "accepted_refresh_unavailable", "accepted_sink_failure"],
+)
 async def test_cycle_completion_records_ordinary_path_separately_from_zero_timing(monkeypatch, case):
     import asyncio
     from dataclasses import replace
@@ -553,7 +562,13 @@ async def test_cycle_completion_records_ordinary_path_separately_from_zero_timin
     bot.approved_coins_minus_ignored_coins = {"long": set(bot.positions), "short": set()}
     bot._begin_live_event_cycle = lambda **_: setattr(bot, "_live_event_current_cycle_id", "cy_test")
     events, executed = [], []
-    bot._emit_live_event = lambda kind, **data: events.append((kind, data))
+
+    def emit(kind, **data):
+        if case == "accepted_sink_failure":
+            raise RuntimeError("optional sink unavailable")
+        events.append((kind, data))
+
+    bot._emit_live_event = emit
     owner = hsl_live.Owner(bot)
     wave = replace(owner.capture(quotes()), ordinary_receipts=owner.ordinary_receipts())
     assert owner._account_matches(wave, NOW)  # Use real admission/immutable facts.
@@ -562,7 +577,7 @@ async def test_cycle_completion_records_ordinary_path_separately_from_zero_timin
     async def protect(**kwargs):
         return False
     async def refresh(**kwargs):
-        return True
+        return case != "accepted_refresh_unavailable"
     async def execute(cancels, creates):
         executed.append((cancels, creates))
         return None  # A returned execution path does not imply acknowledgement/writes.
@@ -583,15 +598,71 @@ async def test_cycle_completion_records_ordinary_path_separately_from_zero_timin
     try:
         result = await owner.cycle()
         data = [event["data"] for kind, event in events if kind == EventTypes.CYCLE_COMPLETED]
-        assert len(data) == 1
         expected = case.startswith("accepted")
-        assert data[0]["ordinary_executed"] is result["ordinary_executed"] is expected
-        assert data[0]["timings_ms"]["ordinary_execute"] == 0
+        assert result["ordinary_executed"] is expected
         assert bool(executed) is expected
-        assert data[0]["execution_owner"] == "hsl"
+        progress = ordinary_progress_payload(bot, NOW + 500)["ordinary_progress"]
+        assert progress["last_accepted_age_ms"] == (500 if expected else None)
+        if case in ("accepted_refresh_unavailable", "accepted_sink_failure"):
+            assert data == []
+        else:
+            assert len(data) == 1
+            assert data[0]["ordinary_executed"] is expected
+            assert data[0]["timings_ms"]["ordinary_execute"] == 0
+            assert data[0]["execution_owner"] == "hsl"
     finally:
-        owner._ordinary.cancel()
-        await asyncio.gather(owner._ordinary, return_exceptions=True)
+        if owner._ordinary is not None:
+            owner._ordinary.cancel()
+            await asyncio.gather(owner._ordinary, return_exceptions=True)
+
+
+def test_ordinary_progress_alert_requires_continued_cycles_and_reports_recovery(caplog):
+    from live.planning_gates import log_staged_execution_defer
+
+    caplog.set_level("INFO")
+    bot = SimpleNamespace(_format_staged_execution_defer_message=lambda details: "defer")
+    assert ordinary_progress_payload(bot, 1000) == {}
+    observe_ordinary_outer_cycle(bot, 1000, accepted=False)
+    # Elapsed wall time alone is not evidence that cycles are still advancing.
+    observe_ordinary_outer_cycle(bot, 501_000, accepted=False)
+    observe_ordinary_outer_cycle(bot, 701_000, accepted=False)
+    assert not ordinary_progress_payload(bot, 801_000)["ordinary_progress"]["stalled"]
+    log_staged_execution_defer(bot, {
+        "context": "rust order calculation",
+        "defer_reason": "captured_planning_snapshot_unavailable",
+        "missing": ["market_snapshot", "secret"],
+        "exception": "secret",
+    })
+    log_staged_execution_defer(bot, {
+        "context": "protective rust order calculation",
+        "defer_reason": "current_account_inputs_unavailable",
+        "missing": ["balance"],
+    })
+    observe_ordinary_outer_cycle(bot, 801_000, accepted=False)
+    observe_ordinary_outer_cycle(bot, 811_000, accepted=False)
+    progress = ordinary_progress_payload(bot, 811_300)
+    assert progress["ordinary_progress"] == {
+        "last_accepted_age_ms": None,
+        "last_outer_cycle_age_ms": 300,
+        "without_acceptance_ms": 310_000,
+        "stalled": True,
+        "last_defer": {
+            "phase": "rust_order_calculation",
+            "reason": "captured_planning_snapshot_unavailable",
+            "missing_surfaces": ["market_snapshot"],
+        },
+    }
+    assert caplog.text.count("ordinary planning stalled") == 1
+    assert "missing=market_snapshot" in caplog.text
+    assert "secret" not in caplog.text
+    assert "ordinary_progress=stalled/310.0s" in format_periodic_health_summary(progress)
+    observe_ordinary_acceptance(bot, 812_000)
+    observe_ordinary_acceptance(bot, 813_000)
+    assert caplog.text.count("ordinary planning recovered") == 1
+    progress = ordinary_progress_payload(bot, 814_000)
+    assert progress["ordinary_progress"]["last_defer"] is None
+    assert not progress["ordinary_progress"]["stalled"]
+    assert "ordinary_accepted_age=1.0s" in format_periodic_health_summary(progress)
 
 
 def test_other_execution_owner_omits_optional_ordinary_path_flag():
