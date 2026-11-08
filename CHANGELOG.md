@@ -9,6 +9,9 @@ since the latest release tag; these features may already be available when insta
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 
+- Preserve the original epoch, missing quote, or quote age in staged planning deferral diagnostics
+  when market data recovers before the execution loop handles the failure.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
