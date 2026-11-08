@@ -65,6 +65,7 @@ def migrate_unstuck_ema_spans(
     tracker=None,
     explicit_bounds=None,
     strategy_defaults=None,
+    strategy_bound_defaults=None,
     scenario_strategy_paths=None,
 ) -> None:
     kind = normalize_strategy_kind(config.get("bot", {}).get("portfolio", {}).get("strategy_kind"))
@@ -187,9 +188,11 @@ def migrate_unstuck_ema_spans(
     bounds = config.get("optimize", {}).get("bounds")
     coupled_search = []
     if isinstance(bounds, dict):
+        if strategy_bound_defaults is None:
+            strategy_bound_defaults = get_strategy_optimize_bounds(kind)
         default_strategy_bounds = {
             side: _price_spans(value, kind)
-            for side, value in get_strategy_optimize_bounds(kind).items()
+            for side, value in strategy_bound_defaults.items()
         }
         for side, keys in migrated.items():
             side_bounds = bounds.setdefault(side, {})

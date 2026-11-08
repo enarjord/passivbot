@@ -46,7 +46,6 @@ raise SystemExit(result)
 @pytest.mark.parametrize("coarse", [None, "base", "scenario"])
 def test_gpu_migration_works_with_live_only_dependencies(tmp_path, in_place, coarse):
     cfg = released_v8_policy()
-    cfg["config_version"] = "v8.4.0"
     cfg["live"]["hsl_engine"] = "legacy"
     cfg["bot"]["long"]["hsl"].update(enabled=True, restart_after_red_policy="always")
     for key in ("lookback_ema_span_minutes", "realized_loss_gate_lookback_minutes", "risk_bootstrap_max_lookback_minutes"):
@@ -97,7 +96,6 @@ def test_gpu_migration_works_with_live_only_dependencies(tmp_path, in_place, coa
 
 def test_coin_flag_file_migration_works_without_research_runtime(tmp_path):
     cfg = released_v8_policy()
-    cfg["config_version"] = "v8.5.0"
     for key in ("lookback_ema_span_minutes", "realized_loss_gate_lookback_minutes",
                 "risk_bootstrap_max_lookback_minutes"):
         cfg["live"].pop(key, None)

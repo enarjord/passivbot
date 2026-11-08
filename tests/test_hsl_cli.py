@@ -17,7 +17,6 @@ from tools.migrate_config_v9 import migrate as migrate_config_v9
 
 def _v8_config():
     config = released_v8_policy()
-    config["config_version"] = "v8.5.0"
     config["live"]["pnls_max_lookback_days"] = 30.0
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["restart_after_red_policy"] = "always"

@@ -438,7 +438,7 @@ def test_aggregate_balance_override_constructor_rejects_before_credentials(
 
 @pytest.mark.parametrize(
     "version",
-    [None, "v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0", "8.5.0"],
+    [None, "v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0", "v8.6.0", "8.6.0"],
 )
 @pytest.mark.parametrize("policy", ["always", "never"])
 @pytest.mark.parametrize("location", ["base", "coin", "fixed", "scenario"])
@@ -483,7 +483,20 @@ def test_old_selectorless_hsl_requires_explicit_migration(version, policy, locat
         with pytest.raises(ValueError, match="versioned v8"):
             migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True)
         return
-    if policy == "never":
+    if version in {"v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0"}:
+        with pytest.raises(ValueError, match="not a verified versioned v8 schema"):
+            migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True)
+        return
+    if version == "v8.0.0" and location == "coin":
+        for acknowledge in (False, True):
+            with pytest.raises(
+                ValueError, match=r"not an effective coin override in v8\.0\.0"
+            ):
+                migrate(
+                    cfg, memory_span_minutes=43200.0, acknowledge_never_removal=acknowledge
+                )
+        del cfg["coin_overrides"]
+    elif policy == "never":
         with pytest.raises(ValueError, match="acknowledge-never-removal"):
             migrate(cfg, memory_span_minutes=43200.0)
     converted = migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
@@ -492,7 +505,7 @@ def test_old_selectorless_hsl_requires_explicit_migration(version, policy, locat
 
 def test_old_disabled_hsl_requires_explicit_migration_too():
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = "threshold"
@@ -516,7 +529,7 @@ def test_old_root_file_backed_hsl_requires_migration_before_hydration(
     from tools.migrate_config_v9 import migrate
 
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -555,7 +568,7 @@ def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location
     from tools.migrate_config_v9 import migrate
 
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -604,7 +617,7 @@ async def test_cli_external_suite_old_hsl_rejected_before_preparation(
 
     module = importlib.import_module(command)
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -683,7 +696,7 @@ def test_external_suite_file_helpers_gate_before_hydration(
     import suite_runner
 
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -768,7 +781,7 @@ async def test_cli_current_external_suite_reaches_preparation(
 def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mode, selector):
     from tools.migrate_config_v9 import migrate
 
-    cfg = as_legacy(source(mode, enabled=False), "v8.5.0")
+    cfg = as_legacy(source(mode, enabled=False))
     if selector is not None:
         cfg["live"]["hsl_engine"] = selector
     original = deepcopy(cfg)
@@ -792,7 +805,7 @@ def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mod
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_legacy_hsl_guard_uses_cli_modified_config(enabled_before, enabled_after, wrapped):
     cfg = source(enabled=enabled_before)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     cfg["live"]["hsl_engine"] = "legacy"
     if wrapped:
         cfg = {"config": cfg}
@@ -805,7 +818,7 @@ def test_legacy_hsl_guard_uses_cli_modified_config(enabled_before, enabled_after
 def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp_path):
     from config.overrides import parse_overrides
     cfg = source(enabled=False)
-    as_legacy(cfg, "v8.5.0")
+    as_legacy(cfg)
     policy = {"bot": {"long": {"hsl": {"enabled": False, "restart_after_red_policy": "never"}}}}
     if location == "coin":
         cfg["coin_overrides"] = {"TEST": policy}

@@ -15,7 +15,7 @@ from time import monotonic
 
 from config.migrations.v9 import (
     MigrationResult, V9_SCHEMA_VERSION, _hsl_enablement_facts, _require_gate_ack,
-    migrate_v8_to_v9,
+    _migration_source_version, _require_v8_0_inline_coin_override, migrate_v8_to_v9,
 )
 from config.risk_memory import normalize_lookback_ema_span_minutes
 from json_utils import json_dumps_streamlined
@@ -216,7 +216,7 @@ def _materialized_coin_patch(overrides, effective):
     return result
 
 
-def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
+def _materialize_files(source, *, source_schema_version, base_config_path, span, acknowledge, changes,
                        _null_policy_enablement=None, _root_enablement=None, best_effort=False,
                        _emit_guesses=True, _change_prefix=""):
     """Use normal file resolution and file-then-inline precedence without simulation."""
@@ -243,7 +243,8 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         flag_context = deepcopy(result)
         flag_context["coin_overrides"] = flags
         _materialize_files(
-            flag_context, base_config_path=base_config_path, span=span,
+            flag_context, source_schema_version=source_schema_version,
+            base_config_path=base_config_path, span=span,
             acknowledge=acknowledge, changes=changes,
             _root_enablement=_root_enablement, best_effort=best_effort,
             _emit_guesses=_emit_guesses,
@@ -259,6 +260,8 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
     for coin, inline in result.get("coin_overrides", {}).items():
         if not isinstance(inline, dict):
             raise ValueError(f"coin_overrides.{coin} must be a mapping")
+        if source_schema_version == "v8.0.0":
+            _require_v8_0_inline_coin_override(inline, f"{_change_prefix}coin_overrides.{coin}")
         inline_live = inline.get("live", {})
         if isinstance(inline_live, dict) and "minimum_coin_age_days" in inline_live:
             value = inline_live.pop("minimum_coin_age_days")
@@ -299,7 +302,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         })
         # Migrate the raw document before filtering allowed coin leaves, so a
         # dormant Never policy cannot disappear as an unrecognized current field.
-        envelope = {"config_version": "v8.6.0", "bot": {}, **loaded}
+        envelope = {"config_version": result["config_version"], "bot": {}, **loaded}
         file_result = migrate_v8_to_v9(
             envelope, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
@@ -326,7 +329,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         # inline null validation to the final root pass would miss those modes.
         # Keep raw inline leaves for that final pass's authored change paths.
         migrate_v8_to_v9(
-            {"config_version": "v8.6.0", "bot": {}, **inline}, memory_span_minutes=span,
+            {"config_version": result["config_version"], "bot": {}, **inline}, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
             _coin_patch=True, best_effort=best_effort,
@@ -488,6 +491,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     payload = source.get("config", source) if isinstance(source, dict) else source
     if not isinstance(payload, dict):
         raise TypeError("configuration must be a mapping")
+    source_schema_version = _migration_source_version(payload.get("config_version"))
     inferred_changes = []
     if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION:
         from config.migrations.best_effort_v9 import record_envelope_metadata, remove_result_metadata
@@ -537,7 +541,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         file_changes = []
         null_policy_enablement = {}
         authored = _materialize_files(
-            payload, base_config_path=base_config_path, span=span,
+            payload, source_schema_version=source_schema_version,
+            base_config_path=base_config_path, span=span,
             acknowledge=acknowledge_never_removal, changes=file_changes,
             _null_policy_enablement=null_policy_enablement, best_effort=best_effort,
         )
@@ -561,7 +566,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             )
             fixed_enablement = {}
             effective_fixed = _materialize_files(
-                optimized_payload, base_config_path=base_config_path, span=span,
+                optimized_payload, source_schema_version=source_schema_version,
+                base_config_path=base_config_path, span=span,
                 acknowledge=acknowledge_never_removal,
                 changes=file_changes if materialize_fixed_coins else [],
                 _null_policy_enablement=fixed_enablement,
@@ -595,7 +601,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                 _set_patch(effective, overrides, authored=True, scenario=True)
                 scenario_enablement = {}
                 effective = _materialize_files(
-                    effective, base_config_path=base_config_path, span=span,
+                    effective, source_schema_version=source_schema_version,
+                    base_config_path=base_config_path, span=span,
                     acknowledge=acknowledge_never_removal,
                     changes=file_changes if materialize_coin_patch else [],
                     _null_policy_enablement=scenario_enablement,
@@ -610,7 +617,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     scenario_optimized_enablement = dict(optimized_root_enablement)
                     scenario_optimized_enablement.update(_hsl_enablement_facts(overrides))
                     _materialize_files(
-                        optimized_scenario, base_config_path=base_config_path, span=span,
+                        optimized_scenario, source_schema_version=source_schema_version,
+                        base_config_path=base_config_path, span=span,
                         acknowledge=acknowledge_never_removal, changes=[],
                         _root_enablement=scenario_optimized_enablement, best_effort=best_effort,
                         _emit_guesses=False,
@@ -730,7 +738,11 @@ def main(argv=None):
     parser.add_argument("output_config", type=Path, nargs="?")
     parser.add_argument("--lookback-ema-span-minutes", type=float)
     parser.add_argument("--memory-span", action="append", default=[], metavar="PATH=MINUTES")
-    parser.add_argument("--acknowledge-never-removal", action="store_true")
+    parser.add_argument(
+        "--acknowledge-permanent-stop-removal", "--acknowledge-never-removal",
+        dest="acknowledge_never_removal", action="store_true",
+        help="Explicitly adopt finite cooldown in place of v8 permanent-stop policy.",
+    )
     parser.add_argument("--acknowledge-realized-loss-gate-memory-change", action="store_true",
                         help="Explicitly adopt independent decaying realized memory for every active gate context.")
     parser.add_argument("--acknowledge-search-backend-change", action="store_true")

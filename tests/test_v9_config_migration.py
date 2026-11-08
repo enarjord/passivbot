@@ -633,7 +633,10 @@ def test_null_restart_resolves_effective_enablement_in_scenario_and_legacy_suite
 def test_distinct_scenario_window_requires_path_specific_choice():
     source = legacy()
     source["backtest"]["scenarios"] = [{"label": "test", "overrides": {
-        "live.pnls_max_lookback_days": 2.5, "live.hsl_signal_mode": "unified"}}]
+        "live.pnls_max_lookback_days": 2.5, "live.hsl_signal_mode": "unified",
+        "bot.hsl.enabled": False, "bot.hsl.red_threshold": 0.15,
+        "bot.hsl.ema_span_minutes": 720.0, "bot.hsl.cooldown_minutes_after_red": 60.0,
+        "bot.hsl.panic_close_order_type": "limit"}}]
     path = "backtest.scenarios[0].overrides.live.pnls_max_lookback_days"
     with pytest.raises(ValueError, match="requires --memory-span"):
         migrate_v8_to_v9(source, memory_span_minutes=43200)

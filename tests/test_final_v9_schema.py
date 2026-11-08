@@ -679,14 +679,16 @@ def test_best_effort_scenario_and_fixed_windows_keep_distinct_spans():
                and item.get("best_effort") for item in result.changes)
 
 
-def test_best_effort_accepts_changed_never_and_loss_gate_policy(caplog):
+def test_best_effort_requires_permanent_stop_ack_but_infers_loss_gate_policy(caplog):
     config = v8_config()
     config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
     config["live"]["max_realized_loss_pct"] = 0.05
-    result = migrate(config, best_effort=True)
+    with pytest.raises(ValueError, match="acknowledge-permanent-stop-removal"):
+        migrate(config, best_effort=True)
+    result = migrate(config, best_effort=True, acknowledge_never_removal=True)
     assert result.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 0.05
     assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
-    assert "remove permanent stop" in caplog.text
+    assert "remove permanent stop" not in caplog.text
     assert "decaying realized-loss memory" in caplog.text
 
 
@@ -752,19 +754,26 @@ def test_best_effort_stat_suffix_is_retained_in_objectives(stat):
                for change in result.changes)
 
 
-def test_best_effort_coin_file_guesses_are_reported_and_file_is_unchanged(tmp_path, caplog):
+def test_best_effort_coin_file_requires_explicit_stop_ack_and_preserves_source(tmp_path):
     config = v8_config()
     coin = tmp_path / "coin.json"
     coin.write_text(json.dumps({"bot": {"long": {"hsl": {
         "enabled": False, "restart_after_red_policy": "never"}}}}))
     before = coin.read_bytes()
     config["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
-    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    kwargs = dict(best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    with pytest.raises(ValueError, match="acknowledge-permanent-stop-removal"):
+        migrate(config, **kwargs)
+    result = migrate(config, acknowledge_never_removal=True, **kwargs)
     assert coin.read_bytes() == before
     assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
-    assert any(item.get("best_effort") and "override_config_path::" in item["path"]
-               and "restart_after_red_policy" in item["path"] for item in result.changes)
-    assert "coin_overrides.AAA.override_config_path::bot.long.hsl.restart_after_red_policy" in caplog.text
+    changes = [
+        item for item in result.changes
+        if item["path"] == "coin_overrides.AAA.override_config_path::bot.long.hsl.restart_after_red_policy"
+    ]
+    assert len(changes) == 1
+    assert changes[0]["old"] == "never" and changes[0]["new"] is None
+    assert not changes[0].get("best_effort", False)
 
 
 @pytest.mark.parametrize("kind", ["bounds", "unknown", "conflict", "strategy", "null_policy"])
@@ -1002,16 +1011,16 @@ def test_deap_transition_has_exactly_one_unambiguous_report_entry(best_effort):
     assert ("acknowledged" in transitions[0]["reason"]) is not best_effort
 
 
-@pytest.mark.parametrize("acknowledge", [False, True])
-def test_best_effort_never_removal_has_exactly_one_report_entry(acknowledge):
+def test_acknowledged_never_removal_has_exactly_one_explicit_report_entry():
     config = v8_config()
     config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
-    result = migrate(config, best_effort=True, acknowledge_never_removal=acknowledge)
+    result = migrate(config, best_effort=True, acknowledge_never_removal=True)
     entries = [item for item in result.changes
                if item["path"] == "bot.long.hsl.restart_after_red_policy"]
     assert len(entries) == 1
     assert entries[0]["old"] == "never" and entries[0]["new"] is None
-    assert entries[0].get("best_effort", False) is not acknowledge
+    assert not entries[0].get("best_effort", False)
+    assert "explicitly acknowledged permanent stop removal" in entries[0]["reason"]
 
 
 @pytest.mark.parametrize("source_policy", ["file", "inline", "both"])
@@ -1034,7 +1043,8 @@ def test_best_effort_coin_warnings_match_retained_report_decisions(tmp_path, cap
         config["backtest"]["scenarios"] = [{"label": "patch", "overrides": {"coin_overrides": deepcopy(patch)}}]
     elif context == "legacy_flags":
         config["live"]["coin_flags"] = {"AAA": "-lc coin.json"}
-    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    result = migrate(config, best_effort=True, acknowledge_never_removal=True,
+                     base_config_path=str(tmp_path / "root.json"))
     guesses = [item for item in result.changes if item.get("best_effort")]
     messages = [record.getMessage() for record in caplog.records
                 if record.getMessage().startswith("[best-effort]")]
