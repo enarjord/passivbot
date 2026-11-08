@@ -37,7 +37,7 @@ converting the v8.6 export. Leave each version stamp under its source loader's
 control. [Public v8.6 source checkout](https://github.com/enarjord/passivbot/tree/772abadc10a5bbf258a84aa8209a9084699fa1bd)
 
 If the matching runtime is unavailable or v8.6 cannot represent the source
-policy, start from a canonical example in the v9 checkout and author a reviewed
+policy, start from the canonical template in the v9 checkout and author a reviewed
 v9 config using the original settings and the decisions below. [Config workflow](config_workflow.md)
 
 ### v8.0 coin override files
@@ -49,7 +49,7 @@ v8.0.0 environment from the same working directory as the old run, with `PYTHONP
 pointing to that checkout's `src` directory. Keep the output beside the source.
 
 ```sh
-PYTHONPATH=src python - input.v8.json inline.v8.json <<'PY'
+PYTHONPATH=/path/to/v8.0.0-checkout/src python - input.v8.json inline.v8.json <<'PY'
 import sys
 from config_utils import dump_config, load_config, load_hjson_config, parse_overrides
 
