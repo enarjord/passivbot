@@ -6,10 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Report how long it has been since the last accepted ordinary plan. Warn when outer cycles
-  keep completing for five minutes without ordinary reconciliation, with the last observed defer
-  phase and reason when available.
-
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
@@ -71,6 +67,10 @@ since the latest release tag; these features may already be available when insta
   Keep unused log-range dimensions explicitly optional per branch and derive ordinary computation
   expiry from its consumed account and complete quote receipts under their respective freshness limits.
   Distinguish completed ordinary execution paths from skipped plans even when integer timing is zero.
+
+- Report how long it has been since the last accepted ordinary plan. Warn when outer cycles
+  keep completing for five minutes without ordinary reconciliation, with the last observed defer
+  phase and reason when available.
 
 - Add optional `--disabled-sides` and `--bot-layout` refactoring to `migrate-config-v9`
   and `clean-config`, allowing dormant profiles to be retained or omitted and directional
