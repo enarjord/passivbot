@@ -63,7 +63,7 @@ def test_unverified_schema_fails_before_opening_overrides(version):
         migrate(source, best_effort=True)
 
 
-@pytest.mark.parametrize("location", ["root", "legacy_flags", "scenario", "fixed"])
+@pytest.mark.parametrize("location", ["root", "legacy_flags", "core_legacy_flags", "scenario", "fixed"])
 @pytest.mark.parametrize("best_effort", [False, True])
 def test_v8_0_coin_files_require_materialization_before_opening(location, best_effort, monkeypatch):
     def unexpected_load(*args, **kwargs):
@@ -74,7 +74,7 @@ def test_v8_0_coin_files_require_materialization_before_opening(location, best_e
     patch = {"AAA": {"override_config_path": "coin.json"}}
     if location == "root":
         source["coin_overrides"] = patch
-    elif location == "legacy_flags":
+    elif location in {"legacy_flags", "core_legacy_flags"}:
         source["live"]["coin_flags"] = {"AAA": "-lc coin.json"}
     elif location == "scenario":
         source["backtest"]["scenarios"] = [
@@ -84,8 +84,9 @@ def test_v8_0_coin_files_require_materialization_before_opening(location, best_e
         source["optimize"]["fixed_runtime_overrides"] = {
             "coin_overrides.AAA.override_config_path": "coin.json"
         }
+    converter = migrate_v8_to_v9 if location == "core_legacy_flags" else migrate
     with pytest.raises(ValueError, match="hydrated coin-file semantics.*Materialize the effective inline"):
-        migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
+        converter(source, memory_span_minutes=123.5, best_effort=best_effort)
 
 
 @pytest.mark.parametrize("settings", [

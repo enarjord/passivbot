@@ -352,10 +352,16 @@ def migrate_v8_to_v9(
     from .final_v9 import reject_v8_alias_conflicts
     from .released_v8 import TAGGED_V8_SCHEMA_VERSIONS
 
-    coin_overrides = result.get("coin_overrides")
-    if schema_version == "v8.0.0" and not _coin_patch and isinstance(coin_overrides, dict):
-        for coin, patch in coin_overrides.items():
-            _require_v8_0_inline_coin_override(patch, f"coin_overrides.{coin}")
+    if schema_version == "v8.0.0" and not _coin_patch:
+        coin_overrides = result.get("coin_overrides")
+        live = result.get("live")
+        if not coin_overrides and isinstance(live, dict) and live.get("coin_flags"):
+            from config.overrides import parse_old_coin_flags
+
+            coin_overrides = parse_old_coin_flags(result)
+        if isinstance(coin_overrides, dict):
+            for coin, patch in coin_overrides.items():
+                _require_v8_0_inline_coin_override(patch, f"coin_overrides.{coin}")
     reject_v8_alias_conflicts(result)
     tagged_v8 = schema_version in TAGGED_V8_SCHEMA_VERSIONS
     # Default hydration cannot authorize removing an explicitly null restart
