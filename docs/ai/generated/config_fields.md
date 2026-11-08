@@ -400,7 +400,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `logging.dir` | string | `"logs"` | — | — | — | — | — | python |
 | `logging.level` | integer | `1` | — | — | — | — | — | python |
 | `logging.live_event_debug_profiles` | array | `[]` | — | — | — | — | — | python |
-| `logging.max_bytes_mb` | float | `10.0` | — | — | — | — | — | python |
+| `logging.max_bytes_mib` | float | `10.0` | MiB | — | — | — | — | python |
 | `logging.memory_snapshot_interval_minutes` | float | `30.0` | — | — | — | — | — | python |
 | `logging.persist_to_file` | boolean | `true` | — | — | — | — | — | python |
 | `logging.rotation` | boolean | `true` | — | — | — | — | — | python |
@@ -414,7 +414,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `monitor.compress_rotated_segments` | boolean | `true` | — | — | — | — | — | python |
 | `monitor.emit_completed_candles` | boolean | `true` | — | — | — | — | — | python |
 | `monitor.enabled` | boolean | `true` | — | — | — | — | — | python |
-| `monitor.event_rotation_mb` | float | `128.0` | — | — | — | — | — | python |
+| `monitor.event_rotation_mib` | float | `128.0` | MiB | — | — | — | — | python |
 | `monitor.event_rotation_minutes` | float | `60.0` | — | — | — | — | — | python |
 | `monitor.include_raw_fill_payloads` | boolean | `false` | — | — | — | — | — | python |
 | `monitor.max_total_bytes` | integer | `1073741824` | — | — | — | — | — | python |

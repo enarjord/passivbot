@@ -89,3 +89,61 @@ async def test_owner_shutdown_during_clock_failure_does_not_attempt_recovery(shu
     await instance.run()
     bot._maybe_recover_exchange_time_sync.assert_not_awaited()
     assert not instance._running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wake_after", "expected_sleeps"),
+    [(None, [0.25] * 8), (0.95, [0.25, 0.25, 0.1])],
+)
+async def test_shutdown_aware_sleep_uses_elapsed_monotonic_time(
+    monkeypatch, wake_after, expected_sleeps
+):
+    import passivbot as pb_mod
+
+    bot, _ = owner_bot()
+    elapsed = 0.0
+    sleeps = []
+
+    async def sleep(seconds):
+        nonlocal elapsed
+        sleeps.append(seconds)
+        elapsed += seconds if wake_after is None else wake_after
+
+    monkeypatch.setattr(
+        pb_mod, "asyncio",
+        SimpleNamespace(
+            get_running_loop=lambda: SimpleNamespace(time=lambda: elapsed),
+            sleep=sleep,
+            CancelledError=asyncio.CancelledError,
+        ),
+    )
+    await Passivbot._sleep_unless_shutdown(bot, 2.0, stage="execution")
+
+    assert sleeps == pytest.approx(expected_sleeps)
+    assert elapsed >= 2.0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_aware_sleep_checks_shutdown_after_final_delayed_wake(monkeypatch):
+    import passivbot as pb_mod
+
+    bot, _ = owner_bot()
+    elapsed = 0.0
+
+    async def sleep(seconds):
+        nonlocal elapsed
+        assert seconds == 0.25
+        elapsed = 1.0
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr(
+        pb_mod, "asyncio",
+        SimpleNamespace(
+            get_running_loop=lambda: SimpleNamespace(time=lambda: elapsed),
+            sleep=sleep,
+            CancelledError=asyncio.CancelledError,
+        ),
+    )
+    with pytest.raises(asyncio.CancelledError, match="execution"):
+        await Passivbot._sleep_unless_shutdown(bot, 0.25, stage="execution")

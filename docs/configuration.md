@@ -124,7 +124,7 @@ Example per-metric aggregation:
 - **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk and refreshes `logs/{user}.log` as a stable alias to the current run. On Windows without symlink privileges, this alias is a text pointer containing the absolute path to the current run log; Passivbot's monitor tooling follows it automatically. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
 - **dir**: Directory used for persisted live log files and the stable current-run alias when `persist_to_file` is enabled. Default `logs`.
 - **rotation**: Enables rotating live log files instead of appending to one file per process. Default `true`.
-- **max_bytes_mb**: Maximum size in megabytes for each live log file before rotation. Used only when `rotation = true`. Default `10`.
+- **max_bytes_mib**: Maximum size in mebibytes (MiB) for each live log file before rotation. Used only when `rotation = true`. Default `10`.
 - **backup_count**: Number of rotated backup files to keep when rotation is enabled. Default `5`.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
@@ -137,7 +137,7 @@ The monitor publisher writes a read-only dashboard data root to disk when enable
 - **root_dir**: Base directory for monitor output. Per-bot data is written under `root_dir/{exchange}/{user}`.
 - **snapshot_interval_seconds**: Best-effort minimum interval between `state.latest.json` writes.
 - **checkpoint_interval_minutes**: Interval between compressed checkpoint snapshots. Set `0` to disable checkpoints.
-- **event_rotation_mb**: Rotate `events/current.ndjson` after it exceeds this size.
+- **event_rotation_mib**: Rotate `events/current.ndjson` after it exceeds this size in mebibytes (MiB).
 - **event_rotation_minutes**: Rotate `events/current.ndjson` after this elapsed time even if size threshold is not reached.
 - **retain_days**: Age-based retention for rotated event/history/checkpoint files.
 - **max_total_bytes**: Global byte cap for the monitor root. Old rotated event/history/checkpoint files are pruned first.

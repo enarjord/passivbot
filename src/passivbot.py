@@ -6143,12 +6143,11 @@ class Passivbot:
             raise asyncio.CancelledError(f"shutdown requested during {stage}")
 
     async def _sleep_unless_shutdown(self, seconds: float, *, stage: str) -> None:
-        remaining = max(0.0, float(seconds))
-        while remaining > 0.0:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(seconds))
+        while (remaining := deadline - loop.time()) > 0.0:
             Passivbot._raise_if_shutdown_requested(self, stage)
-            chunk = min(remaining, 0.25)
-            await asyncio.sleep(chunk)
-            remaining -= chunk
+            await asyncio.sleep(min(remaining, 0.25))
         Passivbot._raise_if_shutdown_requested(self, stage)
 
     def _should_log_ws_reconnect_warning(

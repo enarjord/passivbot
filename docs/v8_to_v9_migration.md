@@ -32,6 +32,7 @@ before backtesting a proposed replacement.
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
+| `logging.max_bytes_mb`, `monitor.event_rotation_mb` | `logging.max_bytes_mib`, `monitor.event_rotation_mib`. The size was already measured in mebibytes, so values are unchanged |
 | `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_fraction` |
 | `bot.<side>.risk.total_wallet_exposure_limit` | `bot.<side>.risk.total_wallet_exposure_limit_ratio`, with the same notional-to-balance value |
 | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |

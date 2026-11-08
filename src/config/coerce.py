@@ -45,7 +45,7 @@ def normalize_monitor_config(config: dict) -> None:
     numeric_rules = (
         ("snapshot_interval_seconds", float, lambda x: x > 0.0, "must be > 0"),
         ("checkpoint_interval_minutes", float, lambda x: x >= 0.0, "must be >= 0"),
-        ("event_rotation_mb", float, lambda x: x > 0.0, "must be > 0"),
+        ("event_rotation_mib", float, lambda x: x > 0.0, "must be > 0"),
         ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
         ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
         ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
@@ -72,7 +72,7 @@ def normalize_logging_config(config: dict) -> None:
         logging_cfg[key] = bool(logging_cfg[key])
 
     numeric_rules = (
-        ("max_bytes_mb", float, lambda x: x > 0.0, "must be > 0"),
+        ("max_bytes_mib", float, lambda x: x > 0.0, "must be > 0"),
         ("backup_count", int, lambda x: x >= 0, "must be >= 0"),
     )
     for key, caster, predicate, message in numeric_rules:

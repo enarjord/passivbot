@@ -12,6 +12,7 @@ import numpy as np
 import passivbot_rust as pbr
 
 from live.event_bus import EventTypes, ReasonCodes
+from live.console_health import ordinary_progress_payload
 from live import ordinary_diagnostics
 from trailing_diagnostics import (
     build_trailing_close_diagnostic,
@@ -536,6 +537,7 @@ def _build_health_summary_payload(
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
     }
+    payload.update(ordinary_progress_payload(self, now_ms))
     loop_ms = payload["last_loop_duration_ms"]
     loop_timings = getattr(self, "_last_loop_timing_ms", {}) or {}
     if loop_ms >= 60_000 and isinstance(loop_timings, dict):

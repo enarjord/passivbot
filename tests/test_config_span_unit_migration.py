@@ -1,4 +1,4 @@
-"""Released v8 time values move directly to final public unit names."""
+"""Released v8 values move directly to final public unit names."""
 
 from copy import deepcopy
 import json
@@ -23,6 +23,26 @@ def read_path(config, path):
     for part in path:
         config = config[part]
     return config
+
+
+def test_released_rotation_sizes_convert_to_mib_without_rescaling():
+    source = released_source("trailing_martingale")
+    source["logging"]["max_bytes_mb"] = 2.5
+    source["monitor"]["event_rotation_mb"] = 64.25
+    source["optimize"]["fixed_runtime_overrides"] = {"logging.max_bytes_mb": 1.5}
+    source["backtest"]["scenarios"] = [
+        {"label": "rotation", "overrides": {"monitor.event_rotation_mb": 16.5}}
+    ]
+
+    result = migrate(source, memory_span_minutes=123.5)
+    config = prepare_config(result.config, verbose=False)
+
+    assert config["logging"]["max_bytes_mib"] == 2.5
+    assert config["monitor"]["event_rotation_mib"] == 64.25
+    assert "max_bytes_mb" not in config["logging"]
+    assert "event_rotation_mb" not in config["monitor"]
+    assert config["optimize"]["fixed_runtime_overrides"] == {"logging.max_bytes_mib": 1.5}
+    assert config["backtest"]["scenarios"][0]["overrides"] == {"monitor.event_rotation_mib": 16.5}
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])

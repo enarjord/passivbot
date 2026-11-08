@@ -3,6 +3,111 @@ import logging
 import re
 
 
+_ORDINARY_STALL_MS = 300_000
+_ORDINARY_DEFER_PHASES = {
+    "ordinary preparation": "preparation",
+    "ordinary consumption": "consumption",
+    "ordinary after_reconciliation": "after_reconciliation",
+    "ordinary after_protection": "after_protection",
+    "rust order calculation": "rust_order_calculation",
+}
+_ORDINARY_DEFER_REASONS = {
+    "account_facts_changed",
+    "account_facts_changed_during_preparation",
+    "account_refresh_in_progress",
+    "captured_planning_snapshot_unavailable",
+    "current_account_inputs_unavailable",
+    "current_account_refresh_unavailable",
+    "current_inputs_changed",
+    "hsl_candle_receipt_replaced",
+    "hsl_fill_receipt_replaced",
+    "market_inputs_unavailable",
+    "ordinary_plan_retired",
+    "raw_balance_changed",
+    "required_fill_facts_changed",
+    "shutdown",
+    "staged_inputs_unavailable",
+    "staged_planner_inputs_not_fresh",
+}
+
+
+def observe_ordinary_defer(bot, details):
+    """Retain only code-owned classifications from an ordinary planner defer."""
+    phase = _ORDINARY_DEFER_PHASES.get(details.get("context", "").partition(": ")[0])
+    if phase is None:
+        return
+    reason = details.get("defer_reason")
+    missing = details.get("missing") or ()
+    bot._console_ordinary_last_defer = dict(
+        phase=phase,
+        reason=reason if reason in _ORDINARY_DEFER_REASONS else "unknown",
+        missing_surfaces=[
+            surface
+            for surface in ("balance", "positions", "open_orders", "fills", "candles", "market_snapshot")
+            if surface in missing
+        ],
+    )
+
+
+def observe_ordinary_acceptance(bot, now_ms):
+    """An accepted ordinary plan returned from reconciliation, possibly as a no-op."""
+    bot._console_ordinary_accepted_ms = now_ms
+    bot._console_ordinary_wait_started_ms = None
+    bot._console_ordinary_last_defer = None
+    if getattr(bot, "_console_ordinary_stalled", False):
+        bot._console_ordinary_stalled = False
+        logging.info("[health] ordinary planning recovered | accepted_plan_returned=yes")
+
+
+def observe_ordinary_outer_cycle(bot, now_ms, *, accepted):
+    """Require continuing outer-cycle completions before declaring a stall."""
+    previous = getattr(bot, "_console_ordinary_outer_completed_ms", None)
+    bot._console_ordinary_outer_completed_ms = now_ms
+    if accepted or getattr(bot, "_console_ordinary_stalled", False):
+        return
+    started = getattr(bot, "_console_ordinary_wait_started_ms", None)
+    if started is None or previous is None or not 0 <= now_ms - previous < _ORDINARY_STALL_MS:
+        bot._console_ordinary_wait_started_ms = now_ms
+        return
+    if now_ms - started < _ORDINARY_STALL_MS:
+        return
+    bot._console_ordinary_stalled = True
+    defer = getattr(bot, "_console_ordinary_last_defer", None) or {}
+    logging.warning(
+        "[health] ordinary planning stalled | no_accepted_plan=%.1fs "
+        "last_defer_phase=%s reason=%s missing=%s",
+        (now_ms - started) / 1000.0,
+        defer.get("phase", "unknown"),
+        defer.get("reason", "unknown"),
+        ",".join(defer.get("missing_surfaces", ())) or "-",
+    )
+
+
+def ordinary_progress_payload(bot, now_ms):
+    completed = getattr(bot, "_console_ordinary_outer_completed_ms", None)
+    accepted = getattr(bot, "_console_ordinary_accepted_ms", None)
+    started = getattr(bot, "_console_ordinary_wait_started_ms", None)
+    if completed is None and accepted is None:
+        return {}
+    return {
+        "ordinary_progress": dict(
+            last_accepted_age_ms=(
+                now_ms - accepted if accepted is not None and accepted <= now_ms else None
+            ),
+            last_outer_cycle_age_ms=(
+                now_ms - completed if completed is not None and completed <= now_ms else None
+            ),
+            without_acceptance_ms=(
+                max(0, completed - started)
+                if completed is not None and started is not None
+                else None
+            ),
+            stalled=getattr(bot, "_console_ordinary_stalled", False),
+            last_defer=getattr(bot, "_console_ordinary_last_defer", None),
+        )
+    }
+
+
 def token(value, limit=32):
     return re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(value or "unknown"))[:limit]
 

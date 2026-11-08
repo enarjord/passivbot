@@ -253,6 +253,13 @@ restriction count, with one bounded effective-mode/cause example. Strategy close
 do not imply ordinary order permission. Pending confirmation epochs describe current waits;
 historical cancel-first outcomes retain their own age and cannot be displayed as active gates.
 
+The heartbeat also reports `ordinary_accepted_age`. The health observer logs a warning once when
+outer cycles keep completing for five minutes without an accepted ordinary plan, and one recovery
+when an accepted plan returns from reconciliation. Before a stall is declared, a gap of at least
+five minutes between outer cycle completions restarts the observation window. The warning includes
+the latest observed ordinary deferral classification when available. The alert and its age do not
+grant write permission or imply that an exchange order was due.
+
 A prior GREEN/inactive HSL observation may expire immediately before an unchanged fresh observation
 replaces it. The producer marks only this proven replacement case; both events retain their durable
 severity and freshness. Its console projection uses DEBUG and a bounded five-minute aggregate of

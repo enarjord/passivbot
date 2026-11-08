@@ -161,7 +161,7 @@ class MonitorPublisher:
         root_dir: str,
         snapshot_interval_seconds: float,
         checkpoint_interval_minutes: float,
-        event_rotation_mb: float,
+        event_rotation_mib: float,
         event_rotation_minutes: float,
         retain_days: float,
         max_total_bytes: int,
@@ -186,7 +186,7 @@ class MonitorPublisher:
         self.current_events_path = self.events_dir / "current.ndjson"
         self.snapshot_interval_ms = max(1, int(float(snapshot_interval_seconds) * 1000.0))
         self.checkpoint_interval_ms = max(0, int(float(checkpoint_interval_minutes) * 60_000.0))
-        self.event_rotation_bytes = max(1, int(float(event_rotation_mb) * 1024.0 * 1024.0))
+        self.event_rotation_bytes = max(1, int(float(event_rotation_mib) * 1024.0 * 1024.0))
         self.event_rotation_interval_ms = max(1, int(float(event_rotation_minutes) * 60_000.0))
         self.retain_days = float(retain_days)
         self.max_total_bytes = int(max_total_bytes)
@@ -239,7 +239,7 @@ class MonitorPublisher:
             root_dir=str(config["root_dir"]),
             snapshot_interval_seconds=float(config["snapshot_interval_seconds"]),
             checkpoint_interval_minutes=float(config["checkpoint_interval_minutes"]),
-            event_rotation_mb=float(config["event_rotation_mb"]),
+            event_rotation_mib=float(config["event_rotation_mib"]),
             event_rotation_minutes=float(config["event_rotation_minutes"]),
             retain_days=float(config["retain_days"]),
             max_total_bytes=int(config["max_total_bytes"]),
@@ -444,6 +444,7 @@ class MonitorPublisher:
             "config": {
                 "snapshot_interval_seconds": self.snapshot_interval_ms / 1000.0,
                 "checkpoint_interval_minutes": self.checkpoint_interval_ms / 60_000.0,
+                # Keep the existing manifest key for readers of monitor history.
                 "event_rotation_mb": self.event_rotation_bytes / (1024.0 * 1024.0),
                 "event_rotation_minutes": self.event_rotation_interval_ms / 60_000.0,
                 "retain_days": self.retain_days,
