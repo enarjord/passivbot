@@ -38,7 +38,7 @@ Use the included sample config and scenarios:
 
 ```shell
 PYTHONPATH=src python3 src/tools/run_fake_live.py \
-  configs/examples/fake_live_hsl.json \
+  tests/fixtures/fake_live_hsl.json \
   scenarios/fake_live/hsl_long_red_restart.hjson \
   --user fake_hsl_restart_test \
   --snapshot-each-step

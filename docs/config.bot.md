@@ -276,8 +276,8 @@ a long at 100% of effective WEL with `threshold = 0.90`, `close_fraction = 0.12`
 close price 100 would fall to about 86.8%, not 90%. Realized losses, fees or other balance changes
 also change the denominator of the post-fill exposure ratio.
 
-These formulas describe [Rust's unstuck calculation](../passivbot-rust/src/risk.rs);
-[the allowance helper](../passivbot-rust/src/utils.rs) supplies the realized-loss budget.
+Rust implements the [unstuck calculation](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/risk.rs)
+and its [realized-loss budget](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/utils.rs).
 
 When multiple positions are eligible, auto-unstuck chooses the least stuck
 position first, defined as the lowest pside-aware relative distance between

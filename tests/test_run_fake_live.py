@@ -14,7 +14,7 @@ import tools.run_fake_live as run_fake_live_module
 from fill_events_manager import FillEvent, FillEventCache
 from config_utils import load_config
 from config.schema import get_template_config, get_expanded_config_prototype
-from hsl_fixture import mutable_runtime_fixture
+from hsl_fixture import FAKE_HSL_CONFIG_PATH, mutable_runtime_fixture
 from exchanges.fake import FakeCCXTClient
 from live.event_bus import EventTypes, LiveEvent
 from passivbot import setup_bot
@@ -199,7 +199,7 @@ async def test_fake_live_persists_events_when_console_pipeline_is_disabled(
 
     try:
         args = argparse.Namespace(
-            config=str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"),
+            config=str(FAKE_HSL_CONFIG_PATH),
             scenario=str(scenario_path),
             user=user,
             max_steps=0,
@@ -852,7 +852,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
     user = _isolated_fake_user("fake_coin_overrides", tmp_path)
     _cleanup_fake_user_state(user)
     base_config = hjson.loads(
-        (REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json").read_text(
+        FAKE_HSL_CONFIG_PATH.read_text(
             encoding="utf-8"
         )
     )
@@ -957,7 +957,7 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     _cleanup_fake_user_state(user)
 
     cfg = load_config(
-        str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
+        str(FAKE_HSL_CONFIG_PATH), verbose=False
     )
     cfg["bot"]["long"]["hsl"]["enabled"] = False
     # The gate alone owns strict shared-memory bootstrap coverage, even with
@@ -1078,7 +1078,7 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
 
     cfg = load_config(
-        str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
+        str(FAKE_HSL_CONFIG_PATH), verbose=False
     )
     cfg["bot"]["long"]["hsl"]["enabled"] = False
     cfg["bot"]["short"]["hsl"]["enabled"] = False
@@ -1165,7 +1165,7 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
     }
     scenario_path = tmp_path / "fake_remote_call_trace.hjson"
     scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
-    config_path = REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"
+    config_path = FAKE_HSL_CONFIG_PATH
 
     args = argparse.Namespace(
         config=str(config_path),

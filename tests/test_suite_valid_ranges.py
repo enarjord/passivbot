@@ -5,7 +5,7 @@ import pytest
 
 from backtest import build_backtest_payload, execute_backtest
 from config.universe import set_side_universe_sources
-from config_utils import load_config
+from config import CONFIG_SCHEMA_VERSION, prepare_config
 from suite_runner import ExchangeDataset, _prepare_dataset_subset
 from utils import ts_to_date
 
@@ -48,7 +48,17 @@ def _inputs(interval=1, offset=0):
         timestamps=timestamps,
         cache_dir="unused",
     )
-    config = load_config("configs/examples/ema_anchor.json", verbose=False)
+    config = prepare_config(
+        {
+            "config_version": CONFIG_SCHEMA_VERSION,
+            "bot": {
+                "portfolio": {"strategy_kind": "ema_anchor"},
+                "long": {"enabled": True},
+                "short": {"enabled": True},
+            },
+        },
+        verbose=False,
+    )
     set_side_universe_sources(config, "approved_coins", {"long": coins, "short": coins})
     set_side_universe_sources(config, "ignored_coins", {"long": [], "short": []})
     config["backtest"].update(

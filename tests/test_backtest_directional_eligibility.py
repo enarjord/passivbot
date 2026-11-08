@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from backtest import run_backtest
-from config_utils import load_config
+from config import CONFIG_SCHEMA_VERSION, prepare_config
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -17,7 +17,21 @@ def require_real_passivbot_rust_module():
 
 
 def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dict:
-    config = load_config("configs/examples/ema_anchor.json", verbose=False)
+    config = prepare_config(
+        {
+            "config_version": CONFIG_SCHEMA_VERSION,
+            "bot": {
+                "portfolio": {"strategy_kind": "ema_anchor"},
+                "global": {
+                    "unstuck": {"enabled": False},
+                    "entry_cooldown": {"base_duration_minutes": 0.0},
+                },
+                "long": {"enabled": True},
+                "short": {"enabled": True},
+            },
+        },
+        verbose=False,
+    )
     set_side_universe_sources(config, 'approved_coins', {'long': ['LONGCOIN'], 'short': ['SHORTCOIN']})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['hedge_mode'] = hedge_mode

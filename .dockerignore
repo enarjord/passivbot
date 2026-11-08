@@ -1,30 +1,28 @@
-backtests/
-caches/
-historical_data/
-optimize_results/
-
-# Ignore Python cache files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Ignore build artifacts
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# Ignore Rust artifacts
-target/
-Cargo.lock
-
-# Ignore VCS and editor files
-.git/
-*.swp
-*.swo
-*.bak
-*.tmp
-.DS_Store
-.idea/
-.vscode/
+# Shared build inputs for Dockerfile and Dockerfile_live.
+# Credentials, authored configs, caches, logs and monitor data are runtime mounts.
+**
+!pyproject.toml
+!setup.py
+!MANIFEST.in
+!requirements-dev.txt
+!requirements-full.txt
+!requirements-live.txt
+!requirements-rust.txt
+!rust-toolchain.toml
+!schemas/config-v9.schema.json
+!broker_codes.hjson
+!container/entrypoint.sh
+!container/render_api_keys.py
+!container/render_config.py
+!src/**/*.py
+!src/monitor_dashboard_static/*.css
+!src/monitor_dashboard_static/*.html
+!src/monitor_dashboard_static/*.js
+!src/tools/backtest_dashboard_static/*.css
+!src/tools/backtest_dashboard_static/*.html
+!src/tools/backtest_dashboard_static/*.js
+!passivbot-rust/Cargo.toml
+!passivbot-rust/Cargo.lock
+!passivbot-rust/build.rs
+!passivbot-rust/src/**/*.rs
+!passivbot-rust/src/**/*.metal

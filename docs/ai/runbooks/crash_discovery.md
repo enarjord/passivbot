@@ -34,10 +34,10 @@ Downloads contact public exchange endpoints. Run Binance and Bybit separately so
 catalog differences remain attributable:
 
 ```bash
-passivbot download --symbols <coins> --exchanges binance \
-  --start-date <start-date> --end-date <end-date>
-passivbot download --symbols <coins> --exchanges bybit \
-  --start-date <start-date> --end-date <end-date>
+passivbot download configs/examples/default_trailing_martingale_long.json \
+  --symbols BTC,ETH --exchanges binance --start-date 2025-01-01 --end-date 2025-02-01
+passivbot download configs/examples/default_trailing_martingale_long.json \
+  --symbols BTC,ETH --exchanges bybit --start-date 2025-01-01 --end-date 2025-02-01
 ```
 
 Use repository symbol normalization or catalog records for aliases such as `1000PEPE` and

@@ -3,6 +3,8 @@ from copy import deepcopy
 
 import pytest
 
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
+
 from config.migrations.final_v9 import replace_retired_metrics
 
 
@@ -22,4 +24,4 @@ def test_old_drawdown_formula_requires_explicit_replacement_and_acknowledgment(o
     changes = []
     replace_retired_metrics(source, replacements={old: new}, acknowledge=True, changes=changes)
     assert source['optimize']['scoring'] == [{'metric': new, 'goal': 'min'}]
-    assert 'definition version 1' in changes[0]['reason']
+    assert f'definition version {CORE_METRIC_DEFINITION_VERSION}' in changes[0]['reason']

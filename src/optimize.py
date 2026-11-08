@@ -3678,7 +3678,7 @@ async def main():
         epilog=(
             "Examples:\n"
             "  passivbot optimize configs/examples/default_trailing_martingale_long.json -s XMR -sd 2025 -c 4 --suite n\n"
-            "  passivbot optimize --bot.long.enabled y -e bybit -s BTC,ETH -i 10000 -ps 200\n"
+            "  passivbot optimize --bot.long.enabled y -e bybit -s BTC,ETH -ltwel 0.5,1.0 -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."
         ),

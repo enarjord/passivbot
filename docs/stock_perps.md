@@ -1,460 +1,92 @@
 # Stock Perpetuals Trading Guide
 
-This guide covers trading stock perpetuals (equity perps) on Hyperliquid using Passivbot.
+Passivbot supports Hyperliquid builder-deployed perpetuals (HIP-3). These include markets
+that reference stocks, indices, and other traditional assets. The builder namespace
+identifies the contract, for example `xyz:TSLA`.
 
-## Current Support Status
+## Live account and margin requirements
 
-Passivbot currently supports **cross-only** live trading for Hyperliquid HIP-3 markets.
+- Use a Hyperliquid account in `unifiedAccount` or `portfolioMargin` mode. Startup fails
+  when an unsupported account mode has HIP-3 markets in its approved universe or has
+  existing HIP-3 positions or open orders.
+- New entries use cross margin on cross-capable markets. Market metadata determines
+  whether a symbol can trade in cross mode. Isolated-only markets are ineligible for new
+  positions under the current entry policy.
+- Check the builder's access requirements as well as the exchange account and agent-wallet
+  setup. A margin error alone does not establish why an order was rejected.
 
-- Cross-capable HIP-3 markets may still be traded in cross mode.
-- HIP-3 markets that are isolated-only by exchange metadata are currently ignored for new entries.
-- If the bot detects an existing isolated HIP-3 position or open order at startup, it hard-fails instead of trying to manage that state.
-
-The isolated-margin code paths remain in the repo for possible future work, but isolated HIP-3 live trading is currently not supported.
-
-## Overview
-
-Stock perpetuals are perpetual futures contracts that track traditional equity prices (TSLA, NVDA, AAPL, etc.). On Hyperliquid, these are deployed via **HIP-3** (Hyperliquid Improvement Proposal 3), which enables permissionless perpetual market creation.
-
-The primary stock perps provider on Hyperliquid is **TradeXYZ** (trade.xyz), which deploys markets with the `xyz:` prefix (e.g., `xyz:TSLA`, `xyz:NVDA`).
-
-### Key Characteristics
-
-| Aspect | Stock Perps | Crypto Perps |
-|--------|-------------|--------------|
-| Symbol format | `xyz:TSLA/USDC:USDC` | `BTC/USDC:USDC` |
-| Margin mode | Exchange metadata decides; Passivbot currently supports cross-only live trading | Cross or Isolated |
-| Max leverage | 10x | Up to 50x |
-| Trading hours | 24/7 | 24/7 |
-| Fees | 2x standard Hyperliquid fees | Standard fees |
-| Collateral | USDC | USDC |
-
-### Available Stock Perps
-
-As of early 2026, TradeXYZ offers perpetuals on:
-- **Tech giants**: TSLA, NVDA, AAPL, MSFT, META, AMZN, GOOGL, NFLX, AMD
-- **Fintech/Crypto-adjacent**: COIN, HOOD, PLTR, MSTR
-- **Commodities**: GOLD, SILVER, COPPER, NATGAS, URANIUM
-- **Currencies**: EUR, JPY
-- **Index**: XYZ100 (Nasdaq-like index)
-
-Other HIP-3 builders (FLX, KM, CASH, VNTL, HYNA, ABCD) also offer various perps. Cross-capable builder markets may still work, but isolated-only HIP-3 trading is currently disabled.
-
-## Understanding Balance and Margin
-
-### How Isolated Margin Works
-
-HIP-3 stock perps may be either **isolated-only** or **cross-capable**, depending on exchange metadata. Many still use isolated margin, which is fundamentally different from cross margin used by most crypto perps. Passivbot currently avoids that isolated live path and treats HIP-3 as cross-only when possible.
-
-| Cross Margin (HL crypto perps) | Isolated Margin (HIP-3/XYZ perps) |
-|-------------------------------|-----------------------------------|
-| Entire balance backs all positions | Each position has dedicated margin |
-| One liquidation can cascade to others | Liquidations are contained per-position |
-| More capital efficient | Safer but requires more upfront margin |
-| Default for BTC, ETH, etc. | Unsupported in Passivbot live trading for now |
-
-### Balance Display Differences
-
-You'll see different balance breakdowns depending on which interface you use:
-
-**Hyperliquid Web UI (app.hyperliquid.xyz)**:
-- Shows your **total account value** (e.g., 105 USDC)
-- This includes all free balance + margin locked in positions
-
-**TradeXYZ Web UI (trade.xyz)**:
-- Shows a **breakdown by builder**:
-  - `USDC (HL perps)`: Free balance available for HL native perps or withdrawal
-  - `USDC (XYZ perps)`: Margin currently locked in your XYZ stock perp positions
-
-**Example**:
-```
-Hyperliquid UI:     105 USDC total
-TradeXYZ UI:        11.91 USDC (HL perps) + 93.27 USDC (XYZ perps) = 105.18 USDC
-```
-
-The ~$93 locked in "XYZ perps" is your margin for open TSLA positions. If those positions get liquidated, only that $93 is at risk - your remaining $12 stays safe.
-
-### Margin Calculation
-
-When you open a position on an isolated margin market:
-
-```
-margin_required = position_notional / leverage
-                = (quantity × price) / leverage
-```
-
-For example, opening 0.24 TSLA at $423 with 2x leverage:
-```
-margin = (0.24 × $423) / 2 = $50.76
-```
-
-This margin is **locked** for that position until you close it. Your free balance decreases accordingly.
-
-### Passivbot Balance Display
-
-Passivbot shows your **total account value** from the Hyperliquid API, which includes:
-- Free balance
-- All locked margin
-- Unrealized PnL
-
-The balance changes you see in logs reflect margin being allocated/released as positions open/close:
-```
-[balance] 105.21 -> 84.27   # Margin locked for new position
-[balance] 84.27 -> 67.35    # More margin locked for second entry
-```
-
-## Requirements
-
-### 1. Hyperliquid Account
-
-You need a Hyperliquid account with USDC deposited. No KYC required - your wallet is your identity.
-
-### 2. One-Time TradeXYZ Registration
-
-**Important**: Before you can trade XYZ stock perps via API, you must complete a one-time wallet registration on the TradeXYZ platform:
-
-1. Go to [trade.xyz](https://trade.xyz)
-2. Click "Connect Wallet" and connect your Hyperliquid wallet
-3. Sign the verification transaction to prove wallet ownership
-4. Accept the terms of service and privacy policy
-5. Click **"Enable Trading"** when prompted and sign the confirmation
-
-This registration links your wallet to the TradeXYZ builder, enabling API access to their HIP-3 markets. Without this step, orders will fail with "Insufficient margin" errors even if you have sufficient balance.
-
-### 3. Regional Restrictions
-
-TradeXYZ prohibits access from:
-- United States
-- OFAC-sanctioned countries
-
-Ensure you're not connecting from a restricted region.
+Passivbot derives wallet balance by subtracting unrealized PnL from the applicable
+account equity, including core and HIP-3 PnL for the unified balance path. It uses wallet
+balance for the exposure budget. `total_wallet_exposure_limit_ratio = 1.0` on a side
+with a 100 USDC balance gives a 100 USDC side-level notional budget. Leverage affects
+margin requirements, while the configured ratio controls the bot's exposure budget.
 
 ## Configuration
 
-### Symbol Selection
+Copy the maintained template as described in [Config Workflow](config_workflow.md). Set
+`live.account.user` to the configured Hyperliquid account, set `bot.portfolio.hedge_mode`
+to `false`, and review the active sides and their exposure. Add the intended contracts to
+`bot.global.universe.approved_coins` or a side-specific universe. Use a namespaced
+identifier such as `xyz:TSLA` to distinguish contracts from different builders. Crypto
+and eligible HIP-3 perpetuals can share the same universe.
 
-You can specify stock perps in `approved_coins` using any of these formats:
-
-```json
-{
-  "live": {
-    "approved_coins": ["TSLA"]
-  }
-}
-```
-
-or explicitly with the prefix:
+This fragment shows the relevant fields to apply to the private config.
 
 ```json
 {
-  "live": {
-    "approved_coins": ["xyz:TSLA", "xyz:NVDA"]
-  }
-}
-```
-
-Passivbot automatically maps `TSLA` to `XYZ-TSLA/USDC:USDC` on Hyperliquid.
-
-### Mixing Crypto and Stock Perps
-
-You can run both crypto perps and supported stock perps in the same bot:
-
-```json
-{
-  "live": {
-    "approved_coins": ["BTC", "ETH", "TSLA", "NVDA"]
-  }
-}
-```
-
-Passivbot automatically sets the correct margin mode for each symbol:
-- **Crypto perps** (BTC, ETH, SOL, etc.) → cross margin
-- **Stock perps** (TSLA, NVDA, AAPL, etc.) → cross only when the market is cross-capable; isolated-only markets are skipped
-
-```
-BTC/USDC:USDC: margin=ok (cross)
-XYZ-XYZ100/USDC:USDC: margin=ok (cross)
-```
-
-**How balance works in mixed mode:**
-
-| Component | Backs What |
-|-----------|------------|
-| Free balance | Shared by all cross-margin positions (BTC, ETH, etc.) |
-| Locked margin (per stock) | Only that specific stock perp position |
-
-**Risk isolation**: This is how isolated margin works at the exchange level. Passivbot currently does not support live HIP-3 isolated trading, but the distinction is still useful context for understanding the exchange.
-
-**Practical consideration**: Isolated margin positions lock up capital, reducing what's available for cross-margin positions. Plan your `n_positions` and `total_wallet_exposure_limit_ratio` accordingly.
-
-### Automatic Detection
-
-Passivbot automatically detects stock perps by:
-1. The `xyz:` symbol prefix (or `XYZ-` in CCXT format)
-2. The `onlyIsolated: true` market flag
-3. Membership in the known stock ticker list (TSLA, NVDA, AAPL, etc.)
-
-### Leverage and Margin
-
-Stock perps do not all share the same margin capabilities. Passivbot currently:
-
-1. Detects whether a HIP-3 market is isolated-only or cross-capable from exchange metadata
-2. Uses cross mode on cross-capable HIP-3 markets
-3. Ignores isolated-only HIP-3 markets for new entries
-4. Hard-fails if existing isolated HIP-3 live state is detected at startup
-5. Retains the isolated-margin code for possible future support work
-
-**Leverage calculation for isolated margin:**
-
-The remaining isolated-margin notes below are kept as exchange/background reference. They do not mean isolated HIP-3 trading is currently supported in Passivbot live mode.
-
-For isolated margin, your margin requirement is: `margin = exposure / leverage`
-
-To ensure you never exceed your balance, Passivbot uses:
-```
-min_leverage = ceil(max(long_TWEL, short_TWEL))
-```
-
-For example, with TWEL = 1.25:
-- Minimum leverage = ceil(1.25) = 2x
-- Maximum exposure at $100k balance = $125k
-- Margin required = $125k / 2 = $62.5k (within balance)
-
-### Minimum Order Size
-
-Stock perps on Hyperliquid have a **$10 minimum order value**. With small balances, this limits how many grid entries you can place.
-
-For a $100 balance trading TSLA at $400:
-- Minimum qty = $10 / $400 = 0.025 TSLA
-- At TWEL 1.0 with 2x leverage: max exposure = $200, max qty = 0.5 TSLA
-- Practical grid depth: ~5-8 entries before hitting minimums
-
-Consider setting `bot.<side>.universe.filter_by_min_effective_cost: false` if you want to trade with smaller balances and accept that some grid levels may be skipped.
-
-### Example Config
-
-Minimal test config for stock perps:
-
-```json
-{
-    "config_version": "v9.0.0",
-    "bot": {
-        "portfolio": {
-            "strategy_kind": "trailing_martingale",
-            "hedge_mode": false
-        },
-        "long": {
-            "enabled": true,
-            "universe": {
-                "filter_by_min_effective_cost": false,
-                "minimum_coin_age_days": 0.0,
-                "approved_coins": [
-                    "TSLA"
-                ]
-            },
-            "risk": {
-                "max_positions": 2,
-                "total_wallet_exposure_limit_ratio": 1.0
-            },
-            "strategy": {
-                "trailing_martingale": {
-                    "entry": {
-                        "initial_qty_fraction": 0.4
-                    }
-                }
-            }
-        },
-        "short": {
-            "enabled": false,
-            "risk": {
-                "max_positions": 0,
-                "total_wallet_exposure_limit_ratio": 0.0
-            }
-        }
+  "config_version": "v9.0.0",
+  "bot": {
+    "portfolio": {
+      "hedge_mode": false
     },
-    "live": {
-        "account": {
-            "user": "hyperliquid_01",
-            "leverage": 2
-        }
-    },
-    "logging": {
-        "level": 2
+    "long": {
+      "enabled": true,
+      "universe": {
+        "approved_coins": ["xyz:TSLA"]
+      }
     }
+  },
+  "live": {
+    "account": {
+      "user": "hyperliquid_01"
+    }
+  }
 }
 ```
 
-Key settings explained:
-- `live.account.leverage: 2` - Safe starting point, meets isolated margin requirements
-- `bot.<side>.universe.filter_by_min_effective_cost: false` - Allow trading even if balance is low
-- `bot.long.universe.minimum_coin_age_days: 0.0` - Stock perps are new, don't filter by age
-- `bot.long.strategy.trailing_martingale.entry.initial_qty_fraction: 0.4` - Larger initial entries (fewer grid levels with small balance)
+Check the resolved market and the [minimum effective cost](min_effective_cost.md). The
+required notional depends on market metadata and quantity precision. When the intended
+first order is too small, a minimum-sized order can exceed the strategy's intended
+allocation. Review this before changing `bot.<side>.universe.filter_by_min_effective_cost`.
 
-## Oracle Pricing Behavior
-
-Stock perps use oracle pricing from RedStone's HyperStone oracle. During market hours, prices track live stock prices. During market closure (weekends, holidays):
-
-- Oracle maintains "stickiness" to the closing price
-- Price boundaries are set based on the final open price
-- Large trades can move the price within these boundaries
-
-**Risk Warning**: Weekend trading carries additional risk. A December 2025 incident saw a whale trigger a 3.5% selloff on a Sunday, causing liquidations. Consider reducing position sizes or pausing bots during market closures.
+See [Hyperliquid setup](hyperliquid_guide.md) and [Running live](live.md) for the full
+config review and offline preflight workflow.
 
 ## Data Sources for Backtesting and Live Trading
 
-Passivbot uses multiple data sources for stock perps, automatically falling back to alternatives when primary sources are unavailable:
+Use native Hyperliquid candles for backtests of actual perp behavior. History availability
+depends on the market and the sources available to the data preparation path. An explicit
+`backtest.ohlcv_source_dir` supplies external candle files in the
+[documented format](backtesting.md#external-ohlcv-source-dir).
 
-### 1. Hyperliquid API (Primary for Live Trading)
-- **Coverage**: Last ~3.5 days (5000 1m candles)
-- **Format**: Native perp data with oracle pricing
-- **Usage**: Live trading, recent backtesting
-- **No setup required** - Works automatically
-
-### 2. Yahoo Finance (Free, Default for Historical)
-- **Coverage**: Last 7 days of 1m data
-- **Cost**: FREE, no API key required
-- **Setup**: Installed automatically with yfinance package
-- **Limitations**: Only market hours data, no weekends
-
-### 3. Finnhub / Alpha Vantage (Optional, for Extended History)
-- **Coverage**: Varies by provider
-- **Cost**: Requires API key (free tiers available)
-- **Setup**: Add to api-keys.json
-
-```json
-{
-  "tradfi": {
-    "provider": "finnhub",
-    "api_key": "your_api_key"
-  }
-}
-```
-
-### Data Source Priority
-
-CandlestickManager automatically selects the best source:
-1. Local cache (if available)
-2. Hyperliquid API (last 3.5 days)
-3. Yahoo Finance (last 7 days, free)
-4. Configured TradFi provider (older data)
-
-### Important Notes About TradFi Data
-
-TradFi data represents actual stock prices and **does not include**:
-- Perpetual funding rates
-- Oracle-driven pricing during market closure
-- Weekend/after-hours price movements
-
-This data is suitable for:
-- Strategy development and initial backtesting
-- Understanding general price behavior
-- Warm-up periods for EMAs
-
-For accurate backtesting of actual perp behavior, use native Hyperliquid data where available.
+For supported stock symbols, Hyperliquid archive acquisition can try an underlying-asset
+data provider. The default Yahoo Finance adapter requires a separate `yfinance` install.
+Passivbot also recognizes configured providers such as Finnhub and Alpha Vantage through
+the private `tradfi` entry in `api-keys.json`. Provider coverage varies. Record the data
+source when comparing results.
 
 ### Synthetic Candles During Market Closure (Backtesting Model)
 
-Hyperliquid HIP-3 stock perps trade 24/7, but TradFi data sources only cover regular
-trading hours (roughly 390 of 1440 minutes per weekday, nothing on weekends). When
-backtesting stock perps from TradFi sources, Passivbot fills every closed-market minute
-with a **synthetic flat candle**: high = low = close = previous real close, volume = 0.
-These synthetic minutes are **tradable** in the backtest, by design:
+Underlying-asset history does not capture perpetual funding or the builder's pricing while
+the underlying market is closed. In backtests with stock-perp calendar context, eligible
+missing closed-market minutes can be represented as synthetic candles with
+`high = low = close = previous close` and zero volume. These minutes remain tradable in
+the simulator. Strict price comparisons prevent a resting order priced exactly at the
+flat price from filling on that candle.
 
-- The live venue trades continuously, so a backtest that froze trading during
-  underlying-market closures would be *less* faithful to live behavior, not more.
-- Order fills use strict price inequalities (`low < bid`, `high > ask`), so orders
-  resting exactly at the flat price never fill on synthetic candles. Only orders priced
-  through the flat price fill — and such crossing orders would also fill immediately on
-  the live 24/7 venue at approximately that price.
+Flat synthetic candles omit overnight and weekend price movement. The next actual candle
+can carry the full price change, and zero synthetic volume affects volume-based Forager
+ranking. Review the synthetic-candle share and the transition to native history before
+using the result to evaluate a live config.
 
-Accepted modeling caveats to keep in mind when interpreting results:
-
-1. **Overnight/weekend drift is modeled as flat.** Real HIP-3 prices drift while the
-   underlying market is closed. Triggers that depend on price movement (trailing
-   entries/closes, auto-unstuck, equity hard stop loss) cannot fire during synthetic
-   minutes in the backtest, and the first real candle after a closure absorbs the whole
-   move as one discontinuity.
-2. **Volume metrics are diluted.** Synthetic minutes carry zero volume, so rolling
-   volume features (forager volume scoring and the volume-drop filter) will rank stock
-   perps below crypto in mixed universes and may exclude them via volume filters.
-3. **Regime seam with native data.** As native Hyperliquid xyz history accumulates
-   (real 24/7 candles), configs optimized on synthetic-filled TradFi history may behave
-   differently across the transition.
-
-The backtest logs each stock coin's synthetic-candle share at INFO level
-(`[hlcvs] xyz:TSLA: N of M tradable minutes (x%) are synthetic flat candles`).
-
-## Limitations
-
-### Current Limitations
-
-1. **Isolated margin only** - Cross margin support planned for future HIP-3 upgrade
-2. **10x max leverage** - Lower than crypto perps
-3. **Higher fees** - 2x standard Hyperliquid fees
-4. **Builder registration required** - One-time setup per builder (TradeXYZ, FLX, etc.)
-5. **No hedge mode** - Same as regular Hyperliquid
-6. **$10 minimum order** - Limits grid depth on small accounts
-
-## Troubleshooting
-
-### "Insufficient margin to place order"
-
-**Cause**: Wallet not registered with TradeXYZ
-
-**Solution**: Complete the one-time registration at [trade.xyz](https://trade.xyz) (see Requirements section)
-
-### "Too many DEXes found" when loading markets
-
-**Cause**: CCXT needs HIP-3 DEX specification
-
-**Solution**: Passivbot handles this automatically. If using CCXT directly:
-```python
-exchange.options["fetchMarkets"] = {
-    "types": ["swap", "hip3"],
-    "hip3": {"dex": ["xyz"]}
-}
-```
-
-### "No long symbols are approved due to min effective cost too high"
-
-**Cause**: Balance too low for $10 minimum order size
-
-**Solution**: Either:
-1. Increase account balance
-2. Set `filter_by_min_effective_cost: false` in config
-3. Reduce `n_positions` to concentrate capital
-
-### Orders rejected during market closure
-
-**Cause**: Oracle price boundaries or liquidity issues
-
-**Solution**: Consider pausing trading during extended market closures (weekends, holidays)
-
-### Symbol not found / "Skipping unsupported markets"
-
-**Cause**: Symbol mapping issue or market not loaded
-
-**Solution**: Ensure you're using a valid ticker (TSLA, NVDA, etc.) and that the Hyperliquid markets cache is fresh. Delete `caches/hyperliquid/markets.json` to force refresh.
-
-## Live Test Results (January 2026)
-
-Successfully tested with:
-- **Account**: ~$105 USDC
-- **Symbol**: TSLA (xyz:TSLA)
-- **Leverage**: 2x
-- **Results**:
-  - Bot correctly detected isolated margin requirement
-  - Margin mode set to isolated automatically
-  - Multiple fills executed at ~$423
-  - Position tracking and order management working correctly
-
-## Resources
-
-- [TradeXYZ Documentation](https://docs.trade.xyz)
-- [Hyperliquid HIP-3 Docs](https://hyperliquid.gitbook.io/hyperliquid-docs/hyperliquid-improvement-proposals-hips/hip-3-builder-deployed-perpetuals)
-- [HyperStone Oracle (RedStone)](https://blog.redstone.finance/2025/11/13/felix-launches-its-first-hyperliquid-hip-3-market-with-tsla-powered-by-hyperstone/)
-
----
-
-*Last updated: January 2026*
-*Status: Live tested and working*
+[Hyperliquid HIP-3 reference](https://hyperliquid.gitbook.io/hyperliquid-docs/hyperliquid-improvement-proposals-hips/hip-3-builder-deployed-perpetuals)

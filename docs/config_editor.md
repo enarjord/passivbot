@@ -1,6 +1,7 @@
 # Config editor assistance
 
-The checked [v9 JSON Schema](../schemas/config-v9.schema.json) describes canonical authored JSON.
+The checked [v9 JSON Schema](https://github.com/enarjord/passivbot/blob/v9/schemas/config-v9.schema.json)
+describes canonical authored JSON.
 It offers field completion, declared numeric types, nullability, known value choices and closed
 objects. It also describes dynamic scenario/limit/scoring records, nested optimizer bounds,
 literal dotted or nested scenario overrides, dotted leaf fixed-runtime pins, and the existing

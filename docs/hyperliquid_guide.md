@@ -8,12 +8,8 @@
 
 ### Passivbot setup
 
-1. If not already installed, install Passivbot. Otherwise, pull latest master branch: `git pull`.
-2. Update the requirements:
-   ```bash
-   python3 -m pip install -e .
-   ```
-3. Add your Hyperliquid wallet address and API wallet to `api-keys.json`:
+1. Follow [installation and update guidance](installation.md) for the revision you will run.
+2. Add your Hyperliquid wallet address and API wallet to your private `api-keys.json`.
 ```json
 "hyperliquid_01": {
     "exchange": "hyperliquid",
@@ -24,12 +20,11 @@
 ```
 For the `"private_key"`, use the API wallet created in the API section on Hyperliquid.
 
-Now Passivbot may be run as normal with `passivbot live ...`. Note that Hyperliquid has a minimum
-$10 order size:
-`initial_entry_cost = balance * (total_wallet_exposure_limit_ratio / n_positions) * strategy_initial_sizing_fraction`.
-For `bot.portfolio.strategy_kind = "trailing_martingale"`, this fraction is
-`bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
-`bot.portfolio.strategy_kind = "ema_anchor"`, it is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
+Set `live.account.user` to the account name in your reviewed v9 config. See
+[Running live](live.md) for offline preflight and startup, and
+[minimum effective cost](min_effective_cost.md) for how account balance and strategy sizing
+affect entry eligibility. For builder-deployed markets, review the
+[HIP-3 account and margin requirements](stock_perps.md).
 
 #### HyperLiquid with a Vault (CopyTrading-like)
 1. In HyperLiquid, navigate to "Vaults" in the top menu and create a new vault.

@@ -1,7 +1,7 @@
 # Passivbot Parameters Explanation
 
 For editor completion and early structure/type checks, see the generated
-[v9 JSON Schema](../schemas/config-v9.schema.json) and the
+[v9 JSON Schema](https://github.com/enarjord/passivbot/blob/v9/schemas/config-v9.schema.json) and the
 [editor setup guide](config_editor.md). Runtime validators still enforce context-dependent
 trading, dataset and optimizer rules.
 
@@ -71,11 +71,21 @@ for the distinction between schema, package version and tags.
   - `false`: fixed denominator, same as live: `wallet_exposure_limit_ratio = total_wallet_exposure_limit_ratio / max_positions`.
 - **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before replay. `1` keeps minute observations; higher values lose intra-interval fill ordering. Minute-only drawdown, Ulcer, Pain, recovery, CAGR EW and exposure quantities become explicitly unavailable at coarser cadence, and optimizer-selected requests for them fail preflight. Daily-return quantities require a cadence supplying complete UTC daily closes. Passivbot does not interpolate missing minute or daily support.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
-- **equity_floor_fraction**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_fraction`, and `backtest_completion_fraction` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_fraction = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_fraction < 1.0`.
+- **equity_floor_fraction**: Backtest equity-floor guard relative to starting balance.
+  With `starting_balance = 1000` and `equity_floor_fraction = 0.05`, replay stops at
+  equity `<= 50`. The value must satisfy `0.0 <= equity_floor_fraction < 1.0`.
+  Completion measures observation coverage and can equal `1.0` when replay stops
+  at the final observation. Check liquidation status separately.
 - **maker_fee_override_fraction**: Optional signed maker fee override (scale one; negative values are rebates; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override-fraction`.
 - **taker_fee_override_fraction**: Optional signed taker fee override (scale one; negative values are rebates; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override-fraction`.
 - **limit_order_fill_buffer_fraction**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
-- **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.portfolio.execution.market_orders_allowed`. A sell fills at `close * (1 - market_order_slippage_fraction)` rounded down to `price_step`; a buy fills at `close * (1 + market_order_slippage_fraction)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
+- **market_order_slippage_fraction**: Backtest-only slippage for simulated market orders.
+  This applies to ordinary orders promoted by `bot.portfolio.execution.market_orders_allowed`
+  and to panic closes when the effective HSL policy uses `panic_close_order_type: "market"`.
+  A sell fills at `close * (1 - market_order_slippage_fraction)` rounded down to `price_step`.
+  A buy fills at `close * (1 + market_order_slippage_fraction)` rounded up.
+  Simulated market fills use taker fees. The default is `0.0005` (5 bps).
+  Live orders follow the exchange adapter's order semantics and slippage controls.
   Core activity quantities include `fills_gap_max_days` and `gross_turnover_ratio_per_day`; supporting clocks and counts belong to metric metadata.
 - **balance_sample_divider**: Plot-only minutes per balance/equity bucket. `1` keeps every observed point in plots; higher values thin plots. `balance_and_equity.csv.gz` always retains full-precision values at every native observation, including USD/BTC account balances and collateral-agnostic `strategy_equity`. This setting does not change metric populations or CSV precision.
 - **btc_collateral_target_ratio**: Target BTC collateral value divided by total wallet value in USD: current BTC market value plus USD cash, excluding unrealized trading PnL. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
@@ -140,7 +150,9 @@ The monitor publisher writes a read-only dashboard data root to disk when enable
 - **event_rotation_mib**: Rotate `events/current.ndjson` after it exceeds this size in mebibytes (MiB).
 - **event_rotation_minutes**: Rotate `events/current.ndjson` after this elapsed time even if size threshold is not reached.
 - **retain_days**: Age-based retention for rotated event/history/checkpoint files.
-- **max_total_bytes**: Global byte cap for the monitor root. Old rotated event/history/checkpoint files are pruned first.
+- **max_total_bytes**: Retention target in bytes for each bot's monitor directory. Pruning removes older
+  rotated event, history, and checkpoint files. Protected current files may leave the root
+  above the target.
 - **retain_price_ticks**, **retain_candles**, **retain_fills**: Enable or disable the current history streams for price ticks, completed candles, and normalized fills.
 - **compress_rotated_segments**: If `true`, gzip rotated event segments and checkpoints.
 - **price_tick_min_interval_milliseconds**: Minimum per-symbol interval for emitting `history/price_ticks.current.ndjson` entries.
@@ -386,9 +398,12 @@ allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_exce
   - When `false`, auto-unstuck skips the EMA trigger/readiness check but still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 - **unstuck.loss_allowance_fraction**:
   - Sets a realized-loss budget weighted by the side's `total_wallet_exposure_limit_ratio`.
-  - `balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`.
-  - `loss_floor = balance_peak * (1 - loss_allowance_fraction * total_wallet_exposure_limit_ratio)`; remaining allowance is `max(0, balance - loss_floor)`.
-  - Example: A reconstructed peak balance of `$10,000`, `loss_allowance_fraction = 0.02`, and `total_wallet_exposure_limit_ratio = 1.5` give a `$9,700` floor. At a current balance of `$9,800`, the remaining allowance is `$100`.
+  - Let `D` be the account-wide net-realized drawdown remembered using
+    `bot.portfolio.unstuck.memory_ema_span_minutes`. With raw balance `B` and
+    `p = loss_allowance_fraction * total_wallet_exposure_limit_ratio`, the remaining
+    allowance is `max(0, p * (B + D) - D)`.
+  - With a raw balance of `$9,800`, remembered drawdown of `$200`, loss allowance fraction
+    of `0.02`, and total wallet exposure limit ratio of `1.5`, the remaining allowance is `$100`.
   - This is a pacing budget: exchange minimum sizing may exceed it. See the [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
   - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_fraction`; the selected coin+side then uses that fraction in the same account-wide formula.
 - **unstuck.exposure_trigger_ratio**:
@@ -599,15 +614,22 @@ shared source.
   `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow an initial entry on that side. Set only the desired side to `false` to allow exchange-minimum-sized entries. Actual exchange minima and held-position management are unchanged. Selection and one-way arbitration apply each side's effective flag before choosing an entry. The nullable backtest override inherits both independently.
 
-- **bot.portfolio.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
+- **bot.portfolio.execution.market_orders_allowed**: When `true`, ordinary orders at
+  or near the market can be promoted to market orders. The default `false` keeps ordinary
+  orders as limits. HSL panic closes use the effective controller's `panic_close_order_type`
+  independently. Live market orders execute as taker orders and may fill away from the
+  reference price during fast moves or thin liquidity. Exchange adapter and CCXT slippage controls apply.
 
-- **bot.portfolio.execution.market_order_near_touch_fraction**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
+- **bot.portfolio.execution.market_order_near_touch_fraction**: Promotion threshold used
+  when ordinary market orders are allowed. The reference price is the midpoint of the
+  best bid and ask when both are valid. The default threshold is `0.001`. Live and
+  backtest share the promotion rule. Execution price and slippage have separate controls.
   - Decision rules:
     - non-panic buy with `price >= market_price` => `market`
     - non-panic sell with `price <= market_price` => `market`
     - otherwise, if `abs(order_price_diff) <= market_order_near_touch_fraction` => `market`
     - otherwise => `limit`
-    - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
+    - panic closes use the configured HSL controller's `panic_close_order_type`
   - Ownership is `config.bot.portfolio.execution`. Backtests always inherit `bot.portfolio.execution.market_orders_allowed` and `bot.portfolio.execution.market_order_near_touch_fraction`; `config.backtest` does not accept overrides for either field.
 
 - **bot.portfolio.warmup.max_minutes**: Cap on span-based historical warm-up for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Both modes round up only at the whole-minute acquisition boundary: `0.5` allows one minute and `5.5` allows six. Every positive cap, including an integer cap, is a maximum rather than a minimum request: a `3.25`-minute requirement acquires four candles under either a `5.5` or `60` cap. Uncapped background candidate refresh retains its default minimum window. The authored cap and EMA spans remain floats; live ranking readers use those fractional spans directly. Native hourly reads retain whole-hour alignment, and independently required RMS history is unchanged.
@@ -978,14 +1000,15 @@ To intentionally opt out of a default limit, keep the metric name but disable it
 For CLI overrides you can replace the full list with a JSON/HJSON payload:
 
 ```
-passivbot optimize --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
+passivbot optimize path/to/config.json \
+  --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
 ```
 
 For repeatable one-off entries, use `--limit`. Symbolic scalar operators in `--limit` are
 written as keep conditions, matching `pareto_store.py` filtering:
 
 ```bash
-passivbot optimize \
+passivbot optimize path/to/suite-config.json --suite y \
   --clear-limits \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.35' \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.5 scenario=base' \
@@ -1053,11 +1076,12 @@ recurrence. The [risk reference](v9_risk_model.md) specifies sampling, arithmeti
 bootstrap and malformed-input behavior; the [HSL guide](equity_hard_stop_loss.md) explains
 scopes and finite cooldown.
 
-A flatten starts finite cooldown when the latest pre-final-fill assessment **or** the
-post-final-accounting assessment is RED. Once qualified, later GREEN/budget changes do not
-cancel or renew the integer deadline. New actual exposure starts a new episode. Zero
-cooldown allows immediate restart subject to ordinary gates. There is no `never` option;
-permanent shutdown belongs to the operator or an external supervisor.
+`cooldown_after_red_minutes` measures the wait from the factual fill that takes the
+whole configured scope from exposed to flat. The latest assessment before that fill
+or the final accounting assessment, including realized PnL and fees, must be RED.
+Once qualified, later signal or budget changes leave the deadline intact. New actual
+exposure starts a new episode. A value of `0` gives no waiting period, and ordinary
+entry checks still apply. See [qualified finite cooldown](equity_hard_stop_loss.md#qualified-finite-cooldown).
 
 Portfolio optimizer bounds use `optimize.bounds.portfolio.hsl`; local HSL bounds use their side
 blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.portfolio.unstuck` and

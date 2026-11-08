@@ -3,31 +3,34 @@
 ## Contract
 
 1. Stock perps are Hyperliquid-only in Passivbot.
-2. Stock perps use isolated margin behavior.
+2. Hyperliquid HIP-3 live startup requires unified or portfolio-margin account mode when
+   the approved universe or live state includes HIP-3 markets. New entries require a
+   cross-capable market. Preserve observed margin state when handling existing exposure
+   under the connector's supported account contract.
 3. Symbol normalization must preserve HIP-3 routing semantics.
 
 ## Non-Obvious Details
 
 1. User symbol forms (`TSLA`, `xyz:TSLA`, `XYZ-TSLA`) map to HIP-3 market forms.
 2. Builder registration is required before API trading on supported builders.
-3. Stock perps have a practical $10 minimum order constraint.
+3. Use the exchange's effective minimum order size for the actual market.
 4. Historical data may blend exchange/tradfi sources depending on age and availability.
 5. With Hyperliquid `ohlcv_source_dir`, closed-market minutes for `xyz:` coins are synthetic flat
    candles (`h=l=c=previous close`, `v=0`) and intentionally tradable. Strict fill inequalities
    prevent fills exactly at the flat price. Do not cap or unmark these candles without changing the
-   documented modeling contract and its tests. See `docs/stock_perps.md` for modeling caveats and
+   documented modeling contract and its tests. See [the user guide](../../stock_perps.md) for modeling caveats and
    `../case_studies/backtest_data_integrity.md` for the decision history.
 
 ## High-Impact Operational Gotchas
 
 1. Missing builder registration can surface as misleading margin errors.
-2. Small balances can hit minimum order constraints quickly due to the $10 floor.
+2. Small balances can hit market-specific minimum order constraints.
 3. Symbol routing must remain Hyperliquid-only for stock perps.
 
 ## Validation
 
 1. Symbol normalization and routing.
-2. Margin mode assignment by symbol type.
+2. Account-mode and margin-capability admission.
 3. Mixed crypto + stock configs.
 4. Minimum-order behavior on small balances.
 

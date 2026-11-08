@@ -8,6 +8,7 @@ import pytest
 
 from config import prepare_config
 from config.schema import get_template_config, get_expanded_config_prototype
+from hsl_fixture import FAKE_HSL_CONFIG_PATH
 from released_v8_fixtures import released_v8_policy
 from config_utils import add_config_arguments, project_template_config_for_cli
 from passivbot_cli.main import main as cli_main
@@ -95,16 +96,11 @@ def test_runtime_schema_override_is_rejected_before_any_config_mutation(command,
     assert config == original
 
 
-def test_fake_hsl_example_preserves_automatic_gpu_sizing():
-    import json
-    from pathlib import Path
-
-    example = json.loads(
-        (Path(__file__).parents[1] / "configs/examples/fake_live_hsl.json").read_text()
-    )
-    policy = example["optimize"]["gpu"]
+def test_fake_hsl_fixture_preserves_automatic_gpu_sizing():
+    source = json.loads(FAKE_HSL_CONFIG_PATH.read_text())
+    policy = source["optimize"]["gpu"]
     effective = prepare_config(
-        example, verbose=False, target="canonical", runtime=None
+        source, verbose=False, target="canonical", runtime=None
     )["optimize"]["gpu"]
     canonical = get_template_config()["optimize"]["gpu"]
     assert policy["batch_size"] == effective["batch_size"] == canonical["batch_size"] is None
