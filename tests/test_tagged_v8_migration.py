@@ -11,6 +11,7 @@ import pytest
 
 from config import prepare_config
 from config.migrations.released_v8 import get_released_v8_defaults
+from config.migrations.v9 import migrate_v8_to_v9
 from tools.migrate_config_v9 import main, migrate
 
 
@@ -60,6 +61,53 @@ def test_unverified_schema_fails_before_opening_overrides(version):
     source["coin_overrides"] = {"AAA": {"override_config_path": "missing.json"}}
     with pytest.raises(ValueError, match="not a verified versioned v8 schema.*original runtime"):
         migrate(source, best_effort=True)
+
+
+@pytest.mark.parametrize("location", ["root", "legacy_flags", "scenario", "fixed"])
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_v8_0_coin_files_require_materialization_before_opening(location, best_effort, monkeypatch):
+    def unexpected_load(*args, **kwargs):
+        pytest.fail("v8.0.0 file opened before rejecting its hydrated semantics")
+
+    monkeypatch.setattr("config.overrides.load_override_config", unexpected_load)
+    source = sparse("v8.0.0")
+    patch = {"AAA": {"override_config_path": "coin.json"}}
+    if location == "root":
+        source["coin_overrides"] = patch
+    elif location == "legacy_flags":
+        source["live"]["coin_flags"] = {"AAA": "-lc coin.json"}
+    elif location == "scenario":
+        source["backtest"]["scenarios"] = [
+            {"label": "coin files", "overrides": {"coin_overrides": patch}}
+        ]
+    else:
+        source["optimize"]["fixed_runtime_overrides"] = {
+            "coin_overrides.AAA.override_config_path": "coin.json"
+        }
+    with pytest.raises(ValueError, match="hydrated coin-file semantics.*Materialize the effective inline"):
+        migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
+
+
+@pytest.mark.parametrize("settings", [
+    {"hsl": {"enabled": True}},
+    {"hsl_enabled": True},
+    {"risk_entry_cooldown_minutes": 5.0},
+    {"unstuck_ema_gating_enabled": False},
+    {"unstuck": {"ema_span_0": 2.0}},
+])
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_v8_0_ignored_inline_coin_policy_cannot_become_active(settings, best_effort):
+    source = sparse("v8.0.0")
+    source["coin_overrides"] = {"AAA": {"bot": {"long": settings}}}
+    with pytest.raises(ValueError, match="not an effective coin override in v8.0.0"):
+        migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
+
+
+def test_v8_0_materialized_inline_coin_override_migrates():
+    source = sparse("v8.0.0")
+    source["coin_overrides"] = {"AAA": {"bot": {"long": {"wallet_exposure_limit": 0.43}}}}
+    result = migrate_v8_to_v9(source, memory_span_minutes=123.5)
+    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["wallet_exposure_limit_ratio"] == 0.43
 
 
 @pytest.mark.parametrize("location", ["root", "scenario", "fixed", "file"])

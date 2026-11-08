@@ -40,6 +40,37 @@ If the matching runtime is unavailable or v8.6 cannot represent the source
 policy, start from a canonical example in the v9 checkout and author a reviewed
 v9 config using the original settings and the decisions below. [Config workflow](config_workflow.md)
 
+### v8.0 coin override files
+
+V8.0.0 filled referenced coin files with source defaults and resolved relative paths
+from the working directory first. The v9 converter requires explicit inline values
+for that schema, including when a legacy `-lc` flag names the file. Run this in the
+v8.0.0 environment from the same working directory as the old run, with `PYTHONPATH`
+pointing to that checkout's `src` directory. Keep the output beside the source.
+
+```sh
+PYTHONPATH=src python - input.v8.json inline.v8.json <<'PY'
+import sys
+from config_utils import dump_config, load_config, load_hjson_config, parse_overrides
+
+source = load_hjson_config(sys.argv[1])
+effective = parse_overrides(load_config(sys.argv[1]), verbose=False)
+source["coin_overrides"] = effective["coin_overrides"]
+source.get("live", {}).pop("coin_flags", None)
+dump_config(source, sys.argv[2])
+PY
+```
+
+Verify that the old loader found each intended file and compare the resulting inline
+values with the old effective policy. Review any coin files or inline replacements in
+scenarios or fixed optimizer overrides in their own effective contexts. You can also
+author the intended settings directly in a v9 config.
+
+The v8.0.0 coin allowlist omitted per-coin HSL, entry cooldown and unstuck EMA
+gating and spans. Set those deliberately in v9 if you want them to take effect.
+V8.0.0 also dropped values equal to the effective root. Use the same materialization
+procedure for inline overrides where those values should continue to inherit.
+
 ## Structural changes
 
 | Released field | Final v9 field or action |
@@ -200,9 +231,9 @@ and pins that no longer apply. Put any new portfolio domains under
 `optimize.bounds.hsl` before converting. The converter carries those to
 `bot.portfolio.hsl` and `optimize.bounds.portfolio.hsl`.
 
-The converter preserves sparse file inheritance and reports materialized referenced coin
-patches; file values precede inline values. Conflicting aliases fail rather than choosing
-one by insertion order.
+For v8.1.0 and v8.6.0, the converter preserves sparse file inheritance and reports
+materialized referenced coin patches. Inline values take precedence over file values.
+Conflicting aliases fail rather than choosing one by insertion order.
 
 ### Tagged v8.1 examples
 

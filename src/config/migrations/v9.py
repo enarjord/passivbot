@@ -248,6 +248,41 @@ def _migration_source_version(version):
     return require_released_v8_schema_version(version)
 
 
+def _require_v8_0_inline_coin_override(patch, path):
+    """Keep v8.0's hydrated file policy and ignored inline fields explicit."""
+    if not isinstance(patch, dict):
+        return
+    if patch.get("override_config_path"):
+        raise ValueError(
+            f"{path}.override_config_path uses v8.0.0 hydrated coin-file semantics. "
+            "Materialize the effective inline overrides with the v8.0.0 loader "
+            "or re-author them explicitly. See docs/v8_to_v9_migration.md."
+        )
+    bot = patch.get("bot")
+    if not isinstance(bot, dict):
+        return
+    from .final_v9 import canonical_released_v8_path
+
+    for side in ("long", "short"):
+        for field, _, value in _walk(bot.get(side), f"bot.{side}"):
+            if isinstance(value, dict) and not value:
+                continue
+            local = canonical_released_v8_path(tuple(field.split(".")))[2:]
+            if (
+                local[0] in {"hsl", "entry_cooldown"}
+                or local[0].startswith("hsl_")
+                or local in {
+                    ("unstuck", "ema_gating_enabled"),
+                    ("unstuck", "ema_span_0_minutes"), ("unstuck", "ema_span_1_minutes"),
+                }
+            ):
+                raise ValueError(
+                    f"{path}.{field} was not an effective coin override in v8.0.0. "
+                    "Materialize the old effective inline policy or author this setting "
+                    "deliberately in the v9 configuration."
+                )
+
+
 def migrate_v8_to_v9(
     source,
     *,
@@ -317,6 +352,10 @@ def migrate_v8_to_v9(
     from .final_v9 import reject_v8_alias_conflicts
     from .released_v8 import TAGGED_V8_SCHEMA_VERSIONS
 
+    coin_overrides = result.get("coin_overrides")
+    if schema_version == "v8.0.0" and not _coin_patch and isinstance(coin_overrides, dict):
+        for coin, patch in coin_overrides.items():
+            _require_v8_0_inline_coin_override(patch, f"coin_overrides.{coin}")
     reject_v8_alias_conflicts(result)
     tagged_v8 = schema_version in TAGGED_V8_SCHEMA_VERSIONS
     # Default hydration cannot authorize removing an explicitly null restart
