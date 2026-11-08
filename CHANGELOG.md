@@ -6,9 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Reduce CPU time spent synthesizing sparse one-minute candle windows. Preserve real rows,
-  excluded gaps, synthetic candle provenance, and the existing readiness policy.
-
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
@@ -187,6 +184,9 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce repeated candle shard parsing by reusing bounded validated NPY headers,
   while reading current payload bytes and preserving corruption checks.
+
+- Reduce CPU time spent synthesizing sparse one-minute candle windows. Preserve real rows,
+  excluded gaps, synthetic candle provenance, and the existing readiness policy.
 
 - Reduce standalone setup overhead with a conservative source and installed-runtime
   identity manifest. The versioned identity deliberately invalidates prior evaluation
