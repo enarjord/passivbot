@@ -117,7 +117,7 @@ def test_bare_cli_fails_cleanly_without_market_or_candle_requests(command, suite
     error = capsys.readouterr().err
     assert f"Cannot start {command}" in error
     assert "Both position sides are disabled" in error
-    assert f"{command} configs/examples/btc_long.json" in error
+    assert f"{command} configs/examples/default_trailing_martingale_long.json" in error
     assert "--bot.long.enabled y -s BTC,ETH" in error
     assert "Traceback" not in error
 

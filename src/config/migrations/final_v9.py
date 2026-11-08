@@ -23,11 +23,12 @@ _RELEASED_SHARED_FLAT_PATHS = {
     "risk_twel_enforcer_threshold": ("risk", "total_exposure_enforcer", "threshold_ratio"),
     "forager_volume_ema_span_1m": ("forager", "volume_ema_span_minutes"),
     "forager_volatility_ema_span_1m": ("forager", "log_range_ema_span_minutes"),
-    "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_minutes"),
+    "unilateralness_ema_span_1m": ("forager", "rms_directionality_ema_span_minutes"),
 }
 _RELEASED_SHARED_BOUND_PATHS = {
     **_RELEASED_SHARED_FLAT_PATHS,
     "forager_score_weights_volatility": ("forager", "score_weights", "log_range"),
+    "forager_score_weights_unilateralness": ("forager", "score_weights", "rms_directionality"),
 }
 
 
@@ -292,7 +293,13 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
                             new=reducer, reason="preserve released metric outer statistic in the reducer field"))
 
     def convert(name, path):
-        from config.metrics import canonicalize_metric_name, reject_retired_metric, metric_base_name, KNOWN_METRICS
+        from config.metrics import (
+            CORE_METRIC_DEFINITION_VERSION,
+            KNOWN_METRICS,
+            canonicalize_metric_name,
+            metric_base_name,
+            reject_retired_metric,
+        )
         from config.ew import is_ew_metric
         from .released_v8_metrics import released_v8_metric_name, RELEASED_V8_METRIC_NAMES, RELEASED_V8_STAT_SUFFIXES
         nonlocal ew_requested
@@ -333,11 +340,17 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             new = metric_base_name(new)
         reject_retired_metric(new, path=path)
         if not acknowledge and not best_effort:
-            raise ValueError(f"{path}: core definition version 1 requires --acknowledge-metric-formula-change and re-evaluation of thresholds/results")
+            raise ValueError(
+                f"{path}: core definition version {CORE_METRIC_DEFINITION_VERSION} requires "
+                "--acknowledge-metric-formula-change and re-evaluation of thresholds/results"
+            )
         new = canonicalize_metric_name(new)
         replacement_paths.add(path)
         ew_requested |= is_ew_metric(new)
-        reason = "core definition version 1 metric formula boundary; re-evaluate objectives, limits and stored fitness"
+        reason = (
+            f"core definition version {CORE_METRIC_DEFINITION_VERSION} metric formula boundary; "
+            "re-evaluate objectives, limits and stored fitness"
+        )
         if inferred:
             reason = (
                 "inferred metric formula substitution: " + inferences[path].reason + "; "

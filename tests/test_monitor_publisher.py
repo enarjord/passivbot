@@ -17,7 +17,7 @@ def _make_publisher(tmp_path, **overrides):
         "root_dir": str(tmp_path),
         "snapshot_interval_seconds": 1.0,
         "checkpoint_interval_minutes": 10.0,
-        "event_rotation_mb": 128.0,
+        "event_rotation_mib": 128.0,
         "event_rotation_minutes": 60.0,
         "retain_days": 7.0,
         "max_total_bytes": 1_000_000,
@@ -35,7 +35,7 @@ def _make_publisher(tmp_path, **overrides):
 
 def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     runtime = {"schema_version": 1, "run_id": "run-123"}
-    publisher = _make_publisher(tmp_path, runtime_identity=runtime)
+    publisher = _make_publisher(tmp_path, runtime_identity=runtime, event_rotation_mib=2.5)
 
     event = publisher.record_event("bot.start", ("bot", "lifecycle"), {"status": "starting"}, ts=1000)
     assert event["seq"] == 1
@@ -50,6 +50,8 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     assert manifest["capabilities"]["history"] is True
     assert manifest["capabilities"]["history_streams"]["fills"] is True
     assert manifest["runtime"] == runtime
+    assert publisher.event_rotation_bytes == 2_621_440
+    assert manifest["config"]["event_rotation_mb"] == 2.5
 
     events = [json.loads(line) for line in (root / "events" / "current.ndjson").read_text().splitlines()]
     assert [event["kind"] for event in events] == ["bot.start", "error.bot"]
@@ -265,7 +267,7 @@ def test_monitor_publisher_includes_raw_fill_payload_when_enabled(tmp_path):
 def test_monitor_publisher_rotates_event_segments(tmp_path):
     publisher = _make_publisher(
         tmp_path,
-        event_rotation_mb=0.00001,
+        event_rotation_mib=0.00001,
         event_rotation_minutes=60.0,
     )
 
@@ -286,7 +288,7 @@ def test_monitor_publisher_rotates_event_segments(tmp_path):
 def test_monitor_publisher_concurrent_event_writes_keep_seq_and_manifest(tmp_path):
     publisher = _make_publisher(
         tmp_path,
-        event_rotation_mb=0.00001,
+        event_rotation_mib=0.00001,
         event_rotation_minutes=60.0,
     )
     n_threads = 4
@@ -646,7 +648,7 @@ def test_monitor_recovery_uses_envelope_seq_after_nested_payload_seq(tmp_path):
 
 
 def test_monitor_event_rotation_forces_pre_and_post_manifest_checkpoints(tmp_path, monkeypatch):
-    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher = _make_publisher(tmp_path, event_rotation_mib=0.00001)
     publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
     assert publisher.record_event("one", ("test",), ts=1_001)
     original_write_manifest = publisher._write_manifest
@@ -670,7 +672,7 @@ def test_monitor_event_rotation_forces_pre_and_post_manifest_checkpoints(tmp_pat
 def test_monitor_event_rotation_waits_for_successful_pre_rotation_checkpoint(
     tmp_path, monkeypatch
 ):
-    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher = _make_publisher(tmp_path, event_rotation_mib=0.00001)
     publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
     assert publisher.record_event("one", ("test",), ts=1_001)
     current_before = publisher.current_events_path.read_text()
@@ -713,7 +715,7 @@ def test_monitor_event_rotation_waits_for_successful_pre_rotation_checkpoint(
 def test_monitor_history_rotation_snapshot_and_close_force_manifest_checkpoints(
     tmp_path, monkeypatch
 ):
-    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher = _make_publisher(tmp_path, event_rotation_mib=0.00001)
     publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
     original_write_manifest = publisher._write_manifest
     checkpoints = []
@@ -1141,7 +1143,7 @@ def test_monitor_publisher_event_timing_retains_cpu_attribution_after_retention_
 def test_monitor_publisher_event_timing_includes_due_rotation_retention(
     tmp_path, monkeypatch
 ):
-    publisher = _make_publisher(tmp_path, event_rotation_mb=0.000001)
+    publisher = _make_publisher(tmp_path, event_rotation_mib=0.000001)
     publisher.current_events_path.write_text("rotated event\n")
     clocks = {"wall_ns": 10_000, "thread_cpu_ns": 1_000}
 

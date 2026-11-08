@@ -19,11 +19,11 @@ GPU = pytest.mark.skipif(
 
 
 def test_candidate_fractional_span_window_and_cooldown_pins():
-    base = adaptive_params({"unilateralness_ema_span_minutes": 4.25})
+    base = adaptive_params({"rms_directionality_ema_span_minutes": 4.25})
     rows = _candidate_parameter_matrix(
         [
             {
-                "long_unilateralness_ema_span_minutes": 7.00000001,
+                "long_rms_directionality_ema_span_minutes": 7.00000001,
                 "long_entry_cooldown_exposure_weight": 9.0,
             }
         ],
@@ -31,7 +31,7 @@ def test_candidate_fractional_span_window_and_cooldown_pins():
         {"long": base},
         static_overrides={"long": {"entry_cooldown_exposure_weight": 3.0}},
     )
-    assert rows[0, ADAPTIVE_PARAM_KEYS.index("unilateralness_window")] == 141
+    assert rows[0, ADAPTIVE_PARAM_KEYS.index("rms_directionality_window")] == 141
     assert rows[0, ADAPTIVE_PARAM_KEYS.index("entry_cooldown_exposure_weight")] == 3
     assert (
         rows[0, ADAPTIVE_PARAM_KEYS.index("entry_cooldown_max_duration_minutes")] == -1
@@ -98,7 +98,7 @@ def test_gpu_rms_matches_finite_rust_window(span, kind):
     indices = sorted(set([n, n + 1, 2 * n, 3 * n, *range(n, len(t), max(1, n // 9))]))
     expected = np.array(
         [
-            pbr.calc_signed_unilateralness(
+            pbr.calc_signed_rms_directionality(
                 close[k - n : k + 1].astype(float).tolist(), span
             )
             for k in indices
@@ -149,7 +149,7 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].pop("entry_cooldown_minutes", None)
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
-        cfg["bot"][s]["forager"]["unilateralness_ema_span_minutes"] = 3.25
+        cfg["bot"][s]["forager"]["rms_directionality_ema_span_minutes"] = 3.25
     for key in mss:
         if not key.startswith("__"):
             mss[key]["last_valid_index"] = count - 1
@@ -171,7 +171,7 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
 @GPU
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
+def test_rms_directionality_ranking_selects_bouncy_coin(strategy, side):
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
 
     cfg, _, mss, _, _ = _fixture(side, 2, "initial")
@@ -190,9 +190,9 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
         bot["risk"].pop("entry_cooldown_minutes", None)
         bot["entry_cooldown"]["base_duration_minutes"] = 0
         bot["forager"].update(
-            unilateralness_ema_span_minutes=3.25,
+            rms_directionality_ema_span_minutes=3.25,
             score_weights=dict(
-                volume=0, log_range=0, ema_readiness=0, unilateralness=1
+                volume=0, log_range=0, ema_readiness=0, rms_directionality=1
             ),
         )
         if strategy == "ema_anchor":
@@ -232,8 +232,8 @@ def test_adaptive_temporal_chunks_preserve_all_native_outputs():
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
         entry_cooldown_adverse_weight=11,
-        unilateralness_ema_span_minutes=3.25,
-        unilateralness_window=65,
+        rms_directionality_ema_span_minutes=3.25,
+        rms_directionality_window=65,
     ).items():
         row[keys.index(key)] = value
     matrix = np.asarray([row], dtype=float)
@@ -375,9 +375,9 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
         entry_cooldown_adverse_weight=11,
-        unilateralness_ema_span_minutes=3.25,
-        unilateralness_window=65,
-        forager_score_weights_unilateralness=1,
+        rms_directionality_ema_span_minutes=3.25,
+        rms_directionality_window=65,
+        forager_score_weights_rms_directionality=1,
         n_positions=1,
     ).items():
         row[keys.index(key)] = value
@@ -434,8 +434,8 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         bot["risk"].pop("entry_cooldown_minutes", None)
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["forager"].update(
-            unilateralness_ema_span_minutes=1.0,
-            score_weights=dict(volume=1, log_range=0, ema_readiness=0, unilateralness=1),
+            rms_directionality_ema_span_minutes=1.0,
+            score_weights=dict(volume=1, log_range=0, ema_readiness=0, rms_directionality=1),
         )
         if strategy == "ema_anchor":
             bot["strategy"][strategy].update(
@@ -472,8 +472,8 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
         cfg["bot"][s]["risk"].pop("entry_cooldown_minutes", None)
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["bot"][side]["forager"].update(
-        unilateralness_ema_span_minutes=100000,
-        score_weights=dict(volume=0, log_range=0, ema_readiness=0, unilateralness=1),
+        rms_directionality_ema_span_minutes=100000,
+        score_weights=dict(volume=0, log_range=0, ema_readiness=0, rms_directionality=1),
     )
     with pytest.raises(ValueError, match="1m"):
         _evaluate(side, (cfg, candles, mss, btc, ts))
@@ -490,7 +490,7 @@ def test_gpu_rms_interval_demand_keeps_real_consumers(count, slots, dynamic, adv
     from gpu_replay_fixtures import _base_parameter_values
 
     values = _base_parameter_values()
-    values.update(n_positions=slots, forager_score_weights_unilateralness=1,
+    values.update(n_positions=slots, forager_score_weights_rms_directionality=1,
                   entry_cooldown_adverse_weight=adverse,
                   entry_cooldown_max_duration_minutes=30)
     matrix = np.asarray([[values[key] for key in keys]])
@@ -498,7 +498,7 @@ def test_gpu_rms_interval_demand_keeps_real_consumers(count, slots, dynamic, adv
                   dynamic_wel_by_tradability=dynamic)
     if accept:
         packed = _scale_directional_minute_parameters(matrix, keys, **kwargs)
-        assert packed[0, keys.index("forager_score_weights_unilateralness")] == 0
+        assert packed[0, keys.index("forager_score_weights_rms_directionality")] == 0
     else:
         with pytest.raises(ValueError, match="requires one-minute candles"):
             _scale_directional_minute_parameters(matrix, keys, **kwargs)
@@ -522,13 +522,13 @@ def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
     runner = cls(run, data, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     assert runner.rms_ranking_coin_counts == (2, 1)
     row[keys.index("n_positions")] = 2
-    row[keys.index("forager_score_weights_unilateralness")] = 1
-    row[keys.index("unilateralness_ema_span_minutes")] = 100000
+    row[keys.index("forager_score_weights_rms_directionality")] = 1
+    row[keys.index("rms_directionality_ema_span_minutes")] = 100000
     matrix = np.asarray([row + row], dtype=float)
     active = {key: value.cpu().clone() for key, value in runner.run(matrix).items()
               if isinstance(value, torch.Tensor)}
-    matrix[0, keys.index("forager_score_weights_unilateralness")] = 0
-    matrix[0, len(keys) + keys.index("forager_score_weights_unilateralness")] = 0
+    matrix[0, keys.index("forager_score_weights_rms_directionality")] = 0
+    matrix[0, len(keys) + keys.index("forager_score_weights_rms_directionality")] = 0
     disabled = runner.run(matrix)
     for key, value in active.items():
         torch.testing.assert_close(value, disabled[key].cpu(), rtol=0, atol=0, equal_nan=True)
@@ -584,7 +584,7 @@ def test_effective_coin_cooldown_interval_demand(pins, base, floor, ceiling, adv
     values = _base_parameter_values()
     values.update(entry_cooldown_minutes=base, entry_cooldown_min_duration_minutes=floor,
                   entry_cooldown_max_duration_minutes=ceiling, entry_cooldown_adverse_weight=adverse,
-                  forager_score_weights_unilateralness=0)
+                  forager_score_weights_rms_directionality=0)
     matrix = np.asarray([[values[key] for key in keys]])
     kwargs = dict(sides=1, interval_minutes=5, cooldown_coin_overrides=(np.asarray([pins]),))
     if accept:
@@ -601,7 +601,7 @@ def test_inherited_coin_cooldown_clamp_validates_every_candidate_and_coin():
 
     values = _base_parameter_values()
     values.update(entry_cooldown_minutes=10, entry_cooldown_adverse_weight=0,
-                  forager_score_weights_unilateralness=0)
+                  forager_score_weights_rms_directionality=0)
     matrix = np.asarray([[values[key] for key in keys]] * 2)
     pins = np.asarray([[np.nan, np.nan, 10, 7, np.nan]])
     kwargs = dict(sides=1, interval_minutes=5, cooldown_coin_overrides=(pins,))

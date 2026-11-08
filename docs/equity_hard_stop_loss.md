@@ -76,13 +76,16 @@ not preserve a prior panic order as continuing strategy authority.
 
 ## Qualified finite cooldown
 
-At the exposed-to-flat transition, use the latest causal assessment immediately before the
-final fill and the final accounting assessment, including realized PnL and fees:
+`cooldown_after_red_minutes` is the wait after a RED-qualified scope becomes flat. The clock
+starts at the fill that removes the scope's last exposure. In position-side or portfolio scope,
+all positions in that scope must be closed. Use the latest causal assessment immediately before
+the final fill and the final accounting assessment, including realized PnL and fees.
 
 ```text
 qualified = pre_final_fill_RED OR post_final_accounting_RED
-cooldown_until = flatten_timestamp + duration if qualified else no_deadline
-in_cooldown = flat AND now < cooldown_until
+cooldown_duration_ms = floor(cooldown_after_red_minutes * 60_000 + 0.5)
+cooldown_until_ms = flatten_timestamp_ms + cooldown_duration_ms if qualified else no_deadline
+in_cooldown = flat AND qualified_deadline_exists AND now_ms < cooldown_until_ms
 ```
 
 Any close can qualify, including a manual close without a Passivbot order tag. An earlier
@@ -92,9 +95,9 @@ pre-fill score 0.09912 and final score 0.09884 still starts the configured finit
 
 After qualification, later GREEN, budget changes or repeated flat observations do not
 cancel, renew or extend the deadline. Corrected facts require shared reconstruction.
-Actual new exposure clears the old terminal record and starts a new episode. Zero cooldown
-permits immediate restart subject to normal strategy/risk gates. There is no `never`
-restart policy; an operator or external supervisor owns permanent shutdown.
+Actual new exposure clears the old terminal record and starts a new episode. A value of zero
+adds no wait. At expiry, new entries again follow ordinary strategy, eligibility, and risk
+checks. An operator or external supervisor owns any permanent shutdown policy.
 
 ## Live reconstruction and availability
 

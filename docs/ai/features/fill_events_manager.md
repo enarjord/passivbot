@@ -2,7 +2,7 @@
 
 ## Contract
 
-All trading writes also share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#bounded-position-to-fill-settling).
+All trading writes also share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#budgets-history-and-admission).
 It schedules tail fetches after position changes and temporarily defers affected coin-sides;
 it is not the trailing reconstruction or historical-PnL proof described below. A successful
 qualifying fetch need not contain the expected fill. Its 15-second maximum cannot be renewed by

@@ -102,7 +102,7 @@ retracement separately. There is no duplicate passive feature case.
 | Exposure | Position/total enforcers, both total-reduction policies, entry gate, excess allowance |
 | Strategy controls | Entry/close trailing, passive behavior, EMA gate modes, volatility/exposure weights |
 | Coin policy | Inheritance and sparse coin overrides |
-| Selection/data | Ranking weights, unilateralness, hysteresis, validity windows, minimum cost, dynamic exposure |
+| Selection/data | Ranking weights, RMS directionality, hysteresis, validity windows, minimum cost, dynamic exposure |
 | Execution | Slippage, fill buffer, realized-loss gate, coarse candles, BTC collateral capability |
 | Metric work | Core metrics and completion, HSL metrics, optional weighted/recovery/gap metrics |
 | Prices | Oscillating, trend, shocks |

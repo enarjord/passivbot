@@ -207,6 +207,7 @@ def _definitions():
             "signed" if name in signed else "nonnegative",
             "extended real with explicit status",
             weighting=("gap duration" if name == "fills_gap_time_weighted_mean_hours"
+                       else "holding episode duration" if name == "position_held_time_weighted_mean_hours"
                        else "calendar exponential" if name.endswith("_ew") else "uniform"),
             curve="strategy_equity" if "strategy_equity" in name else None,
             position_side=next(

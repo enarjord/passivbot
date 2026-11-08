@@ -49,7 +49,7 @@ WORKDIR /app
 
 # Copy runtime support files
 COPY broker_codes.hjson broker_codes.hjson
-COPY container container
+COPY container/entrypoint.sh container/render_api_keys.py container/render_config.py container/
 
 # Copy the built Passivbot wheel from the builder stage
 COPY --from=builder /tmp/wheels/*.whl /tmp/wheels/

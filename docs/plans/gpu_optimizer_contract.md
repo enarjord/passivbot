@@ -30,7 +30,7 @@ search/storage and device cases from accepted numerical, resource and performanc
   repository review-adjudication runbook and remain unresolved until adjudicated.
 - Keep the existing GPU screening/CPU-validation backend until its replacement passes
   the relevant acceptance gates. Do not retain both architectures indefinitely.
-- Follow [repository authority and data boundaries](../../AGENTS.md). Public evidence
+- Follow [repository authority and data boundaries](https://github.com/enarjord/passivbot/blob/HEAD/AGENTS.md). Public evidence
   uses reproducible fixtures and public examples, not private configs or host details.
 - Rust remains the owner of trading semantics. GPU execution does not require Python
   to reimplement trading rules or repeat simulations on CPU.
@@ -143,7 +143,7 @@ Prefer float32 where its benefits justify it. Bitwise float32/float64 identity i
 required. Use explicit absolute/relative tolerances per metric, with sample sufficiency
 and documented non-finite sentinels handled intentionally. Tolerances are provisional
 until baseline observations, not a global percentage applied indiscriminately.
-The acceptance map records [case-scoped numerical decisions](gpu_optimizer_acceptance.md#practical-numerical-foundation--scoped-decisions);
+The acceptance map records [case-scoped numerical decisions](gpu_optimizer_acceptance.md#practical-numerical-foundation-scoped-decisions);
 these decisions do not change the standalone tool's policies or certify every metric.
 
 Evaluate discrepancies case by case for material effect on trading paths, risk decisions,

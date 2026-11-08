@@ -54,5 +54,5 @@ data-path improvements, and stricter live execution contracts.
 5. Use the established operational rollout process for live bots; this release does not authorize
    or perform exchange requests, bot restarts, or order actions by itself.
 
-The complete detailed change ledger is in [CHANGELOG.md](../CHANGELOG.md). The original v7-to-v8
+The complete detailed change ledger is in [CHANGELOG.md](https://github.com/enarjord/passivbot/blob/v8.1.0/CHANGELOG.md). The original v7-to-v8
 migration boundary remains documented in [the v8.0.0 release notes](release_notes_v8.0.0.md).

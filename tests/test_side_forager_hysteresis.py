@@ -50,7 +50,7 @@ def selection_snapshot(kind, *, high_side="short", hedge_mode=True):
             for target in (symbol[side]["bot_params"], value["global"]["global_bot_params"][side]):
                 target["forager_score_weights"] = {
                     "volume": 1.0, "ema_readiness": 0.0,
-                    "log_range": 0.0, "unilateralness": 0.0}
+                    "log_range": 0.0, "rms_directionality": 0.0}
         value["symbols"].append(symbol)
     value["forager_hysteresis"] = {"incumbent_long": [1], "incumbent_short": [1]}
     return value
@@ -132,7 +132,7 @@ def replay_inputs(kind, topology, margins):
         bot["forager"].update(volume_ema_span_minutes=1.0,
                               score_hysteresis_margin=margins[side])
         bot["forager"]["score_weights"] = {
-            "volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0}
+            "volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "rms_directionality": 0.0}
         strategy = bot["strategy"][kind]
         band = strategy["entry"] if kind == "trailing_martingale" else strategy
         band.update(ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)

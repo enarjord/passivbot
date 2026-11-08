@@ -240,9 +240,12 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
-    _set_bounds(cfg, {"long_unilateralness_ema_span_minutes": [1.0, 60.0]})
+    _set_bounds(cfg, {"long_rms_directionality_ema_span_minutes": [1.0, 60.0]})
     if consumer == "forager":
-        _set_bounds(cfg, {"long_forager_score_weights_unilateralness": [0.0, 1.0]})
+        _set_bounds(cfg, {
+            "long_forager_score_weights_log_range": [0.1, 1.0],
+            "long_forager_score_weights_rms_directionality": [0.0, 1.0],
+        })
     else:
         _set_bounds(cfg, {"long_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 10.0]})
     cfg = prepare_config(cfg, verbose=False)
@@ -264,14 +267,14 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     assert result[2] == baseline[2]
     if consumer == "forager":
         # This candidate fits available slots and does not consume a ranking score.
-        cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+        cfg["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 1.0
         result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
         np.testing.assert_array_equal(result[0], baseline[0])
         np.testing.assert_array_equal(result[1], baseline[1])
         assert result[2] == baseline[2]
     else:
         # The enabled candidate uses its own short window, not the search maximum.
-        cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 1.0
+        cfg["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 1.0
         cfg["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
         fills, _, _, payload = run_backtest(
             hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True
@@ -305,27 +308,27 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
         # Only the searched coordinate participates in normalization. Its positive
         # lower bound avoids activating an omitted weight at the all-zero fallback.
         cfg["bot"][side]["forager"]["score_weights"] = dict(
-            volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=1.0,
+            volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=1.0,
         )
-    weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
+    weight_path = (["forager", "score_weights", "rms_directionality"] if consumer == "forager"
                    else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
-    weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
+    weight_key = ("forager_score_weights_rms_directionality" if consumer == "forager"
                   else "entry_cooldown_weights_minutes_adverse_directionality")
-    span_path = ["forager", "unilateralness_ema_span_minutes"]
+    span_path = ["forager", "rms_directionality_ema_span_minutes"]
     bounds = cfg["optimize"]["bounds"]
     for pside in ("long", "short"):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
         _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit_ratio": [float(pside == side)]})
     _set_bounds(cfg, {f"{side}_{weight_key}": [0.1 if consumer == "forager" else 0.0, 1.0]})
-    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0]})
-    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_minutes"
+    _set_bounds(cfg, {f"{side}_rms_directionality_ema_span_minutes": [1.0, 100000.0]})
+    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_rms_directionality_ema_span_minutes"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
     value = 0.0 if pin == "weight" else 2.5
     expected = 0 if pin == "weight" else 51
     if pin_source == "runtime":
         cfg["optimize"]["fixed_runtime_overrides"] = {".".join(path): value}
     else:
-        other_key = f"{side}_unilateralness_ema_span_minutes" if pin == "weight" else f"{side}_{weight_key}"
+        other_key = f"{side}_rms_directionality_ema_span_minutes" if pin == "weight" else f"{side}_{weight_key}"
         other_path = ["bot", side, *(span_path if pin == "weight" else weight_path)]
         cfg[ANCHOR_PLAN_KEY] = {
             "anchors": [{"source": "anchor.json", "fixed_values": [{"key": key, "path": path, "value": value}]}],
@@ -354,11 +357,11 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg["optimize"]["bounds"] = {}
-    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
-    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 2.5
+    cfg["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 1.0
+    cfg["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 2.5
     cfg["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.forager.score_weights.unilateralness": 0.0,
-        "bot.long.forager.unilateralness_ema_span_minutes": 1.0,
+        "bot.long.forager.score_weights.rms_directionality": 0.0,
+        "bot.long.forager.rms_directionality_ema_span_minutes": 1.0,
     }
     assert compute_backtest_warmup_minutes(cfg) == 51
 
@@ -378,7 +381,7 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=float(s == side))
         _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit_ratio": [float(s == side)]})
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
+    cfg["bot"][side]["forager"]["rms_directionality_ema_span_minutes"] = 100000.0
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
     if searched:
@@ -418,7 +421,7 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     cfg["coin_overrides"] = {}
     for side, coin in (("long", "BTC"), ("short", "ETH")):
         cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
-        cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
+        cfg["bot"][side]["forager"]["rms_directionality_ema_span_minutes"] = 100000.0
         cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
         _set_bounds(cfg, {f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit_ratio": [1.0]})
@@ -463,7 +466,7 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=float(s == side))
         _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit_ratio": [float(s == side)]})
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 2.5
+    cfg["bot"][side]["forager"]["rms_directionality_ema_span_minutes"] = 2.5
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not override_enabled)
     if searched:
@@ -511,15 +514,15 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
             f"{s}_total_wallet_exposure_limit_ratio": [float(s == side)],
         })
     cfg["bot"][side]["forager"].update(
-        unilateralness_ema_span_minutes=100000,
-        score_weights=dict(volume=0, log_range=0, ema_readiness=0, unilateralness=float(not searched)),
+        rms_directionality_ema_span_minutes=100000,
+        score_weights=dict(volume=0, log_range=0, ema_readiness=0, rms_directionality=float(not searched)),
     )
     if searched:
         _set_bounds(cfg, {
             # Keep omitted zero weights zero through normalization, including at
             # the lower corner, while leaving RMS history fully reachable.
-            f"{side}_forager_score_weights_unilateralness": [0.1, 1.0],
-            f"{side}_unilateralness_ema_span_minutes": [1.0, 100000.0],
+            f"{side}_forager_score_weights_rms_directionality": [0.1, 1.0],
+            f"{side}_rms_directionality_ema_span_minutes": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
         })
     expected = 2000001 if dynamic or slots < 2 else 0
@@ -546,8 +549,8 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["risk"].update(max_positions=2, total_wallet_exposure_limit_ratio=1)
-    cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_minutes=100000)
-    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
+    cfg["bot"]["long"]["forager"].update(rms_directionality_ema_span_minutes=100000)
+    cfg["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 1
     _set_bounds(cfg, {"long_n_positions": [1, 2]})
     assert compute_backtest_warmup_minutes(cfg) == 2000001
     cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
@@ -571,9 +574,9 @@ def _mirrored_weight_config(strategy, short_bounds):
             total_wallet_exposure_limit_ratio=float(side == "long" or short_bounds == "explicit_zero"),
         )
         config["bot"][side]["forager"]["score_weights"] = dict(
-            volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0,
+            volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=0.0,
         )
-    for index, name in enumerate(("volume", "log_range", "ema_readiness", "unilateralness")):
+    for index, name in enumerate(("volume", "log_range", "ema_readiness", "rms_directionality")):
         _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, float(index + 1)]})
         if short_bounds == "explicit_zero":
             _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
@@ -597,9 +600,9 @@ def test_mirrored_candidate_weights_follow_source_normalization_at_every_corner(
         vector, optimizer_overrides, config["optimize"]["enable_overrides"], config,
         key_paths=shape.key_paths,
     )
-    expected = (dict(volume=0.0, log_range=0.0, ema_readiness=1.0, unilateralness=0.0)
+    expected = (dict(volume=0.0, log_range=0.0, ema_readiness=1.0, rms_directionality=0.0)
                 if fraction == 0.0 else
-                dict(volume=0.1, log_range=0.2, ema_readiness=0.3, unilateralness=0.4))
+                dict(volume=0.1, log_range=0.2, ema_readiness=0.3, rms_directionality=0.4))
     for side in ("long", "short"):
         assert candidate["bot"][side]["forager"]["score_weights"] == pytest.approx(expected)
         assert candidate["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
@@ -617,7 +620,7 @@ def test_disabling_mirror_keeps_independent_fixed_zero_weights_zero():
     )
     assert candidate["bot"]["long"]["forager"]["score_weights"]["ema_readiness"] == 1.0
     assert candidate["bot"]["short"]["forager"]["score_weights"] == dict(
-        volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0,
+        volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=0.0,
     )
 
 
@@ -626,7 +629,7 @@ def test_mirrored_fixed_zero_source_group_does_not_enable_fallback():
     from optimization.warmup import build_optimizer_vector_config
 
     config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
-    for name in ("volume", "log_range", "ema_readiness", "unilateralness"):
+    for name in ("volume", "log_range", "ema_readiness", "rms_directionality"):
         _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0]})
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config(
@@ -634,7 +637,7 @@ def test_mirrored_fixed_zero_source_group_does_not_enable_fallback():
     )
     for side in ("long", "short"):
         assert candidate["bot"][side]["forager"]["score_weights"] == dict(
-            volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0,
+            volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=0.0,
         )
 
 
@@ -647,7 +650,7 @@ def test_runtime_zero_weight_pins_keep_effective_source_authority(pin_side, mirr
     from optimization.warmup import build_optimizer_vector_config
 
     config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
-    names = ("volume", "log_range", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "rms_directionality")
     config["optimize"]["fixed_runtime_overrides"] = {
         f"bot.{pin_side}.forager.score_weights.{name}": 0.0 for name in names
     }
@@ -680,7 +683,7 @@ def test_runtime_zero_weight_object_keeps_leaf_only_permission_boundary(mirror):
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.forager.score_weights": dict(
-            volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0,
+            volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=0.0,
         ),
     }
     with pytest.raises(TypeError, match="must target leaf settings"):
@@ -706,7 +709,7 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
         config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
-    names = ("volume", "log_range", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "rms_directionality")
     zero = dict.fromkeys(names, 0.0)
     positive = dict.fromkeys(names, 0.25)
     for side in ("long", "short"):
@@ -733,7 +736,7 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
         candidate = build_optimizer_vector_config(
             vector, config, overrides_list=["mirror_short_from_long"] if mirror else [],
         )
-        expected = (dict(volume=0.0, log_range=0.0, ema_readiness=1.0, unilateralness=0.0)
+        expected = (dict(volume=0.0, log_range=0.0, ema_readiness=1.0, rms_directionality=0.0)
                     if searched_weights else anchor_weights)
         assert candidate["_optimizer_anchor"]["id"] == anchor_index
         assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == risk_value
@@ -757,7 +760,7 @@ def test_preflight_validates_effective_zero_weight_activation_without_mutating_g
         config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
-    names = ("volume", "log_range", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "rms_directionality")
     zero = dict.fromkeys(names, 0.0)
     for side in ("long", "short"):
         config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)

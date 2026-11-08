@@ -74,8 +74,8 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
 
 for _side in BOT_POSITION_SIDES:
     for _key, _path in {
-        "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
-        "unilateralness_ema_span_minutes": ("forager", "unilateralness_ema_span_minutes"),
+        "forager_score_weights_rms_directionality": ("forager", "score_weights", "rms_directionality"),
+        "rms_directionality_ema_span_minutes": ("forager", "rms_directionality_ema_span_minutes"),
         # The fixed ceiling may be null even when its search endpoints are numeric.
         "entry_cooldown_max_duration_minutes": ("entry_cooldown", "max_duration_minutes"),
         "entry_cooldown_weights_minutes_exposure_ratio": (

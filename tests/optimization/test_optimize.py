@@ -75,7 +75,7 @@ from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.shape import build_optimization_shape
 from optimization.warmup import build_optimizer_max_config
 from optimize_suite import ScenarioEvalContext
-from config import load_prepared_config, prepare_config
+from config import CONFIG_SCHEMA_VERSION, load_prepared_config, prepare_config
 from config.parse import load_raw_config
 from config.schema import get_expanded_config_prototype
 
@@ -110,6 +110,38 @@ def _flat_bounds(config):
 
 def _toy_optimize_bounds(*keys):
     return {"bounds": _bounds_from_flat({key: [0.0, 1000.0] for key in keys})}
+
+
+def _ema_anchor_optimizer_config():
+    bounds = {
+        side: {
+            "entry_cooldown": {"base_duration_minutes": [0.0, 10.0]},
+            "strategy": {"ema_anchor": {"entry_qty_exposure_coefficient": [0.0, 1.0]}},
+        }
+        for side in ("long", "short")
+    }
+    sides = {
+        side: {
+            "enabled": True,
+            "risk": {"max_positions": positions},
+            "hsl": {"enabled": False},
+            "unstuck": {"enabled": False},
+            "entry_cooldown": {"base_duration_minutes": 1.0},
+            "strategy": {"ema_anchor": {"entry_qty_exposure_coefficient": 0.5}},
+        }
+        for side, positions in (("long", 2), ("short", 1))
+    }
+    return prepare_config(
+        {
+            "config_version": CONFIG_SCHEMA_VERSION,
+            "bot": {
+                "portfolio": {"strategy_kind": "ema_anchor"},
+                **sides,
+            },
+            "optimize": {"bounds": bounds, "enable_overrides": ["mirror_short_from_long"]},
+        },
+        verbose=False,
+    )
 
 
 def _independent_close_fixture():
@@ -1603,7 +1635,7 @@ class TestIndividualToConfig:
                         "log_range_ema_span_minutes": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
-                            "unilateralness": 0.0,
+                            "rms_directionality": 0.0,
                             "volume": 0.0,
                             "ema_readiness": 0.0,
                             "log_range": 1.0,
@@ -1633,7 +1665,7 @@ class TestIndividualToConfig:
                         "log_range_ema_span_minutes": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
-                            "unilateralness": 0.0,
+                            "rms_directionality": 0.0,
                             "volume": 0.2,
                             "ema_readiness": 0.3,
                             "log_range": 0.5,
@@ -2369,7 +2401,7 @@ class TestConfigToIndividual:
         assert result == pytest.approx([2.5, 1.5, 4.5, 3.5])
 
     def test_uses_optimization_shape(self):
-        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        config = _ema_anchor_optimizer_config()
         shape = build_optimization_shape(config)
 
         result = config_to_individual(config, shape.bounds, optimization_shape=shape)
@@ -4054,7 +4086,7 @@ class TestConfigsToIndividuals:
         assert len(result) == 0
 
     def test_full_config_seed_preserves_strategy_kind(self):
-        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        config = _ema_anchor_optimizer_config()
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
 
         bounds = extract_bounds_tuple_list_from_config(config)
@@ -4065,7 +4097,7 @@ class TestConfigsToIndividuals:
         assert len(result[0]) == len(bounds)
 
     def test_old_starting_seed_inherits_current_template_bounds_and_defaults(self):
-        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        config = _ema_anchor_optimizer_config()
         shape = build_optimization_shape(config)
 
         stale_seed = deepcopy(config)
@@ -4112,9 +4144,7 @@ class TestResultRecorder:
     """Test ResultRecorder class."""
 
     def test_pymoo_record_entry_is_canonical_and_mirrored(self):
-        template = load_prepared_config(
-            "configs/examples/ema_anchor.json", verbose=False
-        )
+        template = _ema_anchor_optimizer_config()
         bounds = extract_bounds_tuple_list_from_config(template)
         vector = config_to_individual(template, bounds, sig_digits=6)
 
@@ -4144,7 +4174,7 @@ class TestResultRecorder:
         class Candidate(list):
             pass
 
-        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        config = _ema_anchor_optimizer_config()
         bounds = extract_bounds_tuple_list_from_config(config)
         individual = Candidate(config_to_individual(config, bounds, sig_digits=6))
         scoring_keys = config["optimize"]["scoring"]
@@ -4198,9 +4228,7 @@ class TestResultRecorder:
             assert sorted(saved["bot"]["short"]["strategy"]) == [strategy_kind]
 
     def test_recorded_pareto_entry_with_bounds_preserves_mirror_override(self):
-        template = load_prepared_config(
-            "configs/examples/ema_anchor.json", verbose=False
-        )
+        template = _ema_anchor_optimizer_config()
         bounds = extract_bounds_tuple_list_from_config(template)
         vector = config_to_individual(template, bounds, sig_digits=6)
         scoring_keys = template["optimize"]["scoring"]

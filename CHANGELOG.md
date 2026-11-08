@@ -9,6 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
   Require a verified source schema, an explicit unified HSL portfolio policy, and
   acknowledgment before removing a permanent-stop policy.
+- Verify the installed wheel's Rust source fingerprint and binary against the package build
+  record. Offline backtests and optimization can record native provenance outside a checkout.
 
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
@@ -28,6 +30,10 @@ since the latest release tag; these features may already be available when insta
 
 - Fix the live Docker wheel build by copying the Rust lockfile, build script, and pinned toolchain
   into the builder stage.
+
+- Restrict Docker build inputs to application files. Mount credentials, configs, and runtime
+  data after building. The full image uses the locked Python package build and retains its
+  source-script entrypoints.
 
 - Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
   development install profiles and the CLI dependency checks.
@@ -345,7 +351,7 @@ since the latest release tag; these features may already be available when insta
 
 - Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
   price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
-  replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing
+  replay spans and monitor fields without changing
   ranking, normalization, limits or GPU slots.
   Released-v8 native span and optimizer identifiers remain confined to explicit conversion.
 
@@ -567,6 +573,10 @@ since the latest release tag; these features may already be available when insta
   without changing the shared live cap.
   Convert numeric fee strings to the same finite numeric values. Editor validation now accepts
   the existing `visible_metrics: null` policy for derived metrics.
+
+- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
+  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
+  The v8 migration tool converts the old field names without rescaling.
 
 - Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
   millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
@@ -1206,7 +1216,11 @@ since the latest release tag; these features may already be available when insta
   fills at their causal execution boundary. Keep malformed valuation inputs fatal
   rather than replacing them with neutral risk.
 
-- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+- Name the Forager score weight `rms_directionality` and its one-minute EMA span
+  `rms_directionality_ema_span_minutes`. Optimizer fields, native inputs and
+  diagnostics use the same terminology. The score and trading behavior are unchanged.
+
+- Hydrate missing Forager RMS directionality weight/span and adaptive entry cooldown
   weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
   value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
   a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
@@ -1251,7 +1265,7 @@ since the latest release tag; these features may already be available when insta
   for dozens of full-history batches.
   Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
 
-- Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
+- Add opt-in adaptive entry cooldown and Forager RMS directionality scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
   decays during flat prices. Keep the base duration under `bot.<side>.entry_cooldown`,
@@ -1273,7 +1287,7 @@ since the latest release tag; these features may already be available when insta
   that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
   results on candle repairs or gap evidence; cache-only ranking uses the latest complete
   contiguous window within its original source-age allowance, including before an internal gap.
-  Report enabled unilateralness ranking totals from Rust diagnostics in the monitor.
+  Report enabled RMS directionality ranking totals from Rust diagnostics in the monitor.
   Document all four scoring weights, configuration, benchmarks, effective cooldown inspection,
   and unchanged partial-fill semantics.
 
@@ -1502,8 +1516,9 @@ since the latest release tag; these features may already be available when insta
 - Add experimental NVIDIA CUDA GPU optimization on Linux and Windows WSL2 with the
   `gpu-cuda` install extra and the native GPU backtest service.
 
-- Accept `long_short_profit_ratio` as an alias for `pnl_ratio_long_short` in optimizer scoring
-  and limits, including GPU optimization, reusing the existing metric calculation.
+- Keep the Trailing Martingale template as the sole shipped trading configuration.
+  Move the offline fake-live HSL input into test fixtures and update quickstarts
+  and operational guides for the v9 configuration and risk contracts.
 
 Changes since [v8.1.0](https://github.com/enarjord/passivbot/releases/tag/v8.1.0).
 The earlier incremental entries are preserved in the
@@ -1516,10 +1531,10 @@ The earlier incremental entries are preserved in the
   `passivbot tool migrate-config-v9` migration with a chosen slow memory span,
   followed by retuning and fresh backtests. `migrate-hsl` is retired. Do not relabel
   old configurations to bypass migration; see the [v9 guide](docs/v8_to_v9_migration.md).
-- Auto-unstuck owns independent `bot.<side>.unstuck.ema_span_0/1` horizons. Migration derives
-  missing values from the effective strategy where possible. Trailing Martingale entry spans
-  moved to `bot.<side>.strategy.trailing_martingale.entry.ema_span_0/1`; explicit new paths win
-  conflicts with warnings. Legacy CLI paths and optimizer selectors remain accepted.
+- Auto-unstuck owns independent `bot.<side>.unstuck.ema_span_0_minutes` and
+  `ema_span_1_minutes` horizons. Migration derives missing values from the effective strategy
+  where possible. Trailing Martingale entry spans use the same minute-qualified names under
+  `bot.<side>.strategy.trailing_martingale.entry`. Use the explicit converter for released-v8 selectors.
 - Start a fresh optimizer run when upgrading from results/checkpoints without the current
   evaluation identity or GPU parameter layout. Resume now verifies policy, resolved overrides,
   prepared data, dependencies, and Rust source/binary identity before reusing fitness. Existing
@@ -1548,12 +1563,12 @@ The earlier incremental entries are preserved in the
 - GPU seed bootstrap fully evaluates every deduplicated seed on the GPU before population
   trimming. CPU optimizers evaluate every deduplicated starting config with Rust CPU backtests.
   GPU bootstrap work is additional to `optimize.iters`.
-- Added `couple_unstuck_ema_spans` to search strategy and unstuck horizons together; independent
-  search remains the default. Pymoo exposes separate per-individual `mutation_prob` and
-  `mutation_prob_per_variable`; explicit v8 conversion preserves the older operator setting.
-- Added duration-weighted fill-gap and position-holding objectives, rolling-harmonic and
-  time-integrated ADG, and positive-gain-participation strategy-equity metrics. Result payloads
-  include `n_days` and effective UTC analysis dates. See the [metrics reference](docs/metrics.md).
+- Added `couple_unstuck_ema_spans` for joint strategy and unstuck horizon searches. Independent
+  search remains the default. Pymoo exposes separate per-candidate `mutation_probability`
+  and `mutation_probability_per_variable` settings.
+- The versioned core metric catalog includes duration-weighted fill-gap and position-holding
+  objectives. Result payloads include effective UTC analysis dates and support for each metric.
+  See the [metrics reference](docs/metrics.md).
 - Corrected balance/equity sample alignment after warmup, side-specific approved-coin eligibility,
   per-coin zero-exposure entry disabling, suite exchange routing, and nested scenario overrides.
   Suite configuration requires `reducer`; released-v8 aliases use the explicit converter.

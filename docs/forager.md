@@ -10,9 +10,9 @@ Shared defaults belong under `bot.global.forager`; `bot.long.forager` and
 
 - `volume_ema_span_minutes`
 - `log_range_ema_span_minutes`
-- `unilateralness_ema_span_minutes` (a floating-point span, default `60.0`)
+- `rms_directionality_ema_span_minutes` (a floating-point span, default `60.0`)
 - `score_weights.volume`, `score_weights.ema_readiness`, `score_weights.log_range`
-  and `score_weights.unilateralness`
+  and `score_weights.rms_directionality`
 - `score_hysteresis_margin`
 
 The universe's approved/ignored lists, side-specific minimum coin age and effective-cost
@@ -51,9 +51,9 @@ is at the threshold, and positive means it remains away from entry. Rust derives
 from the active strategy; the gap is a signed scale-one fraction. The normalized
 `ema_readiness_component` reverses that preference so a higher component ranks better.
 
-### Unilateralness
+### RMS directionality
 
-`forager.score_weights.unilateralness` optionally penalizes sustained one-way movement
+`forager.score_weights.rms_directionality` optionally penalizes sustained one-way movement
 in either direction. It uses the absolute signed RMS score from completed one-minute close
 returns. Lower values rank better; normalization reverses this penalty for the combined score.
 The weight defaults to zero. See [adaptive entry cooldown and RMS](adaptive_entry_cooldown.md)
@@ -70,8 +70,8 @@ canonical loading selects EMA-readiness-only ranking.
 | `log_range: 1.0`, others zero | Larger candle log ranges |
 | `volume: 1.0`, others zero | Higher quote volume |
 | `ema_readiness: 1.0`, others zero | Prices closer to their initial-entry threshold |
-| `unilateralness: 1.0`, others zero | Less sustained one-way movement |
-| `volume: 0.2`, `ema_readiness: 0.6`, `log_range: 0.2`, `unilateralness: 0.0` | Entry readiness with liquidity and range contributions |
+| `rms_directionality: 1.0`, others zero | Less sustained one-way movement |
+| `volume: 0.2`, `ema_readiness: 0.6`, `log_range: 0.2`, `rms_directionality: 0.0` | Entry readiness with liquidity and range contributions |
 
 Raw weights are distinct from normalized feature components and the combined score.
 `score_hysteresis_margin` is an absolute margin between normalized candidate scores.
@@ -84,13 +84,13 @@ bypass strategy conditions or bypass risk and minimum-size gates.
 ## Optimization Bounds
 
 Authored bounds use `optimize.bounds.<side>.forager.score_weights.<feature>` and
-`optimize.bounds.<side>.forager.unilateralness_ema_span_minutes`.
+`optimize.bounds.<side>.forager.rms_directionality_ema_span_minutes`.
 
-Missing unilateralness weight and span bounds are hydrated as
+Missing RMS directionality weight and span bounds are hydrated as
 `[configured_value, configured_value]` using each side's normalized weight and floating-point
 span. New configs default to `[0.0, 0.0]` for the weight and `[60.0, 60.0]` for the span.
 Templates omit these bounds until loading derives them from bot values. Widen them explicitly
-to search unilateralness; explicit ranges are preserved.
+to search RMS directionality; explicit ranges are preserved.
 
 ## Live Candle Readiness
 
@@ -121,18 +121,18 @@ contract; Forager does not invent substitute observations.
 
 ## Diagnostics And Tuning
 
-When unilateralness has a positive weight, the monitor uses a cached Rust scoring hint
+When RMS directionality has a positive weight, the monitor uses a cached Rust scoring hint
 whose weights and span match the settings. That ranking includes all four components and
 Rust's tie ordering; `observed_at_ms` records when the hint was observed. If no matching
 hint is available, this branch omits the ranking.
 
-With unilateralness weight zero (the default), Python reconstructs the ranking from the
+With RMS directionality weight zero (the default), Python reconstructs the ranking from the
 volume, log range and EMA readiness components using cached candidate data. Treat that
 display as a diagnostic reconstruction; it does not establish Rust's selected symbol or
 tie ordering.
 
 Raw native fields `volume_ema`, `log_range_ema`, `ema_entry_price_gap_fraction` and
-`unilateralness_score` are distinct from their normalized score components.
+`rms_directionality_score` are distinct from their normalized score components.
 
 Features whose weights are zero may be skipped when no other selection requirement
 consumes them.

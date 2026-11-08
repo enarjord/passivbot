@@ -7,6 +7,8 @@ from threading import Event
 
 import pytest
 
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
+
 from config.schema import get_expanded_config_prototype
 from config import prepare_config
 from config.overrides import parse_overrides
@@ -748,7 +750,7 @@ def test_best_effort_stat_suffix_is_retained_in_objectives(stat):
     assert result.config["optimize"]["scoring"][0]["metric"] == new
     assert result.config["optimize"]["scoring"][0]["reducer"] == stat
     assert any(change["old"] == old and change["new"] == new
-               and change.get("best_effort") and "definition version 1" in change["reason"]
+               and change.get("best_effort") and f"definition version {CORE_METRIC_DEFINITION_VERSION}" in change["reason"]
                for change in result.changes)
 
 
