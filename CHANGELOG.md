@@ -101,6 +101,10 @@ since the latest release tag; these features may already be available when insta
   cancellation or timeout, and close clients whose market discovery failed. Reuse
   loaded market snapshots and page Gate daily history forward to discover contracts
   listed beyond the first bounded page.
+
+- Use elapsed monotonic time for live execution and retry waits so delayed event-loop
+  wakeups count toward the requested delay. Keep the existing shutdown checks.
+
 - Include bounded structural reasons when rejecting malformed Bitunix candle
   updates, without exposing raw field contents or relaxing candle validation.
 - Fetch real KuCoin futures bid/ask quotes and last trades from the bulk ticker
