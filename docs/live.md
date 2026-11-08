@@ -1,7 +1,22 @@
 # Running the bot live
 
-For Lighter, follow the [exchange setup guide](exchanges/lighter.md) to install the compatible
-signer and configure an existing L2 API key before starting the bot.
+Start with a private copy of the [maintained config template](config_workflow.md). Set
+`live.account.user` to the account entry in your local credential file. Review which sides are
+enabled, their approved coins and exposure limits, and the intended live position modes.
+
+```bash
+passivbot tool live-config-preflight configs/private/live.json
+```
+
+This offline check summarizes effective settings. Backtest the intended config, then use
+`passivbot live configs/private/live.json` when ready for live exchange access. A live run can
+change account settings and submit or cancel orders. For an offline smoke test use the
+[fake live harness](fake_live.md).
+
+Exchange-specific setup is available for [Lighter](exchanges/lighter.md),
+[Binance Portfolio Margin](exchanges/binance_portfolio_margin.md), and
+[Hyperliquid](hyperliquid_guide.md), including [stock perpetuals](stock_perps.md).
+For HSL-enabled deployments, follow the [HSL live checklist](hsl_live_validation.md).
 
 ## Logging
 
@@ -100,26 +115,22 @@ passivbot live --custom-endpoints configs/custom_endpoints.json configs/your_con
 passivbot live --custom-endpoints none configs/your_config.hjson
 ```
 
-You can embed the path in your live config so it is always applied:
+Set `live.api.custom_endpoints_path` in your existing v9 config to select the same file by default.
+A CLI argument overrides this field. Relative paths are interpreted from the launch directory.
 
 ```json
 "live": {
-  "custom_endpoints_path": "configs/custom_endpoints.json",
-  ...
+  "api": {
+    "custom_endpoints_path": "configs/custom_endpoints.json"
+  }
 }
 ```
 
 ### 3. Confirm during startup
 
-Passivbot logs every override at launch. Look for entries such as:
-
-```
-INFO Custom endpoint active for binanceusdm.fapiPrivate: https://fapi.binance.com/fapi/v1 -> https://proxy.example.exchange/fapi/v1
-INFO Custom endpoint override active for binanceusdm (disable_ws=True, source=...)
-```
-
-If the proxy rejects the request (e.g., missing credentials) ccxt will report a
-403/401 with the proxied URL, confirming the routing is in effect.
+Check the startup summary for the selected config source and WebSocket mode. A proxy can
+receive authenticated REST traffic. Use an endpoint you trust and keep private headers and
+URLs out of public diagnostics.
 
 > **Note:** The override file only affects REST endpoints. Websocket sessions are
 > skipped when `disable_ws` is `true`; otherwise Passivbot continues to connect

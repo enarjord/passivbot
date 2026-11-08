@@ -43,7 +43,7 @@ Observed issues:
    - loading the official example/template config can emit surprising churn
 
 6. The current shape is poorly aligned with the future direction in:
-   - [rust_strategy_runtime_refactor.md](/Users/eiriknarjord/repos/passivbot-3/docs/plans/rust_strategy_runtime_refactor.md)
+   - [rust_strategy_runtime_refactor.md](rust_strategy_runtime_refactor.md)
 
 ## What The User Wants
 
@@ -540,7 +540,7 @@ These should be decided before coding deeply:
 
 This redesign should prepare for the future split described in:
 
-- [rust_strategy_runtime_refactor.md](/Users/eiriknarjord/repos/passivbot-3/docs/plans/rust_strategy_runtime_refactor.md)
+- [rust_strategy_runtime_refactor.md](rust_strategy_runtime_refactor.md)
 
 Important alignment points:
 

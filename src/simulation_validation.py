@@ -43,13 +43,14 @@ def validate_simulation_config(config, *, resolved=False, context=None):
 
 def simulation_config_error_message(error, prog):
     """Keep expected user-input failures concise at executable boundaries."""
+    command = prog.split()[-1]
     detail = f" (scenario {error.context!r})" if error.context else ""
+    bounds = " -ltwel 0.5,1.0" if command == "optimize" else ""
     return (
-        f"Cannot start {prog.split()[-1]}{detail}: no active trading universe.\n\n"
+        f"Cannot start {command}{detail}: no active trading universe.\n\n"
         f"{error}\n\n"
         "Supply a runnable config, for example:\n"
-        f"  {prog} configs/examples/btc_long.json\n\n"
+        f"  {prog} configs/examples/default_trailing_martingale_long.json\n\n"
         "Or configure a side and coins explicitly:\n"
-        f"  {prog} --bot.long.enabled y -s BTC,ETH\n"
-        "See configs/examples/ for more starting points."
+        f"  {prog} --bot.long.enabled y -s BTC,ETH{bounds}\n"
     )

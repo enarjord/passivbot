@@ -9,6 +9,8 @@ from copy import deepcopy
 
 import pytest
 
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
+
 from config_utils import format_config, get_template_config
 from test_final_v9_schema import v8_config
 from tools.migrate_config_v9 import migrate
@@ -711,7 +713,7 @@ class TestLegacyMigration:
         assert formatted["backtest"]["reducer"]["default"] == "mean"
         assert formatted["backtest"]["reducer"]["cagr_fraction_strategy_equity"] == "min"
         assert any(change["old"] == "mdg" and change["new"] == "cagr_fraction_strategy_equity"
-                   and "definition version 1" in change["reason"] for change in result.changes)
+                   and f"definition version {CORE_METRIC_DEFINITION_VERSION}" in change["reason"] for change in result.changes)
 
 
 # =============================================================================

@@ -24,7 +24,7 @@ Historical observations do not supersede those requirements or prove current acc
 
 - Published the contract on `codex/gpu-native-optimizer`; implementation slice uses
   `codex/gpu-native-service`, with a PR to the development branch.
-- Added [`GpuBacktestService`](../../src/optimization/gpu/executor.py): one owning
+- Added [`GpuBacktestService`](https://github.com/enarjord/passivbot/blob/HEAD/src/optimization/gpu/executor.py): one owning
   execution thread, bounded queued-plus-running admission, FIFO compatible microbatches,
   individual futures, parameter snapshots, fail-stop producer errors and clean drain/cancel.
   Cancellation must notify completion consumers even when removed before dispatch.

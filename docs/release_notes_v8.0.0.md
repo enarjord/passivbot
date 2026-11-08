@@ -132,4 +132,4 @@ before enabling or changing HSL settings.
 6. Start live trading only through the normal operational process, with logs
    and monitor output observed closely during the first cycles.
 
-The complete detailed change ledger is in [CHANGELOG.md](../CHANGELOG.md).
+The complete detailed change ledger is in [CHANGELOG.md](https://github.com/enarjord/passivbot/blob/v8.0.0/CHANGELOG.md).

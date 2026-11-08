@@ -14,6 +14,8 @@ This is the recommended way to work with Passivbot configs on the current config
 - Retained strategies are `trailing_martingale` and `ema_anchor`. The v7 strategy and its
   dedicated migration command have been removed.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
+  Both sides are disabled by default. A simulation requires an explicitly enabled side
+  and approved coins.
 
 ## Recommended Workflow
 
@@ -82,11 +84,8 @@ and disables short. Its shared numerical profile is:
 
 ## When To Omit A Config Path
 
-Omitting `config_path` is useful for:
-
-- fast smoke tests
-- CLI exploration
-- generating a config mentally from the canonical defaults
+Omitting `config_path` is useful when inspecting defaults or trying CLI overrides.
+For a simulation, provide the intended side and symbols on the command line.
 
 It is usually better to pass an explicit config file for normal backtest, optimize, and live workflows, because:
 
@@ -99,13 +98,13 @@ It is usually better to pass an explicit config file for normal backtest, optimi
 Backtest from the canonical default:
 
 ```bash
-passivbot backtest -s BTC -sd 2025 --suite n
+passivbot backtest --bot.long.enabled y -s BTC -sd 2025 --suite n
 ```
 
-Optimize from the canonical default:
+Optimize from the canonical default with an explicit exposure range:
 
 ```bash
-passivbot optimize -s BTC -sd 2025 -c 4 --suite n
+passivbot optimize --bot.long.enabled y -s BTC -sd 2025 -c 4 --suite n -ltwel 0.5,1.0
 ```
 
 Live from an explicit config:

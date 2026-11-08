@@ -40,9 +40,9 @@ Optional [configuration prefilters](config_prefilter.md) return graded constrain
 before CPU or native GPU replay. All checks are disabled by default; each must be
 explicitly enabled under `optimize.prefilter.checks`.
 
-The canonical defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly. For the
-recommended config workflow, see [Config Workflow](config_workflow.md).
+The canonical defaults live in `src/config/schema.py` and keep both sides disabled.
+The maintained example `configs/examples/default_trailing_martingale_long.json` enables long
+trading and provides a starting profile. See [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
 
@@ -124,9 +124,11 @@ Explicit `enable_overrides` relationships can still derive effective target valu
 sources, even when a target's own gene is omitted or fixed. Review these relationships with bounds;
 a fixed independent gene does not imply a fixed derived result.
 Use `passivbot tool optimizer-bounds input.json search.json` to write recommended ranges explicitly.
-Running `passivbot optimize` without a config selects the complete starting profile, whose visible
-bound ranges remain searched. Existing fixed/runtime/scenario and anchor precedence still applies;
-anchors and seeds are clamped to the effective domains, including omitted fixed coordinates.
+Omitting the config path starts from schema defaults with no variable bounds.
+Enable a side, choose its coins, and supply explicit ranges to search, such as
+`-ltwel 0.5,1.0` for long total wallet exposure. Fixed, runtime, scenario, and anchor
+precedence still applies. Anchors and seeds are clamped to the effective domains,
+including omitted fixed coordinates.
 
 Normalized Forager weights must be searched together when they have positive participating
 coordinates. A partial weight fine-tune, scenario pin, or fixed positive sibling fails with an actionable
@@ -134,10 +136,10 @@ group diagnostic; either select the entire group or freeze it. A missing zero co
 permitted only when it remains zero through normalization, including the all-zero fallback.
 
 ```bash
-passivbot optimize [path/to/config.json]
+passivbot optimize configs/examples/default_trailing_martingale_long.json
 ```
 
-- Defaults to the in-code schema in `src/config/schema.py` if no config is specified
+- Pass a config path to use your own policy and bounds
 - Use existing configs as starting points: `--start path/to/config(s)`
 - Enable suite scenarios defined in `backtest.scenarios` with `--suite [y/n]` (omit value to enable)
 - Layer additional scenario definitions via `--suite-config path/to/file.json`
@@ -226,7 +228,7 @@ Install the matching optional runtime. For NVIDIA:
 ```bash
 python3 -m pip install -e ".[full,gpu-cuda]"
 python3 -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name())"
-passivbot optimize configs/examples/ema_anchor.json --optimizer-backend gpu
+passivbot optimize configs/examples/default_trailing_martingale_long.json --optimizer-backend gpu
 ```
 
 A compatible NVIDIA driver is required. In WSL2 install that driver on Windows;
@@ -238,7 +240,7 @@ For Apple Silicon on macOS:
 ```bash
 python3 -m pip install -e ".[full,gpu-mps]"
 python3 -c "import torch; print(torch.backends.mps.is_available())"
-passivbot optimize configs/examples/ema_anchor.json --optimizer-backend gpu
+passivbot optimize configs/examples/default_trailing_martingale_long.json --optimizer-backend gpu
 ```
 
 The service selects Metal automatically on supported Macs. Both EMA Anchor and
@@ -265,16 +267,11 @@ rather than returning fabricated values. Float32 replay and accumulation can dif
 [feature and approximation inventory](plans/gpu_optimizer_inventory.md) and
 [acceptance evidence](plans/gpu_optimizer_acceptance.md) for measured limits.
 
-GPU metric eligibility is a policy, not a list of known calculation defects.
-Exclusions can reflect approximation or cost, or favor normalized growth, activity
-and downside-risk signals. Gain shares ADG's smoothed endpoint; ADG adds daily
-normalization. Positive equity-balance divergence has no universally desirable
-optimization direction; raw counts and absolute panic losses favor rates and loss
-percentages, while realized-only growth can reward leaving losses unrealized.
-Excluded metrics remain available to CPU optimization and standalone backtests.
-Enabling one requires supported-strategy/topology parity, alias/scoring/limit
-coverage, explicit tolerances and ranking/constraint evidence. Profile requested
-outputs and reductions separately; eligibility alone does not establish a speedup.
+The GPU metric registry uses the same core catalog as CPU. A replay must supply
+the observations a selected metric needs. For example, a coarse candle interval
+cannot supply minute drawdowns. Device precision can also affect candidate scores,
+constraint outcomes and Pareto membership. Compare representative candidates using
+the intended data, cadence and execution policy. See [GPU/CPU parity checks](gpu_parity.md).
 
 CPU orchestration reuses `optimize.pymoo`, `optimize.population_size` and the existing
 cohort meaning of `optimize.iters`. All deduplicated starting configs and initial parents
@@ -283,12 +280,9 @@ results/Pareto members are written as completions arrive. Evolution advances whe
 required complete offspring are collected. Fine-tune anchors and supported optimizer
 runtime overrides use canonical CPU preparation; fixed policies remove ineffective genes.
 
-For GPU-selected configs, the legacy `optimize.gpu.population_size` migrates to
-`optimize.population_size` when the latter is omitted, null or an auto alias. A concrete
-new value wins, with a warning when the legacy field is discarded. Invalid legacy values
-are rejected; positive legacy values retain the former minimum of eight parents. CPU
-backend configs do not use this migration. Save the normalized config to remove the
-obsolete field. NSGA-III can still raise the actual population to fit its reference directions.
+Set `optimize.population_size` for either backend. NSGA-III can raise the actual
+population to fit its reference directions. The explicit v8 converter handles the
+retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md).
 
 #### Execution settings
 
@@ -936,7 +930,8 @@ Example:
 CLI overrides can replace the full limit set with the same JSON/HJSON payload:
 
 ```bash
-passivbot optimize --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
+passivbot optimize path/to/config.json \
+  --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]'
 ```
 
 For quicker one-off edits, use repeatable `--limit` entries. The symbolic scalar operators
@@ -945,7 +940,7 @@ in `--limit` are written as keep conditions, matching `pareto_store.py` filterin
 - `--limit 'drawdown_max_fraction_strategy_equity <= 0.35'` means keep only results with `drawdown_max_fraction_strategy_equity <= 0.35`
 
 ```bash
-passivbot optimize \
+passivbot optimize path/to/suite-config.json --suite y \
   --clear-limits \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.35' \
   --limit 'drawdown_max_fraction_strategy_equity <= 0.5 scenario=base' \
@@ -958,7 +953,7 @@ You can also combine both forms. `--limits` loads a whole list first, and each `
 appends one more canonical entry:
 
 ```bash
-passivbot optimize \
+passivbot optimize path/to/config.json \
   --limits '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]' \
   --limit 'peak_recovery_max_days_strategy_equity <= 21'
 ```
@@ -978,7 +973,7 @@ they cannot pass a limit through an empty or missing value.
 
 ## Performance Metrics
 
-Rust owns the [core metric catalog and formulas](metrics.md): 24 quantities, with separate long
+Rust owns the [core metric catalog and formulas](metrics.md), with separate long
 and short selectors for position utilization. Objectives and enabled limits determine which
 accumulators run for each optimizer candidate. Regular backtests report the core catalog.
 Retired metrics, alternate units, automatic side copies and USD/BTC presentation variants are

@@ -6,7 +6,7 @@ to the result. A long-running process or an attractive GPU Pareto front is an in
 The final deliverable is a diverse qualified Pareto front, not a single "optimal" config: multiple
 objectives have tradeoffs, and the user chooses among them.
 
-Follow [AGENTS.md](../../../AGENTS.md) for authority and publication boundaries. This runbook does
+Follow [AGENTS.md](https://github.com/enarjord/passivbot/blob/v9/AGENTS.md?plain=1) for authority and publication boundaries. This runbook does
 not grant remote-process or live-trading authority. Use [Optimizing](../../optimizing.md) for CLI
 semantics, [Backtesting](../../backtesting.md) for data preparation, and the
 [metric contract](../features/backtest_metrics.md) for units, clocks, and unavailable values.
@@ -231,8 +231,8 @@ template. Optimization completion does not authorize deployment.
 
 | Question | Owning code |
 |---|---|
-| Selector expansion, anchors, polish, and starting-config handling | [optimize.py](../../../src/optimize.py) |
-| Search-bound history and shared activation | [optimization/warmup.py](../../../src/optimization/warmup.py) |
-| Prepared inputs and standalone CPU payloads | [backtest.py](../../../src/backtest.py) |
-| Diverse selection and canonical config extraction | [pareto_compress.py](../../../src/pareto_compress.py), [config/result_records.py](../../../src/config/result_records.py) |
-| Metric statuses and definitions | [metrics_schema.py](../../../src/metrics_schema.py), [core_metrics.rs](../../../passivbot-rust/src/core_metrics.rs) |
+| Selector expansion, anchors, polish, and starting-config handling | [optimize.py](https://github.com/enarjord/passivbot/blob/v9/src/optimize.py) |
+| Search-bound history and shared activation | [optimization/warmup.py](https://github.com/enarjord/passivbot/blob/v9/src/optimization/warmup.py) |
+| Prepared inputs and standalone CPU payloads | [backtest.py](https://github.com/enarjord/passivbot/blob/v9/src/backtest.py) |
+| Diverse selection and canonical config extraction | [pareto_compress.py](https://github.com/enarjord/passivbot/blob/v9/src/pareto_compress.py), [config/result_records.py](https://github.com/enarjord/passivbot/blob/v9/src/config/result_records.py) |
+| Metric statuses and definitions | [metrics_schema.py](https://github.com/enarjord/passivbot/blob/v9/src/metrics_schema.py), [core_metrics.rs](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/core_metrics.rs) |

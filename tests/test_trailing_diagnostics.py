@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from config import CONFIG_SCHEMA_VERSION
 from trailing_diagnostics import (
     build_trailing_diagnostic,
     build_trailing_inputs_from_snapshot,
@@ -111,7 +112,17 @@ def _sample_snapshot():
     }
 
 
-def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
+@pytest.fixture
+def ema_anchor_config_path(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "config_version": CONFIG_SCHEMA_VERSION,
+        "bot": {"portfolio": {"strategy_kind": "ema_anchor"}},
+    }))
+    return path
+
+
+def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path, ema_anchor_config_path):
     snapshot = _sample_snapshot()
     snapshot["payload"]["trailing"] = {
         "_meta": {
@@ -122,7 +133,6 @@ def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
     }
     snapshot_path = tmp_path / "snapshot.json"
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
-    config_path = Path(__file__).parents[1] / "configs" / "examples" / "ema_anchor.json"
 
     with pytest.raises(
         ValueError,
@@ -132,7 +142,7 @@ def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
         ),
     ):
         create_state_from_sources(
-            config_path=str(config_path),
+            config_path=str(ema_anchor_config_path),
             monitor_root=None,
             exchange=None,
             user=None,
@@ -144,7 +154,7 @@ def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
 
 
 def test_ema_anchor_wizard_state_cannot_reload_unsupported_snapshot(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, ema_anchor_config_path
 ):
     snapshot = _sample_snapshot()
     snapshot["payload"]["trailing"] = {
@@ -156,13 +166,12 @@ def test_ema_anchor_wizard_state_cannot_reload_unsupported_snapshot(
     }
     snapshot_path = tmp_path / "snapshot.json"
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
-    config_path = Path(__file__).parents[1] / "configs" / "examples" / "ema_anchor.json"
     monkeypatch.setattr(
         "trailing_diagnostics_tool.prompt_manual_wizard", lambda defaults: defaults
     )
 
     state = create_state_from_sources(
-        config_path=str(config_path),
+        config_path=str(ema_anchor_config_path),
         monitor_root=None,
         exchange=None,
         user=None,

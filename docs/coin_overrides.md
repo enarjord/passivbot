@@ -20,8 +20,8 @@ Allowed fields are intentionally limited:
 Not overrideable: approved/ignored coins, exchange settings, and arbitrary new keys. A disallowed or
 unknown inline override is rejected with its full path. A full override config file may contain
 ordinary non-override config fields; those fields are validated as part of that config and then
-filtered out. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected; use the
-nested v8 strategy path instead.
+filtered out. Author strategy changes under the current
+`bot.<side>.strategy.<strategy_kind>` path.
 
 `bot.<side>.risk.we_excess_allowance_fraction` can vary per coin. Excess allowance is
 always bounded by side TWEL. `bot.<side>.hsl.scale_budget_with_excess_allowance`
@@ -60,8 +60,8 @@ HSL patch; the main config's effective global mode always decides.
 ## How overrides are loaded
 
 1) `coin_overrides` is read from your main config. Keys should be coin tickers (e.g., `"XRP"`).
-2) If `override_config_path` is provided, the file is loaded. Relative paths are resolved against
-   `live.base_config_path` (if set) or the current working directory.
+2) If `override_config_path` is provided, the file is loaded. For a relative path, Passivbot
+   checks the directory of the main config first and then the working directory.
 3) Explicit allowed values are extracted without hydrating omitted fields or diffing against the
    base config. This preserves intentional resets to a global/default value, `false`, or zero.
 4) File values are applied first and inline values are applied second. Inline values therefore win
@@ -81,7 +81,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
 
 ```json
 {
-  "live": {"base_config_path": "configs/running_config.json"},
+  "config_version": "v9.0.0",
   "coin_overrides": {
     "XRP": {
       "bot": {
@@ -111,25 +111,24 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
     }
   },
   "bot": {
-    "long": {"universe": {"approved_coins": ["BTC", "XRP"]}},
-    "short": {"universe": {"approved_coins": ["BTC", "XRP"]}}
+    "global": {"universe": {"approved_coins": ["BTC", "XRP"]}},
+    "long": {"enabled": true}
   }
 }
 ```
 
 ## File-based override example
 
-Main config:
+`configs/running_config.json`:
 ```json
 {
-  "live": {"base_config_path": "configs/running_config.json"},
+  "config_version": "v9.0.0",
   "coin_overrides": {
-    "BCH": {"override_config_path": "configs/overrides/bch.json"},
-    "DOGE": {"override_config_path": "configs/overrides/doge.json"}
+    "BCH": {"override_config_path": "overrides/bch.json"}
   },
   "bot": {
-    "long": {"universe": {"approved_coins": ["BTC", "BCH", "DOGE"]}},
-    "short": {"universe": {"approved_coins": ["BTC", "BCH", "DOGE"]}}
+    "global": {"universe": {"approved_coins": ["BTC", "BCH"]}},
+    "long": {"enabled": true}
   }
 }
 ```
@@ -173,7 +172,8 @@ Main config:
 
 - Run with `--log-level debug` to see which overrides were initialized and when a per-symbol override
   value is used.
-- Ensure `live.base_config_path` is set so relative `override_config_path` values resolve.
+- Use the main config's location when testing file bindings, for example
+  `passivbot tool config-explain configs/running_config.json bot.long.strategy.trailing_martingale.entry.threshold_base_fraction --coin BCH`.
 - Verify that inline patches contain only allowed fields. Non-override fields in a complete file are
   filtered after the file is validated.
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
@@ -184,9 +184,9 @@ Main config:
 - A per-coin `entry_cooldown.base_duration_minutes` gates only position-increasing entries for the selected
   coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
   EMA trigger/readiness gate; the other unstuck eligibility checks still apply.
-- In global `coin` signal mode, per-coin HSL values drive the live supervisor and Rust backtest for
-  only the selected `coin+side`, including enablement, RED threshold, drawdown EMA span, cooldown/restart policy,
-  and panic execution type. Other coins inherit the main config.
+- In global `coin` scope, per-coin HSL values apply to the selected coin and side in live and
+  backtests. The policy includes enablement, drawdown threshold, EMA spans, finite cooldown,
+  and panic order type. Other coins inherit the main config.
 
 ## Composing single-coin configs
 
