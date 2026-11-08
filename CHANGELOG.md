@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
+
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 
