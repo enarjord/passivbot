@@ -592,7 +592,7 @@ async def get_live_market_snapshots(
 async def get_orchestrator_market_snapshots(
     bot, symbols: list[str]
 ) -> dict[str, MarketSnapshot]:
-    """Return current bid/ask/last snapshots for orchestrator planning."""
+    """Acquire current bid/ask/last snapshots without publishing planner state."""
     fetch_ttl_ms = bot._live_market_snapshot_fetch_max_age_ms()
     provider = getattr(bot, "market_snapshot_provider", None)
     snapshots: dict[str, MarketSnapshot] = {}
@@ -639,7 +639,6 @@ async def get_orchestrator_market_snapshots(
                     context="orchestrator",
                     allow_completed_candle_fallback=False,
                 )
-                bot._record_market_snapshot_surface(symbols, snapshots)
                 sources = Counter(snap.source for snap in snapshots.values())
                 logging.debug(
                     "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
@@ -667,7 +666,6 @@ async def get_orchestrator_market_snapshots(
         len(symbols),
         ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
     )
-    bot._record_market_snapshot_surface(symbols, snapshots)
     return snapshots
 
 

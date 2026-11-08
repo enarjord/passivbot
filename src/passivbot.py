@@ -18218,10 +18218,13 @@ class Passivbot:
         return {symbol: float(snap.last) for symbol, snap in snapshots.items()}
 
     async def _get_orchestrator_market_snapshots(
-        self, symbols: list[str]
+        self, symbols: list[str], *, record_surface: bool = True
     ) -> dict[str, MarketSnapshot]:
-        """Return current bid/ask/last snapshots for orchestrator planning."""
-        return await market_data.get_orchestrator_market_snapshots(self, symbols)
+        """Acquire quotes and publish the cohort when it belongs to planning."""
+        snapshots = await market_data.get_orchestrator_market_snapshots(self, symbols)
+        if record_surface:
+            self._record_market_snapshot_surface(symbols, snapshots)
+        return snapshots
 
     def _live_market_snapshot_max_age_ms(self) -> int:
         return market_data.live_market_snapshot_max_age_ms(self)

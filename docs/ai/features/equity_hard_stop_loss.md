@@ -89,6 +89,9 @@ fill once even when HSL is disabled, and the ordinary ledger debits it once. A b
 suffix starts from an explicitly unknown-prefix zero initializer unless a known
 origin is factually proven. Attenuation is a disclosed estimate, not exact-history
 or safety proof; losing the initializer declares a new bounded bootstrap.
+Passive per-symbol HSL quote reads update the owner's factual quote cache without stamping the
+planner's market-snapshot surface. A protective wave stamps its cohort when it has panic or
+retired-order work, under the same input validation and write admission rules.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
 Ordinary HSL acquisition completes remote candle/EMA, quote and confirming account reads before

@@ -79,9 +79,9 @@ async def test_abandoned_shared_quote_is_owned_until_completion_or_shutdown(
 
 @pytest.mark.asyncio
 async def test_hsl_quote_deadline_cannot_cancel_ordinary_shared_request():
-    from types import SimpleNamespace
     from time import monotonic
     from live.hsl_live import Owner
+    from passivbot import Passivbot
 
     started, release = asyncio.Event(), asyncio.Event()
 
@@ -91,9 +91,9 @@ async def test_hsl_quote_deadline_cannot_cancel_ordinary_shared_request():
         return {"A": {"bid": 99.0, "ask": 101.0, "last": 100.0}}
 
     provider = MarketSnapshotProvider(exchange_name="fake", fetch_tickers=fetch)
-    owner = Owner(
-        SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots)
-    )
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    owner = Owner(bot)
     assert await owner.acquire_quotes({"A"}) == {}
     ordinary = asyncio.create_task(provider.get_snapshots(["A"]))
     await asyncio.sleep(0)
@@ -105,6 +105,73 @@ async def test_hsl_quote_deadline_cannot_cancel_ordinary_shared_request():
     assert (await ordinary)["A"].last == 100.0
     assert (await owner.acquire_quotes({"A"}))["A"].last == 100.0
     owner.cancel_inputs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_hsl_quote_completion_preserves_ordinary_market_snapshot(monkeypatch, fallback):
+    from copy import copy
+    from types import SimpleNamespace
+
+    import passivbot as pb
+    from live.hsl_live import Owner
+    from live.market_snapshot import MarketSnapshot
+
+    clock = [1_800_000_000_000]
+    monkeypatch.setattr(pb, "utc_ms", lambda: clock[0])
+    started, release = asyncio.Event(), asyncio.Event()
+    held, flat = "BTC/USDT:USDT", "ETH/USDT:USDT"
+
+    def snapshots(symbols):
+        return {
+            symbol: MarketSnapshot(symbol, 99.0, 101.0, 100.0, clock[0], "fixture")
+            for symbol in symbols
+        }
+
+    async def get_snapshots(symbols, *, max_age_ms):
+        assert max_age_ms == 5_000
+        if symbols == [held]:
+            started.set()
+            await release.wait()
+            if fallback:
+                raise MarketSnapshotUnavailable("offline primary quote unavailable")
+        return snapshots(symbols)
+
+    async def explicit_fallback(symbols, **kwargs):
+        assert symbols == [held]
+        assert kwargs["allow_completed_candle_fallback"] is False
+        return snapshots(symbols)
+
+    bot = pb.Passivbot.__new__(pb.Passivbot)
+    bot.exchange = "hyperliquid" if fallback else "fake"
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=get_snapshots)
+    bot._get_live_market_snapshots = explicit_fallback
+    owner = Owner(bot)
+
+    hsl_read = asyncio.create_task(owner.acquire_quotes({held}))
+    try:
+        await asyncio.wait_for(started.wait(), 1.0)
+        assert set(await bot._get_orchestrator_market_snapshots([held, flat])) == {held, flat}
+        ledger = bot._ensure_freshness_ledger()
+        before = copy(ledger.surfaces["market_snapshot"])
+        quote_task = owner._quote_tasks[held]
+        release.set()
+        assert set(await quote_task) == {held}
+        await hsl_read
+        assert ledger.surfaces["market_snapshot"] == before
+        assert bot._market_snapshot_signature_invalid([held, flat]) == []
+
+        clock[0] += 10_001
+        invalid = bot._market_snapshot_signature_invalid([held, flat])
+        assert {(row["symbol"], row["reason"]) for row in invalid} == {
+            (held, "stale"), (flat, "stale"),
+        }
+    finally:
+        release.set()
+        try:
+            await hsl_read
+        finally:
+            owner.cancel_inputs()
 
 
 @pytest.mark.asyncio

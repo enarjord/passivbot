@@ -2605,9 +2605,8 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
         fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
         ticker_strategy=bot._market_snapshot_ticker_strategy(),
     )
-    owner = Owner(
-        SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots)
-    )
+    bot.market_snapshot_provider = provider
+    owner = Owner(bot)
     try:
         # Every pass expires the provider cache, reproducing repeated refreshes.
         for price in (100.0, 90.0, 105.0):

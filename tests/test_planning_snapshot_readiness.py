@@ -204,9 +204,9 @@ async def test_actual_owner_defers_only_snapshot_readiness_then_recovers(tmp_pat
             original_quotes = bot._get_orchestrator_market_snapshots
             requested = []
 
-            async def quotes(symbols):
-                result = await original_quotes(symbols)
-                if expiring[0]:
+            async def quotes(symbols, *, record_surface=True):
+                result = await original_quotes(symbols, record_surface=record_surface)
+                if record_surface and expiring[0]:
                     expiring[0] = False
                     requested.extend(symbols)
                     if failure == "pre_capture_expiry":
