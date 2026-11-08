@@ -918,7 +918,7 @@ def released_runtime_selector(path, *, strategy_kind=None):
     ))
 
 
-def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_change=False,
+def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_search_backend_change=False,
                        sparse=False, best_effort=False, base_config_path=""):
     """Translate public fields without guessing independent optimizer ranges."""
     FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
@@ -986,6 +986,15 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         mode = node.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", mode)
         return "portfolio" if mode == "unified" else mode
 
+    def require_portfolio_choice(enabled, context):
+        if type(enabled) is not bool:
+            raise ValueError(
+                f"{context}: unified HSL requires an explicit bot.hsl portfolio policy. "
+                "Choose enabled, red_threshold, ema_span_minutes, cooldown_minutes_after_red "
+                "and panic_close_order_type. Review both old side controllers and replace or "
+                "remove their HSL bounds and pins explicitly."
+            )
+
     def memory_paths(scope):
         paths = [("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
                  ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes")]
@@ -1013,6 +1022,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         values = normalize_scenario_overrides(raw)
         scope = values.get("live.hsl_signal_mode", values.get("bot.portfolio.hsl.scope", inherited_scope))
         scope = "portfolio" if scope == "unified" else scope
+        if scope == "portfolio" and inherited_scope != "portfolio":
+            require_portfolio_choice(
+                values.get("bot.hsl.enabled", values.get("bot.portfolio.hsl.enabled")),
+                path,
+            )
         converted = {}
         for key, value in values.items():
             authored_value = deepcopy(value)
@@ -1103,6 +1117,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         return converted
 
     scope = policy_scope(result, "coin")
+    if scope == "portfolio" and not sparse:
+        authored_bot = result.get("bot", {})
+        portfolio_hsl = authored_bot.get("hsl", authored_bot.get("portfolio", {}).get("hsl", {}))
+        require_portfolio_choice(
+            portfolio_hsl.get("enabled") if isinstance(portfolio_hsl, dict) else None,
+            "live.hsl_signal_mode",
+        )
     live = result.setdefault("live", {})
     for old, target in (
         ("hsl_signal_mode", ("bot", "portfolio", "hsl", "scope")),
@@ -1195,6 +1216,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 old = deepcopy(node[key])
                 node[key] = [selector(item, parameter_selector=True) if isinstance(item, str)
                              else item for item in node[key]]
+                if scope == "portfolio":
+                    from config.hsl import validate_parameter_path
+
+                    for item in node[key]:
+                        if isinstance(item, str):
+                            validate_parameter_path(item, scope)
                 if old != node[key]:
                     record(current, old, node[key], "canonical v9 fixed-parameter selectors")
             else:
@@ -1244,7 +1271,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from .released_v8 import get_released_v8_defaults
     from config.strategy_spec import normalize_strategy_kind
 
-    released = get_released_v8_defaults()
+    from .entry_ema import migrate_entry_ema_tree
+
+    released = get_released_v8_defaults(schema_version=schema_version)
+    migrate_entry_ema_tree(released)
     kind = normalize_strategy_kind(
         result.get("bot", {}).get("portfolio", {}).get("strategy_kind")
         or released["live"]["strategy_kind"]
@@ -1253,6 +1283,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         result, verbose=False,
         strategy_defaults={side: released["bot"][side]["strategy"][kind]
                            for side in ("long", "short")},
+        strategy_bound_defaults={
+            side: released["optimize"]["bounds"][side]["strategy"][kind]
+            for side in ("long", "short")
+        },
         scenario_strategy_paths={
             key: RELEASED_V8_STRATEGY_PATH_RENAMES[kind][
                 ("entry", key) if kind == "trailing_martingale" else (key,)

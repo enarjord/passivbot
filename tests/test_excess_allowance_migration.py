@@ -154,7 +154,7 @@ def test_released_v8_requires_explicit_selector_removal_before_conversion(mode):
     from tools.migrate_config_v9 import migrate as migrate_config_v9
 
     source = {
-        "config_version": "v8.4.0",
+        "config_version": "v8.6.0",
         "live": {"strategy_kind": "trailing_martingale", "pnls_max_lookback_days": 30.0},
         "bot": {
             "long": {"risk": {"n_positions": 1.0, "total_wallet_exposure_limit": 1.0,

@@ -152,9 +152,9 @@ scenarios, seeds and optimizer bounds. Mode `unified`, rolling-day memory and re
 selectors and the separate realized-loss gate window are migration inputs only.
 Active gate contexts require explicit acknowledgment of decaying memory with independent spans.
 `portfolio` policy is never inferred from a side.
-Removed `never` requires acknowledgement. The offline converter's explicit `--best-effort`
-mode may supply these semantic choices and acknowledgements with per-choice warnings
-and report entries; ordinary loading remains strict. See [migration policy](../../v8_to_v9_migration.md).
+The offline converter requires explicit acknowledgment for authored `never` and
+potentially active tagged `threshold` restart policies, including in best-effort
+mode. See [migration policy](../../v8_to_v9_migration.md).
 New memory span/allowance semantics require
 retuning; migrated optimizer fitness and old checkpoints are invalid evidence.
 

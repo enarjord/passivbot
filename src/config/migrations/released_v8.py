@@ -1,4 +1,4 @@
-"""Frozen released-v8.6 authoring defaults for explicit migration only.
+"""Frozen released-v8 authoring defaults for explicit migration only.
 
 Source: public master 772abadc10a5bbf258a84aa8209a9084699fa1bd,
 ``src/config/schema.py``, ``optimize_bounds.py``, ``gpu.py``, and native
@@ -7,10 +7,11 @@ loaded Rust metadata: omitted released settings belong to the released schema.
 """
 
 from copy import deepcopy
-import re
 
 RELEASED_V8_SCHEMA_VERSION = "v8.6.0"
 RELEASED_V8_SOURCE_COMMIT = "772abadc10a5bbf258a84aa8209a9084699fa1bd"
+TAGGED_V8_SCHEMA_VERSIONS = ("v8.0.0", "v8.1.0")
+RELEASED_V8_SCHEMA_VERSIONS = (*TAGGED_V8_SCHEMA_VERSIONS, RELEASED_V8_SCHEMA_VERSION)
 
 _RELEASED_V8_DEFAULTS = {'config_version': 'v8.6.0',
  'backtest': {'reducer': {'default': 'mean'},
@@ -926,14 +927,32 @@ _RELEASED_V8_DEFAULTS = {'config_version': 'v8.6.0',
                           {'goal': 'min', 'metric': 'strategy_eq_underwater_pct_mean'}]}}
 
 
-def get_released_v8_defaults(*, strategy_kind=None):
-    """Return independent copies of the public v8.6 schema and search defaults.
+def require_released_v8_schema_version(version):
+    """Select only source schemas whose authored defaults have been verified."""
+    normalized = "v" + version.strip().lower().removeprefix("v") if isinstance(version, str) else None
+    if normalized not in RELEASED_V8_SCHEMA_VERSIONS:
+        supported = ", ".join(RELEASED_V8_SCHEMA_VERSIONS)
+        raise ValueError(
+            f"config_version {version!r} is not a verified versioned v8 schema. "
+            f"Supported schemas: {supported}. Use the original runtime to materialize the "
+            "configuration and follow docs/v8_to_v9_migration.md for an explicit upgrade."
+        )
+    return normalized
+
+
+def get_released_v8_defaults(*, strategy_kind=None, schema_version=RELEASED_V8_SCHEMA_VERSION):
+    """Return independent copies of the selected v8 schema and search defaults.
 
     Passing a strategy kind projects the same active-strategy subtrees that the
     released loader retained. Omitting it returns the complete released schema,
     including removed strategies for inspecting their original policy.
     """
+    schema_version = require_released_v8_schema_version(schema_version)
     result = deepcopy(_RELEASED_V8_DEFAULTS)
+    if schema_version in TAGGED_V8_SCHEMA_VERSIONS:
+        from .released_v8_tag_defaults import apply_tag_defaults
+
+        apply_tag_defaults(result, schema_version)
     if strategy_kind is not None:
         if strategy_kind not in result["bot"]["long"]["strategy"]:
             raise ValueError(f"unsupported released-v8 strategy kind {strategy_kind!r}")
@@ -995,16 +1014,14 @@ def resolve_released_v8_defaults(source):
     """
     if not isinstance(source, dict):
         raise TypeError("configuration must be a mapping")
-    version = source.get("config_version")
-    if not isinstance(version, str) or re.fullmatch(r"v?8\.\d+\.\d+", version, re.IGNORECASE) is None:
-        raise ValueError("released-v8 defaults require a versioned v8 configuration")
+    version = require_released_v8_schema_version(source.get("config_version"))
     result = deepcopy(source)
     for section in ("bot", "live", "backtest", "optimize"):
         if not isinstance(result.setdefault(section, {}), dict):
             raise TypeError(f"{section} must be a mapping")
     default_kind = _RELEASED_V8_DEFAULTS["live"]["strategy_kind"]
     kind = str(result["live"].get("strategy_kind") or default_kind).strip().lower() or default_kind
-    defaults = get_released_v8_defaults(strategy_kind=kind)
+    defaults = get_released_v8_defaults(strategy_kind=kind, schema_version=version)
     # The released loader deliberately disabled a fully omitted side and did
     # not inherit the schema's example coin universe into a sparse document.
     for side in ("long", "short"):
@@ -1017,7 +1034,7 @@ def resolve_released_v8_defaults(source):
             for side in ("long", "short"):
                 target.setdefault(side, [])
 
-    preserve = {("backtest", "reducer"), ("live", "startup_phase_budgets"),
+    preserve = {("backtest", "reducer"), ("backtest", "aggregate"), ("live", "startup_phase_budgets"),
                 ("optimize", "fixed_runtime_overrides")}
 
     def fill(target, template, path=()):
@@ -1054,7 +1071,7 @@ def materialize_released_v8_bot_defaults(config, *, changes):
             or _RELEASED_V8_DEFAULTS["live"]["strategy_kind"])
     defaults = resolve_released_v8_defaults(
         {
-            "config_version": RELEASED_V8_SCHEMA_VERSION,
+            "config_version": config.get("config_version", RELEASED_V8_SCHEMA_VERSION),
             "bot": {side: {} for side in ("long", "short") if side in bot},
             "live": {"strategy_kind": kind},
         }
@@ -1143,7 +1160,9 @@ def normalize_released_v8_position_counts(config, *, changes):
     visit(config)
 
 
-def materialize_released_v8_optimizer_bounds(config, *, changes):
+def materialize_released_v8_optimizer_bounds(
+    config, *, changes, schema_version=RELEASED_V8_SCHEMA_VERSION,
+):
     """Preserve released implicit search ranges after explicit structural conversion.
 
     This stage consumes the converter's canonical paths. Authored and migrated
@@ -1159,10 +1178,15 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
     # Use only the released default resolver, never the evolving v9 template or
     # loaded native metadata, for the ranges that v8 supplied implicitly.
     released = resolve_released_v8_defaults({
-        "config_version": RELEASED_V8_SCHEMA_VERSION, "bot": {},
+        "config_version": schema_version, "bot": {},
         "live": {"strategy_kind": kind},
     })
     defaults = released["optimize"]["bounds"]
+    from .entry_cooldown import migrate_entry_cooldown_tree
+    from .entry_ema import migrate_entry_ema_tree
+
+    migrate_entry_cooldown_tree(defaults)
+    migrate_entry_ema_tree(defaults)
     portfolio = config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio"
     for side in ("long", "short"):
         shared = defaults[side]

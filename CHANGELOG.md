@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
+  Require a verified source schema, an explicit unified HSL portfolio policy, and
+  acknowledgment before removing a permanent-stop policy.
+
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 

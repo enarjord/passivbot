@@ -229,6 +229,17 @@ def _require_gate_ack(config, acknowledge):
     return contexts
 
 
+def _migration_source_version(version):
+    if version == V9_SCHEMA_VERSION:
+        return version
+    match = _VERSION.fullmatch(version.strip()) if isinstance(version, str) else None
+    if match is None or int(match[1]) != 8:
+        raise ValueError("migrate-config-v9 requires versioned v8 or final canonical v9")
+    from .released_v8 import require_released_v8_schema_version
+
+    return require_released_v8_schema_version(version)
+
+
 def migrate_v8_to_v9(
     source,
     *,
@@ -260,9 +271,7 @@ def migrate_v8_to_v9(
         raise ValueError("expected a v8 or v9 bot configuration")
     result = deepcopy(payload)
     version = result.get("config_version")
-    match = _VERSION.fullmatch(version.strip()) if isinstance(version, str) else None
-    if match is None or tuple(map(int, match.groups()))[0] not in {8, 9}:
-        raise ValueError("migrate-config-v9 requires versioned v8 or final canonical v9")
+    schema_version = _migration_source_version(version)
     inferred_changes = []
     if best_effort and not _coin_patch:
         from .best_effort_v9 import record_envelope_metadata, remove_result_metadata
@@ -294,15 +303,14 @@ def migrate_v8_to_v9(
         if metric_replacements:
             raise ValueError("metric replacements apply only to versioned v8 migration")
         return MigrationResult(result, inferred_changes, ())
-    is_v8 = int(match[1]) == 8
-    if not is_v8:
-        raise ValueError("migrate-config-v9 supports versioned v8 and final canonical v9 only")
     for path, _, _ in _walk(result):
         if re.search(r"(?:^|\.)bot\.(?:global|long|short)\.enabled$", path):
             raise ValueError(f"{path} is not a released-v8 field; activation is chosen and reported by migration")
     from .final_v9 import reject_v8_alias_conflicts
+    from .released_v8 import TAGGED_V8_SCHEMA_VERSIONS
 
     reject_v8_alias_conflicts(result)
+    tagged_v8 = schema_version in TAGGED_V8_SCHEMA_VERSIONS
     # Default hydration cannot authorize removing an explicitly null restart
     # policy: that audit needs the original authored enablement facts.
     enablement = _hsl_enablement_facts(result)
@@ -331,7 +339,7 @@ def migrate_v8_to_v9(
                 live.get("pnls_max_lookback_days"), "live.pnls_max_lookback_days", metric_changes,
                 missing="pnls_max_lookback_days" not in live,
             )
-    if is_v8 and memory_span_minutes is None and not _coin_patch:
+    if memory_span_minutes is None and not _coin_patch:
         raise ValueError(
             "v8 risk memory is not equivalent to an EMA span; explicitly choose "
             "--lookback-ema-span-minutes and re-tune HSL/unstuck"
@@ -361,6 +369,13 @@ def migrate_v8_to_v9(
     # filtering/canonicalization merges aliases. Only the tool supplies this
     # private exact-path context; no inherited leaf is added to the output.
     enablement.update(_null_policy_enablement or {})
+    # A tagged threshold controller can become active through a stored scenario,
+    # optimizer policy or referenced coin patch even when the root is dormant.
+    # Absence inherits the tagged disabled default. Invalid/conflicting facts
+    # cannot prove that removal is harmless.
+    threshold_may_halt = any(
+        value is not False for facts in enablement.values() for value in facts
+    )
 
     def disabled_null_policy(path):
         parts = _semantic_hsl_path(path)
@@ -410,17 +425,19 @@ def migrate_v8_to_v9(
                 continue
             value = node[key]
             current = f"{path}.{key}" if path else str(key)
-            if best_effort and str(key).split(".")[-1] in {
+            if (best_effort or tagged_v8) and str(key).split(".")[-1] in {
                 "we_excess_allowance_mode", "risk_we_excess_allowance_mode",
             }:
-                from .best_effort_v9 import record_guess
-
                 if not isinstance(value, str) or value.strip().lower() != "bounded":
                     raise ValueError(f"{current}: only retired bounded allowance mode can be removed automatically")
                 del node[key]
-                record_guess(changes, current, value, None,
-                             "remove retired bounded-mode selector; v9 always uses bounded excess allowance",
-                             log_prefix=_guess_log_prefix)
+                reason = "remove retired bounded-mode selector; v9 always uses bounded excess allowance"
+                if tagged_v8:
+                    record(current, value, None, reason)
+                else:
+                    from .best_effort_v9 import record_guess
+
+                    record_guess(changes, current, value, None, reason, log_prefix=_guess_log_prefix)
                 continue
             if _retired_control(current, key):
                 del node[key]
@@ -433,23 +450,33 @@ def migrate_v8_to_v9(
                 ) for item in value):
                     raise ValueError(f"{current} targets removed v8 fields; edit selectors explicitly")
             if "restart_after_red_policy" in str(key):
-                if value is None and disabled_null_policy(current):
+                parts = _semantic_hsl_path(current)
+                tagged_restart = (
+                    tagged_v8 and parts[-2:] == ("hsl", "restart_after_red_policy")
+                    and "bounds" not in parts
+                )
+                if value is None and not tagged_restart and disabled_null_policy(current):
                     del node[key]
                     record(current, value, None, "removed null restart field from a disabled v8 HSL policy")
                     continue
-                if not isinstance(value, str) or value.strip().lower() not in {"always", "never"}:
+                policy = value.strip().lower() if isinstance(value, str) else None
+                if tagged_restart and value is None:
+                    policy = "threshold"
+                threshold = tagged_restart and policy == "threshold"
+                if policy not in {"always", "never"} and not threshold:
                     raise ValueError(f"{current} has no v9 policy equivalent; remove it explicitly")
-                if value.strip().lower() == "never" and not acknowledge_never_removal and not best_effort:
+                permanent_halt = policy == "never" or (threshold and threshold_may_halt)
+                if permanent_halt and not acknowledge_never_removal:
                     raise ValueError(
-                        f"{current}=never requires --acknowledge-never-removal; "
-                        "v9 resumes after finite cooldown"
+                        f"{current}={policy} requires --acknowledge-permanent-stop-removal "
+                        "(--acknowledge-never-removal). V9 resumes after finite cooldown "
+                        "and ordinary admission gates."
                     )
-                if value.strip().lower() == "never" and best_effort and not acknowledge_never_removal:
-                    from .best_effort_v9 import record_guess
-
-                    record_guess(changes, current, value, None,
-                                 "remove permanent stop; v9 resumes after finite cooldown and admission gates",
-                                 log_prefix=_guess_log_prefix)
+                if permanent_halt:
+                    record(current, value, None,
+                           "explicitly acknowledged permanent stop removal; v9 resumes after finite cooldown")
+                elif threshold:
+                    record(current, value, None, "removed dormant tagged threshold restart policy")
                 else:
                     record(current, value, None, "removed restart policy; only finite cooldown remains")
                 del node[key]
@@ -533,6 +560,7 @@ def migrate_v8_to_v9(
     from .final_v9 import finalize_v8_layout
 
     result = finalize_v8_layout(result, span=None if _coin_patch else root_span, changes=changes,
+                                schema_version=schema_version,
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
                                 sparse=_coin_patch, best_effort=best_effort, base_config_path=base_config_path)
     if not _coin_patch:
@@ -549,7 +577,7 @@ def migrate_v8_to_v9(
                    "zero capacity still prevents entries without suppressing existing held-position management")
         from .released_v8 import materialize_released_v8_optimizer_bounds
 
-        materialize_released_v8_optimizer_bounds(result, changes=changes)
+        materialize_released_v8_optimizer_bounds(result, changes=changes, schema_version=schema_version)
     from config.authored import validate_authored_config
     from config.schema import get_template_config
 

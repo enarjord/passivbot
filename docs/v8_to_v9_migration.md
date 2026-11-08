@@ -9,6 +9,37 @@ The explicit offline converter writes config and a change report. It makes no ex
 requests and starts no bot. Keep original source/config pairs and inspect the report
 before backtesting a proposed replacement.
 
+## Supported source schemas
+
+The converter uses the source defaults and optimizer domains for the tagged
+`v8.0.0` and `v8.1.0` schemas and the final public `v8.6.0` schema.
+Schema versions are independent of the package version and Git tag. Sparse
+strategy and risk settings keep the defaults from their verified source.
+
+For another v8 schema, first materialize a copy using the exact runtime that
+last loaded it. Keep the output beside the input so referenced files resolve
+in the same directory. Run the following in the source checkout with its own
+Python environment.
+
+```sh
+PYTHONPATH=src python - input.v8.json materialized.v8.json <<'PY'
+import sys
+from config_utils import dump_config, load_config
+dump_config(load_config(sys.argv[1]), sys.argv[2])
+PY
+```
+
+Then use the public v8.6 source checkout with its own environment to load
+that materialized config and export a separate
+`materialized.v8.6.json` with the same command. Review any rejected HSL, venue,
+strategy, or optimizer settings and compare the two materialized policies before
+converting the v8.6 export. Leave each version stamp under its source loader's
+control. [Public v8.6 source checkout](https://github.com/enarjord/passivbot/tree/772abadc10a5bbf258a84aa8209a9084699fa1bd)
+
+If the matching runtime is unavailable or v8.6 cannot represent the source
+policy, start from a canonical example in the v9 checkout and author a reviewed
+v9 config using the original settings and the decisions below. [Config workflow](config_workflow.md)
+
 ## Structural changes
 
 | Released field | Final v9 field or action |
@@ -149,12 +180,39 @@ fixed optimizer overrides, add `--acknowledge-realized-loss-gate-memory-change` 
 reviewing the new memory policy. The gate allowance is
 `max(0, r * (raw_balance + D_gate) - D_gate)`; TWEL does not multiply `r`.
 
-HSL resumes after a qualified finite cooldown and the ordinary admission gates. Any
-authored `restart_after_red_policy="never"` requires `--acknowledge-never-removal`,
-including dormant policies. An ambiguous enabled null policy must be corrected explicitly.
+HSL resumes after a qualified finite cooldown and the ordinary admission gates.
+Use `--acknowledge-permanent-stop-removal` to adopt that policy in place of
+an authored `never` or a tagged `threshold` policy that could become active.
+Tagged v8 resolves omitted or null restart policy to `threshold`. Review stored
+scenarios, optimizer pins and coin overrides before accepting removal. The
+flag is required in strict and best-effort modes, including for dormant
+authored `never` policies. The previous flag `--acknowledge-never-removal`
+is an alias. An enabled null policy in v8.6 requires an explicit choice.
+
+Tagged `unified` HSL shared a signal across directional controllers. V9
+portfolio scope has one controller and requires an explicit policy. In a
+reviewed copy, put the chosen portfolio `enabled`, `red_threshold`,
+`ema_span_minutes`, `cooldown_minutes_after_red`, and `panic_close_order_type`
+under `bot.hsl`. Review and remove any directional HSL optimizer bounds
+and pins that no longer apply. Put any new portfolio domains under
+`optimize.bounds.hsl` before converting. The converter carries those to
+`bot.portfolio.hsl` and `optimize.bounds.portfolio.hsl`.
+
 The converter preserves sparse file inheritance and reports materialized referenced coin
 patches; file values precede inline values. Conflicting aliases fail rather than choosing
 one by insertion order.
+
+### Tagged v8.1 examples
+
+| Example | Migration choices |
+| --- | --- |
+| `default_trailing_martingale_long.json`, `ema_anchor.json` | HSL is disabled. Review memory and metric choices. |
+| `BTC_ETH_XRP_SOL_ADA_long.json`, `suite_example.json`, `xmr_long_short.json` | Author the portfolio HSL policy and choose or remove the directional HSL bounds. |
+| `hsl_npos1.json` | Author the portfolio policy, resolve the directional HSL bounds, and acknowledge the active tagged permanent-stop policy change. |
+| `btc_long.json` | Resolve the unified HSL policy and its bounds. Review or replace the BTC-denominated objectives and constraints. The converter requires an explicit decision for `flat_btc_balance_hours` and `loss_profit_ratio_usd`. |
+
+If starting a fresh BTC search, remove the old objectives and limits in the
+reviewed copy and author new v9 selectors and thresholds after conversion.
 
 Core metric definition version 1 changes observation populations, clocks and formulas.
 Strict migration requires `--acknowledge-metric-formula-change` for every selected
@@ -252,7 +310,7 @@ are emitted as choices are made, including before a later validation failure.
 | Zero or sub-minute rolling window | Use the minimum `1.0` minute span |
 | Missing or all-history root window | Use the canonical `43200.0` minute (30-day) span |
 | All-history scenario/fixed window | Use the same canonical 30-day span |
-| `restart_after_red_policy="never"` | Remove it and adopt finite cooldown plus ordinary admission gates |
+| Authored `never` or potentially active tagged `threshold` restart policy | Require `--acknowledge-permanent-stop-removal` before adopting finite cooldown |
 | Retired `we_excess_allowance_mode="bounded"` | Remove selector; retain the bounded allowance contract (`legacy_raw` still fails) |
 | Active realized-loss gate | Adopt independent decaying realized memory and report each effective context |
 | Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract`, and recognized hydration metadata | Remove obsolete result/cache snapshots before inference; discard known runtime fields from recognized result records |
@@ -270,7 +328,7 @@ initializes `mutation_probability_per_variable`; the old zero `mutation_indpb` s
 uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
 with best-effort mode. Best-effort mode supplies missing acknowledgment for retained
-metric definitions and explicit formula replacements, restart, gate-memory and search-algorithm
+metric definitions and explicit formula replacements, gate-memory and search-algorithm
 changes. Inferred metric choices remain identified as guesses in warnings and the report,
 even with `--acknowledge-metric-formula-change`. The old recovery maximum measures waiting
 for a strictly higher equity observation; the current metric measures running-peak recovery
