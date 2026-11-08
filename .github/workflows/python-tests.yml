@@ -110,9 +110,10 @@ jobs:
           .venv/bin/python -m pip wheel . --no-deps -w "$wheel_work/wheels"
           wheels=("$wheel_work/wheels/"*.whl)
           python -m venv "$wheel_work/venv"
-          "$wheel_work/venv/bin/python" -m pip install "${wheels[0]}[full]"
           cp .github/ci/smoke_installed_research.py "$wheel_work/smoke.py"
           cd "$wheel_work/run"
+          # The build leaves checkout egg-info, which pip can see on PYTHONPATH.
+          env -u PYTHONPATH "$wheel_work/venv/bin/python" -m pip install "${wheels[0]}[full]"
           env -u PYTHONPATH "$wheel_work/venv/bin/python" "$wheel_work/smoke.py" "$expected_source"
 
       - name: Upload collection manifest
