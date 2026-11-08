@@ -84,6 +84,26 @@ def test_dataset_includes_objectives_and_preserves_members(front):
     assert pareto_plot.select_metrics([], data) == METRICS[:2]
 
 
+def test_plot_can_rank_and_minimize_saved_peak_recovery(tmp_path):
+    source = tmp_path / "candidate.json"
+    output = tmp_path / "plot.html"
+    recovery = "peak_recovery_max_days_strategy_equity"
+    write_candidate(source)
+    entry = json.loads(source.read_text())
+    entry["metrics"]["stats"] = {recovery: {"mean": 10.0, "std": 0.0}}
+    source.write_text(json.dumps(entry))
+
+    assert pareto_plot.main([
+        str(source), recovery, METRICS[0], "--objectives", recovery, "-o", str(output),
+    ]) == 0
+    data = read_payload(output.read_text())
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    assert metrics[recovery]["goal"] == "min"
+    assert metrics[f"stats.{recovery}.mean"]["goal"] == "min"
+    assert metrics[f"stats.{recovery}.std"]["goal"] is None
+    assert data["selection"]["objectives"][0]["goal"] == "min"
+
+
 @pytest.mark.parametrize("layout", ["named", "suite"])
 def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(
     tmp_path, layout

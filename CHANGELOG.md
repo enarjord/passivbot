@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
+  the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
+
 - Preserve the original epoch, missing quote, or quote age in staged planning deferral diagnostics
   when market data recovers before the execution loop handles the failure.
 

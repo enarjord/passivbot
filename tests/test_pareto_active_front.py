@@ -138,6 +138,39 @@ def test_non_scoring_min_cagr_fraction_strategy_equitynd_duplicate_vectors(front
     assert result.candidate.path.stem == "c"
 
 
+@pytest.mark.parametrize(
+    "saved_goal, expected_goal, winner",
+    [(None, "min", "short"), ("max", "max", "long")],
+)
+def test_requested_peak_recovery_direction(tmp_path, capsys, saved_goal, expected_goal, winner):
+    growth = "cagr_fraction_strategy_equity_ew"
+    ulcer = "ulcer_index_fraction_strategy_equity"
+    recovery = "peak_recovery_max_days_strategy_equity"
+    scoring = [{"metric": growth, "goal": "max"}, {"metric": ulcer, "goal": "min"}]
+    if saved_goal is not None:
+        scoring.append({"metric": recovery, "goal": saved_goal})
+    for name, days in (("short", 10.0), ("long", 50.0)):
+        objectives = {growth: 0.2, ulcer: 0.1}
+        if saved_goal is not None:
+            objectives[recovery] = days
+        payload = {
+            "optimize": {"scoring": scoring},
+            "metrics": {
+                "definition_version": 2,
+                "objectives": objectives,
+                "stats": {recovery: {"mean": days}},
+            },
+        }
+        (tmp_path / f"{name}.json").write_text(json.dumps(payload))
+
+    result, record = run(tmp_path, capsys, "-o", f"{growth},{ulcer},{recovery}")
+
+    assert record["loaded_count"] == 2
+    assert record["active_front_count"] == 1
+    assert record["objectives"][-1]["goal"] == expected_goal
+    assert result.candidate.path.stem == winner
+
+
 def test_text_reports_three_counts(front, capsys):
     run_from_args(build_parser().parse_args([str(front), "-o", "cagr_fraction_strategy_equity,omega_ratio_strategy_equity"]))
     output = capsys.readouterr().out
