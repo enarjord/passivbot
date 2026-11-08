@@ -31,12 +31,14 @@ socket.getaddrinfo = offline
 native_declaration = types.ModuleType("setuptools_rust")
 native_declaration.Binding = types.SimpleNamespace(PyO3=None)
 native_declaration.RustExtension = lambda *args, **kwargs: None
+native_declaration.build_rust = setuptools.Command
 options = {}
 with patch.dict(sys.modules, {"setuptools_rust": native_declaration}):
     with patch.object(setuptools, "setup", lambda **kwargs: options.update(kwargs)):
         runpy.run_path("setup.py")
 options.pop("rust_extensions")
 options.pop("setup_requires")
+options["cmdclass"].pop("build_rust")
 setuptools.setup(**options)
 """
 
