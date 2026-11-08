@@ -5,6 +5,7 @@ import logging
 import sys
 from typing import Iterable
 
+from live.console_health import observe_ordinary_defer
 from live.freshness import ACCOUNT_SURFACES
 from live.market_snapshot import MarketSnapshot
 from live.events import run_diagnostic_step
@@ -220,6 +221,9 @@ def handle_staged_execution_precondition_error(
 
 def log_staged_execution_defer(bot, details: dict) -> None:
     """Log a throttled non-trading defer while staged inputs settle."""
+    run_diagnostic_step(
+        "record ordinary planning defer", lambda: observe_ordinary_defer(bot, details)
+    )
     missing = tuple(details.get("missing", ()))
     required = tuple(details.get("required", ()))
     context = str(details.get("context") or "planning")
