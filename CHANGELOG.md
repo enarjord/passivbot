@@ -6,9 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
-  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
-  The v8 migration tool converts the old field names without rescaling.
+- Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
+  the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
@@ -547,6 +546,10 @@ since the latest release tag; these features may already be available when insta
   without changing the shared live cap.
   Convert numeric fee strings to the same finite numeric values. Editor validation now accepts
   the existing `visible_metrics: null` policy for derived metrics.
+
+- Name the live log and monitor event rotation limits `logging.max_bytes_mib`
+  and `monitor.event_rotation_mib`. Both still use 1,048,576 bytes per MiB.
+  The v8 migration tool converts the old field names without rescaling.
 
 - Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
   millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
