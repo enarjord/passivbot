@@ -810,6 +810,13 @@ def load_selection_candidates(path: str | Path | None):
     )
 
 
+def default_pareto_goal(metric: str) -> str | None:
+    """Return the direction for a requested saved metric without a scoring spec."""
+    if metric == "peak_recovery_max_days_strategy_equity":
+        return "min"
+    return default_objective_goal(metric)
+
+
 def _resolve_active_objective_metrics(
     scoring_specs: Sequence[ObjectiveSpec],
     candidates: Sequence[ParetoCandidate],
@@ -839,7 +846,7 @@ def _resolve_active_objective_metrics(
         if metric in available_specs:
             resolved.append(available_specs[metric])
             continue
-        goal = default_objective_goal(metric)
+        goal = default_pareto_goal(metric)
         if goal is None:
             invalid.append(metric)
             continue
@@ -1729,12 +1736,12 @@ def format_selection_result(
     lines.append(f"Backtest command: {backtest_command}")
     lines.append(f"Method summary: {_method_explanation(result.method)}")
     active_metrics = result.details.get("active_metrics")
-    spec_map = objective_spec_by_metric(result.candidate.entry)
+    objective_goals = {spec["metric"]: spec["goal"] for spec in record["objectives"]}
     if isinstance(active_metrics, list) and active_metrics:
         lines.append("Active objectives:")
         objective_rows = []
         for metric in active_metrics:
-            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            goal = objective_goals[metric]
             objective_rows.append([str(metric), str(goal)])
         lines.extend(_render_table(["metric", "goal"], objective_rows))
     if active_limits:
@@ -1782,7 +1789,7 @@ def format_selection_result(
     if isinstance(selected_utilities, Mapping) and selected_utilities:
         metric_rows: List[List[str]] = []
         for metric, value in result.objective_values.items():
-            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            goal = objective_goals[metric]
             row = [
                 metric,
                 str(goal),
@@ -1818,7 +1825,7 @@ def format_selection_result(
     else:
         lines.extend(["", "Objectives:"])
         for metric, value in result.objective_values.items():
-            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            goal = objective_goals[metric]
             lines.append(f"  {metric} ({goal}): {value}")
     shortlist = record["top_candidates"]
     if len(shortlist) > 1:

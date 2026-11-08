@@ -128,6 +128,8 @@ staged before installation. Concurrent destination mutation is outside the tool'
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_equity` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
+When requested as an objective, `peak_recovery_max_days_strategy_equity` defaults to minimizing
+recovery days. A direction explicitly saved in `optimize.scoring` takes precedence.
 Default scaling applies `(2 / pi) * atan(value)` and uses the ranked pool's min/max values.
 Changing the pool can change the ranking scale. The front covers the saved candidates.
 A newly constrained optimization can discover candidates discarded from the original front.
