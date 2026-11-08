@@ -17,6 +17,10 @@ _RETIRED_LIVE_FIELDS = frozenset({
     "hsl_position_during_cooldown_policy", "hsl_unavailable_grace_seconds",
     "hsl_accept_incomplete_history", "risk_input_max_attempts",
 })
+_RETIRED_RMS_SELECTOR_LEAVES = frozenset({
+    "unilateralness", "score_weights_unilateralness", "forager_score_weights_unilateralness",
+    "unilateralness_ema_span_1m", "unilateralness_ema_span_minutes",
+})
 
 
 def _retired_control(path, key):
@@ -142,11 +146,15 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
                 or _retired_control(path, key)
             ):
                 raise ValueError(f"{path} is removed in v9; use {MIGRATION_COMMAND}")
-            if isinstance(value, str) and "fixed_params" in path and (
-                "pnls_max_lookback_days" in value or "restart_after_red_policy" in value
-                or "realized_loss_gate_lookback_minutes" in value
-            ):
-                raise ValueError(f"{path} targets a removed v9 field; use {MIGRATION_COMMAND}")
+            if isinstance(value, str) and "fixed_params" in path:
+                if (
+                    "pnls_max_lookback_days" in value or "restart_after_red_policy" in value
+                    or "realized_loss_gate_lookback_minutes" in value
+                ):
+                    raise ValueError(f"{path} targets a removed v9 field; use {MIGRATION_COMMAND}")
+                selected = value.rsplit(".", 1)[-1].strip().removeprefix("long_").removeprefix("short_")
+                if selected in _RETIRED_RMS_SELECTOR_LEAVES:
+                    raise ValueError(f"{path} targets retired selector {value!r}. Use the rms_directionality fields.")
             if name.split(".")[-1] == "hsl_signal_mode" and value == "unified":
                 raise ValueError(f"{path}=unified is removed in v9; use {MIGRATION_COMMAND}")
 

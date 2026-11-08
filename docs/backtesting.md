@@ -215,14 +215,15 @@ offline mode.
 ## Usage
 
 ```shell
-passivbot backtest
+passivbot backtest configs/examples/default_trailing_martingale_long.json
 ```
 Or
 ```shell
 passivbot backtest path/to/config.json
 ```
-If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`.
-The example config `configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly.
+The starter explicitly enables long trading. If you omit the config path, the in-code defaults
+leave both sides disabled. Enable the intended side and supply approved coins, for example
+`passivbot backtest --bot.long.enabled y -s BTC`.
 See [Config Workflow](config_workflow.md) for the recommended way to copy and customize configs.
 
 ## Backtest Results
@@ -363,6 +364,9 @@ existing `load_backtest_artifact_workspace` remains an eager notebook convenienc
 Dense equity CSV is an explicit export under the report output directory and is
 not a second default copy of the binary history.
 
+To inspect changes across completed runs, see
+[Compare two saved backtests](tools.md#compare-two-saved-backtests).
+
 ## HLCV Data Contract
 
 Direct or prepared backtest inputs must contain finite high, low, and close prices throughout
@@ -453,7 +457,8 @@ approved-coin selection flow as the backtester, but stops after preparing cache 
 
 ```shell
 passivbot download configs/examples/default_trailing_martingale_long.json
-passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
+passivbot download configs/examples/default_trailing_martingale_long.json \
+  --symbols BTC --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
 ```
 
 The default command warms the base backtest request. For an optimizer, use
@@ -514,7 +519,8 @@ Each scenario may override:
 - `start_date`/`end_date`
 - `exchanges`: restricts which exchanges' data the scenario can see
 - `coin_sources`: force a specific exchange for individual coins (see below)
-- `overrides`: arbitrary config path overrides (e.g., `{"live.long.we": 0.5}`)
+- `overrides`: canonical, scenario-eligible config paths such as
+  `{"bot.long.risk.total_wallet_exposure_limit_ratio": 0.5}`
 
 Top-level suite keys (directly under `backtest`):
 

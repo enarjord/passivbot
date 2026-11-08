@@ -12,15 +12,35 @@ The container startup path uses:
 
 This is the intended base for Docker, Docker Compose, and hosted platforms such as Railway.
 
+## Build Inputs
+
+Both Docker images use a build-context allowlist for application source, dependency manifests,
+and runtime support files. Provide credentials, authored configs, cached data, and logs through
+runtime mounts. The build context excludes these files, including configs under `configs/`.
+
 ## Live Image
 
-Build the live image from the repo root:
+Build the live image from a clean source checkout. Keep credentials, private configs, logs,
+and monitor artifacts outside the build context. Mount runtime inputs when starting the container.
 
 ```bash
 docker build -f Dockerfile_live -t passivbot-live:latest .
 ```
 
 The image already includes the compiled Rust extension and launches the wrapper entrypoint by default.
+
+## Full Image
+
+Build the full image for research and development workflows.
+
+```bash
+docker build -t passivbot:latest .
+docker run --rm --network none passivbot:latest python src/backtest.py --help
+```
+
+The full image includes the installed CLI and the source-script entrypoints. Mount an intended
+configuration at runtime. The default Compose profile continues to bind the checkout to
+`/app` so it can use local configs and persist outputs.
 
 ## Required Env
 
@@ -47,7 +67,10 @@ Set:
 - `PB_API_SECRET`
 - `PB_API_PASSPHRASE` optional
 
-The entrypoint renders a temporary `api-keys.json` and links it into the working tree so the existing live runtime can use it without code-path divergence.
+The entrypoint renders a temporary `api-keys.json` for exchanges using a key, secret, and
+optional passphrase. Mount an account file for exchanges requiring other fields, such as
+[Lighter](exchanges/lighter.md) or [Hyperliquid](hyperliquid_guide.md). Keep the credential file
+private and mount it read-only.
 
 ## Config
 
@@ -63,11 +86,15 @@ Set:
 
 - `PB_CONFIG_INLINE`
 
-with a JSON or HJSON payload.
+with a reviewed JSON or HJSON payload using the v9 schema. An inline config is rendered
+in the container's runtime directory. Use a mounted config when it references relative
+coin-list or override files.
 
 ### Option 3: Schema defaults
 
-If neither config env is set, the container starts from the in-code schema defaults.
+If neither config env is set, the container starts from the in-code schema defaults with both
+position sides disabled for new entries. `PB_APPROVED_COINS` supplies a universe and leaves
+activation unchanged. Use a reviewed mounted or inline configuration for trading.
 
 ## Optional Deployment Overrides
 
@@ -94,7 +121,8 @@ Live runs use Passivbot's canonical logging config.
 
 - `logging.persist_to_file` defaults to `true`
 - `logging.dir` defaults to `logs`
-- log files are written as `${logging.dir}/${live.account.user}.log`
+- a timestamped run log is written under `logging.dir`
+- `${logging.dir}/${live.account.user}.log` points to the current run log
 
 Container logs still go to stdout/stderr, and file persistence uses the same live logging handler rather than a wrapper-level tee.
 
@@ -118,17 +146,9 @@ docker run --rm \
   passivbot-live:latest
 ```
 
-Using env-generated credentials and schema defaults:
-
-```bash
-docker run --rm \
-  -e PB_USER=bitget_01 \
-  -e PB_EXCHANGE=bitget \
-  -e PB_API_KEY=... \
-  -e PB_API_SECRET=... \
-  -e PB_APPROVED_COINS=BTC,ETH,SOL \
-  passivbot-live:latest
-```
+For an env-configured deployment, supply `PB_CONFIG_INLINE` with the reviewed config and use
+the host's secret store for any credential environment variables. Keep shell history and
+shared build logs free of credential values.
 
 ## Docker Compose Example
 

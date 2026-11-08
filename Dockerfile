@@ -20,16 +20,18 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
-# Copy all source code
-COPY . .
+# Copy only the package build inputs. Keep source entrypoints available for Compose.
+COPY pyproject.toml setup.py MANIFEST.in rust-toolchain.toml ./
+COPY requirements-dev.txt requirements-full.txt requirements-live.txt requirements-rust.txt ./
+COPY schemas/config-v9.schema.json schemas/
+COPY src src
+COPY passivbot-rust/Cargo.toml passivbot-rust/Cargo.lock passivbot-rust/build.rs passivbot-rust/
+COPY passivbot-rust/src passivbot-rust/src
 
-# Install Python dependencies (including maturin for Rust extension builds)
-RUN pip install --no-cache-dir -r requirements.txt
+# Install the full dependency set, including the existing developer tools.
+RUN python -m pip install --no-cache-dir ".[dev]"
 
-# Build Rust extensions for backtesting and optimization
-RUN cd passivbot-rust \
-    && maturin build --release \
-    && pip install target/wheels/*.whl
+COPY broker_codes.hjson broker_codes.hjson
 
 # Default command to run the bot; override with docker-compose command or docker run args
 CMD ["python", "src/main.py"]

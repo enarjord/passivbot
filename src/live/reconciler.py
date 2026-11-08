@@ -2741,7 +2741,7 @@ def validate_rust_orchestrator_output(
         "volume_component",
         "ema_readiness_component",
         "log_range_component",
-        "unilateralness_component",
+        "rms_directionality_component",
     )
     event_finite_fields = (
         "incumbent_score",

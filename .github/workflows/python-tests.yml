@@ -60,12 +60,13 @@ jobs:
           .venv/bin/python -c "from rust_utils import check_and_maybe_compile; check_and_maybe_compile(force=True)"
           .venv/bin/python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; print(verify_loaded_runtime_extension())"
 
-      - name: Validate AI documentation
+      - name: Validate documentation
         if: matrix.shard == 0
         run: |
           .venv/bin/python src/tools/check_ai_docs.py
           .venv/bin/python src/tools/generate_live_event_registry.py --check
           .venv/bin/python -m pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+          .venv/bin/python -m mkdocs build --strict --site-dir "${{ runner.temp }}/docs-site"
 
       - name: Run Python test shard
         env:
@@ -82,7 +83,7 @@ jobs:
         run: |
           .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v9', '--help']))"
           .venv/bin/python src/tools/run_fake_live.py \
-            configs/examples/fake_live_hsl.json \
+            tests/fixtures/fake_live_hsl.json \
             scenarios/fake_live/hsl_long_red_restart.hjson \
             --user ci_fake_hsl_restart \
             --output-dir "${{ runner.temp }}/fake-live"

@@ -320,7 +320,7 @@ print(report["status"], report["metrics"])
 
 ## Requested-metric cohort evidence
 
-The [cohort tool](../gpu_cohort_benchmark.md#optional-metric-cohort-measurements)
+The [cohort tool](../gpu_cohort_benchmark.md)
 now requests optional histories/reductions and scalar diagnostic limit metrics from
 both simulators. Explicit policy files are resolved into the report; unknown policies
 remain unassessed. BTC-denominated requests enable CPU BTC analysis. The core three
@@ -378,7 +378,7 @@ all objective rankings. The original tool covered only ADG/drawdown. Explicit ob
 vectors now make these third-objective observations directly reproducible from its reports.
 
 Warm direct/native cohort cost remains comparable, as recorded in the
-[measurement recipe](../gpu_cohort_benchmark.md#fill-gap-resolution-experiment).
+[historical cohort benchmark](../gpu_cohort_benchmark.md#historical-v8-synthetic-measurements).
 Native replay retains exact direct-GPU results except the already measured six-unit
 float64 weighted-ADG reduction in TM/43. No CPU policy is widened. Automatic widths
 have no eligible tuning samples in these underfilled cohorts. Regression tests cover
@@ -661,7 +661,7 @@ An existing reducer or output field does not establish native support.
 | Recovery, weighted volume and weighted equity | Requested per-step GPU histories feed strict recovery and canonical suffix/daily reducers. Recovery-resolution, weighted-volume and weighted-equity tests isolate input definitions, cutoffs, optional capture and dispatch bounds. | Input-definition repairs do not remove float32 curve/trajectory sensitivity, especially strict recovery ordering near plateaus. Full histories remain on device. |
 | Legacy-only fallbacks | Directional single-coin volume/tail helpers and daily peak-recovery helpers still exist. The native service uses shared replay, requires the observed portfolio tail, and rejects exact-only metric names. | Do not count an unused fallback as accepted native behavior or retain the old optimizer merely to preserve its approximations. |
 
-The [scoped decisions below](#practical-numerical-foundation--scoped-decisions)
+The [scoped decisions below](#practical-numerical-foundation-scoped-decisions)
 record the numerical foundation accepted for the measured recipes. The
 all-supported-metric audit checks presence and finite/sentinel handling; its
 undefined policies remain explicitly unassessed. Neither this table nor finite

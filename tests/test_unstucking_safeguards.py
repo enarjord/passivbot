@@ -444,7 +444,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "exposure_ratio": 0.0,
                     "adverse_directionality": 0.0,
                 },
-                "unilateralness_ema_span_minutes": 60.0,
+                "rms_directionality_ema_span_minutes": 60.0,
                 "ema_span_0_minutes": 1.0,
                 "ema_span_1_minutes": 2.0,
                 "entry_log_range_ema_span_1h_candles": 0.0,
@@ -466,7 +466,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "close_trailing_retracement_base_fraction": 0.0,
                 "close_trailing_threshold_base_fraction": 0.0,
                 "forager_score_weights": {
-                    "unilateralness": 0.0,
+                    "rms_directionality": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
                     "log_range": 1.0,
@@ -486,7 +486,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "forager_log_range_ema_span_minutes": 0.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
-                    "unilateralness": 0.0,
+                    "rms_directionality": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
                     "log_range": 1.0,

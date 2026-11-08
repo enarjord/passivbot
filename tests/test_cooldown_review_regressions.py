@@ -97,13 +97,13 @@ def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
 @pytest.mark.parametrize(
     "key,bound",
     [
-        ("unilateralness_ema_span_minutes", [0.0, 60.0]),
-        ("unilateralness_ema_span_minutes", [60.0, 100001.0]),
-        ("unilateralness_ema_span_minutes", [60.0, float("nan")]),
+        ("rms_directionality_ema_span_minutes", [0.0, 60.0]),
+        ("rms_directionality_ema_span_minutes", [60.0, 100001.0]),
+        ("rms_directionality_ema_span_minutes", [60.0, float("nan")]),
         ("entry_cooldown_weights_minutes_exposure_ratio", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [-1.0, 10.0]),
         ("entry_cooldown_weights_minutes_adverse_directionality", [0.0, float("inf")]),
-        ("forager_score_weights_unilateralness", [-1.0, 1.0]),
+        ("forager_score_weights_rms_directionality", [-1.0, 1.0]),
         ("entry_cooldown_min_duration_minutes", [-1.0, 10.0]),
         ("entry_cooldown_max_duration_minutes", [0.0, float("inf")]),
     ],
@@ -118,7 +118,7 @@ def test_adaptive_optimizer_rejects_invalid_domains_before_sampling(key, bound, 
 
 def test_prepare_config_rejects_nested_invalid_search_domain():
     cfg = get_expanded_config_prototype()
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [0.0, 60.0]
+    cfg["optimize"]["bounds"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = [0.0, 60.0]
     with pytest.raises(ValueError, match="optimize.bounds"):
         prepare_config(cfg, verbose=False)
 
@@ -128,8 +128,8 @@ def test_adaptive_optimizer_accepts_float_span_boundaries_and_zero_weights():
     validate_optimize_bounds_against_bot_config(
         cfg,
         _nested_bounds({
-            "long_unilateralness_ema_span_minutes": [1.0, 100000.0, 0.5],
-            "short_unilateralness_ema_span_minutes": [10.5, 20.5],
+            "long_rms_directionality_ema_span_minutes": [1.0, 100000.0, 0.5],
+            "short_rms_directionality_ema_span_minutes": [10.5, 20.5],
             "long_entry_cooldown_weights_minutes_exposure_ratio": [0.0, 10.0],
             "short_entry_cooldown_weights_minutes_adverse_directionality": 0.0,
         }),
@@ -222,11 +222,11 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1.0, 1.0])
     if consumer == "forager":
-        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
+        bounds["forager"]["score_weights"]["rms_directionality"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     if bound_span is not None:
-        bounds["forager"]["unilateralness_ema_span_minutes"] = [60.0, bound_span]
+        bounds["forager"]["rms_directionality_ema_span_minutes"] = [60.0, bound_span]
     cfg = prepare_config(cfg, verbose=False)
     import math
     assert compute_backtest_warmup_minutes(cfg) == math.ceil(20 * (bound_span or 60.0)) + 1
@@ -259,9 +259,9 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"]["long"]
-    bounds["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
+    bounds["forager"]["rms_directionality_ema_span_minutes"] = [60.0, 240.5]
     if consumer == "forager":
-        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
+        bounds["forager"]["score_weights"]["rms_directionality"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     cfg = prepare_config(cfg, verbose=False)
@@ -275,10 +275,10 @@ def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_r
     cfg = get_expanded_config_prototype()
     cfg["bot"]['long']["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     assert compute_backtest_warmup_minutes(cfg) == 1
-    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    cfg["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 1.0
     assert compute_backtest_warmup_minutes(cfg) == 4811
 
 
@@ -328,7 +328,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit_ratio=[1.0, 1.0])
     weight_bound = [0.0, 1.0 if positive_bound else 0.0]
     if consumer == "forager":
-        bounds["forager"]["score_weights"]["unilateralness"] = weight_bound
+        bounds["forager"]["score_weights"]["rms_directionality"] = weight_bound
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
@@ -338,7 +338,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     _, markets, _, _ = _synthetic_inputs()
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if positive_bound:
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+        with pytest.raises(ValueError, match="RMS directionality requires.*one-minute"):
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
         cfg['bot'][side]['universe']['approved_coins'] = ["UNLOADEDCOIN"]
         cfg = prepare_config(clean_config(cfg), verbose=False)
@@ -400,8 +400,8 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
     cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 1 if reactivates else 0]
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     if consumer == "forager":
-        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-        cfg["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0, 1]
+        cfg["bot"][side]["forager"]["score_weights"]["rms_directionality"] = 1.0
+        cfg["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["rms_directionality"] = [0, 1]
     else:
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
@@ -411,13 +411,13 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
     _, markets, _, _ = _synthetic_inputs()
     prepared["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reactivates:
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+        with pytest.raises(ValueError, match="RMS directionality requires.*one-minute"):
             validate_optimizer_dataset_intervals(prepared, markets, "binance")
     else:
         validate_optimizer_dataset_intervals(prepared, markets, "binance")
         from warmup_utils import compute_backtest_warmup_minutes
         reference = deepcopy(prepared)
-        reference["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0.0
+        reference["bot"][side]["forager"]["score_weights"]["rms_directionality"] = 0.0
         reference["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
         for activation in (False, True):
             assert compute_backtest_warmup_minutes(prepared, for_trade_activation=activation) == compute_backtest_warmup_minutes(reference, for_trade_activation=activation)
@@ -434,9 +434,9 @@ def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
         weights_minutes={"exposure_ratio": [0, 10], "adverse_directionality": [0, 20]},
     )
     bounds[side]["forager"].update(
-        unilateralness_ema_span_minutes=[10.5, 60.5],
+        rms_directionality_ema_span_minutes=[10.5, 60.5],
     )
-    bounds[side]["forager"]["score_weights"]["unilateralness"] = [0, 1]
+    bounds[side]["forager"]["score_weights"]["rms_directionality"] = [0, 1]
     expected = flatten_optimize_bounds(bounds, strategy_kind="trailing_martingale")
     prepared = prepare_config(cfg, verbose=False)
     for candidate in (prepared, prepare_config(clean_config(prepared), verbose=False)):
@@ -448,8 +448,8 @@ def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
             assert paths[f"bot.{side}.entry_cooldown.{leaf}"] == ("bot", side, "entry_cooldown", leaf)
         for modifier in ("exposure_ratio", "adverse_directionality"):
             assert paths[f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"] == ("bot", side, "entry_cooldown", "weights_minutes", modifier)
-        assert f"bot.{side}.forager.unilateralness_ema_span_minutes" in paths
-        assert f"bot.{side}.forager.score_weights.unilateralness" in paths
+        assert f"bot.{side}.forager.rms_directionality_ema_span_minutes" in paths
+        assert f"bot.{side}.forager.score_weights.rms_directionality" in paths
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -540,7 +540,7 @@ def test_optimizer_data_registration_checks_final_coin_rms_policy(side, eligibil
         )
 
     if eligibility == "eligible":
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+        with pytest.raises(ValueError, match="RMS directionality requires.*one-minute"):
             register()
         assert arrays.count == 0
     else:
@@ -568,7 +568,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit_ratio=[1.0, 1.0])
-    bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
+    bounds["forager"]["score_weights"]["rms_directionality"] = [0.0, 1.0]
     if pinned is not None:
         cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.max_positions": pinned}
     set_side_universe_sources(cfg, 'approved_coins', {"long": [], "short": []})
@@ -577,7 +577,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     _, markets, _, _ = _synthetic_inputs()
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reject:
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+        with pytest.raises(ValueError, match="RMS directionality requires.*one-minute"):
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
     else:
         validate_optimizer_dataset_intervals(cfg, markets, "binance")
@@ -609,14 +609,14 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
         max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},
     )
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
-    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
+    cfg["optimize"]["bounds"][side]["forager"]["rms_directionality_ema_span_minutes"] = [1.0, 60.0]
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]})
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == (1201 if reject else 3)
     _, markets, _, _ = _synthetic_inputs()
     if reject:
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+        with pytest.raises(ValueError, match="RMS directionality requires.*one-minute"):
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
     else:
         validate_optimizer_dataset_intervals(cfg, markets, "binance")

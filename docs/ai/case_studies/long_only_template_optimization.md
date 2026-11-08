@@ -9,7 +9,7 @@ claim that this style or any resulting config has passed final robustness tests.
 ## Declare The Style Before Searching
 
 Copy an appropriate authored config, or use the public
-[trailing-martingale example](../../../configs/examples/default_trailing_martingale_long.json) as a
+[trailing-martingale example](https://github.com/enarjord/passivbot/blob/v9/configs/examples/default_trailing_martingale_long.json) as a
 starting profile. Preserve deliberately chosen bounds; default example ranges are not a substitute
 for the user's search design. Migrate older schemas explicitly before anchoring a v9 search.
 

@@ -62,9 +62,9 @@ ADAPTIVE_PARAM_KEYS = (
     "entry_cooldown_max_duration_minutes",
     "entry_cooldown_exposure_weight",
     "entry_cooldown_adverse_weight",
-    "unilateralness_ema_span_minutes",
-    "forager_score_weights_unilateralness",
-    "unilateralness_window",
+    "rms_directionality_ema_span_minutes",
+    "forager_score_weights_rms_directionality",
+    "rms_directionality_window",
 )
 ADAPTIVE_OVERRIDE_KEYS = ADAPTIVE_PARAM_KEYS[:4]
 
@@ -74,7 +74,7 @@ def adaptive_params(bot: dict) -> dict:
     from math import ceil
 
     weights = bot.get("entry_cooldown_weights_minutes", {})
-    span = float(bot.get("unilateralness_ema_span_minutes", 60.0))
+    span = float(bot.get("rms_directionality_ema_span_minutes", 60.0))
     maximum = bot.get("entry_cooldown_max_duration_minutes")
     return dict(
         zip(
@@ -85,7 +85,7 @@ def adaptive_params(bot: dict) -> dict:
                 float(weights.get("exposure_ratio", 0.0)),
                 float(weights.get("adverse_directionality", 0.0)),
                 span,
-                float(bot.get("forager_score_weights", {}).get("unilateralness", 0.0)),
+                float(bot.get("forager_score_weights", {}).get("rms_directionality", 0.0)),
                 float(ceil(20.0 * span)),
             ),
         )

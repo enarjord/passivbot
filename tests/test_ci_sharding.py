@@ -234,7 +234,7 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
                      "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "RAYON_NUM_THREADS"]:
         assert shards["env"][variable] == "1"
     steps = {step["name"]: step for step in shards["steps"]}
-    for name in ["Validate AI documentation", "Run release CLI smokes"]:
+    for name in ["Validate documentation", "Run release CLI smokes"]:
         assert steps[name]["if"] == "matrix.shard == 0"
     assert "--maxfail=10" in steps["Run Python test shard"]["run"]
     assert "--ci-shard-count=8" in steps["Run Python test shard"]["run"]

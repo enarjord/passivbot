@@ -92,8 +92,9 @@ pub(crate) fn validate(params: &crate::types::BotParams) -> Result<(), String> {
         }
         _ => {}
     }
-    if !params.unilateralness_ema_span_minutes.is_finite() || params.unilateralness_ema_span_minutes < 1.0 {
-        return Err("unilateralness EMA span must be finite and >= 1".into());
+    let span = params.rms_directionality_ema_span_minutes;
+    if !span.is_finite() || span < 1.0 {
+        return Err("RMS directionality EMA span must be finite and >= 1".into());
     }
     Ok(())
 }

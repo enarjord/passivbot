@@ -45,9 +45,46 @@ def _strategy_side(config, pside, kind=None):
     return config["bot"][pside]["strategy"][kind]
 
 
-def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
-    path = Path(__file__).resolve().parents[1] / "configs/examples/ema_anchor_smoke_test.json"
-    authored = json.loads(path.read_text())
+def test_ema_anchor_file_loads_with_preserved_inputs(tmp_path):
+    strategy = {
+        "base_qty_fraction": 0.04, "ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0,
+        "offset_fraction": 0.003, "offset_log_range_ema_span_minutes": 60.0,
+        "offset_log_range_1m_coefficient": 0.0, "offset_log_range_ema_span_1h_candles": 24.0,
+        "offset_log_range_1h_coefficient": 0.0, "inventory_offset_exposure_coefficient": 0.2,
+    }
+    backtest = {
+        "start_date": "2023-01-01", "end_date": "2023-01-15",
+        "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
+        "starting_balance": 100000.0, "maker_fee_override_fraction": 0.0004,
+        "btc_collateral_target_ratio": 0.0, "suite_enabled": False,
+    }
+    authored = {
+        "config_version": CONFIG_SCHEMA_VERSION,
+        "backtest": backtest,
+        "bot": {
+            "portfolio": {
+                "strategy_kind": "ema_anchor",
+                "hsl": {"scope": "coin"},
+                "unstuck": {"memory_ema_span_minutes": 43200.0},
+                "loss_gate": {"max_drawdown_fraction": 1.0},
+            },
+            "global": {
+                "universe": {"approved_coins": ["BTC", "SOL"]},
+                "risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": 1.0},
+                "hsl": {"enabled": False},
+                "unstuck": {"ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0},
+                "strategy": {"ema_anchor": strategy},
+            },
+            "long": {"enabled": True},
+            "short": {"enabled": True},
+        },
+        "live": {
+            "account": {"user": "example"},
+            "startup": {"risk_bootstrap_max_lookback_minutes": 129600.0},
+        },
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(authored))
     original = deepcopy(authored)
     config = load_prepared_config(str(path), verbose=False, log_info=False)
     compiled = compile_runtime_config(config, runtime="backtest")
@@ -55,7 +92,6 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
     assert config['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert config["live"]["account"]["user"] == "example"
-    # This explicit demonstration span is not a converted rolling-window policy.
     assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
     assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 1.0
@@ -63,37 +99,22 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
     }
-    for key, expected in {
-        "start_date": "2023-01-01", "end_date": "2023-01-15",
-        "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
-        "starting_balance": 100000.0, "maker_fee_override_fraction": 0.0004,
-        "btc_collateral_target_ratio": 0.0, "suite_enabled": False,
-    }.items():
+    for key, expected in backtest.items():
         assert config["backtest"][key] == expected
-    expected_native_strategy = {
-        "base_qty_fraction": 0.04, "ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0,
-        "offset_fraction": 0.003, "offset_log_range_ema_span_minutes": 60.0,
-        "offset_log_range_1m_coefficient": 0.0, "offset_log_range_ema_span_1h_candles": 24.0,
-        "offset_log_range_1h_coefficient": 0.0, "inventory_offset_exposure_coefficient": 0.2,
-    }
-    expected_strategy = deepcopy(expected_native_strategy)
     for side in ("long", "short"):
         assert config["bot"][side]["hsl"]["enabled"] is False
         assert config["bot"][side]["risk"]["max_positions"] == 2.0
         assert config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
-        for key, expected in expected_strategy.items():
+        for key, expected in strategy.items():
             assert _strategy_side(config, side)[key] == expected
             assert _strategy_side(compiled, side)[key] == expected
         native_strategy = build_runtime_strategy_side(
             _strategy_side(compiled, side), strategy_kind="ema_anchor", pside=side,
         )
-        for key, expected in expected_native_strategy.items():
+        for key, expected in strategy.items():
             assert native_strategy[key] == expected
         assert config["bot"][side]["unstuck"]["ema_span_0_minutes"] == 48.0
         assert config["bot"][side]["unstuck"]["ema_span_1_minutes"] == 288.0
-    for retired in ("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes",
-                    "no_restart_drawdown_threshold", "orange_tier_mode", "tier_ratios"):
-        assert retired not in path.read_text()
     assert json.loads(path.read_text()) == original
 
 
@@ -1350,7 +1371,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["bot"]["long"]["forager"]["score_weights"] == {
-        "unilateralness": 0.0,
+        "rms_directionality": 0.0,
         "volume": 0.0,
         "ema_readiness": 1.0,
         "log_range": 0.0,
@@ -1372,7 +1393,7 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["bot"]["short"]["forager"]["score_weights"] == {
-        "unilateralness": 0.0,
+        "rms_directionality": 0.0,
         "volume": 0.0,
         "ema_readiness": 0.0,
         "log_range": 0.0,

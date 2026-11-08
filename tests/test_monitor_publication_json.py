@@ -106,7 +106,7 @@ def test_monitor_json_preserves_finite_numpy_values_and_null(tmp_path):
 
 @pytest.mark.parametrize("stream", ["events", "fills"])
 def test_invalid_payload_does_not_rotate_an_existing_full_segment(tmp_path, stream):
-    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher = _make_publisher(tmp_path, event_rotation_mib=0.00001)
     if stream == "events":
         record = lambda payload: publisher.record_event("test.row", ("test",), payload, ts=1000)
     else:

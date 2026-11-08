@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import pytest
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 from config.migrations.released_v8 import get_released_v8_defaults
 from tools.migrate_config_v9 import migrate
 from released_v8_fixtures import RELEASED_V8_EXAMPLE_NAMES, released_v8_example_metrics
@@ -35,7 +36,7 @@ def test_newly_retired_growth_requires_explicit_formula_choice_and_acknowledgmen
     assert any(
         row["old"] == "adg_strategy_eq"
         and row["new"] == "cagr_fraction_strategy_equity"
-        and "definition version 1" in row["reason"]
+        and f"definition version {CORE_METRIC_DEFINITION_VERSION}" in row["reason"]
         for row in result.changes
     )
     assert raw == before
@@ -50,7 +51,7 @@ def test_retained_name_with_revised_fee_definition_still_requires_acknowledgment
     )
     assert any(
         row["old"] == row["new"] == "loss_profit_ratio"
-        and "definition version 1" in row["reason"]
+        and f"definition version {CORE_METRIC_DEFINITION_VERSION}" in row["reason"]
         for row in result.changes
     )
 
