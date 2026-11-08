@@ -710,6 +710,44 @@ def test_standardize_gaps_complete_range_returns_equal_independent_copy(tmp_path
     assert not np.shares_memory(out, candles)
 
 
+def test_standardize_gaps_preserves_exact_minute_seeds_and_exclusions(tmp_path):
+    cm = CandlestickManager(
+        exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches")
+    )
+    t0 = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
+    t1, t2, t3, t4, t5, t6 = (t0 + i * ONE_MIN_MS for i in range(1, 7))
+    candles = np.array(
+        [
+            (t0 - 1, 10, 10, 10, 10, 1),
+            (t1, 11, 12, 9, 11, 2),
+            (t2 - 1, 99, 99, 99, 99, 1),
+            (t3, 12, 12, 12, 12, 1),
+            (t3, 13, 13, 13, 13, 1),
+            (t5, 14, 15, 13, 14, 2),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    out = cm.standardize_gaps(
+        candles,
+        start_ts=t0,
+        end_ts=t6,
+        assume_sorted=True,
+        symbol="GAPS",
+        excluded_synthetic_ranges=[(t4, t5), (t2 - 30_000, t2 - 1)],
+    )
+
+    assert out.tolist() == [
+        (t0, 10, 10, 10, 10, 0),
+        (t1, 11, 12, 9, 11, 2),
+        (t2, 11, 11, 11, 11, 0),
+        (t3, 13, 13, 13, 13, 1),
+        (t5, 14, 15, 13, 14, 2),
+        (t6, 14, 14, 14, 14, 0),
+    ]
+    assert cm._synthetic_timestamps["GAPS"] == {t0, t2, t6}
+    assert not np.shares_memory(out, candles)
+
+
 def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
     class _Ex:
         id = "okx"

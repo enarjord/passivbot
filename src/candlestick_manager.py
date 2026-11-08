@@ -6847,113 +6847,67 @@ class CandlestickManager:
             ONE_MIN_MS,
             dtype=np.int64,
         )
-        # Map from ts to row index in a
-        pos = {int(t): i for i, t in enumerate(ts_arr)}
-        excluded_ranges = sorted(
-            (
-                (max(effective_lo, int(start)), min(effective_hi, int(end)))
-                for start, end in (excluded_synthetic_ranges or [])
-                if int(start) <= effective_hi and int(end) >= effective_lo
-            ),
-            key=lambda item: item[0],
-        )
-        excluded_range_idx = 0
+        # Map exact-minute rows to their grid slots. Keep the last sorted
+        # occurrence of each duplicate, as the previous timestamp map did.
+        offsets = ts_arr[i0:i1] - effective_lo
+        on_grid = offsets % ONE_MIN_MS == 0
+        slots = offsets[on_grid] // ONE_MIN_MS
+        last = np.ones(slots.size, dtype=bool)
+        last[:-1] = slots[:-1] != slots[1:]
+        source_rows = np.full(expected.size, -1, dtype=np.intp)
+        source_rows[slots[last]] = i0 + np.flatnonzero(on_grid)[last]
+        real = source_rows >= 0
 
-        def excluded_from_synthesis(timestamp: int) -> bool:
-            nonlocal excluded_range_idx
-            while (
-                excluded_range_idx < len(excluded_ranges)
-                and excluded_ranges[excluded_range_idx][1] < timestamp
-            ):
-                excluded_range_idx += 1
-            return (
-                excluded_range_idx < len(excluded_ranges)
-                and excluded_ranges[excluded_range_idx][0]
-                <= timestamp
-                <= excluded_ranges[excluded_range_idx][1]
-            )
+        # Propagate only accepted grid rows within the window. An earlier row
+        # can seed its first missing minute, as can the first input row when
+        # leading synthesis is explicitly enabled.
+        if not real[0]:
+            source_rows[0] = i0 - 1 if i0 else (0 if fill_leading_gaps else -1)
+        np.maximum.accumulate(source_rows, out=source_rows)
+        synthetic = ~real & (source_rows >= 0)
+        for start, end in excluded_synthetic_ranges or ():
+            lo_idx = np.searchsorted(expected, int(start), side="left")
+            hi_idx = np.searchsorted(expected, int(end), side="right")
+            synthetic[lo_idx:hi_idx] = False
 
-        out_rows = []
-        prev_close: Optional[float] = None
-
-        # Seed prev_close from:
-        # 1) the candle exactly at effective_lo, else
-        # 2) the last candle before effective_lo (ffill from earlier data), else
-        # 3) if fill_leading_gaps=True, use the first available candle (bfill for leading gaps)
-        if effective_lo in pos:
-            prev_close = float(a[pos[effective_lo]]["c"])
-        else:
-            idx = int(np.searchsorted(ts_arr, effective_lo))
-            if idx > 0:
-                # There's a candle before effective_lo - use it for ffill
-                prev_close = float(a[idx - 1]["c"])
-            elif fill_leading_gaps and a.size > 0:
-                # No candle before effective_lo, but fill_leading_gaps=True
-                # Use first candle's close to backward-fill leading gaps
-                prev_close = float(a[0]["c"])
-            # If no candle before, prev_close stays None until we hit real data
-
-        synthesized_count = 0
-        synthesized_timestamps: List[int] = []
-        for t in expected:
-            if t in pos:
-                row = a[pos[t]]
-                out_rows.append(tuple(row.tolist()))
-                prev_close = float(row["c"])  # update seed
-            else:
-                if excluded_from_synthesis(int(t)):
-                    continue
-                if prev_close is None:
-                    # No previous data to forward-fill from - skip this timestamp
-                    continue
-                # Synthesize a zero-candle using previous close (internal gaps only)
-                out_rows.append((int(t), prev_close, prev_close, prev_close, prev_close, 0.0))
-                synthesized_timestamps.append(int(t))
-                synthesized_count += 1
+        keep = real | synthetic
+        out = a[source_rows[keep]]
+        synthetic_output = synthetic[keep]
+        synthesized_timestamps = expected[synthetic]
+        out["ts"][synthetic_output] = synthesized_timestamps
+        close = out["c"][synthetic_output]
+        for field in ("o", "h", "l"):
+            out[field][synthetic_output] = close
+        out["bv"][synthetic_output] = 0
+        synthesized_count = synthesized_timestamps.size
 
         # Track synthetic timestamps for EMA recomputation detection
-        if symbol and synthesized_timestamps:
-            self._track_synthetic_timestamps(symbol, synthesized_timestamps)
+        if symbol and synthesized_count:
+            self._track_synthetic_timestamps(symbol, synthesized_timestamps.tolist())
 
         # Log when zero-candles were synthesized (rate-limited or batched)
         if synthesized_count > 0 and symbol:
+            first_ts = int(synthesized_timestamps[0])
+            last_ts = int(synthesized_timestamps[-1])
             # In batch mode, collect for later aggregated logging
             if self._synth_candle_batch_mode:
-                try:
-                    first_ts = min(synthesized_timestamps)
-                    last_ts = max(synthesized_timestamps)
-                except Exception:
-                    first_ts = None
-                    last_ts = None
                 meta = self._synth_candle_batch.get(symbol)
                 if not isinstance(meta, dict):
                     meta = {"count": 0, "min_ts": None, "max_ts": None}
                 meta["count"] = int(meta.get("count", 0)) + int(synthesized_count)
-                if first_ts is not None:
-                    try:
-                        meta["min_ts"] = (
-                            int(first_ts)
-                            if meta.get("min_ts") is None
-                            else min(int(meta["min_ts"]), int(first_ts))
-                        )
-                    except Exception:
-                        meta["min_ts"] = int(first_ts)
-                if last_ts is not None:
-                    try:
-                        meta["max_ts"] = (
-                            int(last_ts)
-                            if meta.get("max_ts") is None
-                            else max(int(meta["max_ts"]), int(last_ts))
-                        )
-                    except Exception:
-                        meta["max_ts"] = int(last_ts)
+                try:
+                    meta["min_ts"] = min(int(meta["min_ts"]), first_ts)
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    meta["min_ts"] = first_ts
+                try:
+                    meta["max_ts"] = max(int(meta["max_ts"]), last_ts)
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    meta["max_ts"] = last_ts
                 self._synth_candle_batch[symbol] = meta
             else:
                 # Normal mode: deduplicate by gap start (only warn once per unique gap origin)
                 # Round first_ts to nearest hour to reduce duplicate warnings when the same
                 # underlying gap is detected at slightly different boundaries in different fetch windows
-                first_ts = min(synthesized_timestamps)
-                last_ts = max(synthesized_timestamps)
                 hour_ms = 3600_000
                 first_ts_hour = (first_ts // hour_ms) * hour_ms  # Floor to hour boundary
                 gap_key = (symbol, first_ts_hour)
@@ -6998,13 +6952,11 @@ class CandlestickManager:
                         synthesized_count,
                         "s" if synthesized_count > 1 else "",
                         ts_info,
-                        prev_close if prev_close is not None else 0.0,
+                        float(a["c"][source_rows[-1]]),
                         suffix,
                     )
 
-        if not out_rows:
-            return np.empty((0,), dtype=CANDLE_DTYPE)
-        return np.array(out_rows, dtype=CANDLE_DTYPE)
+        return out
 
     # ----- External archives (historical) -----
 
