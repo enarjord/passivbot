@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
+  the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.

@@ -14,7 +14,7 @@ from config.metrics import (
     reject_retired_metric,
     split_metric_stat_suffix,
 )
-from config.scoring import ObjectiveSpec, default_objective_goal
+from config.scoring import ObjectiveSpec
 from metrics_schema import (
     encode_metric_values,
     copy_metric_value,
@@ -24,6 +24,7 @@ from pareto_explorer import (
     ParetoCandidate,
     add_selection_arguments,
     build_selection_record,
+    default_pareto_goal,
     evaluate_selection,
     load_selection_candidates,
     project_candidates_to_scenario,
@@ -106,7 +107,7 @@ def build_dataset(
                 (
                     None
                     if stat == "std"
-                    else goals.get(metric, default_objective_goal(metric))
+                    else goals.get(metric, default_pareto_goal(metric))
                 ),
                 "Statistics",
             )
@@ -131,7 +132,7 @@ def build_dataset(
                 metadata[key] = (
                     key,
                     key,
-                    goals.get(key, default_objective_goal(key)),
+                    goals.get(key, default_pareto_goal(key)),
                     "Objectives" if key in goals else "Metrics",
                 )
     order = [spec.metric for spec in specs] + sorted(set(columns) - set(goals))
