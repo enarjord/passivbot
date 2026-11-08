@@ -12,6 +12,12 @@ The container startup path uses:
 
 This is the intended base for Docker, Docker Compose, and hosted platforms such as Railway.
 
+## Build Inputs
+
+Both Docker images use a build-context allowlist for application source, dependency manifests,
+and runtime support files. Provide credentials, authored configs, cached data, and logs through
+runtime mounts. The build context excludes these files, including configs under `configs/`.
+
 ## Live Image
 
 Build the live image from a clean source checkout. Keep credentials, private configs, logs,
@@ -22,6 +28,19 @@ docker build -f Dockerfile_live -t passivbot-live:latest .
 ```
 
 The image already includes the compiled Rust extension and launches the wrapper entrypoint by default.
+
+## Full Image
+
+Build the full image for research and development workflows.
+
+```bash
+docker build -t passivbot:latest .
+docker run --rm --network none passivbot:latest python src/backtest.py --help
+```
+
+The full image includes the installed CLI and the source-script entrypoints. Mount an intended
+configuration at runtime. The default Compose profile continues to bind the checkout to
+`/app` so it can use local configs and persist outputs.
 
 ## Required Env
 

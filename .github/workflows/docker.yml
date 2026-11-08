@@ -1,0 +1,93 @@
+name: Docker images
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/docker.yml
+      - .dockerignore
+      - Dockerfile
+      - Dockerfile_live
+      - docker-compose.yml
+      - 'container/**'
+      - MANIFEST.in
+      - pyproject.toml
+      - setup.py
+      - 'requirements*.txt'
+      - rust-toolchain.toml
+      - 'schemas/**'
+      - broker_codes.hjson
+      - 'src/**'
+      - 'passivbot-rust/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Build and smoke test Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify private inputs are outside the Docker context
+        run: |
+          mkdir -p configs/private logs monitor
+          private_paths=(
+            api-keys.json
+            configs/private/docker-smoke.json
+            logs/docker-smoke.log
+            monitor/docker-smoke.json
+            src/docker-smoke.hjson
+          )
+          for path in "${private_paths[@]}"; do
+            test ! -e "$path"
+            printf '%s\n' 'synthetic excluded file' > "$path"
+          done
+          context_export="$(mktemp -d)"
+          docker buildx build --output "type=local,dest=$context_export" --file - . <<'DOCKERFILE'
+          FROM scratch
+          COPY . /
+          DOCKERFILE
+          test -f "$context_export/src/main.py"
+          test -f "$context_export/passivbot-rust/Cargo.lock"
+          for path in "${private_paths[@]}"; do
+            test ! -e "$context_export/$path"
+          done
+
+      - name: Build the full and live images
+        run: |
+          docker build --tag passivbot-full:ci .
+          docker build --file Dockerfile_live --tag passivbot-live:ci .
+
+      - name: Validate installed packages offline
+        run: |
+          for image in passivbot-full:ci passivbot-live:ci; do
+            docker run --rm --network none --entrypoint sh "$image" -ec '
+              for path in api-keys.json configs/private/docker-smoke.json logs/docker-smoke.log monitor/docker-smoke.json src/docker-smoke.hjson; do
+                test ! -e "/app/$path"
+              done
+              test -f /app/broker_codes.hjson
+              cd /tmp
+              passivbot --version
+              passivbot tool config-schema --check
+              python -c "import json; from config import CONFIG_SCHEMA_VERSION; print(json.dumps(dict(config_version=CONFIG_SCHEMA_VERSION, bot={}, live={})))" > config.json
+              passivbot tool clean-config config.json clean.json
+              test -s clean.json
+              python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; assert verify_loaded_runtime_extension()[\"runtime_compiled_sha256\"]"
+            '
+          done
+
+      - name: Validate source and wrapper entrypoints offline
+        run: |
+          docker compose --profile default --profile live config --quiet
+          docker run --rm --network none passivbot-full:ci python src/main.py --help
+          docker run --rm --network none passivbot-full:ci python src/backtest.py --help
+          docker run --rm --network none passivbot-full:ci python src/optimize.py --help
+          docker run --rm --network none \
+            -e PB_USER=ci_fake -e PB_EXCHANGE=fake -e PB_API_KEY=synthetic -e PB_API_SECRET=synthetic \
+            passivbot-live:ci --help
