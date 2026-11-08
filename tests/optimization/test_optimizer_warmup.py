@@ -242,7 +242,10 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
     _set_bounds(cfg, {"long_rms_directionality_ema_span_minutes": [1.0, 60.0]})
     if consumer == "forager":
-        _set_bounds(cfg, {"long_forager_score_weights_rms_directionality": [0.0, 1.0]})
+        _set_bounds(cfg, {
+            "long_forager_score_weights_log_range": [0.1, 1.0],
+            "long_forager_score_weights_rms_directionality": [0.0, 1.0],
+        })
     else:
         _set_bounds(cfg, {"long_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 10.0]})
     cfg = prepare_config(cfg, verbose=False)

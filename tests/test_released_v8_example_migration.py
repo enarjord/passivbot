@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 
 import pytest
+
+from config.metrics import CORE_METRIC_DEFINITION_VERSION
 from jsonschema import Draft202012Validator
 
 from released_v8_fixtures import without_metric_selection
@@ -228,7 +230,7 @@ def test_strict_retired_formulas_require_choices_and_explicit_choices_override_b
                   if item["path"] == "optimize.scoring[0].metric")
     assert choice["old"] == metric and choice["new"] == target
     assert choice["best_effort"] is True
-    assert "definition version 1" in choice["reason"]
+    assert f"definition version {CORE_METRIC_DEFINITION_VERSION}" in choice["reason"]
     assert "re-evaluate objectives, limits and stored fitness" in choice["reason"]
     assert metric in caplog.text and target in caplog.text
     assert source == original
