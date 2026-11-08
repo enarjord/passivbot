@@ -487,7 +487,16 @@ def test_old_selectorless_hsl_requires_explicit_migration(version, policy, locat
         with pytest.raises(ValueError, match="not a verified versioned v8 schema"):
             migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True)
         return
-    if policy == "never":
+    if version == "v8.0.0" and location == "coin":
+        for acknowledge in (False, True):
+            with pytest.raises(
+                ValueError, match=r"not an effective coin override in v8\.0\.0"
+            ):
+                migrate(
+                    cfg, memory_span_minutes=43200.0, acknowledge_never_removal=acknowledge
+                )
+        del cfg["coin_overrides"]
+    elif policy == "never":
         with pytest.raises(ValueError, match="acknowledge-never-removal"):
             migrate(cfg, memory_span_minutes=43200.0)
     converted = migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
