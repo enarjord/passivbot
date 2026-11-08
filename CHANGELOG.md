@@ -8,6 +8,9 @@ since the latest release tag; these features may already be available when insta
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
+- Verify the installed wheel's Rust source fingerprint and binary against the package build
+  record. Offline backtests and optimization can record native provenance outside a checkout.
+
 - Let Pareto tools minimize saved peak recovery days when requested as an objective, even when
   the optimizer did not score it. Honor any direction explicitly recorded in the saved scoring.
 

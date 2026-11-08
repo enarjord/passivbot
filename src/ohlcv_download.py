@@ -10,13 +10,13 @@ from pathlib import Path
 # inspect an already-built runtime and must not prune/build/stamp anything.
 if "--plan" in sys.argv[1:]:
     sys.dont_write_bytecode = True
-    from rust_utils import source_fingerprint, verify_loaded_runtime_extension
-    expected = source_fingerprint(Path(__file__).resolve().parents[1] / "passivbot-rust")
+    from rust_utils import verify_loaded_runtime_extension
     try:
         import passivbot_rust
 
-        runtime = verify_loaded_runtime_extension(fingerprint=expected)
-        if expected is not None and runtime.get("runtime_compiled_source_stamp") != expected:
+        runtime = verify_loaded_runtime_extension()
+        stamp = runtime.get("runtime_compiled_source_stamp")
+        if not stamp or stamp != runtime.get("expected_source_fingerprint"):
             raise RuntimeError("missing or mismatched native source stamp")
     except (ImportError, RuntimeError, OSError) as error:
         raise SystemExit(

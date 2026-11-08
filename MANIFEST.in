@@ -1,4 +1,5 @@
 include schemas/config-v9.schema.json
 include requirements-live.txt requirements-full.txt requirements-dev.txt requirements-rust.txt
-include rust-toolchain.toml passivbot-rust/Cargo.lock
+include rust-toolchain.toml passivbot-rust/Cargo.toml passivbot-rust/Cargo.lock passivbot-rust/build.rs
+recursive-include passivbot-rust/src *.rs *.metal
 recursive-include src/tools/backtest_dashboard_static *.html *.css *.js

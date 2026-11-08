@@ -524,6 +524,11 @@ def test_verify_loaded_runtime_extension_uses_loaded_package_layout(
     module = types.ModuleType("passivbot_rust")
     module.__file__ = str(init_py)
     module.__path__ = [str(package_dir)]
+    native = types.ModuleType("passivbot_rust.passivbot_rust")
+    native.__file__ = str(installed)
+    module.passivbot_rust = native
+    # A second artifact in the package is not evidence that Python loaded it.
+    (package_dir / "passivbot_rust_newer.cpython-312-darwin.so").write_text("other binary")
 
     monkeypatch.setitem(sys.modules, "passivbot_rust", module)
     monkeypatch.setattr("rust_utils._extension_suffixes", lambda: ["cpython-312-darwin.so"])
@@ -540,3 +545,57 @@ def test_verify_loaded_runtime_extension_skips_stub_modules(monkeypatch: pytest.
     info = verify_loaded_runtime_extension(fingerprint="abc123")
 
     assert info["skipped"] == "stub_module"
+
+
+@pytest.mark.parametrize("changed", [None, "artifact", "source_stamp", "embedded_stamp"])
+def test_installed_wheel_binds_source_to_artifact_record(tmp_path, monkeypatch, changed):
+    from base64 import urlsafe_b64encode
+    from hashlib import sha256
+    from importlib.metadata import PathDistribution
+    from rust_utils import WHEEL_SOURCE_STAMP
+
+    installed = tmp_path / "site-packages"
+    dist_info = installed / "passivbot-9.0.0.dist-info"
+    dist_info.mkdir(parents=True)
+    module_path = installed / "rust_utils.py"
+    module_path.write_text("")
+    native = installed / "passivbot_rust.abi3.so"
+    native.write_bytes(b"installed native artifact")
+    source = "1" * 64
+    stamp = installed / WHEEL_SOURCE_STAMP
+    stamp.parent.mkdir()
+    stamp.write_text(source)
+    rows = []
+    for path in (module_path, native, stamp):
+        payload = path.read_bytes()
+        digest = urlsafe_b64encode(sha256(payload).digest()).decode().rstrip("=")
+        rows.append(f"{path.relative_to(installed).as_posix()},sha256={digest},{len(payload)}\n")
+    (dist_info / "RECORD").write_text("".join(rows))
+    monkeypatch.setattr("rust_utils.__file__", str(module_path))
+    monkeypatch.setattr("rust_utils.metadata.distribution", lambda _: PathDistribution(dist_info))
+    module = types.ModuleType("passivbot_rust")
+    module.__file__ = str(native)
+    module.runtime_build_info = lambda: {
+        "source_fingerprint": "2" * 64 if changed == "embedded_stamp" else source
+    }
+    monkeypatch.setitem(sys.modules, "passivbot_rust", module)
+
+    decoy = tmp_path / "passivbot-rust"
+    decoy.mkdir()
+    (decoy / "Cargo.toml").write_text("unrelated sources")
+    monkeypatch.chdir(tmp_path)
+    write_source_stamp(native, "unrelated sidecar")
+
+    if changed == "artifact":
+        native.write_bytes(b"replacement artifact")
+    if changed == "source_stamp":
+        stamp.write_text("3" * 64)
+
+    if changed is None:
+        info = verify_loaded_runtime_extension()
+        assert info["expected_source_fingerprint"] == info["runtime_compiled_source_stamp"] == source
+        assert info["runtime_compiled_sha256"] == sha256(native.read_bytes()).hexdigest()
+    else:
+        message = "source fingerprint" if changed == "embedded_stamp" else "wheel RECORD"
+        with pytest.raises(RuntimeError, match=message):
+            verify_loaded_runtime_extension()
