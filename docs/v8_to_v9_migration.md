@@ -27,6 +27,7 @@ before backtesting a proposed replacement.
 | EMA-anchor `entry_double_down_factor`, `offset_psize_weight` | `entry_qty_exposure_coefficient`, `inventory_offset_exposure_coefficient`; same-side sizing and signed inventory shifts retain their original formulas |
 | Strategy `*_volatility_1m_weight` / `*_volatility_1h_weight` | Corresponding `*_log_range_1m_coefficient` / `*_log_range_1h_coefficient`; the indicator remains EMA of `ln(high / low)` |
 | Forager `score_weights.volatility` | `score_weights.log_range`, preserving relative weights and their normalization |
+| Forager `score_weights.unilateralness`, `unilateralness_ema_span_1m` | `score_weights.rms_directionality`, `rms_directionality_ema_span_minutes`. Weights, spans and scoring are unchanged. |
 | Forager/strategy log-range span names containing `volatility` | Corresponding names containing `log_range`, retaining the same minute or hourly-candle unit |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |

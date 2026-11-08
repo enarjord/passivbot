@@ -56,8 +56,8 @@ def main():
             weights_minutes={"exposure_ratio": float(10 + i % 100),
                             "adverse_directionality": float(20 + i % 200)},
         )
-        side["forager"]["score_weights"]["unilateralness"] = 0.2
-        side["forager"]["unilateralness_ema_span_minutes"] = 15.0 + i % 166
+        side["forager"]["score_weights"]["rms_directionality"] = 0.2
+        side["forager"]["rms_directionality_ema_span_minutes"] = 15.0 + i % 166
         candidates.append(prepare_candidate_parameters(candidate, markets, "binance"))
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,

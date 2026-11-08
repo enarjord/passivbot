@@ -204,7 +204,7 @@ mod core {
         pub volume_component: f64,
         pub ema_readiness_component: f64,
         pub log_range_component: f64,
-        pub unilateralness_component: f64,
+        pub rms_directionality_component: f64,
         pub selected: bool,
         pub incumbent: bool,
     }
@@ -260,7 +260,7 @@ mod core {
             symbol_idx: usize,
             details: String,
         },
-        UnilateralnessUnavailable {
+        RmsDirectionalityUnavailable {
             symbol_idx: usize,
         },
         MissingEma {
@@ -323,7 +323,7 @@ mod core {
         pub log_range: EmaBySpan,
         pub volume: EmaBySpan,
         #[serde(default)]
-        pub signed_unilateralness: EmaBySpan,
+        pub signed_rms_directionality: EmaBySpan,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -432,7 +432,7 @@ mod core {
     /// Explicit live transport unavailability, scoped to the span and consumer.
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub struct UnilateralnessUnavailable {
+    pub struct RmsDirectionalityUnavailable {
         #[serde(default)]
         pub current: Vec<f64>,
         #[serde(default)]
@@ -458,9 +458,9 @@ mod core {
         /// history. Only missing RMS inputs at these spans may be deferred;
         /// unrelated inputs and non-finite scores remain strict.
         #[serde(default)]
-        pub unilateralness_warmup_spans: Vec<f64>,
+        pub rms_directionality_warmup_spans: Vec<f64>,
         #[serde(default)]
-        pub unilateralness_unavailable: UnilateralnessUnavailable,
+        pub rms_directionality_unavailable: RmsDirectionalityUnavailable,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -1098,7 +1098,7 @@ mod core {
                         volume_component: item.volume_component,
                         ema_readiness_component: item.ema_readiness_component,
                         log_range_component: item.log_range_component,
-                        unilateralness_component: item.unilateralness_component,
+                        rms_directionality_component: item.rms_directionality_component,
                         selected: item.selected,
                         incumbent: item.incumbent,
                     })
@@ -2266,7 +2266,7 @@ mod core {
             enabled: false,
             volume_ema: 0.0,
             log_range_ema: 0.0,
-            unilateralness_score: 0.0,
+            rms_directionality_score: 0.0,
             bid: 0.0,
             ask: 0.0,
             ema_lower: 0.0,
@@ -2476,7 +2476,7 @@ mod core {
                 volume_ema,
                 log_range_ema,
                 // Filled below only if this candidate survives volume pruning.
-                unilateralness_score: 0.0,
+                rms_directionality_score: 0.0,
                 bid,
                 ask,
                 ema_lower,
@@ -2484,15 +2484,15 @@ mod core {
                 entry_initial_ema_distance_fraction,
             });
         }
-        if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
+        if cfg.require_forager && normalized_weights.rms_directionality > 0.0 {
             let scoring_positions =
                 forager_scoring_positions(out, cfg).map_err(map_forager_selection_error)?;
             let mut ranking_unavailable = false;
             for pos in scoring_positions {
                 let s = &symbols[out[pos].index];
                 let side = symbol_side_input(s, pside);
-                match signed_unilateralness(s, &side.bot_params, true) {
-                    Ok(value) => out[pos].unilateralness_score = value.abs(),
+                match signed_rms_directionality(s, &side.bot_params, true) {
+                    Ok(value) => out[pos].rms_directionality_score = value.abs(),
                     Err(err) => {
                         handle_strategy_input_error(
                             err,
@@ -2650,7 +2650,7 @@ mod core {
     ) -> Result<(), OrchestratorError> {
         let explicitly_unavailable = match &err {
             OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
-            OrchestratorError::UnilateralnessUnavailable { .. } => true,
+            OrchestratorError::RmsDirectionalityUnavailable { .. } => true,
             OrchestratorError::MissingTrailing { .. } => {
                 !symbol_side_input(symbol, pside).trailing_available
             }
@@ -2812,7 +2812,7 @@ mod core {
         })
     }
 
-    fn signed_unilateralness(
+    fn signed_rms_directionality(
         symbol: &SymbolInput,
         bp: &BotParams,
         forager: bool,
@@ -2822,19 +2822,19 @@ mod core {
         } else {
             &symbol.emas.m1
         };
-        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_minutes)
+        let value = ema_lookup(&bundle.signed_rms_directionality, bp.rms_directionality_ema_span_minutes)
             .ok_or_else(|| {
                 let unavailable = if forager {
-                    &symbol.unilateralness_unavailable.forager
+                    &symbol.rms_directionality_unavailable.forager
                 } else {
-                    &symbol.unilateralness_unavailable.current
+                    &symbol.rms_directionality_unavailable.current
                 };
                 if symbol
-                    .unilateralness_warmup_spans
-                    .contains(&bp.unilateralness_ema_span_minutes)
-                    || unavailable.contains(&bp.unilateralness_ema_span_minutes)
+                    .rms_directionality_warmup_spans
+                    .contains(&bp.rms_directionality_ema_span_minutes)
+                    || unavailable.contains(&bp.rms_directionality_ema_span_minutes)
                 {
-                    OrchestratorError::UnilateralnessUnavailable {
+                    OrchestratorError::RmsDirectionalityUnavailable {
                         symbol_idx: symbol.symbol_idx,
                     }
                 } else {
@@ -2846,7 +2846,7 @@ mod core {
         if !value.is_finite() || value.abs() > 1.0 {
             return Err(OrchestratorError::NonFiniteInput {
                 symbol_idx: Some(symbol.symbol_idx),
-                field: "signed_unilateralness",
+                field: "signed_rms_directionality",
             });
         }
         Ok(value)
@@ -2898,7 +2898,7 @@ mod core {
             None
         };
         let adverse = if bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0 {
-            let signed = signed_unilateralness(symbol, bp, false)?;
+            let signed = signed_rms_directionality(symbol, bp, false)?;
             Some(
                 (if pside == PositionSide::Long {
                     -signed
@@ -2933,7 +2933,7 @@ mod core {
                     Ok(value) => Some(value),
                     Err(
                         OrchestratorError::MissingEma { .. }
-                        | OrchestratorError::UnilateralnessUnavailable { .. },
+                        | OrchestratorError::RmsDirectionalityUnavailable { .. },
                     ) => None,
                     Err(err) => return Err(format!("{err:?}")),
                 };
@@ -3077,12 +3077,12 @@ mod core {
         let side = symbol_side_input(symbol, pside);
         let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
             && (symbol
-                .unilateralness_warmup_spans
-                .contains(&side.bot_params.unilateralness_ema_span_minutes)
+                .rms_directionality_warmup_spans
+                .contains(&side.bot_params.rms_directionality_ema_span_minutes)
                 || symbol
-                    .unilateralness_unavailable
+                    .rms_directionality_unavailable
                     .current
-                    .contains(&side.bot_params.unilateralness_ema_span_minutes));
+                    .contains(&side.bot_params.rms_directionality_ema_span_minutes));
         let requests =
             if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
                 && wants_entries
@@ -5142,8 +5142,8 @@ mod core {
                 },
                 tradable: true,
                 allow_missing_strategy_inputs: false,
-                unilateralness_warmup_spans: Vec::new(),
-                unilateralness_unavailable: Default::default(),
+                rms_directionality_warmup_spans: Vec::new(),
+                rms_directionality_unavailable: Default::default(),
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,
@@ -6005,7 +6005,7 @@ mod core {
             global.global_bot_params.long.total_wallet_exposure_limit_ratio = 1.0;
             global.global_bot_params.long.forager_score_weights =
                 crate::types::ForagerScoreWeights {
-                    unilateralness: 0.0,
+                    rms_directionality: 0.0,
                     volume: 1.0,
                     ema_readiness: 1.0,
                     log_range: 1.0,

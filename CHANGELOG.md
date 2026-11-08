@@ -324,7 +324,7 @@ since the latest release tag; these features may already be available when insta
 
 - Name native forager inputs by their quantities: volume and log-range EMAs, signed EMA entry
   price gaps, and absolute score-hysteresis margins. Align native ranking weights, optimizer IDs,
-  replay spans and monitor fields, including `unilateralness_ema_span_minutes`, without changing
+  replay spans and monitor fields without changing
   ranking, normalization, limits or GPU slots.
   Released-v8 native span and optimizer identifiers remain confined to explicit conversion.
 
@@ -1185,7 +1185,11 @@ since the latest release tag; these features may already be available when insta
   fills at their causal execution boundary. Keep malformed valuation inputs fatal
   rather than replacing them with neutral risk.
 
-- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+- Name the Forager score weight `rms_directionality` and its one-minute EMA span
+  `rms_directionality_ema_span_minutes`. Optimizer fields, native inputs and
+  diagnostics use the same terminology. The score and trading behavior are unchanged.
+
+- Hydrate missing Forager RMS directionality weight/span and adaptive entry cooldown
   weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
   value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
   a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
@@ -1230,7 +1234,7 @@ since the latest release tag; these features may already be available when insta
   for dozens of full-history batches.
   Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
 
-- Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
+- Add opt-in adaptive entry cooldown and Forager RMS directionality scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
   decays during flat prices. Keep the base duration under `bot.<side>.entry_cooldown`,
@@ -1252,7 +1256,7 @@ since the latest release tag; these features may already be available when insta
   that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
   results on candle repairs or gap evidence; cache-only ranking uses the latest complete
   contiguous window within its original source-age allowance, including before an internal gap.
-  Report enabled unilateralness ranking totals from Rust diagnostics in the monitor.
+  Report enabled RMS directionality ranking totals from Rust diagnostics in the monitor.
   Document all four scoring weights, configuration, benchmarks, effective cooldown inspection,
   and unchanged partial-fill semantics.
 

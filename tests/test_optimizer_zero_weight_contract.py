@@ -18,7 +18,7 @@ from optimizer_overrides import optimizer_overrides
 from tools.gpu_parity import build_parser, fixture_inputs
 
 
-ZERO_WEIGHTS = dict(volume=0.0, log_range=0.0, ema_readiness=0.0, unilateralness=0.0)
+ZERO_WEIGHTS = dict(volume=0.0, log_range=0.0, ema_readiness=0.0, rms_directionality=0.0)
 FALLBACK_WEIGHTS = {**ZERO_WEIGHTS, "ema_readiness": 1.0}
 
 

@@ -961,7 +961,7 @@ def _candidate_parameter_matrix(
     for side_index, (side, base) in enumerate(base_params.items()):
         overrides = (static_overrides or {}).get(side, {})
         for column, key in enumerate(param_keys):
-            if key == "unilateralness_window":
+            if key == "rms_directionality_window":
                 continue
             source_key = coupled_sources.get(key, key)
             target = side_index * len(param_keys) + column
@@ -979,11 +979,11 @@ def _candidate_parameter_matrix(
                     )
                     for candidate in candidates
                 ]
-        if "unilateralness_window" in param_keys:
+        if "rms_directionality_window" in param_keys:
             offset = side_index * len(param_keys)
-            matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
+            matrix[:, offset + param_keys.index("rms_directionality_window")] = np.ceil(
                 20.0
-                * matrix[:, offset + param_keys.index("unilateralness_ema_span_minutes")]
+                * matrix[:, offset + param_keys.index("rms_directionality_ema_span_minutes")]
             )
     return matrix
 

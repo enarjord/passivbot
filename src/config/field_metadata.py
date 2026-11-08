@@ -269,7 +269,7 @@ def _bot_metadata(path):
             data["description"] += " Weights the relative ranking of the one-minute EMA of ln(candle high / candle low)."
     elif local.startswith("forager.") and name.endswith("ema_span_minutes"):
         data["unit"] = "minutes"
-        if name == "unilateralness_ema_span_minutes":
+        if name == "rms_directionality_ema_span_minutes":
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."

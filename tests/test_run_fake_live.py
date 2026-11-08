@@ -495,7 +495,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "forager_log_range_ema_span_minutes": 0.0,
                 "forager_volume_ema_span_minutes": 1.0,
                 "forager_score_weights": {
-                    "unilateralness": 0.0,
+                    "rms_directionality": 0.0,
                     "volume": 1.0,
                     "ema_readiness": 0.0,
                     "log_range": 0.0,
@@ -511,7 +511,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "entry_cooldown_min_duration_minutes": 0.0,
                 "entry_cooldown_max_duration_minutes": None,
                 "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                "unilateralness_ema_span_minutes": 60.0,
+                "rms_directionality_ema_span_minutes": 60.0,
                 "risk_wel_enforcer_threshold_ratio": 1.0,
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold_ratio": 1.0,
@@ -535,7 +535,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert "risk_we_excess_allowance_mode" not in out
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
-        "unilateralness": pytest.approx(0.0),
+        "rms_directionality": pytest.approx(0.0),
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
         "log_range": pytest.approx(0.0),
@@ -576,7 +576,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "forager_log_range_ema_span_minutes": 0.0,
                         "forager_volume_ema_span_minutes": 1.0,
                         "forager_score_weights": {
-                            "unilateralness": 0.0,
+                            "rms_directionality": 0.0,
                             "volume": 1.0,
                             "ema_readiness": 0.0,
                             "log_range": 0.0,
@@ -592,7 +592,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "entry_cooldown_min_duration_minutes": 0.0,
                         "entry_cooldown_max_duration_minutes": None,
                         "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                        "unilateralness_ema_span_minutes": 60.0,
+                        "rms_directionality_ema_span_minutes": 60.0,
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold_ratio": 1.0,
                         "risk_twel_enforcer_enabled": True,

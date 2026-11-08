@@ -16,11 +16,11 @@ from optimization.warmup import (
 )
 
 
-def omit_unilateralness_bounds(config):
+def omit_rms_directionality_bounds(config):
     for side in ("long", "short"):
         bounds = config["optimize"]["bounds"][side]["forager"]
-        bounds.get("score_weights", {}).pop("unilateralness", None)
-        bounds.pop("unilateralness_ema_span_minutes", None)
+        bounds.get("score_weights", {}).pop("rms_directionality", None)
+        bounds.pop("rms_directionality_ema_span_minutes", None)
 
 
 
@@ -57,10 +57,10 @@ def test_parsed_template_bounds_freeze_adaptive_defaults():
     bounds = flat_bounds(cfg)
     for side in ("long", "short"):
         forager = cfg["bot"][side]["forager"]
-        weight = forager["score_weights"]["unilateralness"]
-        span = forager["unilateralness_ema_span_minutes"]
-        assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
-        assert bounds[f"{side}_unilateralness_ema_span_minutes"] == [span, span]
+        weight = forager["score_weights"]["rms_directionality"]
+        span = forager["rms_directionality_ema_span_minutes"]
+        assert bounds[f"{side}_forager_score_weights_rms_directionality"] == [weight, weight]
+        assert bounds[f"{side}_rms_directionality_ema_span_minutes"] == [span, span]
         cooldown = cfg["bot"][side]["entry_cooldown"]
         for key, value in cooldown["weights_minutes"].items():
             assert bounds[f"{side}_entry_cooldown_weights_minutes_{key}"] == [value, value]
@@ -74,7 +74,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     source = get_expanded_config_prototype()
     original = flat_bounds(source)
     for key in (
-        "forager_score_weights_unilateralness", "unilateralness_ema_span_minutes",
+        "forager_score_weights_rms_directionality", "rms_directionality_ema_span_minutes",
         "entry_cooldown_weights_minutes_exposure_ratio",
         "entry_cooldown_weights_minutes_adverse_directionality",
         "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
@@ -82,16 +82,16 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
         assert f"{side}_{key}" not in original
     source["bot"][side]["forager"].update(
         score_weights={"volume": 1.0, "ema_readiness": 0.0,
-                       "log_range": 0.0, "unilateralness": 1.0},
-        unilateralness_ema_span_minutes=42.5,
+                       "log_range": 0.0, "rms_directionality": 1.0},
+        rms_directionality_ema_span_minutes=42.5,
     )
     source["bot"][side]["entry_cooldown"].update(
         min_duration_minutes=20.0, max_duration_minutes=90.0,
         weights_minutes={"exposure_ratio": 3.25, "adverse_directionality": 2.5},
     )
     expected = {
-        "forager_score_weights_unilateralness": 0.5,
-        "unilateralness_ema_span_minutes": 42.5,
+        "forager_score_weights_rms_directionality": 0.5,
+        "rms_directionality_ema_span_minutes": 42.5,
         "entry_cooldown_weights_minutes_exposure_ratio": 3.25,
         "entry_cooldown_weights_minutes_adverse_directionality": 2.5,
         "entry_cooldown_min_duration_minutes": 20.0,
@@ -109,8 +109,8 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
         if path[:4] == ("bot", side, "forager", "score_weights"):
             vector[index] = parsed["bot"][side]["forager"]["score_weights"][path[-1]]
     candidate = build_optimizer_vector_config(vector, parsed)
-    assert candidate["bot"][side]["forager"]["score_weights"]["unilateralness"] == 0.5
-    assert candidate["bot"][side]["forager"]["unilateralness_ema_span_minutes"] == 42.5
+    assert candidate["bot"][side]["forager"]["score_weights"]["rms_directionality"] == 0.5
+    assert candidate["bot"][side]["forager"]["rms_directionality_ema_span_minutes"] == 42.5
     for key in ("weights_minutes", "min_duration_minutes", "max_duration_minutes"):
         assert candidate["bot"][side]["entry_cooldown"][key] == parsed["bot"][side]["entry_cooldown"][key]
 
@@ -126,12 +126,12 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
     source = get_expanded_config_prototype()
     for side, span, weight in (("long", 12.5, 2.0), ("short", 81.25, 3.0)):
         source["bot"][side]["forager"].update(
-            unilateralness_ema_span_minutes=span,
+            rms_directionality_ema_span_minutes=span,
             score_weights={"volume": 1.0, "ema_readiness": 1.0,
-                           "log_range": 0.0, "unilateralness": weight},
+                           "log_range": 0.0, "rms_directionality": weight},
         )
     freeze_other_score_weights(source)
-    omit_unilateralness_bounds(source)
+    omit_rms_directionality_bounds(source)
     if missing == "forager":
         for side in ("long", "short"):
             source["optimize"]["bounds"][side].pop("forager")
@@ -147,10 +147,10 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
         bounds = flat_bounds(candidate, effective=True)
         for side in ("long", "short"):
             forager = cfg["bot"][side]["forager"]
-            weight = forager["score_weights"]["unilateralness"]
-            span = forager["unilateralness_ema_span_minutes"]
-            assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
-            assert bounds[f"{side}_unilateralness_ema_span_minutes"] == [span, span]
+            weight = forager["score_weights"]["rms_directionality"]
+            span = forager["rms_directionality_ema_span_minutes"]
+            assert bounds[f"{side}_forager_score_weights_rms_directionality"] == [weight, weight]
+            assert bounds[f"{side}_rms_directionality_ema_span_minutes"] == [span, span]
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)
     assert flat_bounds(load_config(path, live_only=live_only, verbose=False)) == flat_bounds(cfg)
@@ -159,52 +159,52 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
 @pytest.mark.parametrize("form", ["nested", "grouped", "flat"])
 def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
     source = get_expanded_config_prototype()
-    omit_unilateralness_bounds(source)
+    omit_rms_directionality_bounds(source)
     for side in ("long", "short"):
         forager = source["optimize"]["bounds"][side]["forager"]
         if form == "nested":
-            forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
+            forager.setdefault("score_weights", {})["rms_directionality"] = [0.0, 1.0, 0.01]
+            forager["rms_directionality_ema_span_minutes"] = [20.5, 240.5, 0.5]
         elif form == "grouped":
-            forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
+            forager["score_weights_rms_directionality"] = [0.0, 1.0, 0.01]
+            forager["rms_directionality_ema_span_minutes"] = [20.5, 240.5, 0.5]
         else:
-            source["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0, 0.01]
-            source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
+            source["optimize"]["bounds"][f"{side}_forager_score_weights_rms_directionality"] = [0.0, 1.0, 0.01]
+            source["optimize"]["bounds"][f"{side}_rms_directionality_ema_span_minutes"] = [20.5, 240.5, 0.5]
     if form != "nested":
         with pytest.raises(ValueError, match="unknown configuration field"):
             prepare_config(source, verbose=False)
         for side in ("long", "short"):
-            source["optimize"]["bounds"].pop(f"{side}_forager_score_weights_unilateralness", None)
-            source["optimize"]["bounds"].pop(f"{side}_unilateralness_ema_span_minutes", None)
+            source["optimize"]["bounds"].pop(f"{side}_forager_score_weights_rms_directionality", None)
+            source["optimize"]["bounds"].pop(f"{side}_rms_directionality_ema_span_minutes", None)
             forager = source["optimize"]["bounds"][side]["forager"]
-            forager.pop("score_weights_unilateralness", None)
-            forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
+            forager.pop("score_weights_rms_directionality", None)
+            forager.setdefault("score_weights", {})["rms_directionality"] = [0.0, 1.0, 0.01]
+            forager["rms_directionality_ema_span_minutes"] = [20.5, 240.5, 0.5]
     cfg = prepare_config(source, verbose=False)
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)
     for candidate in (cfg, clean_config(cfg), load_config(path, verbose=False)):
         for side in ("long", "short"):
-            assert flat_bounds(candidate)[f"{side}_forager_score_weights_unilateralness"] == [0.0, 1.0, 0.01]
-            assert flat_bounds(candidate)[f"{side}_unilateralness_ema_span_minutes"] == [20.5, 240.5, 0.5]
+            assert flat_bounds(candidate)[f"{side}_forager_score_weights_rms_directionality"] == [0.0, 1.0, 0.01]
+            assert flat_bounds(candidate)[f"{side}_rms_directionality_ema_span_minutes"] == [20.5, 240.5, 0.5]
 
 
 def test_direct_cleaning_keeps_omitted_bounds_and_reloads_fixed_effective_weight():
     source = get_expanded_config_prototype()
-    omit_unilateralness_bounds(source)
+    omit_rms_directionality_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"] = {
-        "volume": 1.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 2.0,
+        "volume": 1.0, "ema_readiness": 1.0, "log_range": 0.0, "rms_directionality": 2.0,
     }
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
+    source["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 42.5
     freeze_other_score_weights(source)
     snapshot = deepcopy(source)
     cleaned = clean_config(source)
     assert source == snapshot
-    assert "long_forager_score_weights_unilateralness" not in flat_bounds(cleaned)
-    assert "long_unilateralness_ema_span_minutes" not in flat_bounds(cleaned)
-    assert flat_bounds(cleaned, effective=True)["long_forager_score_weights_unilateralness"] == [0.5, 0.5]
-    assert flat_bounds(cleaned, effective=True)["long_unilateralness_ema_span_minutes"] == [42.5, 42.5]
+    assert "long_forager_score_weights_rms_directionality" not in flat_bounds(cleaned)
+    assert "long_rms_directionality_ema_span_minutes" not in flat_bounds(cleaned)
+    assert flat_bounds(cleaned, effective=True)["long_forager_score_weights_rms_directionality"] == [0.5, 0.5]
+    assert flat_bounds(cleaned, effective=True)["long_rms_directionality_ema_span_minutes"] == [42.5, 42.5]
     assert flat_bounds(prepare_config(cleaned, verbose=False)) == flat_bounds(cleaned, effective=True)
 
 
@@ -214,10 +214,10 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
     from optimize import _canonicalize_optimizer_individual
 
     source = get_expanded_config_prototype()
-    omit_unilateralness_bounds(source)
+    omit_rms_directionality_bounds(source)
     omit_cooldown_bounds(source)
-    source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = weight
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 75.25
+    source["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = weight
+    source["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 75.25
     source["bot"]["long"]["entry_cooldown"].update(
         min_duration_minutes=2.5, max_duration_minutes=90.25,
         weights_minutes={"exposure_ratio": 3.25, "adverse_directionality": 2.5},
@@ -225,7 +225,7 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
     freeze_other_score_weights(source)
     hydrated = prepare_config(source, verbose=False)
     previous = clean_config(hydrated)
-    omit_unilateralness_bounds(previous)
+    omit_rms_directionality_bounds(previous)
     omit_cooldown_bounds(previous)
     previous = prepare_config(previous, verbose=False)
 

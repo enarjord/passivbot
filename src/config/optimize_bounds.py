@@ -31,8 +31,8 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "max_duration_minutes": "entry_cooldown_max_duration_minutes",
     },
     "forager": {
-        "score_weights_unilateralness": "forager_score_weights_unilateralness",
-        "unilateralness_ema_span_minutes": "unilateralness_ema_span_minutes",
+        "score_weights_rms_directionality": "forager_score_weights_rms_directionality",
+        "rms_directionality_ema_span_minutes": "rms_directionality_ema_span_minutes",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_log_range": "forager_score_weights_log_range",
         "score_weights_volume": "forager_score_weights_volume",
@@ -255,8 +255,8 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
         "entry_cooldown_weights_minutes_adverse_directionality",
         "entry_cooldown_min_duration_minutes",
         "entry_cooldown_max_duration_minutes",
-        "forager_score_weights_unilateralness",
-        "unilateralness_ema_span_minutes",
+        "forager_score_weights_rms_directionality",
+        "rms_directionality_ema_span_minutes",
     }
     target = template["optimize"]["bounds"]
     for key, value in flat.items():
@@ -271,9 +271,9 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
             .get("forager", {})
             .get("score_weights", {})
         )
-        if isinstance(scoring, dict) and "unilateralness" in scoring:
-            target[side]["forager"].setdefault("score_weights", {})["unilateralness"] = deepcopy(
-                scoring["unilateralness"]
+        if isinstance(scoring, dict) and "rms_directionality" in scoring:
+            target[side]["forager"].setdefault("score_weights", {})["rms_directionality"] = deepcopy(
+                scoring["rms_directionality"]
             )
 
 

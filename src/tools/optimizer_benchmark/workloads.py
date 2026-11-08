@@ -89,7 +89,10 @@ def apply_features(config, case, coins, markets, bars):
             bot["entry_cooldown"].update(min_duration_minutes=1.0, max_duration_minutes=60.0,
                                           weights_minutes=dict(exposure_ratio=10.0, adverse_directionality=5.0))
         weights = bot["forager"]["score_weights"]
-        weights.update(volume=0.3, log_range=0.3, ema_readiness=0.4, unilateralness=0.2 if "forager_unilateral" in flags else 0.0)
+        weights.update(
+            volume=0.3, log_range=0.3, ema_readiness=0.4,
+            rms_directionality=0.2 if "forager_rms_directionality" in flags else 0.0,
+        )
         if case.topology != "forager":
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
@@ -143,8 +146,8 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
         # This generated benchmark profile explicitly searches every positive
         # score coordinate. An authored bounds_config remains authoritative.
         for side in ("long", "short"):
-            if config["bot"][side]["forager"]["score_weights"]["unilateralness"] > 0:
-                source_bounds[side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0, 1, 0.01]
+            if config["bot"][side]["forager"]["score_weights"]["rms_directionality"] > 0:
+                source_bounds[side]["forager"].setdefault("score_weights", {})["rms_directionality"] = [0, 1, 0.01]
     search["optimize"]["bounds"] = deepcopy(source_bounds)
     validate_hsl_paths(search)
     flat = _flatten_bounds_for_config(search, search["optimize"]["bounds"])

@@ -408,15 +408,15 @@ Final reducer quantities compete largest-first across the shared batch loss allo
 
 ### Filter Parameters
 
-Forager ranks eligible candidates using volume, EMA readiness, log range and unilateralness.
+Forager ranks eligible candidates using volume, EMA readiness, log range and RMS directionality.
 The old volume-drop filter is removed; volume continues to contribute through its configured weight.
 
 - **forager.log_range_ema_span_minutes / forager.volume_ema_span_minutes**: Floating-point spans in minutes for the log-range and quote-volume EMAs used by forager mode.
   - The log-range component is the EMA of `ln(high / low)` from completed candles.
   - These spans control the raw inputs to forager ranking; they are separate from strategy log-range spans such as `log_range_ema_span_1h_candles` and `offset_log_range_ema_span_1h_candles`.
 - **forager.score_weights**: Final weighted forager ranking weights.
-  - Required keys: `volume`, `ema_readiness`, `log_range`, `unilateralness`.
-  - The unilateralness weight defaults to zero; see the canonical template for other weights.
+  - Required keys: `volume`, `ema_readiness`, `log_range`, `rms_directionality`.
+  - The RMS directionality weight defaults to zero; see the canonical template for other weights.
   - Positive weights are relative and normalized to unit sum before use.
   - If all weights are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.

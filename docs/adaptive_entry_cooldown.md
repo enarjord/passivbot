@@ -1,4 +1,4 @@
-# RMS unilateralness and adaptive entry cooldown
+# RMS directionality and adaptive entry cooldown
 
 Both features are opt-in. New weights default to zero; existing cooldown durations,
 Forager weights, CLI aliases and optimizer bounds retain their defaults. CPU backtests,
@@ -16,8 +16,8 @@ For completed one-minute closes, let `r = log(close_t) - log(close_previous)` an
 ```
 mean   += a * (r - mean)
 square += a * (r*r - square)
-signed_unilateralness = mean / sqrt(square)
-U = abs(signed_unilateralness)
+signed_rms_directionality = mean / sqrt(square)
+U = abs(signed_rms_directionality)
 ```
 
 An entirely flat window has U = 0. U ranges from 0 to 1 and measures sustained,
@@ -25,7 +25,7 @@ consistent one-way movement. Upward and downward trends receive the same Forager
 penalty. Small two-way moves cancel; isolated shocks receive less penalty than
 consistent trends. This is directionality, not absolute price-move magnitude.
 
-`bot.<side>.forager.unilateralness_ema_span_minutes` is the shared floating-point span,
+`bot.<side>.forager.rms_directionality_ema_span_minutes` is the shared floating-point span,
 default 60. Both consumers on that side use it. The supported range is 1–100000.
 For deterministic restart reconstruction, both runtimes use exactly
 `ceil(20 * span)` returns, requiring one more completed close, with exponential
@@ -35,7 +35,7 @@ this bounded initialization is separate from a simple moving average. A flat
 tail makes RMS decay approximately by `(1-a)^(minutes/2)` until the prior movement
 leaves the replay history. At span 60 its flat-tail half-life is about 42 minutes.
 
-`bot.<side>.forager.score_weights.unilateralness` defaults to zero. The existing
+`bot.<side>.forager.score_weights.rms_directionality` defaults to zero. The existing
 cross-candidate lower-is-better normalization converts U into a higher-is-better
 component, then combines it with the other relative weights. An absolute `1-U`
 score is not substituted for that existing normalization. With insufficient
@@ -78,8 +78,8 @@ Exposure uses the existing position wallet exposure divided by its effective wal
 exposure limit; it is not capped at one. A flat position contributes zero. If a
 held position has a zero effective limit, the exposure modifier saturates the
 configured ceiling. Long adverse score is
-`max(0, -signed_unilateralness)`; short adverse score is
-`max(0, signed_unilateralness)`. Favorable movement adds no directionality delay.
+`max(0, -signed_rms_directionality)`; short adverse score is
+`max(0, signed_rms_directionality)`. Favorable movement adds no directionality delay.
 With base 5, exposure ratio 0.8, and adverse score 0.75, the example gives
 `5 + 0.8*10 + 0.75*20 = 28` minutes. A zero base and adverse weight 20 alone
 would give 15 minutes. At fixed positive base, additive minutes can express the
@@ -107,9 +107,9 @@ introduce logical-order completion tracking or exempt re-entry fragments.
 
 Adaptive optimizer bounds are visible fixed ranges by default: widen bounds under the matching nested config paths,
 for example `optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
-or `optimize.bounds.long.forager.score_weights.unilateralness`. The existing
-Forager bound shorthand also supports `score_weights_unilateralness`. Missing
-unilateralness weight/span and cooldown weight/minimum-duration bounds are hydrated
+or `optimize.bounds.long.forager.score_weights.rms_directionality`. The existing
+Forager bound shorthand also supports `score_weights_rms_directionality`. Missing
+RMS directionality weight/span and cooldown weight/minimum-duration bounds are hydrated
 as `[configured_value, configured_value]`. A missing maximum-duration bound is
 hydrated only when the configured ceiling is finite; a null ceiling remains unbounded
 and has no numeric optimizer bound. Explicit bounds are preserved. Keep a
@@ -175,7 +175,7 @@ A reproducible synthetic comparison against the replay reference is available:
 
 ```sh
 cargo test --release --no-default-features --manifest-path passivbot-rust/Cargo.toml \
-  unilateralness::tests::benchmark_rolling_against_replay -- --ignored --nocapture
+  rms_directionality::tests::benchmark_rolling_against_replay -- --ignored --nocapture
 ```
 
 The test reports both timings and maximum score error for the same fixed input.

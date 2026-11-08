@@ -119,8 +119,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                             endpoint, field=f"optimize.bounds.{bound_key}"
                         )
         adaptive_domain = {
-            ("forager", "unilateralness_ema_span_minutes"): (1.0, 100_000.0),
-            ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
+            ("forager", "rms_directionality_ema_span_minutes"): (1.0, 100_000.0),
+            ("forager", "score_weights", "rms_directionality"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "exposure_ratio"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "adverse_directionality"): (0.0, math.inf),
             ("entry_cooldown", "base_duration_minutes"): (0.0, math.inf),
@@ -342,7 +342,7 @@ def _validate_inherited_forager_weight_context(
                 raise ValueError(f"{context}{exc}") from exc
             raise
 
-    names = ("volume", "log_range", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "rms_directionality")
     plan = get_bound_plan(config)
     bindings = {binding.authoring_path: binding for binding in plan.bindings}
     values = {}
@@ -441,7 +441,7 @@ def _validate_forager_weight_context(
             )
         return configured, pinned
 
-    names = ("volume", "log_range", "ema_readiness", "unilateralness")
+    names = ("volume", "log_range", "ema_readiness", "rms_directionality")
     for side in ("long", "short"):
         weight_source = optimizer_numeric_group_source_side(config, side, "forager")
         bot = config.get("bot", {}).get(weight_source, {})

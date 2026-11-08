@@ -944,6 +944,21 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
+                    "rms_directionality_ema_span_minutes": {
+                      "type": "number",
+                      "default": 60.0,
+                      "minimum": 1.0,
+                      "maximum": 100000.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
                     "score_hysteresis_margin": {
                       "type": "number",
                       "default": 0.02,
@@ -1004,7 +1019,7 @@
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
-                        "unilateralness": {
+                        "rms_directionality": {
                           "type": "number",
                           "default": 0.0,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
@@ -1043,21 +1058,6 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "unilateralness_ema_span_minutes": {
-                      "type": "number",
-                      "default": 60.0,
-                      "minimum": 1.0,
-                      "maximum": 100000.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-coin-override": "forbidden"
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
@@ -2495,6 +2495,22 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
+                    "rms_directionality_ema_span_minutes": {
+                      "type": "number",
+                      "default": 60.0,
+                      "minimum": 1.0,
+                      "maximum": 100000.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "long_rms_directionality_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
                     "score_hysteresis_margin": {
                       "type": "number",
                       "default": 0.02,
@@ -2557,7 +2573,7 @@
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
-                        "unilateralness": {
+                        "rms_directionality": {
                           "type": "number",
                           "default": 0.0,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
@@ -2570,7 +2586,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_forager_score_weights_unilateralness",
+                          "x-passivbot-optimizer-key": "long_forager_score_weights_rms_directionality",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-coin-override": "forbidden"
                         },
@@ -2598,22 +2614,6 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "unilateralness_ema_span_minutes": {
-                      "type": "number",
-                      "default": 60.0,
-                      "minimum": 1.0,
-                      "maximum": 100000.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "long_unilateralness_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-coin-override": "forbidden"
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
@@ -4411,6 +4411,22 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
+                    "rms_directionality_ema_span_minutes": {
+                      "type": "number",
+                      "default": 60.0,
+                      "minimum": 1.0,
+                      "maximum": 100000.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "short_rms_directionality_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
                     "score_hysteresis_margin": {
                       "type": "number",
                       "default": 0.02,
@@ -4473,7 +4489,7 @@
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
-                        "unilateralness": {
+                        "rms_directionality": {
                           "type": "number",
                           "default": 0.0,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
@@ -4486,7 +4502,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_forager_score_weights_unilateralness",
+                          "x-passivbot-optimizer-key": "short_forager_score_weights_rms_directionality",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-coin-override": "forbidden"
                         },
@@ -4514,22 +4530,6 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "unilateralness_ema_span_minutes": {
-                      "type": "number",
-                      "default": 60.0,
-                      "minimum": 1.0,
-                      "maximum": 100000.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "short_unilateralness_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-coin-override": "forbidden"
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
@@ -7427,7 +7427,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "unilateralness": {
+                            "rms_directionality": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -7453,7 +7453,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.forager.score_weights.unilateralness"
+                              "x-passivbot-target": "bot.long.forager.score_weights.rms_directionality"
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -7562,7 +7562,7 @@
                             }
                           }
                         },
-                        "unilateralness_ema_span_minutes": {
+                        "rms_directionality_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -7588,7 +7588,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.forager.unilateralness_ema_span_minutes"
+                          "x-passivbot-target": "bot.long.forager.rms_directionality_ema_span_minutes"
                         },
                         "log_range_ema_span_minutes": {
                           "anyOf": [
@@ -9567,7 +9567,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "unilateralness": {
+                            "rms_directionality": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -9593,7 +9593,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.short.forager.score_weights.unilateralness"
+                              "x-passivbot-target": "bot.short.forager.score_weights.rms_directionality"
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -9702,7 +9702,7 @@
                             }
                           }
                         },
-                        "unilateralness_ema_span_minutes": {
+                        "rms_directionality_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -9728,7 +9728,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.short.forager.unilateralness_ema_span_minutes"
+                          "x-passivbot-target": "bot.short.forager.rms_directionality_ema_span_minutes"
                         },
                         "log_range_ema_span_minutes": {
                           "anyOf": [
@@ -11708,7 +11708,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "unilateralness": {
+                            "rms_directionality": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -11734,7 +11734,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.global.forager.score_weights.unilateralness"
+                              "x-passivbot-target": "bot.global.forager.score_weights.rms_directionality"
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -11843,7 +11843,7 @@
                             }
                           }
                         },
-                        "unilateralness_ema_span_minutes": {
+                        "rms_directionality_ema_span_minutes": {
                           "anyOf": [
                             {
                               "type": "number"
@@ -11869,7 +11869,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.forager.unilateralness_ema_span_minutes"
+                          "x-passivbot-target": "bot.global.forager.rms_directionality_ema_span_minutes"
                         },
                         "log_range_ema_span_minutes": {
                           "anyOf": [
@@ -18428,6 +18428,9 @@
         "bot.global.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "bot.global.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "bot.global.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
@@ -18440,14 +18443,11 @@
         "bot.global.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/log_range"
         },
-        "bot.global.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "bot.global.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bot.global.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/volume"
-        },
-        "bot.global.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "bot.global.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/volume_ema_span_minutes"
@@ -18704,6 +18704,9 @@
         "bot.long.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "bot.long.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "bot.long.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_hysteresis_margin"
         },
@@ -18716,14 +18719,11 @@
         "bot.long.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/log_range"
         },
-        "bot.long.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "bot.long.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bot.long.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/volume"
-        },
-        "bot.long.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "bot.long.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/volume_ema_span_minutes"
@@ -19049,6 +19049,9 @@
         "bot.short.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "bot.short.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "bot.short.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_hysteresis_margin"
         },
@@ -19061,14 +19064,11 @@
         "bot.short.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/log_range"
         },
-        "bot.short.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "bot.short.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bot.short.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/volume"
-        },
-        "bot.short.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "bot.short.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/volume_ema_span_minutes"
@@ -19745,8 +19745,8 @@
         "optimize.bounds.long.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights"
         },
-        "optimize.bounds.long.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "optimize.bounds.long.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "optimize.bounds.long.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -19757,8 +19757,8 @@
         "optimize.bounds.long.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/volume"
         },
-        "optimize.bounds.long.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
+        "optimize.bounds.long.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "optimize.bounds.long.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/log_range_ema_span_minutes"
@@ -19970,8 +19970,8 @@
         "optimize.bounds.short.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights"
         },
-        "optimize.bounds.short.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "optimize.bounds.short.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "optimize.bounds.short.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -19982,8 +19982,8 @@
         "optimize.bounds.short.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/volume"
         },
-        "optimize.bounds.short.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
+        "optimize.bounds.short.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "optimize.bounds.short.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/log_range_ema_span_minutes"
@@ -20195,8 +20195,8 @@
         "optimize.bounds.global.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights"
         },
-        "optimize.bounds.global.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "optimize.bounds.global.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "optimize.bounds.global.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -20207,8 +20207,8 @@
         "optimize.bounds.global.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/volume"
         },
-        "optimize.bounds.global.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
+        "optimize.bounds.global.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "optimize.bounds.global.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/log_range_ema_span_minutes"
@@ -21033,6 +21033,9 @@
         "global.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "global.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "global.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
@@ -21045,14 +21048,11 @@
         "global.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/log_range"
         },
-        "global.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "global.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "global.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/volume"
-        },
-        "global.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "global.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/volume_ema_span_minutes"
@@ -21309,6 +21309,9 @@
         "long.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "long.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "long.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_hysteresis_margin"
         },
@@ -21321,14 +21324,11 @@
         "long.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/log_range"
         },
-        "long.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "long.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "long.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/volume"
-        },
-        "long.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "long.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/volume_ema_span_minutes"
@@ -21654,6 +21654,9 @@
         "short.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "short.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "short.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_hysteresis_margin"
         },
@@ -21666,14 +21669,11 @@
         "short.forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/log_range"
         },
-        "short.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "short.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "short.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/volume"
-        },
-        "short.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "short.forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/volume_ema_span_minutes"
@@ -21931,6 +21931,9 @@
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
@@ -21943,14 +21946,11 @@
         "forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/log_range"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/volume"
-        },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/volume_ema_span_minutes"
@@ -22222,6 +22222,9 @@
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
@@ -22234,14 +22237,11 @@
         "score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/log_range"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/volume"
-        },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/volume_ema_span_minutes"
@@ -22259,8 +22259,8 @@
         "log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/log_range"
         },
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "volume": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_weights/properties/volume"
@@ -22772,6 +22772,9 @@
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_hysteresis_margin"
         },
@@ -22784,14 +22787,11 @@
         "forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/log_range"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/volume"
-        },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/volume_ema_span_minutes"
@@ -23063,6 +23063,9 @@
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_hysteresis_margin"
         },
@@ -23075,14 +23078,11 @@
         "score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/log_range"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/volume"
-        },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/volume_ema_span_minutes"
@@ -23100,8 +23100,8 @@
         "log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/log_range"
         },
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "volume": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights/properties/volume"
@@ -23766,6 +23766,9 @@
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_hysteresis_margin"
         },
@@ -23778,14 +23781,11 @@
         "forager.score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/log_range"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/volume"
-        },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "forager.volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/volume_ema_span_minutes"
@@ -24057,6 +24057,9 @@
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/log_range_ema_span_minutes"
         },
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
+        },
         "score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_hysteresis_margin"
         },
@@ -24069,14 +24072,11 @@
         "score_weights.log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/log_range"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/volume"
-        },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
         },
         "volume_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/volume_ema_span_minutes"
@@ -24094,8 +24094,8 @@
         "log_range": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/log_range"
         },
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "volume": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights/properties/volume"
@@ -25236,8 +25236,8 @@
         "bounds.long.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights"
         },
-        "bounds.long.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "bounds.long.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bounds.long.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -25248,8 +25248,8 @@
         "bounds.long.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/volume"
         },
-        "bounds.long.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
+        "bounds.long.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "bounds.long.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/log_range_ema_span_minutes"
@@ -25461,8 +25461,8 @@
         "bounds.short.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights"
         },
-        "bounds.short.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "bounds.short.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bounds.short.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -25473,8 +25473,8 @@
         "bounds.short.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/volume"
         },
-        "bounds.short.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
+        "bounds.short.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "bounds.short.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/log_range_ema_span_minutes"
@@ -25686,8 +25686,8 @@
         "bounds.global.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights"
         },
-        "bounds.global.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "bounds.global.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "bounds.global.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -25698,8 +25698,8 @@
         "bounds.global.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/volume"
         },
-        "bounds.global.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
+        "bounds.global.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "bounds.global.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/log_range_ema_span_minutes"
@@ -26154,8 +26154,8 @@
         "long.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights"
         },
-        "long.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "long.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "long.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -26166,8 +26166,8 @@
         "long.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/volume"
         },
-        "long.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
+        "long.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "long.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/log_range_ema_span_minutes"
@@ -26379,8 +26379,8 @@
         "short.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights"
         },
-        "short.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "short.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "short.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -26391,8 +26391,8 @@
         "short.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/volume"
         },
-        "short.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
+        "short.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "short.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/log_range_ema_span_minutes"
@@ -26604,8 +26604,8 @@
         "global.forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights"
         },
-        "global.forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "global.forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "global.forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -26616,8 +26616,8 @@
         "global.forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/volume"
         },
-        "global.forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
+        "global.forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "global.forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/log_range_ema_span_minutes"
@@ -26906,8 +26906,8 @@
         "forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -26918,8 +26918,8 @@
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/volume"
         },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/log_range_ema_span_minutes"
@@ -27156,8 +27156,8 @@
         "score_weights": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.forager.score_weights"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -27168,8 +27168,8 @@
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/volume"
         },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/unilateralness_ema_span_minutes"
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/log_range_ema_span_minutes"
@@ -27184,8 +27184,8 @@
     "scenarioPatch:optimize.bounds.long.forager.score_weights": {
       "type": "object",
       "properties": {
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -27629,8 +27629,8 @@
         "forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -27641,8 +27641,8 @@
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/volume"
         },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/log_range_ema_span_minutes"
@@ -27879,8 +27879,8 @@
         "score_weights": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.forager.score_weights"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -27891,8 +27891,8 @@
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/volume"
         },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/unilateralness_ema_span_minutes"
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/log_range_ema_span_minutes"
@@ -27907,8 +27907,8 @@
     "scenarioPatch:optimize.bounds.short.forager.score_weights": {
       "type": "object",
       "properties": {
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -28352,8 +28352,8 @@
         "forager.score_weights": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights"
         },
-        "forager.score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "forager.score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "forager.score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -28364,8 +28364,8 @@
         "forager.score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/volume"
         },
-        "forager.unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
+        "forager.rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "forager.log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/log_range_ema_span_minutes"
@@ -28602,8 +28602,8 @@
         "score_weights": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.forager.score_weights"
         },
-        "score_weights.unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "score_weights.rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "score_weights.ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"
@@ -28614,8 +28614,8 @@
         "score_weights.volume": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/volume"
         },
-        "unilateralness_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/unilateralness_ema_span_minutes"
+        "rms_directionality_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/rms_directionality_ema_span_minutes"
         },
         "log_range_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/log_range_ema_span_minutes"
@@ -28630,8 +28630,8 @@
     "scenarioPatch:optimize.bounds.global.forager.score_weights": {
       "type": "object",
       "properties": {
-        "unilateralness": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/unilateralness"
+        "rms_directionality": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/rms_directionality"
         },
         "ema_readiness": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/forager/properties/score_weights/properties/ema_readiness"

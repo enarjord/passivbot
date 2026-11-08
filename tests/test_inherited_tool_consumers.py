@@ -25,14 +25,14 @@ def test_explicit_preset_reopens_visible_domains_from_lean_common_weights(kind):
     from tools.optimizer_bounds import apply_recommended_bounds
     raw = source(kind)
     raw["bot"]["global"]["forager"] = {"score_weights": {
-        "volume": 0.2, "log_range": 0.2, "ema_readiness": 0.2, "unilateralness": 0.4}}
+        "volume": 0.2, "log_range": 0.2, "ema_readiness": 0.2, "rms_directionality": 0.4}}
     before = deepcopy(raw)
     exported = apply_recommended_bounds(raw)
     loaded = prepare_config(exported, verbose=False)
     assert len([binding for binding in get_bound_plan(loaded).bindings
                 if binding.bound.low != binding.bound.high]) > 5
     for side in ("long", "short"):
-        assert exported["optimize"]["bounds"][side]["forager"]["score_weights"]["unilateralness"] == [0.0, 1.0, 0.01]
+        assert exported["optimize"]["bounds"][side]["forager"]["score_weights"]["rms_directionality"] == [0.0, 1.0, 0.01]
     assert raw == before
     assert get_template_config()["optimize"]["bounds"] == {}
 

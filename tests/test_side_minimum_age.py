@@ -351,7 +351,7 @@ def test_actual_native_one_way_arbitrates_only_age_eligible_side(young_side, sel
         bot["universe"]["approved_coins"] = ["AAA", "BBB"]
         bot["risk"]["max_positions"] = 2 if selection == "static" else 1
         bot["forager"].update(volume_ema_span_minutes=1.0, log_range_ema_span_minutes=1.0,
-                              score_weights={"volume": 1.0, "log_range": 0.0, "ema_readiness": 0.0, "unilateralness": 0.0})
+                              score_weights={"volume": 1.0, "log_range": 0.0, "ema_readiness": 0.0, "rms_directionality": 0.0})
         if selection == "always_include":
             bot["forager"]["always_include"] = ["AAA", "BBB"]
     if selection == "forced_normal":

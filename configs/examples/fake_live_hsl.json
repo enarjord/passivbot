@@ -159,8 +159,8 @@
             "forager": {
                 "always_include": [],
                 "score_hysteresis_margin": 0.02,
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 0.0, "volume": 1.0},
-                "unilateralness_ema_span_minutes": 60.0,
+                "score_weights": {"ema_readiness": 0.0, "rms_directionality": 0.0, "log_range": 0.0, "volume": 1.0},
+                "rms_directionality_ema_span_minutes": 60.0,
                 "log_range_ema_span_minutes": 0,
                 "volume_ema_span_minutes": 1
             },
@@ -347,11 +347,11 @@
                 "forager": {
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
-                        "unilateralness": [0.0, 0.0],
+                        "rms_directionality": [0.0, 0.0],
                         "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
-                    "unilateralness_ema_span_minutes": [60.0, 60.0],
+                    "rms_directionality_ema_span_minutes": [60.0, 60.0],
                     "log_range_ema_span_minutes": [10, 2880, 1],
                     "volume_ema_span_minutes": [180, 2880, 1]
                 },
