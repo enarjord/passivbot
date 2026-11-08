@@ -34,6 +34,9 @@ since the latest release tag; these features may already be available when insta
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
   and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
 
+- Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
+  a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
+
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
   portfolios, and saved input fingerprints when scenarios add exchanges or use

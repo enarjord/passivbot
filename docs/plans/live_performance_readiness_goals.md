@@ -87,6 +87,11 @@ slices.
     `147.403s` of reference full-replay time was residual orchestration after
     `5.873s` of measured held/background metric sampling. Candidate and
     reference fixture contract, sample counts, and final state all matched.
+- [x] Bound each causal budget lookup by using the tape's validated timestamp and fill-phase order.
+  On a synthetic flat coin with 12,000 balance facts ten seconds apart and one-minute marks,
+  median CPU time for a repeated warm native evaluation fell from 124 ms to 21 ms across nine
+  evaluations per build. The serialized results were byte-identical. This measures native replay
+  and its Python boundary, with no exchange or monitor work.
 - [ ] Acceptance: before optimizing, the report identifies the dominant cost
   category and provides a repeatable local benchmark.
 
