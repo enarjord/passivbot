@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
+
 - Verify the installed wheel's Rust source fingerprint and binary against the package build
   record. Offline backtests and optimization can record native provenance outside a checkout.
 

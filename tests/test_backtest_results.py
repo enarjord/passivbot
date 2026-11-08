@@ -37,7 +37,12 @@ def result(tmp_path, values=(100.0, 99.0, 120.0, 60.0, 100.0)):
     )
     write_equity(tmp_path, frame)
     (tmp_path / "analysis.json").write_text(
-        json.dumps({"drawdown_max_fraction_strategy_equity": 0.5})
+        json.dumps(
+            {
+                "drawdown_max_fraction_strategy_equity": 0.5,
+                "peak_recovery_max_days_strategy_equity": 2 / 1440,
+            }
+        )
     )
     (tmp_path / "dataset.json").write_text(json.dumps({"coins": ["AAA"]}))
     pd.DataFrame(
@@ -137,8 +142,37 @@ def test_default_equity_view_and_selected_scale_preserve_the_peak(tmp_path, scal
     fig = create_equity_overview(store, ReportOptions(equity_scale=scale))
     try:
         assert fig.axes[0].get_yscale() == scale
-        assert "50.000%" in fig.axes[1].get_title()
+        assert fig.axes[1].get_title() == (
+            "Strategy equity drawdown — maximum 50.000% · max recovery 0.001 days"
+        )
         assert len(fig.axes) == 2
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("analysis", "recovery_label"),
+    [
+        (None, ""),
+        ({}, ""),
+        ({"peak_recovery_max_days_strategy_equity": None}, ""),
+        ({"peak_recovery_max_days_strategy_equity": 0.0}, " · max recovery 0.000 days"),
+    ],
+)
+def test_equity_title_uses_only_available_recovery_values(tmp_path, analysis, recovery_label):
+    import matplotlib.pyplot as plt
+
+    store, _ = result(tmp_path, (100.0, 100.0))
+    analysis_path = tmp_path / "analysis.json"
+    if analysis is None:
+        analysis_path.unlink()
+    else:
+        analysis_path.write_text(json.dumps(analysis))
+    fig = create_equity_overview(store, ReportOptions())
+    try:
+        assert fig.axes[1].get_title() == (
+            "Strategy equity drawdown — maximum 0.000%" + recovery_label
+        )
     finally:
         plt.close(fig)
 
