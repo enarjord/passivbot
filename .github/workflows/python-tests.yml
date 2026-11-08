@@ -87,6 +87,24 @@ jobs:
             --user ci_fake_hsl_restart \
             --output-dir "${{ runner.temp }}/fake-live"
 
+      # The real console script, package resources and native artifact must work
+      # without an editable installation, Rust source tree or market connection.
+      - name: Run offline research commands from an installed wheel
+        if: matrix.shard == 0
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: |
+          wheel_work="${{ runner.temp }}/research-wheel"
+          mkdir -p "$wheel_work/run" "$wheel_work/wheels"
+          expected_source=$(.venv/bin/python -c "from rust_utils import source_fingerprint; print(source_fingerprint())")
+          .venv/bin/python -m pip wheel . --no-deps -w "$wheel_work/wheels"
+          wheels=("$wheel_work/wheels/"*.whl)
+          python -m venv "$wheel_work/venv"
+          "$wheel_work/venv/bin/python" -m pip install "${wheels[0]}[full]"
+          cp .github/ci/smoke_installed_research.py "$wheel_work/smoke.py"
+          cd "$wheel_work/run"
+          env -u PYTHONPATH "$wheel_work/venv/bin/python" "$wheel_work/smoke.py" "$expected_source"
+
       - name: Upload collection manifest
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

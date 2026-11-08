@@ -33,6 +33,12 @@ repository's build lock, prunes shadow copies, and stamps the rebuilt artifact. 
 `maturin` build may leave an old source stamp beside a new binary, so do not suppress verification
 to make that artifact load.
 
+The Python wheel build embeds the checkout fingerprint in the Rust extension and
+packages the expected value. An installed runtime verifies those values agree and
+checks both files against the Passivbot installation's wheel `RECORD`. It reads its
+provenance from the installation. A wheel with missing or mismatched provenance
+must be replaced by a clean build and installation.
+
 The application tracks `passivbot-rust/Cargo.lock` and pins its Rust toolchain in
 `rust-toolchain.toml`. Repository builds, package builds and CI use `--locked`: a missing or
 outdated dependency lock fails instead of resolving different dependencies on another machine.

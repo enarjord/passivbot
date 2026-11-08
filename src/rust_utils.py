@@ -7,6 +7,8 @@ itself; it only inspects filesystem state.
 
 from __future__ import annotations
 
+from base64 import urlsafe_b64encode
+from importlib import metadata
 import importlib.machinery
 import importlib.util
 import os
@@ -24,6 +26,7 @@ LOCK_CHECK_INTERVAL = 0.25  # seconds
 COMPILED_EXTENSION_NAME = "libpassivbot_rust"
 PYTHON_MODULE_NAME = "passivbot_rust"
 SOURCE_STAMP_SUFFIX = ".rust-src-sha256"
+WHEEL_SOURCE_STAMP = "passivbot_cli/rust-source.sha256"
 _LOCK_HANDLE = None
 
 
@@ -126,7 +129,7 @@ def _import_target_compiled_path() -> Optional[Path]:
 
 
 def _compiled_path_from_loaded_module() -> Optional[Path]:
-    module = sys.modules.get(PYTHON_MODULE_NAME)
+    module = _loaded_native_module()
     if module is None:
         return None
 
@@ -137,18 +140,13 @@ def _compiled_path_from_loaded_module() -> Optional[Path]:
         if any(str(module_path).lower().endswith(f".{suffix}") for suffix in suffixes):
             return module_path
 
-    locations = list(getattr(module, "__path__", []) or [])
-    if not locations:
-        return None
-
-    suffixes = _extension_suffixes()
-    for location in locations:
-        location_path = Path(location)
-        for ext in suffixes:
-            matches = [p for p in location_path.glob(f"{PYTHON_MODULE_NAME}*.{ext}") if p.exists()]
-            if matches:
-                return max(matches, key=lambda p: p.stat().st_mtime)
     return None
+
+
+def _loaded_native_module():
+    # Maturin uses a Python package that reexports the compiled submodule.
+    module = sys.modules.get(PYTHON_MODULE_NAME)
+    return getattr(module, PYTHON_MODULE_NAME, module)
 
 
 def preferred_compiled_mtime() -> Optional[float]:
@@ -206,6 +204,68 @@ def sha256_file(path: str | Path | None) -> Optional[str]:
     return digest.hexdigest()
 
 
+def _checkout_rust_root() -> Optional[Path]:
+    src = Path(__file__).resolve().parent
+    root = src.parent / "passivbot-rust"
+    if src.name == "src" and (root / "Cargo.toml").is_file():
+        return root
+    return None
+
+
+def _is_sha256(value) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        char in "0123456789abcdef" for char in value
+    )
+
+
+def _embedded_source_fingerprint() -> Optional[str]:
+    build_info = getattr(_loaded_native_module(), "runtime_build_info", None)
+    if not callable(build_info):
+        return None
+    fingerprint = build_info().get("source_fingerprint")
+    return fingerprint if _is_sha256(fingerprint) else None
+
+
+def _verify_wheel_runtime_files(runtime_path: Optional[Path]) -> tuple[str, str]:
+    """Verify the package-owned build stamp and binary against the wheel's RECORD."""
+    try:
+        distribution = metadata.distribution("passivbot")
+    except metadata.PackageNotFoundError as exc:
+        raise RuntimeError("Passivbot wheel metadata is missing; reinstall Passivbot.") from exc
+
+    root = Path(distribution.locate_file("")).resolve()
+    if Path(__file__).resolve() != root / "rust_utils.py" or runtime_path is None:
+        raise RuntimeError("Could not resolve the installed Passivbot wheel and its Rust extension.")
+    runtime_path = runtime_path.resolve()
+    if not runtime_path.is_relative_to(root):
+        raise RuntimeError("The loaded Rust extension is outside the installed Passivbot wheel.")
+
+    record = {entry.as_posix(): entry for entry in distribution.files or ()}
+
+    def verified_hash(relative_path):
+        entry = record.get(relative_path)
+        digest = sha256_file(root / relative_path)
+        if (
+            digest is None
+            or entry is None
+            or entry.hash is None
+            or entry.hash.mode != "sha256"
+            or urlsafe_b64encode(bytes.fromhex(digest)).decode("ascii").rstrip("=") != entry.hash.value
+        ):
+            raise RuntimeError(
+                f"Installed Passivbot file {relative_path!r} does not match its wheel RECORD; "
+                "reinstall Passivbot."
+            )
+        return digest
+
+    artifact = verified_hash(runtime_path.relative_to(root).as_posix())
+    verified_hash(WHEEL_SOURCE_STAMP)
+    source = (root / WHEEL_SOURCE_STAMP).read_text(encoding="utf-8").strip()
+    if not _is_sha256(source):
+        raise RuntimeError("Invalid Rust source fingerprint in the installed Passivbot wheel.")
+    return source, artifact
+
+
 def collect_runtime_provenance() -> dict:
     preferred_path = preferred_compiled_path()
     preferred_str = str(preferred_path) if preferred_path is not None else None
@@ -222,7 +282,8 @@ def collect_runtime_provenance() -> dict:
         runtime_compiled = _compiled_path_from_loaded_module()
         runtime_path = str(runtime_compiled) if runtime_compiled is not None else None
         runtime_hash = sha256_file(runtime_path)
-        runtime_stamp = read_source_stamp(runtime_compiled) if runtime_compiled is not None else None
+        if runtime_compiled is not None:
+            runtime_stamp = _embedded_source_fingerprint() or read_source_stamp(runtime_compiled)
         try:
             runtime_mtime = Path(runtime_path).stat().st_mtime if runtime_path else None
         except OSError:
@@ -295,7 +356,7 @@ def source_fingerprint(root: Path = Path("passivbot-rust")) -> Optional[str]:
     digest = hashlib.sha256()
     for path in tracked_files:
         rel = path.relative_to(root)
-        digest.update(str(rel).encode("utf-8"))
+        digest.update(rel.as_posix().encode("utf-8"))
         digest.update(b"\0")
         with path.open("rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -538,6 +599,12 @@ def check_and_maybe_compile(
     if skip:
         return
 
+    if _checkout_rust_root() is None:
+        if force:
+            raise RuntimeError("Rebuild the Passivbot wheel to replace its Rust extension.")
+        _verify_wheel_runtime_files(_import_target_compiled_path())
+        return
+
     if "passivbot_rust" in sys.modules:
         # Already loaded in this process; if caller insists on force/fail, error out.
         if force or fail_on_stale:
@@ -609,12 +676,13 @@ def sync_installed_extension_into_src() -> None:
 
 def verify_loaded_runtime_extension(*, fingerprint: Optional[str] = None) -> dict:
     """
-    Verify that the compiled artifact loaded in this Python process matches current Rust sources.
+    Verify the loaded extension against its checkout sources or installed wheel.
 
     This should be called after importing `passivbot_rust` in long-lived command entrypoints.
     """
-    if fingerprint is None:
-        fingerprint = source_fingerprint()
+    checkout_root = _checkout_rust_root()
+    if fingerprint is None and checkout_root is not None:
+        fingerprint = source_fingerprint(checkout_root)
 
     module = sys.modules.get(PYTHON_MODULE_NAME)
     runtime_path = _compiled_path_from_loaded_module()
@@ -631,12 +699,28 @@ def verify_loaded_runtime_extension(*, fingerprint: Optional[str] = None) -> dic
     if runtime_path is None or not runtime_path.exists():
         raise RuntimeError("Loaded Rust extension path could not be resolved.")
 
-    stamp = read_source_stamp(runtime_path)
+    if checkout_root is None:
+        source, artifact = _verify_wheel_runtime_files(runtime_path)
+        if source != _embedded_source_fingerprint() or fingerprint not in (None, source):
+            raise RuntimeError(
+                "Loaded Rust extension does not match the installed wheel's source fingerprint; "
+                "restart with a verified Passivbot installation."
+            )
+        return {
+            "runtime_compiled_path": str(runtime_path),
+            "runtime_compiled_sha256": artifact,
+            "runtime_compiled_source_stamp": source,
+            "expected_source_fingerprint": source,
+        }
+
+    stamp = _embedded_source_fingerprint() or read_source_stamp(runtime_path)
     if fingerprint is not None and stamp is not None and stamp != fingerprint:
         raise RuntimeError(
             "Loaded Rust extension does not match current Rust sources; restart after rebuild."
         )
-    if fingerprint is not None and stamp is None and is_stale(runtime_path.stat().st_mtime, latest_source_mtime()):
+    if fingerprint is not None and stamp is None and is_stale(
+        runtime_path.stat().st_mtime, latest_source_mtime(checkout_root)
+    ):
         raise RuntimeError(
             "Loaded Rust extension has no source fingerprint stamp and appears stale."
         )
