@@ -22,9 +22,6 @@ since the latest release tag; these features may already be available when insta
 - Preserve the original epoch, missing quote, or quote age in staged planning deferral diagnostics
   when market data recovers before the execution loop handles the failure.
 
-- Record the ordinary handoff route, account receipt freshness and confirmation status, and
-  reconciled create and cancel counts when a ready plan is rejected or aged.
-
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
@@ -84,6 +81,8 @@ since the latest release tag; these features may already be available when insta
 
 - Recheck a ready ordinary plan blocked only by account receipt expiry after the scheduled
   account refresh and protective pass, with the same exact facts and admission requirements.
+  Record the handoff route, account receipt freshness and confirmation status, and reconciled
+  create and cancel counts when a ready plan is rejected or aged.
 
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
