@@ -49,6 +49,9 @@ since the latest release tag; these features may already be available when insta
 
 - Drop the unused Numba dependency from Python 3.12 installations.
 
+- Reduce repeated candle shard parsing in larger live cohorts by retaining more parsed
+  ranges within the existing 8 MiB row budget.
+
 - Keep monitor output valid strict JSON: report unavailable trailing diagnostic prices explicitly
   instead of publishing infinity from uninitialized extrema or arithmetic overflow. Reject other
   non-finite snapshot, event and history writes visibly while preserving the previous valid data

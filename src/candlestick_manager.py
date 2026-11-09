@@ -2873,14 +2873,14 @@ class CandlestickManager:
         return tuple(signature)
 
     def _remember_disk_rows(self, key, signature, rows):
-        """Bound immutable parsed-source reuse to 16 ranges and eight MiB total."""
+        """Bound immutable parsed-source reuse to 256 ranges and eight MiB of rows."""
         if signature is None or rows.nbytes > 8 * 1024 * 1024:
             return
         cached = rows.copy()
         cached.flags.writeable = False
         self._disk_rows_cache[key] = (signature, cached)
         self._disk_rows_cache.move_to_end(key)
-        while (len(self._disk_rows_cache) > 16 or
+        while (len(self._disk_rows_cache) > 256 or
                sum(value[1].nbytes for value in self._disk_rows_cache.values()) > 8 * 1024 * 1024):
             self._disk_rows_cache.popitem(last=False)
 

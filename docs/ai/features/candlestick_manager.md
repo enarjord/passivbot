@@ -570,8 +570,8 @@ See [EMA preparation timings](live_events.md#ema-preparation-timings) for struct
 
 ### Parsed disk-row reuse
 
-A manager may retain immutable parsed source rows for up to 16 exact ranges and
-8 MiB total. Every reuse rechecks the selected source paths and index using file
+A manager may retain immutable parsed source rows for up to 256 exact ranges and
+8 MiB of row arrays. Every reuse rechecks the selected source paths and index using file
 identity, size, modification time and change time, including atomic replacements
 and in-place corrections whose modification time is restored. Failed/empty shard
 reads and changes during parsing are not certified. For a legacy/primary overlay,

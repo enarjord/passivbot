@@ -266,10 +266,14 @@ def test_merge_shortcut_matches_last_write_wins_reference(manager, case):
 
 def test_reuse_bounds_and_restart_reconstruction(manager):
     """Reuse is disposable and bounded even with many requested ranges."""
-    rows = candles(64); persist(manager, rows)
-    for offset in range(24):
+    rows = candles(300); persist(manager, rows)
+    for offset in range(260):
         manager._load_from_disk(SYMBOL, int(rows['ts'][offset]), int(rows['ts'][-1]))
-    assert len(manager._disk_rows_cache) <= 16
+    if not sys.platform.startswith('win'):
+        assert len(manager._disk_rows_cache) == 256
+        assert next(iter(manager._disk_rows_cache))[2] == int(rows['ts'][4])
+    else:
+        assert not manager._disk_rows_cache
     assert sum(v[1].nbytes for v in manager._disk_rows_cache.values()) <= 8*1024*1024
     warm = load(manager, rows).copy()
     manager._disk_rows_cache.clear(); manager._cache.clear()
