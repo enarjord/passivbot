@@ -88,6 +88,11 @@ since the latest release tag; these features may already be available when insta
 - Service an ordinary plan that finishes during account refresh or protection before the
   execution loop waits for its next cycle, with the same receipt and order-admission checks.
 
+- Recheck a ready ordinary plan blocked only by account receipt expiry after the scheduled
+  account refresh and protective pass, with the same exact facts and admission requirements.
+  Record the handoff route, account receipt freshness and confirmation status, and reconciled
+  create and cancel counts when a ready plan is rejected or aged.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.

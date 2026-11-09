@@ -795,6 +795,15 @@ Console health includes fill age/pending confirmation, active held trailing inpu
 
 `cycle.completed` identifies `execution_owner`. For `hsl`, it completes one finite protective pass, not its overlapping background ordinary preparation. `timings_ms` reports authoritative refresh, protection and ordinary submission performed in that pass. Optional `ordinary_prepare_elapsed_ms` measures preparation start through retrieval of its completed task (including polling delay); `ordinary_pending_age_ms` describes an unfinished task separately. Early-return, shutdown-shortened and I/O-failed passes do not emit successful completions; completion describes the finite owner pass, not proof that every trading input or background task is ready. Only finite nonnegative numeric `timings_ms.authoritative` values bypass sensitive-key redaction.
 
+Optional `ordinary_admission` describes the latest rejected ordinary guard in the completed pass.
+`handoff` is `ready_at_entry`, `same_cycle`, or `after_refresh_retry`. A pass that refreshes and
+then accepts an expired ready-at-entry plan retains its initial rejection observation and sets
+`ordinary_executed` as usual. The existing rejection reason is unchanged. The create and cancel
+counts are measured after reconciliation and before connector admission. Each of the three account
+receipt rows reports `age_ms`, a `clock_status` of `fresh`, `stale`, or `invalid`, and whether
+confirmation is pending. Invalid clocks have a null age. These bounded observations use the guard's
+timestamp and expose only counts, clocks, and classifications.
+
 For the HSL owner, `ordinary_executed` records whether an ordinary plan passed account admission
 and returned from the execution path during that completed pass, matching the owner's existing
 return flag. It includes accepted empty or sub-millisecond executions whose integer timing can be

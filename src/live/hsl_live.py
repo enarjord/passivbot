@@ -16,6 +16,7 @@ from live.console_health import observe_ordinary_acceptance, observe_ordinary_ou
 from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
+from live.ordinary_diagnostics import describe_ordinary_admission
 
 
 def policy(bot, side, symbol=None):
@@ -288,6 +289,10 @@ class Owner:
             return "required_fill_facts_changed"
         if self._current_account_unavailable(now):
             return "current_account_inputs_unavailable"
+        return self._account_facts_mismatch_reason(wave)
+
+    def _account_facts_mismatch_reason(self, wave):
+        bot = self.bot
         # Every write requires the current account generation. Changed size/basis
         # requires replanning, including for a panic close.
         if (
@@ -299,6 +304,17 @@ class Owner:
         if wave.balance != bot.get_raw_balance():
             return "raw_balance_changed"
         return None
+
+    def _can_retry_expired_account(self, wave, now):
+        """Check whether an account-unavailable rejection was caused only by expiry."""
+        bot = self.bot
+        ledger = bot._ensure_freshness_ledger()
+        pending = getattr(bot, "_authoritative_pending_confirmations", {})
+        for surface in ("balance", "positions", "open_orders"):
+            state = ledger.surfaces[surface]
+            if not 0 < state.updated_ms <= now or int(pending.get(surface, 0)) > state.epoch:
+                return False
+        return self._account_facts_mismatch_reason(wave) is None
 
     def _defer_ordinary(self, reason, *, phase, missing=()):
         # This describes an existing discard, never an admission decision.
@@ -955,19 +971,15 @@ class Owner:
             self.bot._log_staged_execution_defer(details)
             return None, elapsed_ms
 
-    async def _service_ordinary(self, plan, timings):
+    async def _service_ordinary(self, plan, timings, *, now):
         from time import perf_counter
         from utils import utc_ms
 
         bot = self.bot
         cancels, creates, snapshot, wave = plan
-        if not self._account_matches(wave, int(utc_ms())):
-            self._defer_ordinary(
-                self._account_mismatch_reason(wave, int(utc_ms()))
-                or "current_inputs_changed",
-                phase="after_protection",
-            )
-            return False
+        reason = self._account_mismatch_reason(wave, now)
+        if reason is not None:
+            return reason
         bot._current_planning_snapshot = snapshot
         started = perf_counter()
         await bot.execute_order_plan_to_exchange(cancels, creates)
@@ -978,7 +990,17 @@ class Owner:
             )
             log_process_recovery(bot)
         timings["ordinary_execute"] += int((perf_counter() - started) * 1000)
-        return True
+        return None
+
+    def _describe_ordinary_rejection(self, plan, *, now_ms, handoff, reason):
+        cancels, creates = plan[:2]
+        return run_diagnostic_step(
+            "describe ordinary admission",
+            lambda: describe_ordinary_admission(
+                self.bot, now_ms=now_ms, handoff=handoff, reason=reason,
+                create_count=len(creates), cancel_count=len(cancels),
+            ),
+        )
 
     async def cycle(self):
         """One finite production pass; offline scenario stepping uses this same owner.
@@ -1001,8 +1023,11 @@ class Owner:
 
         started_ms = int(utc_ms())
         completed_cycle = False
+        ordinary_executed = False
+        retry_after_refresh = False
         timings = dict(authoritative=0, protection=0, ordinary_execute=0)
         cycle_id = None
+        ordinary_admission = None
         ordinary_elapsed_ms = None
         completed_receipts = None
         try:
@@ -1039,18 +1064,33 @@ class Owner:
                         ordinary_executed=False,
                         protective_work=protective_work,
                     )
-                if not await self._service_ordinary(plan, timings):
-                    plan = None
+                gate_ms = int(utc_ms())
+                reason = await self._service_ordinary(plan, timings, now=gate_ms)
+                ordinary_executed = reason is None
+                if reason is not None:
+                    retry_after_refresh = (
+                        reason == "current_account_inputs_unavailable"
+                        and self._can_retry_expired_account(plan[3], gate_ms)
+                    )
+                    ordinary_admission = self._describe_ordinary_rejection(
+                        plan, now_ms=gate_ms, handoff="ready_at_entry", reason=reason
+                    )
+                    if not retry_after_refresh:
+                        self._defer_ordinary(reason, phase="after_protection")
             phase_started = perf_counter()
             refreshed = await bot.refresh_protective_authoritative_state(
                 require_balance=True
             )
             timings["authoritative"] = int((perf_counter() - phase_started) * 1000)
             if not refreshed or self._shutdown_requested():
+                if retry_after_refresh and not self._shutdown_requested():
+                    self._defer_ordinary(
+                        "current_account_inputs_unavailable", phase="after_protection"
+                    )
                 return dict(
                     updated=False,
                     ordinary_completed=completed_plan,
-                    ordinary_executed=plan is not None,
+                    ordinary_executed=ordinary_executed,
                     protective_work=protective_work,
                 )
             self.remember_position()
@@ -1064,22 +1104,31 @@ class Owner:
                 await self.protect(deferred_reports=reports) or protective_work
             )
             timings["protection"] += int((perf_counter() - phase_started) * 1000)
-            # The pending task may have finished during refresh or protection.
-            # Give it one handoff before sleeping, using the protection pass
-            # just completed and the same receipt and write admission checks.
-            if (
+            # Recheck a plan blocked only by expiry, or hand off a task that
+            # just finished. Both use the protection pass just completed and
+            # the same receipt and write admission checks.
+            ready_at_tail = (
                 not completed_plan
                 and self._ordinary is not None
                 and self._ordinary.done()
-                and not self._shutdown_requested()
-            ):
+            )
+            if (retry_after_refresh or ready_at_tail) and not self._shutdown_requested():
                 self.poll_inputs()  # Surface completed input failures before any write.
-                completed_plan = True
-                plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                if ready_at_tail:
+                    completed_plan = True
+                    plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                    if plan is not None:
+                        completed_receipts = plan[3].ordinary_receipts
                 if plan is not None:
-                    completed_receipts = plan[3].ordinary_receipts
-                    if not await self._service_ordinary(plan, timings):
-                        plan = None
+                    gate_ms = int(utc_ms())
+                    reason = await self._service_ordinary(plan, timings, now=gate_ms)
+                    ordinary_executed = reason is None
+                    if reason is not None:
+                        handoff = "after_refresh_retry" if retry_after_refresh else "same_cycle"
+                        ordinary_admission = self._describe_ordinary_rejection(
+                            plan, now_ms=gate_ms, handoff=handoff, reason=reason
+                        )
+                        self._defer_ordinary(reason, phase="after_protection")
             self.schedule_account_reporting()
             if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary_started_ms = int(utc_ms())
@@ -1088,7 +1137,7 @@ class Owner:
             return dict(
                 updated=True,
                 ordinary_completed=completed_plan,
-                ordinary_executed=plan is not None,
+                ordinary_executed=ordinary_executed,
                 protective_work=protective_work,
             )
         except InvalidNonce:
@@ -1113,7 +1162,7 @@ class Owner:
                 run_diagnostic_step(
                     "record ordinary cycle progress",
                     lambda: observe_ordinary_outer_cycle(
-                        bot, int(utc_ms()), accepted=plan is not None
+                        bot, int(utc_ms()), accepted=ordinary_executed
                     ),
                 )
                 try:
@@ -1125,7 +1174,8 @@ class Owner:
                         loop_start_ms=started_ms,
                         timings_ms=timings,
                         execution_owner="hsl",
-                        ordinary_executed=plan is not None,
+                        ordinary_executed=ordinary_executed,
+                        ordinary_admission=ordinary_admission,
                         ordinary_pending=self._ordinary is not None
                         and not self._ordinary.done(),
                         ordinary_prepare_elapsed_ms=ordinary_elapsed_ms,

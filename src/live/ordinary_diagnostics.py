@@ -33,6 +33,35 @@ def _reason(value):
     return ",".join(parts[:4]) if parts and all(p in _HSL_REASONS for p in parts) else "unavailable"
 
 
+def describe_ordinary_admission(bot, *, now_ms, handoff, reason, create_count, cancel_count):
+    """Describe the already-read account clocks at a guarded handoff."""
+    ledger = bot._ensure_freshness_ledger()
+    pending = getattr(bot, "_authoritative_pending_confirmations", {})
+    max_age_ms = bot._live_market_snapshot_max_age_ms()
+    receipts = []
+    for surface in ("balance", "positions", "open_orders"):
+        state = ledger.surfaces[surface]
+        age_ms = now_ms - state.updated_ms
+        if state.updated_ms <= 0 or age_ms < 0:
+            age_ms, clock = None, "invalid"
+        else:
+            clock = "stale" if age_ms > max_age_ms else "fresh"
+        receipts.append(dict(
+            surface=surface,
+            age_ms=age_ms,
+            clock_status=clock,
+            confirmation_pending=int(pending.get(surface, 0)) > state.epoch,
+        ))
+    return dict(
+        handoff=handoff,
+        reason=reason,
+        create_count=create_count,
+        cancel_count=cancel_count,
+        max_age_ms=max_age_ms,
+        receipts=receipts,
+    )
+
+
 def _input_receipts(bot, wave, symbols, *, now_ms, account_max_age_ms):
     """Project the immutable inputs consumed by this computation, never live caches."""
     from live.planning_snapshot import PlanningSnapshot

@@ -542,7 +542,7 @@ async def test_fake_ordinary_execution_has_one_finite_extra_budget(kind, tmp_pat
     instance = owner(bot)
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
-    instance._account_matches = lambda *args: True
+    instance._account_mismatch_reason = lambda *args: None
     waves = []
 
     async def protect(**kwargs):
@@ -687,7 +687,6 @@ async def test_fake_protective_write_confirmation_survives_failed_account_refres
     bot.refresh_protective_authoritative_state = refresh
     instance = owner(bot)
     instance.protect = protect
-    instance._account_matches = lambda *args: False
     instance._account_mismatch_reason = lambda *args: "account_facts_changed"
     instance._ordinary = asyncio.create_task(prepared())
     await instance._ordinary
@@ -810,7 +809,7 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
 
     bot.refresh_protective_authoritative_state = refresh
     instance = Owner(bot)
-    instance._account_matches = lambda *args: True
+    instance._account_mismatch_reason = lambda *args: None
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
 

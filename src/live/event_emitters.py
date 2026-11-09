@@ -1037,6 +1037,7 @@ def emit_live_cycle_completed(
     ordinary_executed: bool | None = None,
     ordinary_prepare_elapsed_ms: int | None = None,
     ordinary_pending_age_ms: int | None = None,
+    ordinary_admission: dict[str, Any] | None = None,
 ) -> None:
     if not cycle_id:
         return
@@ -1068,6 +1069,11 @@ def emit_live_cycle_completed(
             **(
                 {"ordinary_pending_age_ms": ordinary_pending_age_ms}
                 if ordinary_pending_age_ms is not None
+                else {}
+            ),
+            **(
+                {"ordinary_admission": ordinary_admission}
+                if ordinary_admission is not None
                 else {}
             ),
             "authoritative_epoch": _freshness_epoch(bot),
