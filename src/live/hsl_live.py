@@ -1069,6 +1069,7 @@ class Owner:
                 and self._ordinary.done()
                 and not self._shutdown_requested()
             ):
+                self.poll_inputs()  # Surface completed input failures before any write.
                 completed_plan = True
                 plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
                 if plan is not None:

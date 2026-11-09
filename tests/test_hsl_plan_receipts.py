@@ -200,3 +200,51 @@ async def test_ordinary_plan_finishing_during_protection_is_serviced_in_same_cyc
             tasks.append(instance._ordinary)
         instance.cancel_inputs()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_propagates_completed_input_failure_before_ordinary_write(
+    monkeypatch,
+):
+    import utils
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
+    bot, instance = planning_bot(empty=False)
+    plan = await instance._ordinary_plan()
+
+    async def prepare():
+        return plan
+
+    async def read():
+        raise RuntimeError("unexpected HSL input failure")
+
+    async def refresh(**kwargs):
+        return True
+
+    async def protect(**kwargs):
+        assert not pending.done()
+        instance._fill_task = asyncio.create_task(read())
+        await asyncio.wait((pending, instance._fill_task))
+        return False
+
+    writes = []
+
+    async def execute(*orders):
+        writes.append(orders)
+
+    pending = instance._ordinary = asyncio.create_task(prepare())
+    instance.remember_position = lambda: None
+    instance.schedule_history = lambda: None
+    instance.schedule_sources = lambda: None
+    instance.schedule_account_reporting = lambda: None
+    instance.protect = protect
+    bot.refresh_protective_authoritative_state = refresh
+    bot.execute_order_plan_to_exchange = execute
+    try:
+        with pytest.raises(RuntimeError, match="unexpected HSL input failure"):
+            await instance.cycle()
+        assert not writes
+    finally:
+        tasks = (pending, instance._ordinary, instance._fill_task)
+        instance.cancel_inputs()
+        await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
