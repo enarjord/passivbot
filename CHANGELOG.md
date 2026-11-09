@@ -6,8 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Reduce live HSL CPU use when capturing long histories of observed risk budgets.
-
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
@@ -52,6 +50,8 @@ since the latest release tag; these features may already be available when insta
   instead of publishing infinity from uninitialized extrema or arithmetic overflow. Reject other
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
   and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
+
+- Reduce live HSL CPU use when capturing long histories of observed risk budgets.
 
 - Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
   a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
