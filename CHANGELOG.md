@@ -8,6 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
+- Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
+
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
   Require a verified source schema, an explicit unified HSL portfolio policy, and
   acknowledgment before removing a permanent-stop policy. Require materialization or

@@ -8601,10 +8601,13 @@ class CandlestickManager:
             nonlocal gap_index, gap_metadata
             # Keep the existing shared-index mtime check. A sibling
             # writer or local persistence replaces the metadata list.
-            metadata = self._ensure_symbol_index(symbol)["meta"]["known_gaps"]
+            index = self._ensure_symbol_index(symbol)
+            metadata = index["meta"]["known_gaps"]
             if gap_index is None or metadata is not gap_metadata:
                 gap_index = _KnownGapIndex(
-                    self._get_known_gaps_in_range(symbol, start_ts, end_ts)
+                    self._normalize_gap_entries(
+                        self._gap_records_in_range(index, start_ts, end_ts)
+                    )
                 )
                 gap_metadata = metadata
             return gap_index

@@ -616,6 +616,9 @@ Full metadata reads and index serialization still scale with total history.
 
 Deferred-prefix and range-splitting queries, candle read-cohort indexes, and health
 coverage masks select overlapping factual records before enhancing retry metadata.
+Building a read-cohort gap index selects records from the same freshly checked shard
+index used to identify the metadata. The existing checks after asynchronous work still
+observe external index replacement and missing canonical shards.
 Nonoverlapping row ingestion skips full gap normalization without rewriting the
 index; an actual overlap retains the full-history rewrite and proof/epoch policy.
 Selections retain complete outage bounds and the existing owned-record revision,
