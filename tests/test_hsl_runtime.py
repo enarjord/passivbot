@@ -180,6 +180,40 @@ def test_current_quote_failure_is_scoped_before_native_evaluation():
     assert unavailable[0].scope.mode == "portfolio"
 
 
+def test_live_capture_prunes_replay_owners_once_for_the_batch(monkeypatch):
+    value = bot()
+    other = "OTHER/USDT:USDT"
+    value.c_mults[other], value.qty_steps[other] = 1.0, 0.1
+    marks = quotes()
+    marks[other] = replace(marks[SYMBOL], symbol=other)
+    kwargs = dict(
+        symbols={"long": [SYMBOL, other], "short": []},
+        now_ms=NOW,
+        utc_now_ms=NOW,
+        max_current_age_ms=10_000,
+    )
+    first, unavailable = capture(value, marks, {}, **kwargs)
+    assert not unavailable
+    assert {request.scope.symbol for request in first} == {SYMBOL, other}
+
+    owner = value._hsl_factual_replays
+    original_prune = owner.prune
+    pruned = []
+
+    def prune(now):
+        pruned.append(now)
+        return original_prune(now)
+
+    monkeypatch.setattr(owner, "prune", prune)
+    current, unavailable = capture(value, marks, {}, **kwargs)
+    assert not unavailable
+    assert pruned == [NOW]
+    for before, after in zip(first, current, strict=True):
+        assert after.metadata == before.metadata
+        assert after.replay is before.replay
+        assert after.replay.last_seen_ms == NOW
+
+
 @pytest.mark.parametrize("surface", ["balance", "positions"])
 def test_stale_essentials_do_not_become_healthy_or_saved_decisions(surface):
     value = bot()
