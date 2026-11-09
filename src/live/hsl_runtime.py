@@ -5,7 +5,7 @@ run without an await; async acquisition belongs before capture, execution after 
 Public runtime activation remains separately gated while orchestration is integrated.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from collections import Counter
 import json
 import math
@@ -170,6 +170,30 @@ class Scope:
     symbol: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _SubmittedFacts:
+    metadata: str
+    start_ms: int
+    now_ms: int
+    slots: int
+    exposed: bool
+    drawdown_threshold_fraction: float
+    cooldown_ms: int
+
+    @classmethod
+    def from_payload(cls, metadata, payload):
+        snapshot = payload["snapshot"]
+        return cls(
+            metadata,
+            snapshot["start"],
+            snapshot["now"],
+            payload["slots"],
+            any(pair["position"]["size"] != 0 for pair in snapshot["pairs"]),
+            payload["drawdown_threshold_fraction"],
+            payload["cooldown_ms"],
+        )
+
+
 @dataclass(frozen=True)
 class Request:
     scope: Scope
@@ -179,6 +203,7 @@ class Request:
     price_grids: tuple[object, ...]
     mark_observed_ms: tuple[int, ...]
     replay: object = None
+    _submitted: _SubmittedFacts | None = field(default=None, repr=False, compare=False)
 
     @property
     def payload(self):
@@ -726,6 +751,7 @@ def capture(
         for key in keys:
             reasons.update(pair_reasons.get(key, ()))
         metadata = json.dumps(payload, allow_nan=False)
+        submitted = _SubmittedFacts.from_payload(metadata, payload)
         grids = tuple(projected[key[0]][0] for key in keys if key in pairs)
         if replays is None:
             replays = FactualReplays()
@@ -747,6 +773,7 @@ def capture(
                     if pair["position"]["size"] != 0
                 ),
                 replay,
+                submitted,
             )
         )
     return tuple(requests), tuple(unavailable)
@@ -763,19 +790,25 @@ def evaluate(requests):
 def _evaluate(requests):
     decisions = []
     for request in requests:
-        submitted = json.loads(request.metadata)
+        submitted = request._submitted
+        # Standalone requests and requests carrying replaced metadata still
+        # validate against the exact JSON submitted to Rust.
+        if submitted is None or submitted.metadata is not request.metadata:
+            submitted = _SubmittedFacts.from_payload(
+                request.metadata, json.loads(request.metadata)
+            )
         if request.replay is None:
             output = json.loads(
                 pbr.hsl_v9_evaluate_grids(request.metadata, request.price_grids)
             )
         else:
             output = request.replay.evaluate_decoded_grids(
-                request.metadata, request.price_grids, now=submitted["snapshot"]["now"]
+                request.metadata, request.price_grids, now=submitted.now_ms
             )
         # Preserve the full-envelope non-finite check, including inactive and
         # unavailable results, and the existing canonical Decision payload.
         payload = json.dumps(output, allow_nan=False)
-        continuity_status_decoded(output, now=submitted["snapshot"]["now"])
+        continuity_status_decoded(output, now=submitted.now_ms)
         decision = output["decision"]
         unavailable = output["unavailable_reason"]
         if unavailable is not None:
@@ -798,18 +831,16 @@ def _evaluate(requests):
                 raise InvalidHslOutput("incoherent HSL unavailable envelope")
             decisions.append(Unavailable(request.scope, unavailable))
             continue
-        inactive = request.scope.mode == "coin" and submitted["slots"] == 0
+        inactive = request.scope.mode == "coin" and submitted.slots == 0
         if (decision is None) != inactive:
             raise InvalidHslOutput("unexpected HSL scope activity")
         if decision is not None:
-            snapshot = submitted["snapshot"]
-            exposed = any(pair["position"]["size"] != 0 for pair in snapshot["pairs"])
             risk = output["risk"]
-            threshold = struct.unpack("f", struct.pack("f", submitted["drawdown_threshold_fraction"]))[0]
+            threshold = struct.unpack("f", struct.pack("f", submitted.drawdown_threshold_fraction))[0]
             deadline = risk["cooldown_until"]
             if (
-                type(risk["timestamp_ms"]) is not int or risk["timestamp_ms"] != snapshot["now"]
-                or type(risk["exposed"]) is not bool or risk["exposed"] != exposed
+                type(risk["timestamp_ms"]) is not int or risk["timestamp_ms"] != submitted.now_ms
+                or type(risk["exposed"]) is not bool or risk["exposed"] != submitted.exposed
                 or type(risk["red"]) is not bool
                 or type(risk["nonpositive_equity"]) is not bool
                 or any(not _finite(risk[key]) or risk[key] < 0 for key in ("signal_raw_fraction", "signal_ema_fraction", "drawdown_memory_usd"))
@@ -817,14 +848,14 @@ def _evaluate(requests):
                 or risk["action"] != decision["action"]
                 or risk["red"] != (risk["nonpositive_equity"] or min(risk["signal_raw_fraction"], risk["signal_ema_fraction"]) > threshold)
                 or (deadline is not None and (type(deadline) is not int or deadline < 0))
-                or (exposed and decision["action"] != ("panic" if risk["red"] else "normal"))
-                or (not exposed and decision["action"] != ("halted" if deadline is not None and snapshot["now"] < deadline else "normal"))
+                or (submitted.exposed and decision["action"] != ("panic" if risk["red"] else "normal"))
+                or (not submitted.exposed and decision["action"] != ("halted" if deadline is not None and submitted.now_ms < deadline else "normal"))
             ):
                 raise InvalidHslOutput("incoherent v9 risk decision envelope")
             red, flat = decision["red_at"], decision["flat_at"]
             if (
                 type(decision["timestamp"]) is not int
-                or decision["timestamp"] != snapshot["now"]
+                or decision["timestamp"] != submitted.now_ms
                 or decision["action"] not in {"normal", "panic", "halted"}
                 or any(
                     not _finite(decision[key]) or decision[key] < 0
@@ -835,9 +866,9 @@ def _evaluate(requests):
                     and (
                         type(t) is not int
                         or not (
-                            snapshot["start"] if request.replay is None
+                            submitted.start_ms if request.replay is None
                             else request.replay.anchor.origin_ms
-                        ) <= t <= snapshot["now"]
+                        ) <= t <= submitted.now_ms
                     )
                     for t in (red, flat)
                 )
@@ -849,16 +880,16 @@ def _evaluate(requests):
                     and (red is not None or flat is not None)
                 )
                 or (decision["action"] != "normal" and red is None)
-                or (decision["action"] == "panic" and (not exposed or flat is not None))
-                or (decision["action"] == "halted" and exposed)
+                or (decision["action"] == "panic" and (not submitted.exposed or flat is not None))
+                or (decision["action"] == "halted" and submitted.exposed)
                 or (flat is not None and (red is None or flat < red))
-                or (decision["action"] == "halted" and deadline != flat + submitted["cooldown_ms"])
+                or (decision["action"] == "halted" and deadline != flat + submitted.cooldown_ms)
             ):
                 raise InvalidHslOutput("invalid HSL decision envelope")
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))
         decisions.append(
             Decision(
-                submitted["drawdown_threshold_fraction"],
+                submitted.drawdown_threshold_fraction,
                 request.scope,
                 None if decision is None else decision["action"],
                 request.execution_type,

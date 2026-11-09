@@ -70,6 +70,9 @@ since the latest release tag; these features may already be available when insta
 - Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per
   capture batch.
 
+- Reuse the exact submitted HSL facts when validating native results to avoid decoding retained
+  history a second time.
+
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
   portfolios, and saved input fingerprints when scenarios add exchanges or use
