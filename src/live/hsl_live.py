@@ -16,6 +16,7 @@ from live.console_health import observe_ordinary_acceptance, observe_ordinary_ou
 from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
+from live.ordinary_diagnostics import describe_ordinary_admission
 
 
 def policy(bot, side, symbol=None):
@@ -987,6 +988,16 @@ class Owner:
         timings["ordinary_execute"] += int((perf_counter() - started) * 1000)
         return None
 
+    def _describe_ordinary_rejection(self, plan, *, now_ms, handoff, reason):
+        cancels, creates = plan[:2]
+        return run_diagnostic_step(
+            "describe ordinary admission",
+            lambda: describe_ordinary_admission(
+                self.bot, now_ms=now_ms, handoff=handoff, reason=reason,
+                create_count=len(creates), cancel_count=len(cancels),
+            ),
+        )
+
     async def cycle(self):
         """One finite production pass; offline scenario stepping uses this same owner.
 
@@ -1012,6 +1023,7 @@ class Owner:
         retry_after_refresh = False
         timings = dict(authoritative=0, protection=0, ordinary_execute=0)
         cycle_id = None
+        ordinary_admission = None
         ordinary_elapsed_ms = None
         completed_receipts = None
         try:
@@ -1055,6 +1067,9 @@ class Owner:
                     retry_after_refresh = (
                         reason == "current_account_inputs_unavailable"
                         and self._can_retry_expired_account(plan[3], gate_ms)
+                    )
+                    ordinary_admission = self._describe_ordinary_rejection(
+                        plan, now_ms=gate_ms, handoff="ready_at_entry", reason=reason
                     )
                     if not retry_after_refresh:
                         self._defer_ordinary(reason, phase="after_protection")
@@ -1101,9 +1116,14 @@ class Owner:
                     if plan is not None:
                         completed_receipts = plan[3].ordinary_receipts
                 if plan is not None:
-                    reason = await self._service_ordinary(plan, timings, now=int(utc_ms()))
+                    gate_ms = int(utc_ms())
+                    reason = await self._service_ordinary(plan, timings, now=gate_ms)
                     ordinary_executed = reason is None
                     if reason is not None:
+                        handoff = "after_refresh_retry" if retry_after_refresh else "same_cycle"
+                        ordinary_admission = self._describe_ordinary_rejection(
+                            plan, now_ms=gate_ms, handoff=handoff, reason=reason
+                        )
                         self._defer_ordinary(reason, phase="after_protection")
             self.schedule_account_reporting()
             if self._ordinary is None and not self._shutdown_requested():
@@ -1151,6 +1171,7 @@ class Owner:
                         timings_ms=timings,
                         execution_owner="hsl",
                         ordinary_executed=ordinary_executed,
+                        ordinary_admission=ordinary_admission,
                         ordinary_pending=self._ordinary is not None
                         and not self._ordinary.done(),
                         ordinary_prepare_elapsed_ms=ordinary_elapsed_ms,
