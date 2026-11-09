@@ -153,38 +153,66 @@ impl Recorder {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ScopeBudget {
+    mode: crate::hsl_snapshot::Mode,
+    balance: f64,
+    slots: u64,
+    scale_budget_with_excess_allowance: bool,
+    exposure_budget: Option<ExposureBudget>,
+}
+
+impl From<&Input> for ScopeBudget {
+    fn from(input: &Input) -> Self {
+        Self {
+            mode: input.snapshot.mode,
+            balance: input.snapshot.balance,
+            slots: input.slots,
+            scale_budget_with_excess_allowance: input.scale_budget_with_excess_allowance,
+            exposure_budget: input.exposure_budget,
+        }
+    }
+}
+
+impl ScopeBudget {
+    fn resolve(
+        &self,
+        fact: Option<&BudgetFact>,
+        reasons: &mut BTreeSet<String>,
+    ) -> Result<f64, String> {
+        if fact.is_none_or(|fact| fact.estimated) {
+            reasons.insert("historical_budget_estimate".into());
+        }
+        let (balance, slots, scale, exposure) = match fact {
+            Some(fact) => (
+                fact.balance,
+                fact.slots,
+                fact.scale_budget_with_excess_allowance,
+                fact.exposure_budget.as_ref(),
+            ),
+            None => (
+                self.balance,
+                self.slots,
+                self.scale_budget_with_excess_allowance,
+                self.exposure_budget.as_ref(),
+            ),
+        };
+        budget(balance, &self.mode, slots, scale, exposure)
+    }
+}
+
 fn scope_budget(
     input: &Input,
     timestamp: i64,
     order: i64,
     reasons: &mut BTreeSet<String>,
 ) -> Result<f64, String> {
-    // Continuity validates this ordering before replay and reconstructs retained
-    // observations from the ordered ledger. Keep fill phases at the same clock.
+    // Continuity validates this ordering before replay. Keep fill phases at
+    // the same clock even when selecting the retained predecessor.
     let end = input
         .budget_observations
         .partition_point(|f| (f.timestamp, f.order) <= (timestamp, order));
-    if let Some(fact) = input.budget_observations[..end].last() {
-        if fact.estimated {
-            reasons.insert("historical_budget_estimate".into());
-        }
-        budget(
-            fact.balance,
-            &input.snapshot.mode,
-            fact.slots,
-            fact.scale_budget_with_excess_allowance,
-            fact.exposure_budget.as_ref(),
-        )
-    } else {
-        reasons.insert("historical_budget_estimate".into());
-        budget(
-            input.snapshot.balance,
-            &input.snapshot.mode,
-            input.slots,
-            input.scale_budget_with_excess_allowance,
-            input.exposure_budget.as_ref(),
-        )
-    }
+    ScopeBudget::from(input).resolve(input.budget_observations[..end].last(), reasons)
 }
 
 pub fn evaluate(input: Input) -> Result<Output, String> {
