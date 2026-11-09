@@ -83,6 +83,10 @@ since the latest release tag; these features may already be available when insta
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.
 
+- Reduce native HSL replay CPU on dense retained fill and account histories by indexing execution
+  clocks for causal replay. The changed native fingerprint requires reevaluation of saved optimizer
+  fitness.
+
 - Report asynchronous background failures separately from the execution restart budget,
   redact callback diagnostics, and label health cycle timestamps as observation ages.
   Preserve immediate mode recovery messages with bounded grouped transitions and HSL

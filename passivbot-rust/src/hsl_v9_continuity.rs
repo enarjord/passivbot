@@ -1072,7 +1072,6 @@ fn event_tape_to(
             }
             cohorts.entry(f.timestamp).or_default().push((k.clone(), i));
         }
-        fills.insert(k.clone(), canonical);
         for (&t, _) in facts.prices.range((
             std::ops::Bound::Excluded(ledger.anchor_now),
             std::ops::Bound::Included(ledger.last_now),
@@ -1127,25 +1126,39 @@ fn event_tape_to(
         // inventory and fill crossings in causal source order, retaining the
         // original capture clock only as same-source receipt provenance.
         endpoints.sort_by_key(|(source, captured, _)| (*source, *captured));
+        // Crossing evidence comes from the raw retained tape, even when an
+        // execution was excluded from canonical replay by a conflicting revision.
+        let mut raw_execution_times = Vec::new();
+        if !endpoints.is_empty() {
+            raw_execution_times.extend(facts.fills.iter().filter_map(|fill| {
+                (fill.timestamp > previous.2 && fill.delta.is_some_and(|delta| delta != 0.0))
+                    .then_some(fill.timestamp)
+            }));
+            raw_execution_times.sort_unstable();
+        }
+        let mut raw_execution_times = raw_execution_times.into_iter().peekable();
         let mut observations = vec![];
         for (source, _captured, fact) in endpoints {
             let changed = fact.position.size != previous.0 || fact.position.basis != previous.1;
-            let after_execution = facts.fills.iter().any(|f| {
-                f.delta.is_some_and(|d| d != 0.0)
-                    && previous.2 < f.timestamp
-                    && f.timestamp <= source
-            });
+            while raw_execution_times
+                .peek()
+                .is_some_and(|&at| at <= previous.2)
+            {
+                raw_execution_times.next();
+            }
+            let after_execution = raw_execution_times.peek().is_some_and(|&at| at <= source);
             if changed || after_execution {
                 let at = source.max(ledger.anchor_now);
-                let equal_execution = fills[k].iter().any(|f| f.timestamp == at);
-                let phase = if equal_execution && source == at {
+                let phase = if source == at
+                    && canonical
+                        .binary_search_by_key(&at, |fill| fill.timestamp)
+                        .is_ok()
+                {
+                    reasons.insert("ambiguous_position_fill_phase".into());
                     3
                 } else {
                     1
                 };
-                if equal_execution && source == at {
-                    reasons.insert("ambiguous_position_fill_phase".into());
-                }
                 // Keep source ordering even where several older source clocks
                 // are clamped onto the immutable initializer boundary. Indices
                 // retain capture order for actual equal-source observations.
@@ -1159,6 +1172,22 @@ fn event_tape_to(
             );
         }
         account.insert(k.clone(), observations);
+        fills.insert(k.clone(), canonical);
+    }
+    if let Some(k) = positions.keys().next() {
+        for fact in ledger
+            .budgets
+            .values()
+            .filter(|f| !f.estimated && f.timestamp > ledger.anchor_now)
+        {
+            if fact.observed_at.is_some()
+                && fact.order == i64::MAX
+                && cohorts.contains_key(&fact.timestamp)
+            {
+                reasons.insert("ambiguous_budget_fill_phase".into());
+            }
+            timeline.push((fact.timestamp, 4, 0, k.clone(), 0));
+        }
     }
     for (t, cohort) in cohorts {
         let one_pair = cohort.iter().all(|(k, _)| k == &cohort[0].0);
@@ -1177,24 +1206,6 @@ fn event_tape_to(
                 0
             };
             timeline.push((t, 2, sequence, k, i));
-        }
-    }
-    if let Some(k) = positions.keys().next() {
-        for fact in ledger
-            .budgets
-            .values()
-            .filter(|f| !f.estimated && f.timestamp > ledger.anchor_now)
-        {
-            if fact.observed_at.is_some()
-                && fact.order == i64::MAX
-                && fills
-                    .values()
-                    .flatten()
-                    .any(|f| f.timestamp == fact.timestamp)
-            {
-                reasons.insert("ambiguous_budget_fill_phase".into());
-            }
-            timeline.push((fact.timestamp, 4, 0, k.clone(), 0));
         }
     }
     timeline.sort();
@@ -3185,6 +3196,44 @@ mod tests {
         let output = run(&mut replay, changed);
         assert!(output.reasons.contains("ambiguous_position_fill_phase"));
         assert!(output.reasons.contains("ambiguous_budget_fill_phase"));
+    }
+
+    #[test]
+    fn raw_conflict_crosses_account_endpoint_without_canonical_budget_tie() {
+        let anchor = facts(1, 0, 100.0);
+        let input: Input = serde_json::from_value(anchor.clone()).unwrap();
+        let mut ledger = Ledger::new(anchor.clone(), &input);
+        let mut reasons = BTreeSet::new();
+        ledger.merge(&anchor, &input, &mut reasons).unwrap();
+
+        let earlier = facts(50, 0, 100.0);
+        let input: Input = serde_json::from_value(earlier.clone()).unwrap();
+        ledger.merge(&earlier, &input, &mut reasons).unwrap();
+
+        let mut later = facts(201, 0, 100.0);
+        later["snapshot"]["pairs"][0]["position_at"] = json!(200);
+        later["snapshot"]["pairs"][0]["fills"] = json!([
+            execution("conflict", 150, Some(1.0), 0.0, 2),
+            execution("at_anchor", 1, Some(1.0), 0.0, 0),
+            execution("conflict", 150, Some(-1.0), 0.0, 2),
+            execution("zero", 50, Some(0.0), 0.0, 1),
+        ]);
+        later["budget_observations"].as_array_mut().unwrap().push(json!({
+            "timestamp":150,"observed_at":151,"order":i64::MAX,"balance":1000.0,
+            "slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false
+        }));
+        let input: Input = serde_json::from_value(later.clone()).unwrap();
+        ledger.merge(&later, &input, &mut reasons).unwrap();
+
+        let (steps, positions) = event_tape(&ledger, &mut reasons).unwrap();
+        assert_eq!(positions.values().next().unwrap().size, 1.0);
+        // The anchor fill and zero-delta fill do not cross the first source
+        // endpoint. A conflicted nonzero raw fill crosses the later one.
+        assert!(steps.iter().any(|step| step.timestamp == 200));
+        assert!(reasons.contains("conflicting_identity"));
+        assert!(reasons.contains("current_quantity_reconciliation"));
+        assert!(!reasons.contains("ambiguous_position_fill_phase"));
+        assert!(!reasons.contains("ambiguous_budget_fill_phase"));
     }
 
     #[test]
