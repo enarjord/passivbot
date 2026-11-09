@@ -613,6 +613,8 @@ synthetic candles when determining real coverage. A window without unknown gaps
 skips copying/sorting the retained candle history. This optimization neither
 deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
 Full metadata reads and index serialization still scale with total history.
+Completed-candle health computes aggregate known-gap counts from current metadata and retry
+clocks. The detailed gap summary includes per-gap rows.
 
 Deferred-prefix and range-splitting queries, candle read-cohort indexes, and health
 coverage masks select overlapping factual records before enhancing retry metadata.
