@@ -17789,6 +17789,8 @@ class Passivbot:
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
+        if hsl_enabled:
+            await hsl.wait_for_ordinary_fill_refresh()
         market_epoch = self._ensure_freshness_ledger().epoch
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         if await hsl.refresh_ordinary_account(

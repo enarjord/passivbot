@@ -96,6 +96,9 @@ Freeze each candle acquisition's requested symbol cohort when scheduling it. Lat
 position or fill refreshes cannot remove a source from that in-flight request.
 Ordinary HSL acquisition completes remote candle/EMA, quote and confirming account reads before
 freezing the immutable HSL candle-source and fill receipts actually consumed by its decision.
+After EMA preparation and before quotes, ordinary HSL preparation can wait up to two seconds for
+one fill refresh already owned by the live owner. Protection and the refresh proceed independently.
+Timeout leaves the refresh running and ordinary readiness uses the actual current facts.
 Early trailing work only preloads the factual candle cohort under one shared bounded remote
 budget; it cannot confirm a fill transition or mutate derived trailing readiness. Complete local
 candle acquisition before freezing the consumed receipts. Derive the complete trailing inputs and
