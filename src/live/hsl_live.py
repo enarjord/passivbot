@@ -659,12 +659,21 @@ class Owner:
         """Give the owned fill refresh a bounded head start before ordinary capture."""
         import asyncio
 
+        if self._refresh_lock.locked():
+            # The owner schedules its next fill task after this account read,
+            # before yielding to waiters. Select the task after that handoff.
+            async with self._refresh_lock:
+                pass
+        if self._shutdown_requested():
+            raise OrdinaryPlanDeferred("shutdown")
         task = getattr(self, "_fill_task", None)
         if task is None:
             return
         if not task.done():
             # Neither a timeout nor ordinary cancellation cancels the owner's read.
             await asyncio.wait((task,), timeout=2.0)
+            if self._shutdown_requested():
+                raise OrdinaryPlanDeferred("shutdown")
         if task.done():
             task.result()
 

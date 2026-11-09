@@ -96,8 +96,8 @@ since the latest release tag; these features may already be available when insta
 - Recheck a ready ordinary plan blocked only by account receipt expiry after the scheduled
   account refresh and protective pass, with the same exact facts and admission requirements.
 
-- Give an already-running HSL fill refresh a bounded opportunity to finish before ordinary
-  preparation acquires quotes and captures its receipts.
+- Join an in-flight account refresh before choosing which HSL fill task ordinary preparation
+  can wait for. Give that task a bounded opportunity to finish before acquiring quotes.
   Record the handoff route, account receipt freshness and confirmation status, and reconciled
   create and cancel counts when a ready plan is rejected or aged.
 
