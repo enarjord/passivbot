@@ -938,6 +938,44 @@ class Owner:
                 task.cancel()
                 task.add_done_callback(_retrieve_on_shutdown)
 
+    def _collect_completed_ordinary(self, now_ms):
+        task, self._ordinary = self._ordinary, None
+        started_ms, self._ordinary_started_ms = self._ordinary_started_ms, None
+        elapsed_ms = None if started_ms is None else max(0, now_ms - started_ms)
+        try:
+            return task.result(), elapsed_ms
+        except RuntimeError as exc:
+            handled, details = self.bot._handle_staged_execution_precondition_error(exc)
+            if not handled:
+                raise
+            self.bot._log_staged_execution_defer(details)
+            return None, elapsed_ms
+
+    async def _service_ordinary(self, plan, timings):
+        from time import perf_counter
+        from utils import utc_ms
+
+        bot = self.bot
+        cancels, creates, snapshot, wave = plan
+        if not self._account_matches(wave, int(utc_ms())):
+            self._defer_ordinary(
+                self._account_mismatch_reason(wave, int(utc_ms()))
+                or "current_inputs_changed",
+                phase="after_protection",
+            )
+            return False
+        bot._current_planning_snapshot = snapshot
+        started = perf_counter()
+        await bot.execute_order_plan_to_exchange(cancels, creates)
+        if not self._shutdown_requested():
+            run_diagnostic_step(
+                "record ordinary acceptance",
+                lambda: observe_ordinary_acceptance(bot, int(utc_ms())),
+            )
+            log_process_recovery(bot)
+        timings["ordinary_execute"] += int((perf_counter() - started) * 1000)
+        return True
+
     async def cycle(self):
         """One finite production pass; offline scenario stepping uses this same owner.
 
@@ -973,23 +1011,9 @@ class Owner:
             completed_plan = self._ordinary is not None and self._ordinary.done()
             # Retrieve completed failures before any fallible account refresh.
             if completed_plan:
-                if self._ordinary_started_ms is not None:
-                    ordinary_elapsed_ms = max(
-                        0, int(utc_ms()) - self._ordinary_started_ms
-                    )
-                self._ordinary_started_ms = None
-                completed, self._ordinary = self._ordinary, None
-                try:
-                    plan = completed.result()
-                    if plan is not None:
-                        completed_receipts = plan[3].ordinary_receipts
-                except RuntimeError as exc:
-                    handled, details = bot._handle_staged_execution_precondition_error(
-                        exc
-                    )
-                    if not handled:
-                        raise
-                    bot._log_staged_execution_defer(details)
+                plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                if plan is not None:
+                    completed_receipts = plan[3].ordinary_receipts
             protective_work = False
             if self._shutdown_requested():
                 return dict(
@@ -1011,26 +1035,7 @@ class Owner:
                         ordinary_executed=False,
                         protective_work=protective_work,
                     )
-                cancels, creates, snapshot, wave = plan
-                if self._account_matches(wave, int(utc_ms())):
-                    bot._current_planning_snapshot = snapshot
-                    phase_started = perf_counter()
-                    await bot.execute_order_plan_to_exchange(cancels, creates)
-                    if not self._shutdown_requested():
-                        run_diagnostic_step(
-                            "record ordinary acceptance",
-                            lambda: observe_ordinary_acceptance(bot, int(utc_ms())),
-                        )
-                        log_process_recovery(bot)
-                    timings["ordinary_execute"] += int(
-                        (perf_counter() - phase_started) * 1000
-                    )
-                else:
-                    self._defer_ordinary(
-                        self._account_mismatch_reason(wave, int(utc_ms()))
-                        or "current_inputs_changed",
-                        phase="after_protection",
-                    )
+                if not await self._service_ordinary(plan, timings):
                     plan = None
             phase_started = perf_counter()
             refreshed = await bot.refresh_protective_authoritative_state(
@@ -1055,6 +1060,22 @@ class Owner:
                 await self.protect(deferred_reports=reports) or protective_work
             )
             timings["protection"] += int((perf_counter() - phase_started) * 1000)
+            # The pending task may have finished during refresh or protection.
+            # Give it one handoff before sleeping, using the protection pass
+            # just completed and the same receipt and write admission checks.
+            if (
+                not completed_plan
+                and self._ordinary is not None
+                and self._ordinary.done()
+                and not self._shutdown_requested()
+            ):
+                self.poll_inputs()  # Surface completed input failures before any write.
+                completed_plan = True
+                plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                if plan is not None:
+                    completed_receipts = plan[3].ordinary_receipts
+                    if not await self._service_ordinary(plan, timings):
+                        plan = None
             self.schedule_account_reporting()
             if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary_started_ms = int(utc_ms())

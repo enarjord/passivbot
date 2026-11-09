@@ -195,8 +195,14 @@ async def test_existing_unchanged_refresh_cohort_is_reused_without_extra_fetch(m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["ema", "ticker"])
-async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(tmp_path, monkeypatch, stage):
+@pytest.mark.parametrize(
+    ("stage", "finishes_during_protection"),
+    [("ema", False), ("ticker", False), ("ema", True)],
+    ids=["ema-before-cycle", "ticker-before-cycle", "ema-during-protection"],
+)
+async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(
+    tmp_path, monkeypatch, stage, finishes_during_protection
+):
     import argparse
     import json
     import hjson
@@ -250,26 +256,48 @@ async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(tmp
 
         monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle" if stage=="ema" else "_get_orchestrator_market_snapshots", slow)
         task = asyncio.create_task(instance._ordinary_plan())
+        instance._ordinary = task
         await asyncio.wait_for(entered.wait(), 5.0)
         clock[0] += 15_000
-        release.set()
-        plan = await asyncio.wait_for(task, 5.0)
-        assert plan is not None
-        cancels, creates, snapshot, wave = plan
-        symbol = "BTC/USDT:USDT"
-        assert wave.permission(symbol, "long")[0] == "normal"
-        assert bot.PB_modes["long"][symbol] == "normal"
-        assert creates, "real Rust planning should produce ordinary orders for the held position"
-        assert instance._account_matches(wave, clock[0])
 
-        async def ready():
-            return plan
+        async def finish_preparation():
+            release.set()
+            plan = await asyncio.wait_for(task, 5.0)
+            assert plan is not None
+            _, creates, _, wave = plan
+            symbol = "BTC/USDT:USDT"
+            assert wave.permission(symbol, "long")[0] == "normal"
+            assert bot.PB_modes["long"][symbol] == "normal"
+            assert creates, "real Rust planning should produce ordinary orders for the held position"
+            assert instance._account_matches(wave, clock[0])
 
-        instance._ordinary = asyncio.create_task(ready())
-        await instance._ordinary
-        result = await instance.cycle()
+        def create_count():
+            return sum(call["method"] == "create_order" for call in bot.cca.export_request_log())
+
+        creates_before = create_count()
+        if finishes_during_protection:
+            protect = instance.protect
+
+            async def protect_and_finish(**kwargs):
+                assert not task.done()
+                protective_work = await protect(**kwargs)
+                assert create_count() == creates_before
+                # Let the real background refresh publish before preparation
+                # consumes the cohort it will need at the connector boundary.
+                for refresh in (instance._fill_task, instance._source_task):
+                    if refresh is not None:
+                        await asyncio.wait_for(refresh, 5.0)
+                await finish_preparation()
+                return protective_work
+
+            with monkeypatch.context() as patch:
+                patch.setattr(instance, "protect", protect_and_finish)
+                result = await instance.cycle()
+        else:
+            await finish_preparation()
+            result = await instance.cycle()
         assert result["ordinary_completed"] and result["ordinary_executed"]
-        assert any(call["method"]=="create_order" for call in bot.cca.export_request_log())
+        assert create_count() > creates_before
         completed.append(True)
         return {"ordinary_recovered": True}
 

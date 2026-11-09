@@ -110,6 +110,9 @@ no provisional bundle grants permission. A receipt renewed before this consumpti
 invalidate unconsumed work. A replacement after consumption invalidates even empty plans,
 reconciliation, completed-plan acceptance after protection, and connector admission, even when
 its payload is equal. Quotes refreshed by preparation do not invalidate these source receipts.
+The serialized owner can collect one pending ordinary task that finished during the cycle's
+account refresh or protective work after that protection pass. It keeps the normal inter-cycle
+wait and the same receipt and connector checks, without waiting for unfinished preparation.
 HSL-disabled ordinary preparation keeps its existing initial-receipt and readiness checks.
 The active plan strongly owns consumed receipts through execution. Per-order wave history retains
 only weak references, and discarded or completed plans explicitly retire their receipt identities;
