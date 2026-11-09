@@ -73,3 +73,41 @@ def test_first_policy_observation_does_not_claim_an_earlier_configuration():
     observed = capture(BudgetObservations(), now=60_000, balance_at=59_999)
     assert observed[0]["estimated"]
     assert observed[-1]["timestamp"] == observed[-1]["observed_at"] == 60_000
+
+
+def test_late_balance_correction_inserts_replaces_and_prunes_in_causal_order():
+    history = BudgetObservations()
+    capture(history, now=1, balance=1000)
+    capture(history, now=30, balance_at=29, balance=1500)
+
+    late = capture(history, now=60, balance_at=20, balance=1200, slots=2)
+    assert [(fact["timestamp"], fact["balance"], fact["slots"]) for fact in late] == [
+        (0, 1000, 1), (1, 1000, 1), (20, 1200, 1), (29, 1500, 1), (60, 1200, 2),
+    ]
+
+    corrected = capture(history, start=25, now=70, balance_at=20, balance=1300, slots=2)
+    assert [(fact["timestamp"], fact["observed_at"], fact["balance"], fact["slots"])
+            for fact in corrected] == [
+        (20, 70, 1300, 1), (29, 30, 1500, 1), (60, 70, 1300, 2),
+    ]
+    assert late[2]["balance"] == 1200
+
+
+def test_exposure_policy_in_captured_facts_is_detached_from_inputs_and_future_captures():
+    history = BudgetObservations()
+    exposure = dict(wallet_exposure_limit_ratio=0.2, total_wallet_exposure_limit_ratio=1.0,
+                    we_excess_allowance_fraction=0.1)
+
+    def capture_exposure(now, balance, policy):
+        return history.capture(("coin", "long", "A"), start=0, now=now,
+                               balance=balance, slots=1, scale=True, exposure=policy)
+
+    first = capture_exposure(60_000, 100, exposure)
+    exposure["wallet_exposure_limit_ratio"] = 0.4
+    first[-1]["exposure_budget"]["wallet_exposure_limit_ratio"] = 0.9
+
+    revised = capture_exposure(120_000, 200, exposure)
+    assert [fact["exposure_budget"]["wallet_exposure_limit_ratio"] for fact in revised] == [
+        0.2, 0.2, 0.4,
+    ]
+    assert first[-1]["exposure_budget"]["wallet_exposure_limit_ratio"] == 0.9

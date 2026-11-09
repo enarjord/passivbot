@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce live HSL CPU use when capturing long histories of observed risk budgets.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
