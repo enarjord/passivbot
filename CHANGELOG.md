@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Stop CPU backtests and exact optimizer evaluations from reading a never-updated
+  volume or volatility EMA when two settings share the same span. A strategy
+  volatility span equal to the other side's unused forager volatility span, or equal
+  spans where only one side uses the forager volume, forager volatility, or strategy
+  volatility input, previously resolved to the idle side's stale value. Such
+  backtests now use the maintained EMA, matching live trading and the GPU proxy;
+  affected results change.
+
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 
