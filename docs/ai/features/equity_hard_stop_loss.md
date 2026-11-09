@@ -129,6 +129,11 @@ Each attempt performs at most one such account refresh: changed facts, unavailab
 or renewed expiry discard the ordinary plan and retry through normal scheduling. This work stays
 in the ordinary task and does not make preparation a protective prerequisite.
 
+With HSL disabled, ordinary preparation can join an account refresh already in flight before
+native calculation. It starts no additional account read. Verify unchanged prepared facts and
+reacquire quotes through the canonical provider after the wait before consuming the current raw
+balance. Keep the initial fill and candle receipt checks and all existing write admission checks.
+
 The offline fake runner drains unmet account confirmations, owner-required fill readiness and
 ordinary execution changes before advancing a bar. After a typed create/cancel connector deferral
 or an ordinary account-confirmation request, a fresh accepted ordinary plan must complete without
