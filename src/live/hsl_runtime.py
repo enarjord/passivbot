@@ -727,11 +727,13 @@ def capture(
             reasons.update(pair_reasons.get(key, ()))
         metadata = json.dumps(payload, allow_nan=False)
         grids = tuple(projected[key[0]][0] for key in keys if key in pairs)
-        replays = getattr(bot, "_hsl_factual_replays", None)
         if replays is None:
             replays = FactualReplays()
             bot._hsl_factual_replays = replays
-        replay = replays.scope(scope, metadata, grids)
+        replay = replays.scope_from_capture(
+            scope, metadata, grids, start=snapshot["start"], now=snapshot["now"],
+            cooldown_ms=payload["cooldown_ms"],
+        )
         requests.append(
             Request(
                 scope,

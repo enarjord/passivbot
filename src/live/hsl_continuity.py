@@ -132,12 +132,18 @@ class FactualReplays:
         value = json.loads(metadata)
         snapshot = value["snapshot"]
         self.prune(snapshot["now"])
+        return self.scope_from_capture(
+            key, metadata, grids, start=snapshot["start"], now=snapshot["now"],
+            cooldown_ms=value.get("cooldown_ms", 0),
+        )
+
+    def scope_from_capture(self, key, metadata, grids, *, start, now, cooldown_ms):
+        """Register a scope in a pruned batch using its original capture clocks."""
         if key not in self._scopes:
             self._scopes[key] = ScopeReplay(metadata, grids, native_factory=self._native_factory)
         replay = self._scopes[key]
-        replay.last_seen_ms = snapshot["now"]
-        replay.horizon_ms = max(snapshot["now"] - snapshot["start"],
-                                value.get("cooldown_ms", 0), 60_000)
+        replay.last_seen_ms = now
+        replay.horizon_ms = max(now - start, cooldown_ms, 60_000)
         return replay
 
     def cache_info(self):

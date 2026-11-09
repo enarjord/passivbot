@@ -59,6 +59,9 @@ since the latest release tag; these features may already be available when insta
 - Reduce live HSL replay CPU by reading retained budget facts directly during forward replay.
   The changed native fingerprint requires reevaluation of saved optimizer fitness.
 
+- Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per
+  capture batch.
+
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
   portfolios, and saved input fingerprints when scenarios add exchanges or use
