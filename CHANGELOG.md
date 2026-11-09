@@ -11,8 +11,10 @@ since the latest release tag; these features may already be available when insta
   volatility span equal to the other side's unused forager volatility span, or equal
   spans where only one side uses the forager volume, forager volatility, or strategy
   volatility input, previously resolved to the idle side's stale value. Such
-  backtests now use the maintained EMA, matching live trading and the GPU proxy;
-  affected results change.
+  backtests now use the maintained EMA, as live trading does; affected results
+  change. GPU optimizer candidates whose strategy volatility span lands on the
+  other side's unused forager volatility span no longer count as proxy/exact
+  constraint disagreement.
 
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
