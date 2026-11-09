@@ -71,6 +71,9 @@ since the latest release tag; these features may already be available when insta
 
 - Preserve the ordinary planning quote cohort when a passive single-symbol HSL quote read finishes.
 
+- Service an ordinary plan that finishes during account refresh or protection before the
+  execution loop waits for its next cycle, with the same receipt and order-admission checks.
+
 - Keep ordinary HSL planning live when unchanged fill observations renew during slow market-data
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.

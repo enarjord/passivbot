@@ -136,3 +136,67 @@ async def test_completed_ordinary_plan_rechecks_receipts_after_protection(
     assert result["ordinary_completed"]
     assert result["ordinary_executed"] is allowed
     assert len(writes) == int(allowed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["unchanged", "fill", "source"])
+async def test_ordinary_plan_finishing_during_protection_is_serviced_in_same_cycle(
+    monkeypatch, change
+):
+    import utils
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
+    bot, instance = planning_bot(empty=False)
+    plan = await instance._ordinary_plan()
+    release = asyncio.Event()
+    calls = []
+    defers = []
+    bot._log_staged_execution_defer = defers.append
+
+    async def prepare():
+        await release.wait()
+        return plan
+
+    pending = asyncio.create_task(prepare())
+    instance._ordinary = pending
+
+    async def refresh(**kwargs):
+        calls.append("refresh")
+        assert not pending.done()
+        return True
+
+    async def protect(**kwargs):
+        calls.append("protection")
+        release.set()
+        await pending
+        change_receipt(bot, instance, change)
+        return False
+
+    async def execute(cancels, creates):
+        calls.append("ordinary")
+        assert (cancels, creates) == plan[:2]
+
+    instance.remember_position = lambda: None
+    instance.schedule_history = lambda: None
+    instance.schedule_sources = lambda: None
+    instance.schedule_account_reporting = lambda: None
+    instance.protect = protect
+    bot.refresh_protective_authoritative_state = refresh
+    bot.execute_order_plan_to_exchange = execute
+    try:
+        result = await instance.cycle()
+        accepted = change == "unchanged"
+        assert result["ordinary_completed"]
+        assert result["ordinary_executed"] is accepted
+        assert calls == ["refresh", "protection"] + (["ordinary"] if accepted else [])
+        if not accepted:
+            receipt = "candle" if change == "source" else "fill"
+            assert defers[0]["defer_reason"] == f"hsl_{receipt}_receipt_replaced"
+        assert plan[3].ordinary_receipts in instance._retired_ordinary_receipts
+    finally:
+        release.set()
+        tasks = [pending]
+        if instance._ordinary is not None:
+            tasks.append(instance._ordinary)
+        instance.cancel_inputs()
+        await asyncio.gather(*tasks, return_exceptions=True)
