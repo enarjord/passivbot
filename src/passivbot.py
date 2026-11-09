@@ -17736,7 +17736,8 @@ class Passivbot:
             )
             return {}
         hsl = hsl_live.owner(self)
-        prepared_account = hsl.account_facts() if hsl_live.runtime.enabled(self) else None
+        hsl_enabled = hsl_live.runtime.enabled(self)
+        prepared_account = hsl.account_facts()
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         exchange_unavailable_symbols = (
             self._apply_exchange_symbol_unavailable_planning_policy(
@@ -17788,18 +17789,19 @@ class Passivbot:
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
-        market_epoch = (
-            self._ensure_freshness_ledger().epoch if prepared_account is not None else None
-        )
+        market_epoch = self._ensure_freshness_ledger().epoch
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        if prepared_account is not None:
-            await hsl.refresh_ordinary_account(prepared_account)
-            if self._ensure_freshness_ledger().epoch != market_epoch:
-                # An account confirmation starts a new planning cohort. Reuse
-                # only quotes accepted by the canonical provider in that cohort,
-                # retaining their real acquisition timestamps.
+        if await hsl.refresh_ordinary_account(
+            prepared_account, allow_new_refresh=hsl_enabled
+        ):
+            if not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch:
+                # A confirming read may change the epoch or spend the first
+                # quotes' freshness headroom. Reuse only quotes accepted by the
+                # canonical provider, retaining their real acquisition timestamps.
                 market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
             hsl.require_ordinary_account(prepared_account)
+        else:
+            prepared_account = None
         # Remote acquisition may renew the factual fill tape. Rebuild every
         # fill-derived trailing input from the current cohort, without remote
         # I/O, before consuming HSL or native strategy inputs. An observation

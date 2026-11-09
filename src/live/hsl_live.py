@@ -350,12 +350,13 @@ class Owner:
             )
         )
 
-    async def refresh_ordinary_account(self, prepared_account):
+    async def refresh_ordinary_account(self, prepared_account, *, allow_new_refresh: bool = True) -> bool:
         """Confirm unchanged facts after slow preparation, before capturing permission.
 
         A confirming read may advance receipt times, never rewrite an old one.
         Changed economic facts still invalidate the prepared universe. This work
-        stays in the ordinary task; protection never awaits EMA preparation.
+        stays in the ordinary task. Protection never awaits EMA preparation.
+        With no new read allowed, return whether an existing refresh was joined.
         """
         from utils import utc_ms
 
@@ -365,11 +366,13 @@ class Owner:
             # confirmation. Wait for its complete cohort without cancelling it.
             async with self._refresh_lock:
                 pass
+        elif not allow_new_refresh:
+            return False
         if self._shutdown_requested():
             raise OrdinaryPlanDeferred("shutdown")
         if not self.same_account_facts(prepared_account, self.account_facts()):
             raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
-        if self._current_account_unavailable(int(utc_ms())):
+        if allow_new_refresh and self._current_account_unavailable(int(utc_ms())):
             from ccxt.base.errors import InvalidNonce, NetworkError
             from live.state_refresh import AuthoritativeSurfaceUnavailable
 
@@ -390,6 +393,7 @@ class Owner:
                     self._current_account_unavailable(int(utc_ms())),
                 )
         self.require_ordinary_account(prepared_account)
+        return True
 
     def require_ordinary_account(self, prepared_account):
         from utils import utc_ms
