@@ -1,6 +1,8 @@
 """Read-path scaling and retry equivalence, with no network or timing assertions."""
+import asyncio
 import random
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -86,22 +88,53 @@ async def test_gap_scan_reloads_metadata_after_lock_wait(tmp_path, monkeypatch):
             pytest.fail('newly verified gap must defer the fetch after waiting for the lock')
     cm = CandlestickManager(exchange=Exchange(), exchange_name='kucoin', cache_dir=str(tmp_path))
     symbol = 'SPARSE/USDT:USDT'
-    now = 4*ONE_MIN_MS+1000
+    start = (1_800_000_000_000 // ONE_MIN_MS) * ONE_MIN_MS
+    now = start + 4 * ONE_MIN_MS + 1000
     monkeypatch.setattr(cm, '_now_ms', lambda: now)
-    arr = np.array([(i*ONE_MIN_MS, 100., 100., 100., 100., 1.) for i in (0, 2, 3)], dtype=CANDLE_DTYPE)
-    cm._cache[symbol] = arr
-    cm._add_known_gap(symbol, ONE_MIN_MS, ONE_MIN_MS, reason='fetch_failed', retry_count=1)
-    monkeypatch.setattr(cm, '_load_from_disk', lambda *a, **kw: arr)
+    old = start - 1440 * ONE_MIN_MS
+    old_day = cm._date_key(old)
+    old_shard = Path(cm._shard_path(symbol, old_day, tf='1m'))
+    arr = np.array(
+        [
+            (ts, 100., 100., 100., 100., 1.)
+            for ts in (old, start, start + 2 * ONE_MIN_MS, start + 3 * ONE_MIN_MS)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._save_range_incremental(symbol, arr, timeframe='1m')
+    gap = start + ONE_MIN_MS
+    cm._add_known_gap(symbol, gap, gap, reason='fetch_failed', retry_count=1)
     waits = []
+
     @asynccontextmanager
     async def lock(*args):
         waits.append(1)
+        await asyncio.sleep(0)
         # Use a second manager to exercise shared-file change detection too.
         other = CandlestickManager(exchange=None, exchange_name='kucoin', cache_dir=str(tmp_path))
-        other._record_verified_gap(symbol, ONE_MIN_MS, ONE_MIN_MS)
+        other._now_ms_callback = lambda: now
+        try:
+            other._record_verified_gap(symbol, gap, gap)
+        finally:
+            other.close()
+        old_shard.unlink()
         yield
+
     monkeypatch.setattr(cm, '_acquire_fetch_lock', lock)
-    result = await cm.get_candles(symbol, start_ts=0, end_ts=3*ONE_MIN_MS, max_age_ms=None)
-    assert waits
-    assert result['ts'].tolist() == [i*ONE_MIN_MS for i in range(4)]
-    assert cm._get_known_gaps_enhanced(symbol)[0]['reason'] == 'no_trades'
+    try:
+        result = await cm.get_candles(
+            symbol, start_ts=start, end_ts=start + 3 * ONE_MIN_MS, max_age_ms=None
+        )
+        assert waits == [1]
+        assert result['ts'].tolist() == [start + i * ONE_MIN_MS for i in range(4)]
+        # The post-wait check must notice deletion before the assertions ask
+        # for any fresh index read of their own.
+        index = cm._index[f'{symbol}::1m']
+        assert old_day not in index['shards']
+        assert index['meta']['observed_start_ts'] == start
+        gaps = cm._get_known_gaps_enhanced(symbol)
+        assert [(g['start_ts'], g['end_ts'], g['reason']) for g in gaps] == [
+            (gap, gap, 'no_trades')
+        ]
+    finally:
+        cm.close()
