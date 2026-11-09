@@ -1,9 +1,13 @@
 """Observed budget facts, with causal source clocks distinct from capture clocks."""
 
+from bisect import bisect_left, bisect_right
 from copy import deepcopy
+from operator import itemgetter
 
 
 CURRENT_ORDER = 2**63 - 1
+_FACT_ORDER = itemgetter("timestamp", "order")
+_TIMESTAMP = itemgetter("timestamp")
 
 
 class BudgetObservations:
@@ -44,27 +48,36 @@ class BudgetObservations:
         def record(at, components):
             current = dict(timestamp=at, observed_at=now, order=CURRENT_ORDER,
                            estimated=False, **components)
-            same = next((i for i, fact in enumerate(history)
-                         if (fact["timestamp"], fact["order"]) == (at, CURRENT_ORDER)), None)
-            if same is None:
-                history.append(current)
+            key = (at, CURRENT_ORDER)
+            index = bisect_left(history, key, key=_FACT_ORDER)
+            if index < len(history) and _FACT_ORDER(history[index]) == key:
+                history[index] = current
             else:
-                history[same] = current
-            history.sort(key=lambda fact: (fact["timestamp"], fact["order"]))
+                history.insert(index, current)
 
-        prior = next((fact for fact in reversed(history)
-                      if not fact["estimated"] and fact["timestamp"] <= balance_at), None)
-        if prior is not None and balance_at < policy_at and prior["balance"] != balance:
+        if balance_at < policy_at:
             # A new account balance can predate a changed configuration. Apply
             # that component with the policy already observed at its clock;
             # the later full budget uses the new policy at its own clock.
-            record(balance_at, dict(balance=balance, **{
-                key: deepcopy(prior[key]) for key in policy
-            }))
+            prior = next((fact for fact in reversed(history)
+                          if not fact["estimated"] and fact["timestamp"] <= balance_at), None)
+            if prior is not None and prior["balance"] != balance:
+                record(balance_at, dict(balance=balance, **{
+                    key: deepcopy(prior[key]) for key in policy
+                }))
         latest = history[-1]
         if latest["estimated"] or any(latest[key] != value for key, value in values.items()):
             record(source_at, values)
-        left = max((i for i, fact in enumerate(history) if fact["timestamp"] <= start), default=0)
-        if left:
+        left = bisect_right(history, start, key=_TIMESTAMP) - 1
+        if left > 0:
             del history[:left]
-        return deepcopy(history)
+        # Only the optional exposure policy needs a recursive copy. The
+        # remaining observation fields are scalars.
+        snapshot = []
+        memo = {}
+        for fact in history:
+            snapshot_fact = fact.copy()
+            if fact["exposure_budget"] is not None:
+                snapshot_fact["exposure_budget"] = deepcopy(fact["exposure_budget"], memo)
+            snapshot.append(snapshot_fact)
+        return snapshot
