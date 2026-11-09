@@ -1497,7 +1497,7 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
         live_value=lambda key: 0.05,
     )
     instance = hsl_live.Owner(bot)
-    instance._account_matches = lambda *args: True
+    instance._account_mismatch_reason = lambda *args: None
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     instance.protect = noop

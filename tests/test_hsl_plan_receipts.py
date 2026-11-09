@@ -248,3 +248,128 @@ async def test_tail_handoff_propagates_completed_input_failure_before_ordinary_w
         tasks = (pending, instance._ordinary, instance._fill_task)
         instance.cancel_inputs()
         await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        "unchanged",
+        "refresh_unavailable",
+        "expired_again",
+        "missing_clock",
+        "future_clock",
+        "pending_before",
+        "pending_after",
+        "raw_balance_before_then_restored",
+        "raw_balance_changed",
+        "account_generation",
+        "required_fills",
+        "fill",
+        "source",
+        "shutdown",
+        "input_failure",
+    ],
+)
+async def test_expired_ready_plan_can_use_one_normal_account_refresh(monkeypatch, change):
+    import utils
+
+    clock = [NOW]
+    monkeypatch.setattr(utils, "utc_ms", lambda: clock[0])
+    bot, instance = planning_bot(empty=False)
+    bot.balance_raw = bot.get_raw_balance()
+    bot.get_raw_balance = lambda: bot.balance_raw
+    ledger = bot._ensure_freshness_ledger()
+    bot._staged_planner_required_surfaces = lambda **kwargs: {"fills"}
+    ledger.stamp("fills", signature="original", now_ms=NOW)
+    plan = await instance._ordinary_plan()
+    initial_balance = bot.get_raw_balance()
+    calls, defers = [], []
+    bot._log_staged_execution_defer = defers.append
+
+    async def prepare():
+        return plan
+
+    instance._ordinary = asyncio.create_task(prepare())
+    await instance._ordinary
+    assert instance._account_matches(plan[3], clock[0])
+    clock[0] += 10_001
+    if change == "missing_clock":
+        ledger.surfaces["balance"].updated_ms = 0
+    elif change == "future_clock":
+        ledger.surfaces["balance"].updated_ms = clock[0] + 1
+    elif change == "pending_before":
+        bot._authoritative_pending_confirmations = {"balance": ledger.epoch + 1}
+    elif change == "raw_balance_before_then_restored":
+        bot.balance_raw = initial_balance + 1.0
+    assert not instance._account_matches(plan[3], clock[0])
+
+    async def refresh(*, require_balance):
+        assert require_balance
+        calls.append("refresh")
+        if change == "refresh_unavailable":
+            return False
+        ledger.begin_epoch(now_ms=clock[0])
+        for surface in ("balance", "positions", "open_orders"):
+            ledger.stamp(surface, now_ms=clock[0])
+        if change == "raw_balance_before_then_restored":
+            bot.balance_raw = initial_balance
+        elif change == "raw_balance_changed":
+            bot.balance_raw = initial_balance + 1.0
+        elif change == "account_generation":
+            bot._account_invalidation_generation = plan[3].generation + 1
+        elif change == "required_fills":
+            ledger.stamp("fills", signature="changed", now_ms=clock[0])
+        change_receipt(bot, instance, change)
+        return True
+
+    async def read():
+        raise RuntimeError("unexpected HSL input failure")
+
+    async def protect(**kwargs):
+        calls.append("protection")
+        if "refresh" in calls:
+            if change == "expired_again":
+                clock[0] += 10_001
+            elif change == "pending_after":
+                bot._authoritative_pending_confirmations = {"balance": ledger.epoch + 1}
+            elif change == "shutdown":
+                bot.stop_signal_received = True
+            elif change == "input_failure":
+                instance._fill_task = asyncio.create_task(read())
+                await asyncio.wait((instance._fill_task,))
+        return False
+
+    async def execute(cancels, creates):
+        calls.append("ordinary")
+        assert instance._account_matches(plan[3], clock[0])
+        assert bot._current_planning_snapshot is plan[2]
+        assert (cancels, creates) == plan[:2]
+
+    instance.remember_position = lambda: None
+    instance.schedule_history = lambda: None
+    instance.schedule_sources = lambda: None
+    instance.schedule_account_reporting = lambda: None
+    instance.protect = protect
+    bot.refresh_protective_authoritative_state = refresh
+    bot.execute_order_plan_to_exchange = execute
+    try:
+        if change == "input_failure":
+            with pytest.raises(RuntimeError, match="unexpected HSL input failure"):
+                await instance.cycle()
+        else:
+            result = await instance.cycle()
+            assert result["ordinary_completed"]
+            assert result["ordinary_executed"] == (change == "unchanged")
+        expected = ["protection", "refresh"]
+        if change != "refresh_unavailable":
+            expected.append("protection")
+        if change == "unchanged":
+            expected.append("ordinary")
+            assert not defers
+        assert calls == expected
+        assert plan[3].ordinary_receipts in instance._retired_ordinary_receipts
+    finally:
+        tasks = (instance._ordinary, getattr(instance, "_fill_task", None))
+        instance.cancel_inputs()
+        await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)

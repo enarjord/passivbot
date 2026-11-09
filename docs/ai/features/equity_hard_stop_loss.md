@@ -113,6 +113,11 @@ its payload is equal. Quotes refreshed by preparation do not invalidate these so
 The serialized owner can collect one pending ordinary task that finished during the cycle's
 account refresh or protective work after that protection pass. It keeps the normal inter-cycle
 wait and the same receipt and connector checks, without waiting for unfinished preparation.
+If a ready ordinary plan fails admission solely because known account observations expired,
+the owner can recheck it once after the scheduled authoritative account refresh and protective
+pass. The full current-input checks still apply, including the exact account facts and consumed
+source receipts. Missing observations, invalid clocks and pending confirmations cannot take this
+route. The plan keeps its original snapshot and acquisition times.
 HSL-disabled ordinary preparation keeps its existing initial-receipt and readiness checks.
 The active plan strongly owns consumed receipts through execution. Per-order wave history retains
 only weak references, and discarded or completed plans explicitly retire their receipt identities;

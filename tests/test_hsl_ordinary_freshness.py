@@ -196,12 +196,12 @@ async def test_existing_unchanged_refresh_cohort_is_reused_without_extra_fetch(m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stage", "finishes_during_protection"),
-    [("ema", False), ("ticker", False), ("ema", True)],
-    ids=["ema-before-cycle", "ticker-before-cycle", "ema-during-protection"],
+    ("stage", "handoff"),
+    [("ema", "early"), ("ticker", "early"), ("ema", "tail"), ("ema", "expired_account")],
+    ids=["ema-before-cycle", "ticker-before-cycle", "ema-during-protection", "ema-expired-account"],
 )
 async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(
-    tmp_path, monkeypatch, stage, finishes_during_protection
+    tmp_path, monkeypatch, stage, handoff
 ):
     import argparse
     import json
@@ -244,6 +244,12 @@ async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(
         monkeypatch.setattr(passivbot, "utc_ms", lambda: clock[0])
         monkeypatch.setattr(market_snapshot, "utc_ms", lambda: clock[0])
         await bot.refresh_protective_authoritative_state(require_balance=True)
+        if handoff == "expired_account":
+            # Isolate account receipt expiry from independent fill/candle renewals.
+            for refresh in (instance._fill_task, instance._source_task):
+                if refresh is not None:
+                    await asyncio.wait_for(refresh, 5.0)
+            instance._next_history = instance._next_sources = float("inf")
         entered, release = asyncio.Event(), asyncio.Event()
         original = getattr(bot, "_load_orchestrator_ema_bundle" if stage=="ema" else "_get_orchestrator_market_snapshots")
 
@@ -275,7 +281,7 @@ async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(
             return sum(call["method"] == "create_order" for call in bot.cca.export_request_log())
 
         creates_before = create_count()
-        if finishes_during_protection:
+        if handoff == "tail":
             protect = instance.protect
 
             async def protect_and_finish(**kwargs):
@@ -295,6 +301,11 @@ async def test_real_owner_accepts_green_ordinary_plan_after_slow_preparation(
                 result = await instance.cycle()
         else:
             await finish_preparation()
+            if handoff == "expired_account":
+                clock[0] += bot._live_market_snapshot_max_age_ms() + 1
+                assert instance._account_mismatch_reason(task.result()[3], clock[0]) == (
+                    "current_account_inputs_unavailable"
+                )
             result = await instance.cycle()
         assert result["ordinary_completed"] and result["ordinary_executed"]
         assert create_count() > creates_before
