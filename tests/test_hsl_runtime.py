@@ -214,6 +214,29 @@ def test_live_capture_prunes_replay_owners_once_for_the_batch(monkeypatch):
         assert after.replay.last_seen_ms == NOW
 
 
+def test_live_output_validation_reuses_facts_for_only_the_original_metadata(monkeypatch):
+    requests, unavailable = capture(
+        bot(), quotes(), {}, symbols={"long": [SYMBOL], "short": []},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
+    )
+    assert not unavailable
+    request = replace(requests[0], replay=None)
+    loads = json.loads
+
+    def reject_redecode(value, *args, **kwargs):
+        assert value is not request.metadata, "live input was already serialized from its facts"
+        return loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", reject_redecode)
+    (decision,) = evaluate((request,))
+    assert decision.action == "panic"
+    changed = loads(request.metadata)
+    changed["drawdown_threshold_fraction"] = 0.5
+    (replacement,) = evaluate((replace(request, metadata=json.dumps(changed)),))
+    assert replacement.action == "normal"
+    assert replacement.drawdown_threshold_fraction == 0.5
+
+
 @pytest.mark.parametrize("surface", ["balance", "positions"])
 def test_stale_essentials_do_not_become_healthy_or_saved_decisions(surface):
     value = bot()
