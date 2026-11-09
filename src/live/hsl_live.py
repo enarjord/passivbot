@@ -655,6 +655,19 @@ class Owner:
             if task is not None and task.done():
                 task.result()
 
+    async def wait_for_ordinary_fill_refresh(self):
+        """Give the owned fill refresh a bounded head start before ordinary capture."""
+        import asyncio
+
+        task = getattr(self, "_fill_task", None)
+        if task is None:
+            return
+        if not task.done():
+            # Neither a timeout nor ordinary cancellation cancels the owner's read.
+            await asyncio.wait((task,), timeout=2.0)
+        if task.done():
+            task.result()
+
     def schedule_history(self):
         import asyncio
 
