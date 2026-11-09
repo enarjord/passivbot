@@ -1,7 +1,9 @@
 //! Disposable forward cache over retained factual observations. The immutable
 //! first snapshot is the bootstrap initializer; later quotes cannot replace it.
 //! No serialized risk state, permission or cooldown is accepted from Python.
-use super::{exact_upnl, scope_budget, BudgetFact, ContinuityStatus, Input, Output, Recorder};
+use super::{
+    exact_upnl, scope_budget, BudgetFact, ContinuityStatus, Input, Output, Recorder, ScopeBudget,
+};
 use crate::hsl_decay::{Event, Policy};
 use crate::hsl_history::{self, Fill, Position, PositionSide};
 use crate::hsl_prices::HslPriceGrid;
@@ -150,6 +152,7 @@ struct PairFacts {
 #[derive(Clone)]
 struct Ledger {
     anchor: Value,
+    anchor_budget: ScopeBudget,
     origin: i64,
     anchor_now: i64,
     last_now: i64,
@@ -197,6 +200,7 @@ impl Ledger {
             last_now: input.snapshot.now,
             policy_key: Self::policy_key(&raw),
             anchor: raw,
+            anchor_budget: ScopeBudget::from(input),
             pairs: BTreeMap::new(),
             budgets: BTreeMap::new(),
             global_sequence: input.snapshot.global_fill_sequence,
@@ -374,6 +378,18 @@ impl Ledger {
         self.global_sequence &= input.snapshot.global_fill_sequence;
         Ok(())
     }
+
+    fn scope_budget(
+        &self,
+        timestamp: i64,
+        order: i64,
+        reasons: &mut BTreeSet<String>,
+    ) -> Result<f64, String> {
+        let fact = self.budgets.range(..=(timestamp, order)).next_back();
+        self.anchor_budget
+            .resolve(fact.map(|(_, fact)| fact), reasons)
+    }
+
     fn bootstrap_fill(&self, pair: &PairKey, fill: &Fill) -> bool {
         if fill.timestamp != self.anchor_now {
             return fill.timestamp < self.anchor_now;
@@ -1007,8 +1023,6 @@ fn event_tape_to(
             let marks = positions.keys().cloned().collect();
             (steps, positions, marks, false)
         };
-    let mut input = ledger.bootstrap()?;
-    input.budget_observations = ledger.budgets.values().cloned().collect();
     let mut fills = BTreeMap::<PairKey, Vec<Fill>>::new();
     let mut account = BTreeMap::<PairKey, Vec<&PositionFact>>::new();
     // mark, pre-fill account, execution, ambiguous/post-fill account, budget,
@@ -1197,9 +1211,9 @@ fn event_tape_to(
                 fill_time = Some(t);
                 ordinal = -1;
             }
-            let pre = scope_budget(&input, t, ordinal, reasons)?;
+            let pre = ledger.scope_budget(t, ordinal, reasons)?;
             ordinal += 1;
-            let post = scope_budget(&input, t, ordinal, reasons)?;
+            let post = ledger.scope_budget(t, ordinal, reasons)?;
             let f = &fills[k][i];
             if let Some(price) = f.price.filter(|v| v.is_finite() && *v > 0.0) {
                 for (pair, p) in &mut positions {
@@ -1219,10 +1233,10 @@ fn event_tape_to(
                 reasons,
             )?;
             let net = forward_fill(positions.get_mut(k).unwrap(), f, reasons)?;
-            if !input
-                .budget_observations
-                .iter()
-                .any(|f| f.timestamp == t && f.order == ordinal && !f.estimated)
+            if !ledger
+                .budgets
+                .get(&(t, ordinal))
+                .is_some_and(|f| !f.estimated)
             {
                 reasons.insert("historical_fill_budget_estimate".into());
             }
@@ -1253,7 +1267,7 @@ fn event_tape_to(
                 // clock before the whole cohort becomes flat. Carried minutes
                 // may retire an older RED. Keep the same causal mark/budget
                 // phase; later quotes and account budgets are not pre-facts.
-                let b = scope_budget(&input, t, if phase <= 1 { -1 } else { i64::MAX }, reasons)?;
+                let b = ledger.scope_budget(t, if phase <= 1 { -1 } else { i64::MAX }, reasons)?;
                 causal_valuation(
                     &mut steps,
                     t,
@@ -1305,7 +1319,7 @@ fn event_tape_to(
                     cursor = end;
                     continue;
                 }
-                let b = scope_budget(&input, t, if phase <= 1 { -1 } else { i64::MAX }, reasons)?;
+                let b = ledger.scope_budget(t, if phase <= 1 { -1 } else { i64::MAX }, reasons)?;
                 causal_valuation(
                     &mut steps,
                     t,
@@ -1858,6 +1872,7 @@ mod tests {
     #[test]
     fn budget_lookup_preserves_same_clock_fill_phases_and_estimates() {
         let mut input: Input = serde_json::from_value(facts(120_000, 0, 100.0)).unwrap();
+        input.budget_observations[0].balance = 1100.0;
         let estimated = &input.budget_observations[0];
         let first = BudgetFact {
             timestamp: 60_000,
@@ -1878,10 +1893,18 @@ mod tests {
                 ..first
             },
         ]);
+        let raw = input_value(&input);
+        let mut ledger = Ledger::new(raw.clone(), &input);
+        ledger.merge(&raw, &input, &mut BTreeSet::new()).unwrap();
+        let mut newer: Input = serde_json::from_value(raw).unwrap();
+        newer.snapshot.balance = 1200.0;
+        ledger
+            .merge(&input_value(&newer), &newer, &mut BTreeSet::new())
+            .unwrap();
         for (timestamp, order, expected, estimated) in [
             (0, -2, 1000.0, true),
-            (59_999, i64::MAX, 1000.0, true),
-            (60_000, -2, 1000.0, true),
+            (59_999, i64::MAX, 1100.0, true),
+            (60_000, -2, 1100.0, true),
             (60_000, -1, 900.0, false),
             (60_000, 0, 800.0, false),
             (60_000, 1, 800.0, false),
@@ -1894,6 +1917,12 @@ mod tests {
                 Ok(expected)
             );
             assert_eq!(reasons.contains("historical_budget_estimate"), estimated);
+            let mut forward_reasons = BTreeSet::new();
+            assert_eq!(
+                ledger.scope_budget(timestamp, order, &mut forward_reasons),
+                Ok(expected)
+            );
+            assert_eq!(forward_reasons, reasons);
         }
     }
 
@@ -2492,6 +2521,17 @@ mod tests {
                 serde_json::from_value(malformed).unwrap()
             )
             .is_err());
+        let mut malformed_budget = input.clone();
+        malformed_budget["budget_observations"][0]["slots"] = json!(0);
+        assert_eq!(
+            replay
+                .consume(
+                    malformed_budget.clone(),
+                    serde_json::from_value(malformed_budget).unwrap(),
+                )
+                .unwrap_err(),
+            "inactive HSL slot budget"
+        );
         assert_eq!(replay.cache_info(), counts);
         assert_eq!(replay.ledger.as_ref().unwrap().origin, origin);
         assert_eq!(risk(&run(&mut replay, input)), risk(&expected));
