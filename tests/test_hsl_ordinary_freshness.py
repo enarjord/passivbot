@@ -268,6 +268,123 @@ async def test_pending_fill_refresh_is_consumed_before_quotes_and_owner_handoff(
 
 
 @pytest.mark.asyncio
+async def test_pending_owner_account_selects_the_fill_refresh_it_schedules(monkeypatch):
+    from dataclasses import replace
+    from live.hsl_runtime import observe_fills
+
+    fixture = planning_bot(monkeypatch)
+    bot, owner = fixture.bot, fixture.owner
+    old_receipt = observe_fills(bot, (NOW, NOW))
+    new_receipt = replace(old_receipt)
+    bot._hsl_fill_observation = old_receipt
+    account_started, account_release = asyncio.Event(), asyncio.Event()
+    fill_started, fill_release = asyncio.Event(), asyncio.Event()
+    quote_receipts, actions = [], []
+    schedule_history = owner.schedule_history
+    _record_owner_pass(fixture, actions)
+    owner.schedule_history = schedule_history
+
+    async def refresh_account(*, require_balance):
+        assert require_balance
+        async with owner._refresh_lock:
+            actions.append("account")
+            account_started.set()
+            await account_release.wait()
+            ledger = bot._ensure_freshness_ledger()
+            ledger.begin_epoch(now_ms=NOW)
+            for surface in ("balance", "positions", "open_orders"):
+                ledger.stamp(surface, now_ms=NOW)
+        return True
+
+    async def refresh_fills(kwargs):
+        fill_started.set()
+        await fill_release.wait()
+        bot._hsl_fill_observation = new_receipt
+        return True
+
+    async def quotes(symbols):
+        quote_receipts.append(bot._hsl_fill_observation)
+        return {SYMBOL: MarketSnapshot(SYMBOL, 100.0, 100.0, 100.0, NOW, "fixture")}
+
+    bot.refresh_protective_authoritative_state = refresh_account
+    bot._get_orchestrator_market_snapshots = quotes
+    owner._refresh_history = refresh_fills
+    old_fill_task = owner._fill_task = asyncio.create_task(asyncio.sleep(0, result=True))
+    await old_fill_task
+    plan_task = owner._ordinary = asyncio.create_task(owner._ordinary_plan())
+    owner_task = asyncio.create_task(owner.cycle())
+    try:
+        await asyncio.wait_for(fixture.entered.wait(), 1.0)
+        await asyncio.wait_for(account_started.wait(), 1.0)
+        fixture.release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        account_release.set()
+        result = await asyncio.wait_for(owner_task, 1.0)
+        await asyncio.wait_for(fill_started.wait(), 1.0)
+        assert result["updated"] and not result["ordinary_completed"]
+        assert actions == ["account", "protection"]
+        assert owner._fill_task is not old_fill_task
+        prepared_before_fill = plan_task.done() or bool(quote_receipts)
+        fill_release.set()
+        await asyncio.wait_for(owner._fill_task, 1.0)
+        plan = await asyncio.wait_for(plan_task, 1.0)
+        result = await owner.cycle()
+        assert result["ordinary_completed"] and result["ordinary_executed"], fixture.defers
+        assert not prepared_before_fill
+        assert quote_receipts and all(receipt is new_receipt for receipt in quote_receipts)
+        assert plan is not None and plan[3].ordinary_receipts.fills is new_receipt
+        assert actions == [
+            "account", "protection", "protection", "ordinary", "account", "protection"
+        ]
+    finally:
+        fixture.release.set()
+        account_release.set()
+        fill_release.set()
+        tasks = [
+            task
+            for task in (owner._ordinary, owner._fill_task, plan_task, owner_task)
+            if task is not None
+        ]
+        owner.cancel_inputs()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["cancel", "shutdown"])
+async def test_account_join_stop_leaves_the_owned_inputs_independent(monkeypatch, outcome):
+    fixture = planning_bot(monkeypatch)
+    bot, owner = fixture.bot, fixture.owner
+    fill_task = owner._fill_task = asyncio.create_task(asyncio.Event().wait())
+    await owner._refresh_lock.acquire()
+    plan_task = asyncio.create_task(owner._ordinary_plan())
+    try:
+        await asyncio.wait_for(fixture.entered.wait(), 1.0)
+        fixture.release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        if outcome == "cancel":
+            plan_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await plan_task
+            assert owner._refresh_lock.locked()
+        else:
+            bot.stop_signal_received = True
+            owner._refresh_lock.release()
+            assert await asyncio.wait_for(plan_task, 1.0) is None
+            assert fixture.defers[-1]["defer_reason"] == "shutdown"
+        assert not fill_task.done()
+        assert not fixture.calls and not fixture.captures
+    finally:
+        if owner._refresh_lock.locked():
+            owner._refresh_lock.release()
+        fixture.release.set()
+        plan_task.cancel()
+        owner.cancel_inputs()
+        await asyncio.gather(plan_task, fill_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["timeout", "cancel"])
 async def test_slow_fill_join_leaves_protection_and_fill_task_independent(monkeypatch, outcome):
     fixture = planning_bot(monkeypatch)
