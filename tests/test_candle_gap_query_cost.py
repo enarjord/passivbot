@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from candlestick_manager import (
-    CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS, _GAP_MAX_RETRIES, _KnownGapIndex,
+    CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS, _GAP_MAX_RETRIES,
+    _GAP_PERSISTENT_RETRY_MS, _KnownGapIndex,
 )
 
 NOW = 1_800_000_000_000
@@ -107,6 +108,55 @@ def test_trim_rewrite_and_health_match_full_scan_with_proof_epochs(tmp_path, mon
     finally:
         optimized.close()
         reference.close()
+
+
+@pytest.mark.parametrize("clock_offset_ms,persistent", [(0, 2), (1, 1)])
+def test_candle_health_counts_gaps_without_detail_retry_pass(
+    tmp_path, monkeypatch, clock_offset_ms, persistent
+):
+    cm = CandlestickManager(exchange=None, exchange_name="kucoin", cache_dir=str(tmp_path))
+    cm._now_ms_callback = lambda: NOW + clock_offset_ms
+    old = NOW - 20 * ONE_MIN_MS
+    retry_boundary = NOW - _GAP_PERSISTENT_RETRY_MS
+    records = [
+        dict(start_ts=old + i * 2 * ONE_MIN_MS, end_ts=old + i * 2 * ONE_MIN_MS,
+             reason=reason, retry_count=count, added_at=retry, last_retry_at=retry)
+        for i, (reason, count, retry) in enumerate([
+            ("no_trades", _GAP_MAX_RETRIES, retry_boundary),
+            ("fetch_failed", _GAP_MAX_RETRIES, retry_boundary + 1),
+            ("fetch_failed", _GAP_MAX_RETRIES, retry_boundary),
+            ("auto_detected", _GAP_MAX_RETRIES - 1, NOW),
+        ])
+    ]
+    rows = np.zeros(3, dtype=CANDLE_DTYPE)
+    rows["ts"] = [NOW - i * ONE_MIN_MS for i in (3, 2, 1)]
+    rows["o"] = rows["h"] = rows["l"] = rows["c"] = 10
+    cm._cache[SYMBOL] = rows
+    try:
+        cm._save_known_gaps_enhanced(SYMBOL, records)
+        details = cm.get_gap_summary(SYMBOL)
+        assert [gap["persistent"] for gap in details["gaps"]] == [
+            True, clock_offset_ms == 0, False, False,
+        ]
+        retry_checks = []
+        original = cm._should_retry_gap
+
+        def counted(gap, **kwargs):
+            retry_checks.append(gap["start_ts"])
+            return original(gap, **kwargs)
+
+        monkeypatch.setattr(cm, "_should_retry_gap", counted)
+        report = cm.get_completed_candle_health(SYMBOL, {"1m": 3}, now_ms=NOW)
+        health = report["timeframes"]["1m"]
+        assert health["coverage_ok"]
+        assert health["known_gaps_total"] == details["total_gaps"] == 4
+        assert health["known_gaps_minutes"] == details["total_minutes"] == 4
+        assert health["known_gaps_persistent"] == details["persistent_gaps"] == persistent
+        assert health["known_gaps_retryable"] == details["retryable_gaps"] == 4 - persistent
+        assert health["known_gaps_by_reason"] == details["by_reason"]
+        assert retry_checks == [gap["start_ts"] for gap in records[:3]]
+    finally:
+        cm.close()
 
 
 @pytest.mark.asyncio

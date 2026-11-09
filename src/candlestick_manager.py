@@ -4492,22 +4492,29 @@ class CandlestickManager:
             Dict with keys:
             - total_gaps: Number of gap entries
             - total_minutes: Total minutes of gaps
-            - persistent_gaps: Gaps with retry_count >= max
-            - retryable_gaps: Gaps with retry_count < max
+            - persistent_gaps: Gaps at the retry limit whose retry is not due
+            - retryable_gaps: Other known gaps
             - by_reason: Dict of reason -> count
             - gaps: List of gap details
         """
         gaps = self._get_known_gaps_enhanced(symbol)
-        if not gaps:
-            return {
-                "total_gaps": 0,
-                "total_minutes": 0,
-                "persistent_gaps": 0,
-                "retryable_gaps": 0,
-                "by_reason": {},
-                "gaps": [],
-            }
+        return {
+            **self._summarize_known_gap_counts(gaps),
+            "gaps": [
+                {
+                    "start_ts": g["start_ts"],
+                    "end_ts": g["end_ts"],
+                    "minutes": (g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1,
+                    "retry_count": g.get("retry_count", 0),
+                    "reason": g.get("reason", GAP_REASON_AUTO),
+                    "persistent": g.get("retry_count", 0) >= _GAP_MAX_RETRIES
+                    and not self._should_retry_gap(g),
+                }
+                for g in gaps
+            ],
+        }
 
+    def _summarize_known_gap_counts(self, gaps: List[GapEntry]) -> Dict[str, Any]:
         total_minutes = sum((g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1 for g in gaps)
         persistent = sum(
             1
@@ -4527,18 +4534,6 @@ class CandlestickManager:
             "persistent_gaps": persistent,
             "retryable_gaps": retryable,
             "by_reason": by_reason,
-            "gaps": [
-                {
-                    "start_ts": g["start_ts"],
-                    "end_ts": g["end_ts"],
-                    "minutes": (g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1,
-                    "retry_count": g.get("retry_count", 0),
-                    "reason": g.get("reason", GAP_REASON_AUTO),
-                    "persistent": g.get("retry_count", 0) >= _GAP_MAX_RETRIES
-                    and not self._should_retry_gap(g),
-                }
-                for g in gaps
-            ],
         }
 
     def _missing_spans(self, arr: np.ndarray, start_ts: int, end_ts: int) -> List[Tuple[int, int]]:
@@ -4948,7 +4943,7 @@ class CandlestickManager:
             ]
             last_refresh_ms = self.get_last_refresh_ms(symbol) if step_ms == ONE_MIN_MS else 0
             gap_summary = (
-                self.get_gap_summary(symbol)
+                self._summarize_known_gap_counts(self._get_known_gaps_enhanced(symbol))
                 if step_ms == ONE_MIN_MS
                 else {
                     "total_gaps": 0,

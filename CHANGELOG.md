@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Skip constructing unused per-gap detail rows when reporting completed-candle health.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
