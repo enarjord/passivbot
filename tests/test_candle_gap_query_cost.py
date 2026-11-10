@@ -160,6 +160,89 @@ def test_candle_health_counts_gaps_without_detail_retry_pass(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provisional", [False, True])
+async def test_candle_gap_masks_skip_unused_pass_and_recheck_external_proof(
+    tmp_path, monkeypatch, provisional
+):
+    cm = CandlestickManager(
+        exchange=None, exchange_name="fixture", cache_dir=str(tmp_path),
+        provisional_internal_gap_tolerance_minutes=2,
+    )
+    other = CandlestickManager(
+        exchange=None, exchange_name="fixture", cache_dir=str(tmp_path)
+    )
+    cm._now_ms_callback = other._now_ms_callback = lambda: NOW
+    start = NOW - 16 * ONE_MIN_MS
+    absent = {3, 6, 7, 8, 11, 15}
+    source = np.array(
+        [
+            (start + i * ONE_MIN_MS, 100 + i, 100 + i, 100 + i, 100 + i, 1.0)
+            for i in range(16) if i not in absent
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    gaps = [
+        dict(
+            start_ts=start + lo * ONE_MIN_MS, end_ts=start + hi * ONE_MIN_MS,
+            reason=reason, retry_count=_GAP_MAX_RETRIES, added_at=NOW, last_retry_at=NOW,
+        )
+        for lo, hi, reason in (
+            (3, 3, "fetch_failed"), (6, 8, "fetch_failed"), (11, 11, "no_trades"),
+        )
+    ]
+    calls = []
+    summarize = cm._unverified_candle_gap_ranges
+
+    def observe(*args):
+        calls.append(args)
+        return summarize(*args)
+
+    monkeypatch.setattr(cm, "_unverified_candle_gap_ranges", observe)
+
+    async def read():
+        return await cm.get_candles(
+            SYMBOL, start_ts=start, end_ts=NOW, allow_remote_fetch=False,
+            allow_provisional_internal_gaps=provisional, fill_trailing_gaps=False,
+        )
+
+    def assert_rows(actual, synthesized):
+        expected = []
+        previous_close = None
+        for i in range(16):
+            if i in synthesized:
+                expected.append((start + i * ONE_MIN_MS, *([previous_close] * 4), 0.0))
+            elif i not in absent:
+                previous_close = 100 + i
+                expected.append((start + i * ONE_MIN_MS, *([previous_close] * 4), 1.0))
+        np.testing.assert_array_equal(actual, np.array(expected, dtype=CANDLE_DTYPE))
+
+    try:
+        cm._persist_batch(
+            SYMBOL, source, timeframe="1m", merge_cache=True, last_refresh_ms=NOW - 1
+        )
+        cm._save_known_gaps_enhanced(SYMBOL, gaps)
+        synthesized = {3, 11} if provisional else {11}
+        assert_rows(await read(), synthesized)
+
+        # Another writer can certify the whole outage. This read must observe
+        # the replaced index, even when the discarded mask is never built.
+        other._save_known_gaps_enhanced(
+            SYMBOL, [gaps[0], dict(gaps[1], reason="no_trades"), gaps[2]]
+        )
+        synthesized.update({6, 7, 8})
+        assert_rows(await read(), synthesized)
+        assert calls == ([] if provisional else [(SYMBOL, start, NOW - ONE_MIN_MS)] * 2)
+        assert cm.get_last_refresh_ms(SYMBOL) == NOW - 1
+        assert cm._synthetic_timestamps[SYMBOL] == {
+            start + i * ONE_MIN_MS for i in synthesized
+        }
+        np.testing.assert_array_equal(cm._cache[SYMBOL], source)
+    finally:
+        other.close()
+        cm.close()
+
+
+@pytest.mark.asyncio
 async def test_real_historical_read_uses_bounded_gap_cohort_without_network(tmp_path, monkeypatch):
     cm = manager(tmp_path)
     class NoRequests:

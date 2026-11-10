@@ -9429,11 +9429,6 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
-        unverified_gap_ranges = self._unverified_candle_gap_ranges(
-            symbol,
-            start_ts,
-            end_ts,
-        )
         if allow_provisional_internal_gaps:
             provisional_tolerance_ms = int(
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
@@ -9454,7 +9449,9 @@ class CandlestickManager:
                         (overlap_start, overlap_end)
                     )
         else:
-            excluded_synthetic_ranges = unverified_gap_ranges
+            excluded_synthetic_ranges = self._unverified_candle_gap_ranges(
+                symbol, start_ts, end_ts
+            )
         result = self.standardize_gaps(
             data_for_gaps,
             start_ts=start_ts,
