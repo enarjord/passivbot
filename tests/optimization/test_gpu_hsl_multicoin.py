@@ -34,6 +34,7 @@ def make_proxy(
     dispatch_budget=1000000,
 ):
     config = generated_template(get_expanded_config_prototype(), mode)
+    config["optimize"]["bounds"] = {}
     assert coin_count >= 1
     coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
     config['bot']["portfolio"]['strategy_kind'] = strategy
@@ -41,7 +42,9 @@ def make_proxy(
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     config["backtest"].update(
-        starting_balance=1000.0, btc_collateral_target_ratio=0.0
+        starting_balance=1000.0,
+        btc_collateral_target_ratio=0.0,
+        limit_order_fill_buffer_fraction=0.0,
     )
     for side in ("long", "short"):
         bot = config["bot"][side]

@@ -66,12 +66,24 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
     effective_bot = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).effective_view()
     for side in ("long", "short"):
-        cooldown = result["optimize"]["bounds"][side]["entry_cooldown"]
-        # Keep the configured floor. Positive adaptive weights require a
-        # finite ceiling, which an explicit unbounded policy does not supply.
+        bounds = result["optimize"]["bounds"][side]
+        cooldown = bounds["entry_cooldown"]
+        policy = effective_bot[side]["entry_cooldown"]
         cooldown.pop("min_duration_minutes", None)
-        if effective_bot[side]["entry_cooldown"]["max_duration_minutes"] is None:
-            cooldown.pop("weights_minutes", None)
+        modifiers = cooldown.pop("weights_minutes", {})
+        if policy["max_duration_minutes"] is not None:
+            active_modifiers = {
+                name: domain for name, domain in modifiers.items() if policy["weights_minutes"][name] > 0.0
+            }
+            if active_modifiers:
+                cooldown["weights_minutes"] = active_modifiers
+        # Keep disabled RMS consumers fixed. Opening either search dimension
+        # can make an existing coarser-candle replay require one-minute data.
+        forager = bounds["forager"]
+        if effective_bot[side]["forager"]["score_weights"]["rms_directionality"] == 0.0:
+            forager["score_weights"].pop("rms_directionality", None)
+            if policy["weights_minutes"]["adverse_directionality"] == 0.0:
+                forager.pop("rms_directionality_ema_span_minutes", None)
     _anchor_file_references(result, base_config_path=base_config_path)
     result = prepare_config(result, base_config_path=base_config_path, verbose=False)
     result = strip_config_metadata(result)

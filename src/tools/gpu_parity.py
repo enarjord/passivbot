@@ -183,6 +183,7 @@ def fixture_inputs(args):
     config["backtest"].update(
         exchanges=[args.exchange], starting_balance=1000.0,
         btc_collateral_target_ratio=0.0, filter_by_min_effective_cost=args.filter_by_min_effective_cost,
+        limit_order_fill_buffer_fraction=0.0,
         start_date=datetime.fromtimestamp(int(timestamps[0]) / 1000, timezone.utc).isoformat(),
         end_date=datetime.fromtimestamp((int(timestamps[-1]) + 60_000) / 1000, timezone.utc).isoformat(),
     )

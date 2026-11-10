@@ -59,6 +59,36 @@ def test_recommended_bounds_preserve_unbounded_cooldown_with_zero_adaptive_weigh
     assert weights == {"adverse_directionality": (0.0, 0.0), "exposure_ratio": (0.0, 0.0)}
 
 
+def test_recommended_bounds_keep_five_minute_replay_without_rms_runnable():
+    from optimization.warmup import validate_optimizer_dataset_intervals
+    from tools.optimizer_bounds import apply_recommended_bounds
+
+    raw = source()
+    raw["bot"]["global"]["universe"]["approved_coins"] = ["BTC", "ETH"]
+    raw["bot"]["global"]["entry_cooldown"] = {
+        "base_duration_minutes": 0.0,
+        "min_duration_minutes": 0.0,
+        "max_duration_minutes": 60.0,
+        "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+    }
+    raw["bot"]["global"]["forager"] = {
+        "score_weights": {"ema_readiness": 0.4, "volume": 0.3, "log_range": 0.3, "rms_directionality": 0.0},
+    }
+    raw["backtest"] = {"candle_interval_minutes": 5, "exchanges": ["binance"]}
+    raw["optimize"] = {
+        "scoring": [{"metric": "backtest_completion_fraction", "goal": "max"}],
+        "limits": [],
+    }
+    config = prepare_config(apply_recommended_bounds(raw), verbose=False)
+    config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
+    market = {
+        "qty_step": 0.001, "price_step": 0.1, "min_qty": 0.001, "min_cost": 1.0, "c_mult": 1.0,
+        "exchange": "binance", "maker": 0.0002, "taker": 0.0005,
+    }
+    mss = {coin: {**market, "symbol": f"{coin}/USDT:USDT"} for coin in ("BTC", "ETH")}
+    validate_optimizer_dataset_intervals(config, mss, "binance")
+
+
 def test_common_bound_flags_are_discovered_without_authoring_any_default_range():
     parser = argparse.ArgumentParser()
     raw = get_template_config()
