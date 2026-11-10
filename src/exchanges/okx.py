@@ -486,15 +486,15 @@ class OKXBot(CCXTBot):
             else:
                 raise
 
-    async def calc_ideal_orders(self):
+    async def _finalize_exchange_ideal_orders(self, ideal_orders, *, market_prices=None):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
-        ideal_orders = await super().calc_ideal_orders()
-        market_prices = await self._get_live_last_prices(
-            ideal_orders.keys(),
-            max_age_ms=10_000,
-            context="okx_order_cap_sort",
-            allow_completed_candle_fallback=True,
-        )
+        if market_prices is None:
+            market_prices = await self._get_live_last_prices(
+                ideal_orders.keys(),
+                max_age_ms=10_000,
+                context="okx_order_cap_sort",
+                allow_completed_candle_fallback=True,
+            )
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:

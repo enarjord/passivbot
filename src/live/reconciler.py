@@ -948,29 +948,50 @@ def mark_account_critical_state_dirty(
     )
 
 
-async def calc_orders_to_cancel_and_create(bot):
-    """Determine which existing orders to cancel and which new ones to place."""
-    bot._fresh_entry_eligibility_trace = None
-    connector_enabled = connector_supports_order_churn_gate(bot)
+def _begin_order_churn_generation(bot):
     state = getattr(bot, "_order_churn_gate_state", None)
     if not isinstance(state, OrderChurnGateState):
         state = OrderChurnGateState()
         bot._order_churn_gate_state = state
-    generation = state.begin_generation()
+    return state, state.begin_generation()
+
+
+def _record_ordinary_planning_failure(bot, state, generation):
+    _emit_order_churn_evidence_summary(
+        bot,
+        state=state,
+        generation=generation,
+        reset=state.clear_history(),
+        decisions=[ChurnDecision(False, "planning_failed")],
+        symbols=getattr(bot, "active_symbols", []) or [],
+        snapshot_status="skipped",
+    )
+
+
+def record_ordinary_planning_failure(bot):
+    """End churn evidence continuity when planning fails before reconciliation."""
+    if connector_supports_order_churn_gate(bot):
+        state, generation = _begin_order_churn_generation(bot)
+        _record_ordinary_planning_failure(bot, state, generation)
+
+
+async def calc_orders_to_cancel_and_create(
+    bot, *, calculate_ideal_orders=None, sort_prices=None
+):
+    """Determine which existing orders to cancel and which new ones to place."""
+    bot._fresh_entry_eligibility_trace = None
+    connector_enabled = connector_supports_order_churn_gate(bot)
+    state, generation = _begin_order_churn_generation(bot)
     try:
-        ideal_orders = await bot.calc_ideal_orders()
+        calculate = (
+            bot.calc_ideal_orders
+            if calculate_ideal_orders is None
+            else calculate_ideal_orders
+        )
+        ideal_orders = await calculate()
     except Exception:
         if connector_enabled:
-            reset = state.clear_history()
-            _emit_order_churn_evidence_summary(
-                bot,
-                state=state,
-                generation=generation,
-                reset=reset,
-                decisions=[ChurnDecision(False, "planning_failed")],
-                symbols=getattr(bot, "active_symbols", []) or [],
-                snapshot_status="skipped",
-            )
+            _record_ordinary_planning_failure(bot, state, generation)
         raise
     validate_rust_ideal_orders(ideal_orders)
     if connector_enabled:
@@ -981,9 +1002,14 @@ async def calc_orders_to_cancel_and_create(bot):
 
     wave = bot._hsl_planning_wave
     snapshot = bot._current_planning_snapshot
-    cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(
-        bot, ideal_orders
-    )
+    if sort_prices is None:
+        cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(
+            bot, ideal_orders
+        )
+    else:
+        cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(
+            bot, ideal_orders, sort_prices=sort_prices
+        )
     hsl_live.owner(bot).bind(wave, cancels, creates, ordinary=True)
     bot._current_planning_snapshot = snapshot
     return cancels, creates
@@ -3138,6 +3164,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
     apply_mode_filters: bool = True,
     collect_fresh_entry_eligibility: bool = True,
+    sort_prices=None,
 ):
     """Reconcile exchange orders against a supplied ideal order map."""
     bot._fresh_entry_eligibility_trace = None
@@ -3273,8 +3300,12 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             len(blocked_cancellations),
             len(blocked),
         )
-    to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
-    to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
+    if sort_prices is None:
+        to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
+        to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
+    else:
+        to_cancel = bot._sort_orders_at_market_prices(to_cancel, "to_cancel", sort_prices)
+        to_create = bot._sort_orders_at_market_prices(to_create, "to_create", sort_prices)
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)

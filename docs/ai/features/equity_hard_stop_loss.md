@@ -94,56 +94,54 @@ planner's market-snapshot surface. A protective wave stamps its cohort when it h
 retired-order work, under the same input validation and write admission rules.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
-Ordinary HSL acquisition completes remote candle/EMA, quote and confirming account reads before
-freezing the immutable HSL candle-source and fill receipts actually consumed by its decision.
-After EMA preparation and before quotes, ordinary HSL preparation can join an in-flight account
-refresh before choosing the fill task, so it can see the task scheduled by that owner pass.
-It starts no account read at this step and still performs the normal account confirmation after
-quotes. It can wait up to two seconds for one owned fill task. Protection and the fill refresh
-proceed independently. Timeout leaves the refresh running and ordinary readiness uses the actual
-current facts.
-Early trailing work only preloads the factual candle cohort under one shared bounded remote
-budget; it cannot confirm a fill transition or mutate derived trailing readiness. Complete local
-candle acquisition before freezing the consumed receipts. Derive the complete trailing inputs and
-pending-confirmation predicates from current canonical fills and the owned candle results without
-yielding after the first fill/confirmation read. A discarded asynchronous cache-read cohort must
-never clear a pending confirmation. This acquire-then-derive rule also applies to ordinary trailing
-callers with HSL disabled. Recheck exact receipt identities and account facts before synchronous
-HSL/native consumption. Revalidate previously confirmed trailing evidence under the
-[canonical fill-confirmation contract](fill_events_manager.md); an unchanged fill ID or partial
-ledger signature cannot certify corrected after-state or replay inputs. Missing cached coverage stays explicitly unavailable;
-no provisional bundle grants permission. A receipt renewed before this consumption does not
-invalidate unconsumed work. A replacement after consumption invalidates even empty plans,
-reconciliation, completed-plan acceptance after protection, and connector admission, even when
-its payload is equal. Quotes refreshed by preparation do not invalidate these source receipts.
-The serialized owner can collect one pending ordinary task that finished during the cycle's
-account refresh or protective work after that protection pass. It keeps the normal inter-cycle
-wait and the same receipt and connector checks, without waiting for unfinished preparation.
-If a ready ordinary plan fails admission solely because known account observations expired,
-the owner can recheck it once after the scheduled authoritative account refresh and protective
-pass. The full current-input checks still apply, including the exact account facts and consumed
-source receipts. Missing observations, invalid clocks and pending confirmations cannot take this
-route. The plan keeps its original snapshot and acquisition times.
-HSL-disabled ordinary preparation keeps its existing initial-receipt and readiness checks.
-The active plan strongly owns consumed receipts through execution. Per-order wave history retains
-only weak references, and discarded or completed plans explicitly retire their receipt identities;
-a retained diagnostic traceback cannot keep an old order authorized. Expired or retired references
-fail closed. Bounded ordinary-defer diagnostics report the discard phase and reason without raw
-input payloads.
-Slow ordinary preparation must not consume the current-account freshness budget before
-permission capture. After EMA and quote preparation, confirm a fresh account cohort without
-changing the prepared position, order, snapped-balance or required-fill facts. An unchanged
-confirming read may advance its actual receipt times; it cannot retimestamp an old observation.
-An epoch-changing confirmation reacquires quotes through the canonical provider for that cohort,
-retaining their factual acquisition times. Recheck account facts and freshness after that await.
-Each attempt performs at most one such account refresh: changed facts, unavailable confirmation
-or renewed expiry discard the ordinary plan and retry through normal scheduling. This work stays
-in the ordinary task and does not make preparation a protective prerequisite.
+With HSL enabled, one owned background task prepares the ordinary symbol universe,
+remote candle data, EMA inputs and quotes. It can join an account refresh already in
+flight before selecting the fill task that refresh scheduled. It gives the owned fill
+task up to two seconds. Both protective and fill work proceed independently. Early
+trailing work only preloads factual candles under one bounded remote budget.
 
-With HSL disabled, ordinary preparation can join an account refresh already in flight before
-native calculation. It starts no additional account read. Verify unchanged prepared facts and
-reacquire quotes through the canonical provider after the wait before consuming the current raw
-balance. Keep the initial fill and candle receipt checks and all existing write admission checks.
+If a preparation is ready at entry and the previous account cohort is still current,
+the owner can run protection before the scheduled read. The serialized owner then refreshes
+balance, positions and open orders and runs protection on that cohort. When a write requires
+account confirmation, start new preparation from the confirming cohort.
+After protection it can consume one ready preparation, including work that completed during
+the same pass. It verifies that the just-refreshed account cohort survived protection
+and that the prepared positions, open orders, sizing balance, required fill facts,
+universe and modes still match. Rust sees the current exact raw balance. It remains
+pinned through connector admission.
+
+Select the complete quote cohort at the canonical fetch age and retain its factual
+acquisition timestamps. Preparation and quote retries leave planner surface publication
+to the owner. For expired quotes the owner can start one background refresh for the full quote cohort
+alongside the scheduled account read while retaining the prepared candle and EMA inputs
+within the same completed-candle minute. Age-bounded EMA carry-forward and cache-only
+candidate readiness require new preparation. Apply the same reuse checks when the
+shared cache supplies a replacement for expired prepared quotes. The owner keeps its normal inter-cycle wait and consumes only completed quote work.
+The planner, venue order caps and reconciliation ranking use the same accepted
+quote cohort.
+
+For held trailing positions, read the current local candles after protection. Confirm the
+account cohort, current quotes and trailing anchors after that read. Freeze the actual HSL
+candle-source and fill receipts, then derive trailing inputs and pending confirmations
+from current canonical fills and the acquired candles without yielding after the first
+fill or confirmation read. Revalidate prior trailing evidence under the
+[canonical fill-confirmation contract](fill_events_manager.md). Same-ID corrections
+require current after-state and replay facts. Missing cached coverage stays explicitly
+unavailable. A receipt renewed before consumption can supply the new factual inputs.
+A replacement after consumption invalidates reconciliation, ordinary acceptance and
+connector admission, including equal payloads and empty plans.
+
+The active plan strongly owns consumed receipts through execution. Per-order wave
+history keeps weak references. Retire receipt identities on completion or discard.
+Expired or retired references fail closed. Record bounded defer reasons and the
+post-protection calculation duration without raw input payloads.
+
+With HSL disabled, ordinary preparation retains initial receipt and readiness checks.
+It can join an account refresh already in flight before native calculation and
+reacquires canonical quotes after the wait. The serialized owner can recheck a ready
+plan once after the scheduled refresh and protection if account age alone blocked it.
+The plan retains its original snapshot and acquisition times. Admission requires exact
+account facts, valid clocks, no pending confirmations and current consumed receipts.
 
 The offline fake runner drains unmet account confirmations, owner-required fill readiness and
 ordinary execution changes before advancing a bar. After a typed create/cancel connector deferral

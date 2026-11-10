@@ -8,6 +8,48 @@ from live.market_snapshot import MarketSnapshotUnavailable
 
 
 @pytest.mark.asyncio
+async def test_cached_snapshots_preserve_quote_identity_and_require_complete_fresh_cohort(
+    monkeypatch,
+):
+    from dataclasses import replace
+    from live import market_snapshot
+
+    now = [10_000]
+    calls = []
+    monkeypatch.setattr(market_snapshot, "utc_ms", lambda: now[0])
+
+    async def fetch():
+        calls.append(True)
+        return {
+            "A": {"bid": 99.0, "ask": 101.0, "last": 100.0, "timestamp": 9_900},
+            "B": {"bid": 199.0, "ask": 201.0, "last": 200.0},
+        }
+
+    provider = MarketSnapshotProvider(exchange_name="fake", fetch_tickers=fetch)
+    assert provider.get_cached_snapshots([], max_age_ms=5_000) == {}
+    first = await provider.get_snapshots(["A", "B"], max_age_ms=5_000)
+    now[0] += 5_000
+    cached = provider.get_cached_snapshots(["B", "A", "B", ""], max_age_ms=5_000)
+    assert list(cached) == ["B", "A"]
+    assert cached["A"] is first["A"] and cached["B"] is first["B"]
+    assert cached["A"].fetched_ms == 10_000 and cached["A"].exchange_timestamp_ms == 9_900
+    assert provider.get_cached_snapshots(["A", "missing"], max_age_ms=5_000) is None
+
+    for bad_quote in (
+        replace(first["B"], ask=198.0),
+        replace(first["B"], fetched_ms=0),
+        replace(first["B"], fetched_ms=-1),
+        replace(first["B"], fetched_ms=now[0] + 1),
+    ):
+        provider._cache["B"] = bad_quote
+        assert provider.get_cached_snapshots(["A", "B"], max_age_ms=5_000) is None
+    provider._cache["B"] = first["B"]
+    now[0] += 1
+    assert provider.get_cached_snapshots(["A", "B"], max_age_ms=5_000) is None
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["bulk", "symbols"])
 async def test_cancelled_waiter_does_not_cancel_shared_quote_or_other_waiter(strategy):
     started, release = asyncio.Event(), asyncio.Event()
@@ -1126,6 +1168,8 @@ async def test_shutdown_blocks_cache_reads_and_retry_after_suppressed_cancellati
     )
     with pytest.raises(MarketSnapshotUnavailable, match="shutting down"):
         await provider.get_snapshots(["A"])
+    with pytest.raises(MarketSnapshotUnavailable, match="shutting down"):
+        provider.get_cached_snapshots(["A"], max_age_ms=5_000)
 
 
 @pytest.mark.asyncio
@@ -1229,8 +1273,9 @@ async def test_shutdown_reports_failure_after_bounded_abandonment(monkeypatch, c
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["bulk", "symbols"])
 @pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("cache_only", [False, True])
 async def test_completed_fatal_precedes_callback_cache_and_replacement(
-    strategy, cached
+    strategy, cached, cache_only
 ):
     started, release = asyncio.Event(), asyncio.Event()
     calls = 0
@@ -1266,6 +1311,8 @@ async def test_completed_fatal_precedes_callback_cache_and_replacement(
 
     async def read_before_callback():
         assert owned.done() and not provider._pending_failures
+        if cache_only:
+            return provider.get_cached_snapshots(["A"], max_age_ms=5_000)
         return await provider.get_snapshots(["A"])
 
     reader = asyncio.create_task(read_before_callback())

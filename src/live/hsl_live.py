@@ -124,6 +124,16 @@ class OrdinaryReceipts:
 
 
 @dataclass(frozen=True)
+class _OrdinaryPreparation:
+    account: tuple
+    strategy: object
+    strategy_minute: int
+    trailing_anchors: dict
+    quotes: dict
+    quotes_reacquired: bool = False
+
+
+@dataclass(frozen=True)
 class Wave:
     captured_ms: int
     position_observed_ms: int
@@ -163,6 +173,7 @@ class Owner:
         self._schedule_clock = monotonic
         self._next_sources = self._next_history = 0.0
         self._ordinary = None
+        self._ordinary_quote_retry = None
         self._account_report = None
         self._ordinary_started_ms = None
         self._cycle_running = False
@@ -337,6 +348,9 @@ class Owner:
     async def prepare_ordinary_consumption(self, prepared_account):
         """Rebuild fill-dependent inputs after remote work, then freeze their cohort."""
         candles = await self.bot._preload_trailing_candles(allow_remote_fetch=False)
+        return await self._consume_ordinary_candles(prepared_account, candles)
+
+    async def _consume_ordinary_candles(self, prepared_account, candles):
         if prepared_account is not None:
             self.require_ordinary_account(prepared_account)
         receipts = self.ordinary_receipts()
@@ -833,16 +847,9 @@ class Owner:
             plan = await self._prepare_ordinary_plan(account, initial_receipts)
             return plan
         finally:
-            # The active returned plan owns these references until execution
-            # finishes. The bot and bounded per-order wave history must not keep
-            # old source tapes alive after an attempt has retired.
-            wave = getattr(bot, "_hsl_planning_wave", None)
-            if isinstance(wave, Wave) and wave.ordinary_receipts is not None:
-                if plan is None:
-                    self._retired_ordinary_receipts.add(wave.ordinary_receipts)
-                bot._hsl_planning_wave = replace(wave, ordinary_receipts=None)
+            self._release_planning_wave(plan)
 
-    async def _prepare_ordinary_plan(self, account, initial_receipts):
+    async def _prepare_ordinary_universe(self, account):
         bot = self.bot
         await bot.prepare_planning_universe()
         if not self.same_account_facts(account, self.account_facts()):
@@ -863,11 +870,183 @@ class Owner:
                 missing=details.get("missing", ()),
             )
             return None
+        return True
+
+    async def _prepare_ordinary_plan(self, account, initial_receipts):
+        bot = self.bot
+        if not await self._prepare_ordinary_universe(account):
+            return None
         try:
             cancels, creates = await bot.calc_orders_to_cancel_and_create()
         except OrdinaryPlanDeferred as exc:
             self._defer_ordinary(exc.reason, phase="consumption", missing=exc.missing)
             return None
+        return self._freeze_ordinary_plan(account, initial_receipts, cancels, creates)
+
+    async def _acquire_ordinary_inputs(self):
+        from live import reconciler
+        from utils import utc_ms
+
+        if self._shutdown_requested():
+            return None
+        missing = self._current_account_unavailable(int(utc_ms()))
+        if missing:
+            self._defer_ordinary(
+                "current_account_inputs_unavailable", phase="preparation", missing=missing
+            )
+            return None
+        bot = self.bot
+        account = self.account_facts()
+        if not await self._prepare_ordinary_universe(account):
+            return None
+        try:
+            symbols = sorted(set(bot.active_symbols))
+            strategy_minute = bot._completed_candle_health_now_ms() // 60_000
+            strategy = await bot._prepare_orchestrator_inputs(symbols)
+            await self.wait_for_ordinary_fill_refresh()
+            anchors = bot._get_last_position_change_anchors()
+            quotes = await self._acquire_ordinary_quotes(symbols)
+            if not self.same_account_facts(account, self.account_facts()):
+                raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+            return _OrdinaryPreparation(account, strategy, strategy_minute, anchors, quotes)
+        except Exception:
+            reconciler.record_ordinary_planning_failure(bot)
+            raise
+
+    async def _acquire_ordinary_quotes(self, symbols, *, refresh=False):
+        try:
+            return await self.bot._get_orchestrator_market_snapshots(
+                symbols, record_surface=False, refresh=refresh
+            )
+        except MarketSnapshotUnavailable as exc:
+            raise OrdinaryPlanDeferred("prepared_market_inputs_unavailable") from exc
+
+    def _require_reusable_strategy(self, preparation):
+        if (
+            not preparation.strategy.allow_quote_retry
+            or preparation.strategy_minute != self.bot._completed_candle_health_now_ms() // 60_000
+        ):
+            raise OrdinaryPlanDeferred("prepared_strategy_inputs_expired")
+
+    async def _reacquire_prepared_quotes(self, preparation):
+        from live import reconciler
+
+        try:
+            self._require_reusable_strategy(preparation)
+            # Refresh the full set once. Successive partial reads can keep
+            # aging the previous cache hits on symbol-scoped connectors.
+            quotes = await self._acquire_ordinary_quotes(
+                preparation.strategy.symbols, refresh=True
+            )
+            return replace(preparation, quotes=quotes, quotes_reacquired=True)
+        except Exception:
+            reconciler.record_ordinary_planning_failure(self.bot)
+            raise
+
+    def _ready_ordinary_quotes(self, preparation):
+        bot = self.bot
+        symbols = preparation.strategy.symbols
+        if not symbols:
+            return {}
+        max_age_ms = bot._live_market_snapshot_fetch_max_age_ms()
+        quotes = bot.market_snapshot_provider.get_cached_snapshots(
+            symbols, max_age_ms=max_age_ms
+        )
+        if quotes is not None or bot.exchange != "hyperliquid":
+            return quotes
+        # Hyperliquid's explicit canonical fallback need not populate the provider.
+        if self._prepared_ordinary_quotes_current(preparation):
+            return preparation.quotes
+        return None
+
+    def _prepared_ordinary_quotes_current(self, preparation):
+        from utils import utc_ms
+
+        now = int(utc_ms())
+        max_age_ms = self.bot._live_market_snapshot_fetch_max_age_ms()
+        quotes = preparation.quotes
+        return set(quotes) == set(preparation.strategy.symbols) and all(
+            0 < snap.fetched_ms <= now
+            and now - snap.fetched_ms <= max_age_ms
+            and snap.is_valid()
+            for snap in quotes.values()
+        )
+
+    def _require_ordinary_quotes(self, preparation):
+        quotes = self._ready_ordinary_quotes(preparation)
+        if quotes is None:
+            raise OrdinaryPlanDeferred("prepared_market_inputs_unavailable")
+        if preparation.quotes_reacquired or not self._prepared_ordinary_quotes_current(preparation):
+            self._require_reusable_strategy(preparation)
+        return quotes
+
+    def _ordinary_account_cohort(self):
+        bot = self.bot
+        ledger = bot._ensure_freshness_ledger()
+        return (
+            ledger.epoch,
+            int(getattr(bot, "_account_invalidation_generation", 0)),
+            bot.get_raw_balance(),
+            tuple(ledger.surfaces[name].revision for name in ("balance", "positions", "open_orders")),
+        )
+
+    async def _plan_with_current_account(self, preparation, account_cohort):
+        """Calculate and reconcile under the account cohort that just ran protection."""
+        from live import reconciler
+
+        bot = self.bot
+        plan = None
+        reconciling = False
+        try:
+            if self._ordinary_account_cohort() != account_cohort:
+                raise OrdinaryPlanDeferred("account_cohort_changed_during_protection")
+            self.require_ordinary_account(preparation.account)
+            strategy = preparation.strategy
+            if not bot._orchestrator_preparation_is_current(strategy):
+                raise OrdinaryPlanDeferred("prepared_universe_changed")
+            anchors = preparation.trailing_anchors
+            if anchors != bot._get_last_position_change_anchors():
+                raise OrdinaryPlanDeferred("prepared_trailing_inputs_changed")
+            quotes = self._require_ordinary_quotes(preparation)
+            candles = {}
+            if anchors:
+                # The remote preload ran in preparation. Read the current local
+                # rows after protection, including same-minute corrections.
+                candles = await bot._preload_trailing_candles(allow_remote_fetch=False)
+                self.poll_inputs()
+                if self._ordinary_account_cohort() != account_cohort:
+                    raise OrdinaryPlanDeferred("account_cohort_changed_during_consumption")
+                if anchors != bot._get_last_position_change_anchors():
+                    raise OrdinaryPlanDeferred("prepared_trailing_inputs_changed")
+                if not bot._orchestrator_preparation_is_current(strategy):
+                    raise OrdinaryPlanDeferred("prepared_universe_changed")
+                quotes = self._require_ordinary_quotes(preparation)
+            receipts = await self._consume_ordinary_candles(preparation.account, candles)
+            if self._ordinary_account_cohort() != account_cohort:
+                raise OrdinaryPlanDeferred("account_cohort_changed_during_consumption")
+            if strategy.symbols:
+                bot._record_market_snapshot_surface(strategy.symbols, quotes)
+            reconciling = True
+            cancels, creates = await bot._reconcile_prepared_ordinary(strategy, quotes, receipts)
+            plan = self._freeze_ordinary_plan(preparation.account, None, cancels, creates)
+            return plan
+        except Exception:
+            if not reconciling:
+                reconciler.record_ordinary_planning_failure(bot)
+            raise
+        finally:
+            self._release_planning_wave(plan)
+
+    def _release_planning_wave(self, plan):
+        # The returned plan owns the consumed receipts until execution finishes.
+        wave = getattr(self.bot, "_hsl_planning_wave", None)
+        if isinstance(wave, Wave) and wave.ordinary_receipts is not None:
+            if plan is None:
+                self._retired_ordinary_receipts.add(wave.ordinary_receipts)
+            self.bot._hsl_planning_wave = replace(wave, ordinary_receipts=None)
+
+    def _freeze_ordinary_plan(self, account, initial_receipts, cancels, creates):
+        bot = self.bot
         if not self.same_account_facts(account, self.account_facts()):
             self._defer_ordinary("account_facts_changed", phase="after_reconciliation")
             return None
@@ -914,6 +1093,7 @@ class Owner:
             )
 
     def cancel_inputs(self):
+        self._ordinary_quote_retry = None
         for task in (
             self._ordinary,
             self._account_report,
@@ -986,6 +1166,9 @@ class Owner:
         elapsed_ms = None if started_ms is None else max(0, now_ms - started_ms)
         try:
             return task.result(), elapsed_ms
+        except OrdinaryPlanDeferred as exc:
+            self._defer_ordinary(exc.reason, phase="preparation", missing=exc.missing)
+            return None, elapsed_ms
         except RuntimeError as exc:
             handled, details = self.bot._handle_staged_execution_precondition_error(exc)
             if not handled:
@@ -1059,10 +1242,16 @@ class Owner:
             bot.state_change_detected_by_symbol = set()
             self.poll_inputs()
             plan = None
+            preparation = None
+            late_calculation = callable(
+                getattr(bot, "_prepare_orchestrator_inputs", None)
+            ) and runtime.enabled(bot)
             completed_plan = self._ordinary is not None and self._ordinary.done()
             # Retrieve completed failures before any fallible account refresh.
             if completed_plan:
                 plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                if isinstance(plan, _OrdinaryPreparation):
+                    preparation, plan = plan, None
                 if plan is not None:
                     completed_receipts = plan[3].ordinary_receipts
             protective_work = False
@@ -1072,10 +1261,13 @@ class Owner:
                     ordinary_completed=completed_plan,
                     ordinary_executed=False,
                 )
-            if plan is not None:
-                # Service ready work before a new confirming account read can
-                # invalidate it. Protection still gets first turn; every write
-                # retains its current-input and exact raw-balance admission.
+            if plan is not None or (
+                preparation is not None
+                and not self._refresh_lock.locked()
+                and not self._current_account_unavailable(int(utc_ms()))
+            ):
+                # Preserve the protective opportunity on a still-current
+                # cohort before the scheduled account read can block or fail.
                 phase_started = perf_counter()
                 protective_work = await self.protect(deferred_reports=reports)
                 timings["protection"] += int((perf_counter() - phase_started) * 1000)
@@ -1086,6 +1278,7 @@ class Owner:
                         ordinary_executed=False,
                         protective_work=protective_work,
                     )
+            if plan is not None:
                 gate_ms = int(utc_ms())
                 reason = await self._service_ordinary(plan, timings, now=gate_ms)
                 ordinary_executed = reason is None
@@ -1099,6 +1292,22 @@ class Owner:
                     )
                     if not retry_after_refresh:
                         self._defer_ordinary(reason, phase="after_protection")
+            quote_retry, self._ordinary_quote_retry = self._ordinary_quote_retry, None
+            if (
+                preparation is not None
+                and not preparation.quotes_reacquired
+                and preparation.strategy.allow_quote_retry
+                and self._ready_ordinary_quotes(preparation) is None
+            ):
+                quote_retry = preparation
+                preparation, completed_plan = None, False
+            if quote_retry is not None:
+                # Renew expired quotes alongside the normal owner read while
+                # keeping the completed candle and EMA preparation.
+                self._ordinary_started_ms = int(utc_ms())
+                self._ordinary = asyncio.create_task(
+                    self._reacquire_prepared_quotes(quote_retry)
+                )
             phase_started = perf_counter()
             refreshed = await bot.refresh_protective_authoritative_state(
                 require_balance=True
@@ -1121,6 +1330,17 @@ class Owner:
                 self.schedule_history()
                 self._next_history = now + 5.0
             self.schedule_sources()
+            if (
+                late_calculation
+                and self._ordinary is None
+                and preparation is None
+                and not self._current_account_unavailable(int(utc_ms()))
+            ):
+                # A previous write can leave no usable preparation. Start
+                # from the confirming account cohort while protection runs.
+                self._ordinary_started_ms = int(utc_ms())
+                self._ordinary = asyncio.create_task(self._acquire_ordinary_inputs())
+            account_cohort = self._ordinary_account_cohort() if late_calculation else None
             phase_started = perf_counter()
             protective_work = (
                 await self.protect(deferred_reports=reports) or protective_work
@@ -1134,11 +1354,34 @@ class Owner:
                 and self._ordinary is not None
                 and self._ordinary.done()
             )
-            if (retry_after_refresh or ready_at_tail) and not self._shutdown_requested():
+            if (retry_after_refresh or ready_at_tail or preparation is not None) and not self._shutdown_requested():
                 self.poll_inputs()  # Surface completed input failures before any write.
                 if ready_at_tail:
                     completed_plan = True
                     plan, ordinary_elapsed_ms = self._collect_completed_ordinary(int(utc_ms()))
+                    if isinstance(plan, _OrdinaryPreparation):
+                        preparation, plan = plan, None
+                    if plan is not None:
+                        completed_receipts = plan[3].ordinary_receipts
+                if preparation is not None:
+                    phase_started = perf_counter()
+                    try:
+                        plan = await self._plan_with_current_account(preparation, account_cohort)
+                    except OrdinaryPlanDeferred as exc:
+                        if (
+                            exc.reason == "prepared_market_inputs_unavailable"
+                            and not preparation.quotes_reacquired
+                            and preparation.strategy.allow_quote_retry
+                        ):
+                            self._ordinary_quote_retry = preparation
+                        self._defer_ordinary(exc.reason, phase="consumption", missing=exc.missing)
+                    except RuntimeError as exc:
+                        handled, details = bot._handle_staged_execution_precondition_error(exc)
+                        if not handled:
+                            raise
+                        bot._log_staged_execution_defer(details)
+                    finally:
+                        timings["ordinary_calculate"] = int((perf_counter() - phase_started) * 1000)
                     if plan is not None:
                         completed_receipts = plan[3].ordinary_receipts
                 if plan is not None:
@@ -1146,15 +1389,24 @@ class Owner:
                     reason = await self._service_ordinary(plan, timings, now=gate_ms)
                     ordinary_executed = reason is None
                     if reason is not None:
-                        handoff = "after_refresh_retry" if retry_after_refresh else "same_cycle"
+                        handoff = "after_protection_calculation" if preparation is not None else (
+                            "after_refresh_retry" if retry_after_refresh else "same_cycle"
+                        )
                         ordinary_admission = self._describe_ordinary_rejection(
                             plan, now_ms=gate_ms, handoff=handoff, reason=reason
                         )
                         self._defer_ordinary(reason, phase="after_protection")
             self.schedule_account_reporting()
-            if self._ordinary is None and not self._shutdown_requested():
+            if (
+                self._ordinary is None
+                and self._ordinary_quote_retry is None
+                and not self._shutdown_requested()
+                and (not late_calculation or not self._current_account_unavailable(int(utc_ms())))
+            ):
                 self._ordinary_started_ms = int(utc_ms())
-                self._ordinary = asyncio.create_task(self._ordinary_plan())
+                self._ordinary = asyncio.create_task(
+                    self._acquire_ordinary_inputs() if late_calculation else self._ordinary_plan()
+                )
             completed_cycle = not self._shutdown_requested()
             return dict(
                 updated=True,

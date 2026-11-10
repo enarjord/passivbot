@@ -89,8 +89,27 @@ class MarketSnapshotProvider:
             return None
         return snap if snap.is_valid() else None
 
+    def get_cached_snapshots(
+        self, symbols: Iterable[str], *, max_age_ms: int
+    ) -> dict[str, MarketSnapshot] | None:
+        """Return the complete cached quote cohort without starting a fetch."""
+        self._ensure_open()
+        ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
+        if not ordered_symbols:
+            return {}
+        self.raise_pending_failure()
+
+        now = int(utc_ms())
+        snapshots = {}
+        for symbol in ordered_symbols:
+            snap = self.get_cached(symbol, now_ms=now, max_age_ms=max_age_ms)
+            if snap is None or not 0 < snap.fetched_ms <= now:
+                return None
+            snapshots[symbol] = snap
+        return snapshots
+
     async def get_snapshots(
-        self, symbols: Iterable[str], *, max_age_ms: int = 10_000
+        self, symbols: Iterable[str], *, max_age_ms: int = 10_000, refresh: bool = False
     ) -> dict[str, MarketSnapshot]:
         self._ensure_open()
         ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
@@ -103,10 +122,11 @@ class MarketSnapshotProvider:
 
         now = utc_ms()
         out: dict[str, MarketSnapshot] = {}
-        for symbol in ordered_symbols:
-            snap = self.get_cached(symbol, now_ms=now, max_age_ms=max_age_ms)
-            if snap is not None:
-                out[symbol] = snap
+        if not refresh:
+            for symbol in ordered_symbols:
+                snap = self.get_cached(symbol, now_ms=now, max_age_ms=max_age_ms)
+                if snap is not None:
+                    out[symbol] = snap
 
         missing = [s for s in ordered_symbols if s not in out]
         if not missing:

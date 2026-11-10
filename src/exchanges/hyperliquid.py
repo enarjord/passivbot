@@ -2065,9 +2065,8 @@ class HyperliquidBot(CCXTBot):
     async def update_exchange_config(self):
         pass
 
-    async def calc_ideal_orders(self):
+    async def _finalize_exchange_ideal_orders(self, ideal_orders, *, market_prices=None):
         # hyperliquid needs custom price rounding
-        ideal_orders = await super().calc_ideal_orders()
         for sym in ideal_orders:
             for i in range(len(ideal_orders[sym])):
                 if ideal_orders[sym][i]["side"] == "sell":

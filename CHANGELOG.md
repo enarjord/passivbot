@@ -46,6 +46,10 @@ since the latest release tag; these features may already be available when insta
 - Let ordinary planning with HSL disabled join a pending account refresh before calculating
   orders, so an in-flight raw balance update does not immediately invalidate the new plan.
 
+- Calculate ordinary live orders after the current account refresh and protective pass when
+  HSL is enabled. Prepare candle and EMA inputs in the background to reduce deferrals caused
+  by account updates and renewed input receipts.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.
