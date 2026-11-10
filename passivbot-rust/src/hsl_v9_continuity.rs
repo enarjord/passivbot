@@ -405,27 +405,30 @@ impl Ledger {
 
     fn bootstrap(&self) -> Result<Input, String> {
         let mut raw = self.anchor.clone();
-        let original: BTreeMap<_, _> = raw["snapshot"]["pairs"]
-            .as_array()
-            .ok_or("invalid bootstrap pairs")?
-            .iter()
-            .map(|p| {
+        let mut original: BTreeMap<_, _> = std::mem::take(
+            raw["snapshot"]["pairs"]
+                .as_array_mut()
+                .ok_or("invalid bootstrap pairs")?,
+        )
+        .into_iter()
+        .map(|p| {
+            (
                 (
-                    (
-                        p["symbol"].as_str().unwrap().to_owned(),
-                        u8::from(p["position"]["pside"] == "short"),
-                    ),
-                    p.clone(),
-                )
-            })
-            .collect();
+                    p["symbol"].as_str().unwrap().to_owned(),
+                    u8::from(p["position"]["pside"] == "short"),
+                ),
+                p,
+            )
+        })
+        .collect();
         let mut pairs = vec![];
+        let mut retained_pairs = vec![];
         for (k, facts) in &self.pairs {
             if !original.contains_key(k) && !facts.fills.iter().any(|f| self.bootstrap_fill(k, f)) {
                 continue;
             }
-            let mut pair = if let Some(p) = original.get(k) {
-                p.clone()
+            let mut pair = if let Some(p) = original.remove(k) {
+                p
             } else {
                 let mut position = facts.metadata.clone();
                 position.size = 0.0;
@@ -460,36 +463,38 @@ impl Ledger {
                     .ok_or("invalid anchor position clock")?;
                 pair["position_at"] = json!(initial.min(at));
             }
-            pair["prices"] = serde_json::to_value(
-                facts
-                    .prices
-                    .range(self.origin..=self.anchor_now)
-                    .map(|(&t, &p)| (t.to_string(), p))
-                    .collect::<BTreeMap<_, _>>(),
-            )
-            .map_err(|e| e.to_string())?;
-            pair["fills"] = serde_json::to_value(
-                facts
-                    .fills
-                    .iter()
-                    .filter(|f| self.bootstrap_fill(k, f))
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|e| e.to_string())?;
+            pair["prices"] = json!({});
+            pair["fills"] = json!([]);
             pairs.push(pair);
+            retained_pairs.push((k, facts));
         }
         raw["snapshot"]["pairs"] = Value::Array(pairs);
         if !raw["snapshot"]["pairs"].as_array().unwrap().is_empty() {
             raw["snapshot"].as_object_mut().unwrap().remove("flat_coin");
         }
-        raw["budget_observations"] = serde_json::to_value(
-            self.budgets
-                .values()
-                .filter(|f| f.timestamp <= self.anchor_now)
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| e.to_string())?;
-        serde_json::from_value(raw).map_err(|e| e.to_string())
+        raw["budget_observations"] = json!([]);
+        let mut input: Input = serde_json::from_value(raw).map_err(|e| e.to_string())?;
+        // The ledger stores validated typed facts. Keep the original account
+        // provenance above and reuse its retained inputs without a JSON round trip.
+        for (pair, (key, facts)) in input.snapshot.pairs.iter_mut().zip(retained_pairs) {
+            pair.prices = facts
+                .prices
+                .range(self.origin..=self.anchor_now)
+                .map(|(&timestamp, &price)| (timestamp, price))
+                .collect();
+            pair.fills = facts
+                .fills
+                .iter()
+                .filter(|fill| self.bootstrap_fill(key, fill))
+                .cloned()
+                .collect();
+        }
+        input.budget_observations = self
+            .budgets
+            .range(..=(self.anchor_now, i64::MAX))
+            .map(|(_, fact)| fact.clone())
+            .collect();
+        Ok(input)
     }
 }
 
