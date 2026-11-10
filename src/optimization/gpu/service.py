@@ -1451,7 +1451,7 @@ class SharedAccountReplay:
             require_positive_high_low=True,
         )
         from optimization.gpu.residency import (
-            current_gpu_residency, prefer_streamed_ticks, discard_readonly_file_pages,
+            current_gpu_residency, prefer_streamed_ticks, supports_streamed_ticks, discard_readonly_file_pages,
             capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
         )
         device = gpu_device(torch)
@@ -1460,8 +1460,8 @@ class SharedAccountReplay:
                        else capture_cuda_input_memory_budget)
             input_memory_budget = capture(torch)
         stream_tick_inputs = bool(
-            self.strategy_kind == "trailing_martingale" and self.temporal_chunking
-            and device in {"mps", "cuda"} and current_gpu_residency() is not None
+            supports_streamed_ticks(self.strategy_kind, device) and self.temporal_chunking
+            and current_gpu_residency() is not None
             and prepared_data_cache is not None
             and prefer_streamed_ticks(len(values), coin_count, input_memory_budget,
                                       interval_ms=runs[0].interval_ms, device=device)

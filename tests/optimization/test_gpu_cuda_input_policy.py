@@ -70,18 +70,19 @@ def test_cuda_transport_preference_is_pure_and_keeps_small_histories_resident(mo
     assert observations["device_calls"] == observations["host_calls"] == 1
 
 
-def test_cuda_header_preflight_admits_streaming_but_keeps_guard_and_live_check(monkeypatch):
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_cuda_header_preflight_admits_streaming_but_keeps_guard_and_live_check(monkeypatch, strategy):
     torch, observations = _cuda(monkeypatch, free=7 * 2**30)
     budget = residency.capture_cuda_input_memory_budget(torch)
     shape = (3_000_000, 40, 4)
     with pytest.raises(MemoryError, match="45%"):
         _gpu_cached_input_preflight(None, shape, np.float64, input_memory_budget=budget)
     _gpu_cached_input_preflight(None, shape, np.float64,
-                                stream_tick_inputs=True, input_memory_budget=budget)
+                                strategy_kind=strategy, input_memory_budget=budget)
     observations["free"] = 2**30
     with pytest.raises(MemoryError, match="currently free"):
         _gpu_cached_input_preflight(None, shape, np.float64,
-                                    stream_tick_inputs=True, input_memory_budget=budget)
+                                    strategy_kind=strategy, input_memory_budget=budget)
 
 
 def test_cuda_preparation_uses_original_budget_while_activation_checks_live_free(monkeypatch):

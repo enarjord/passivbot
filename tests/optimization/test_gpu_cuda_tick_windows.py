@@ -78,6 +78,18 @@ def test_cuda_lowering_keeps_byte_relation_window_and_device_callable_views(help
         assert library._byte_parameters[kernel] == {6}
 
 
+def test_cuda_lowering_streams_ema_anchor_tick_arguments_without_rebinding_hourly_slot(helpers):
+    source = (ROOT / "passivbot-rust/src/gpu/mps_multicoin_common.metal").read_text()
+    source += (ROOT / "passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal").read_text()
+    source = helpers["_with_metal_tick_windows"](source, strategy="ema_anchor")
+    source = helpers["_with_compact_metal_hourly_ranges"](source, strategy="ema_anchor")
+    lowered = cuda_source(source, coin_capacity=4)
+    assert lowered.count("const int* window_fill_ticks,") == 3
+    assert lowered.count("const int* window_touch_ticks,") == 3
+    assert lowered.count("const float* compact_hour_log_ranges,") == 3
+    assert "hour_log_ranges[j * coin_count + coin]" in lowered
+
+
 def test_cuda_disk_window_contract_accepts_only_original_signed_byte_relation(helpers, tmp_path):
     data = tick_data(tmp_path)
     check = helpers["_metal_tick_window_paths"]

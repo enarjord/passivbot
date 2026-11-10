@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
+  within the existing GPU memory limit.
+
 - Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
 
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
