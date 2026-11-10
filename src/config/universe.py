@@ -321,6 +321,18 @@ def get_side_universe_sources(config, field, default=None):
     return result if result else default
 
 
+def get_authored_side_universe_sources(config, field, default=None):
+    """Read authored side bindings without exporting the whole config."""
+    from .bot_inheritance import reconciled_bot_policy
+    from .inherited_bounds import get_bound_plan
+
+    # Preserve the same prepared-bounds validation as the full source view.
+    get_bound_plan(config)
+    policy = reconciled_bot_policy(config)
+    bot = policy.source_view() if policy is not None else deepcopy(config.get("bot", {}))
+    return get_side_universe_sources(restore_universe_sources({"bot": bot}), field, default)
+
+
 def require_side_universe_sources(config, field):
     result = get_side_universe_sources(config, field, {})
     for side in ("long", "short"):

@@ -135,11 +135,65 @@ def test_prepared_views_retain_numeric_shape_and_source_authority_without_io(tmp
 
 
 def test_source_view_adopts_changed_public_binding_without_pinning_other_side():
-    from config.universe import get_side_universe_sources, universe_source_view
+    from config.universe import (
+        get_authored_side_universe_sources, get_side_universe_sources, universe_source_view,
+    )
     config = policy_config({"global": {"universe": {"approved_coins": ["BTC"]}}})
     config["bot"]["global"]["universe"]["approved_coins"] = ["ETH"]
-    assert get_side_universe_sources(config, "approved_coins") == {"long": ["ETH"], "short": ["ETH"]}
+    expected = {"long": ["ETH"], "short": ["ETH"]}
+    assert get_side_universe_sources(config, "approved_coins") == expected
+    assert get_authored_side_universe_sources(config, "approved_coins") == expected
     assert universe_source_view(config)["bot"] == {"global": {"universe": {"approved_coins": ["ETH"]}}}
+
+
+@pytest.mark.parametrize("typed", [False, True])
+@pytest.mark.parametrize("shared,pin", [(["BTC"], []), ("./coins.json", ["BTC"]), ("all", ["all"])])
+def test_authored_side_lookup_keeps_bindings_without_export(monkeypatch, typed, shared, pin):
+    from config import inherited_bounds
+    from config.universe import (
+        get_authored_side_universe_sources, get_side_universe_sources,
+        materialize_side_universe_sources, universe_source_view,
+    )
+    raw = {
+        "global": {"universe": {"approved_coins": shared}},
+        "long": {"universe": {"approved_coins": None}},
+        "short": {"universe": {"approved_coins": pin}},
+    }
+    config = policy_config(raw) if typed else {"bot": deepcopy(raw)}
+    materialize_side_universe_sources(
+        config, "approved_coins", {"long": ["BTC"], "short": ["BTC"] if pin else []},
+    )
+    expected = get_side_universe_sources(universe_source_view(config), "approved_coins")
+    assert expected == {"long": shared, "short": pin}
+
+    def unexpected_export(_config):
+        pytest.fail("authored binding lookup exported unrelated config")
+
+    monkeypatch.setattr(inherited_bounds, "optimize_bounds_source_view", unexpected_export)
+    result = get_authored_side_universe_sources(config, "approved_coins")
+    assert result == expected
+    if isinstance(result["long"], list):
+        result["long"].append("ETH")
+    result["short"].append("ETH")
+    assert get_authored_side_universe_sources(config, "approved_coins") == expected
+    assert get_side_universe_sources(config, "approved_coins")["long"] == ["BTC"]
+
+
+def test_authored_side_lookup_preserves_bounds_and_membership_validation():
+    from config.inherited_bounds import BoundPlan, PreparedOptimizationBounds
+    from config.universe import get_authored_side_universe_sources, materialize_side_universe_sources
+
+    config = policy_config({"global": {"universe": {"approved_coins": ["BTC"]}}})
+    materialize_side_universe_sources(config, "approved_coins", {"long": ["BTC"], "short": ["BTC"]})
+    config["bot"]["long"]["universe"]["approved_coins"].append("ETH")
+    bounds = PreparedOptimizationBounds({}, {}, BoundPlan((), (), "", "", ""))
+    config["optimize"] = {"bounds": bounds}
+    bounds["unexpected"] = [1.0, 2.0]
+    with pytest.raises(ValueError, match="prepared optimizer bounds changed"):
+        get_authored_side_universe_sources(config, "approved_coins")
+    del bounds["unexpected"]
+    with pytest.raises(ValueError, match="prepared membership edits"):
+        get_authored_side_universe_sources(config, "approved_coins")
 
 
 @pytest.mark.parametrize("field", ["approved_coins", "ignored_coins"])
