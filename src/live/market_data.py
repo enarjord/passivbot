@@ -590,7 +590,7 @@ async def get_live_market_snapshots(
 
 
 async def get_orchestrator_market_snapshots(
-    bot, symbols: list[str]
+    bot, symbols: list[str], *, refresh: bool = False
 ) -> dict[str, MarketSnapshot]:
     """Acquire current bid/ask/last snapshots without publishing planner state."""
     fetch_ttl_ms = bot._live_market_snapshot_fetch_max_age_ms()
@@ -603,7 +603,10 @@ async def get_orchestrator_market_snapshots(
             fetch_ttl_ms,
         )
         try:
-            snapshots = await provider.get_snapshots(symbols, max_age_ms=fetch_ttl_ms)
+            refresh_options = {"refresh": True} if refresh else {}
+            snapshots = await provider.get_snapshots(
+                symbols, max_age_ms=fetch_ttl_ms, **refresh_options
+            )
         except MarketSnapshotUnavailable as exc:
             if str(getattr(bot, "exchange", "") or "").lower() != "hyperliquid":
                 raise

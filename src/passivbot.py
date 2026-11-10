@@ -198,6 +198,25 @@ EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 from config.universe import get_authored_side_universe_sources, require_side_universe_sources
 
+@dataclass(frozen=True)
+class _OrchestratorPreparation:
+    symbols: list[str]
+    inputs: tuple
+    allow_quote_retry: bool
+    mode_overrides: dict[str, dict[str, Optional[str]]]
+    exchange_unavailable_symbols: set[str]
+    m1_close_emas: dict[str, dict[float, float]]
+    m1_volume_emas: dict[str, dict[float, float]]
+    m1_log_range_emas: dict[str, dict[float, float]]
+    h1_log_range_emas: dict[str, dict[float, float]]
+    ema_unavailable_symbols: set[str]
+    allow_missing_strategy_inputs_symbols: set[str]
+    forager_m1_log_range_emas: dict[str, dict[float, float]]
+    signed_rms_directionality: dict
+    forager_signed_rms_directionality: dict
+    rms_directionality_unavailable: dict
+
+
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
 
@@ -14571,7 +14590,11 @@ class Passivbot:
 
     async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
-        return await self.calc_ideal_orders_orchestrator()
+        ideal_orders = await self.calc_ideal_orders_orchestrator()
+        return await self._finalize_exchange_ideal_orders(ideal_orders)
+
+    async def _finalize_exchange_ideal_orders(self, ideal_orders, *, market_prices=None):
+        return ideal_orders
 
     def _protective_panic_target_psides_by_symbol(self) -> dict[str, set[str]]:
         """Return symbols/psides whose current live mode explicitly requires panic supervision."""
@@ -15321,6 +15344,7 @@ class Passivbot:
             "short": set(),
         }
         self._orchestrator_ema_bundle_completed = False
+        self._orchestrator_ema_bundle_allows_quote_retry = False
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
         self._monitor_runtime_forager_hints = {}
@@ -17699,6 +17723,13 @@ class Passivbot:
             symbol: dict(values) for symbol, values in forager_m1_log_range_emas.items()
         }
         self._orchestrator_ema_bundle_completed = True
+        # An age-bounded carry-forward may expire before a retained quote retry.
+        # Refresh these features through the normal preparation on the next attempt.
+        self._orchestrator_ema_bundle_allows_quote_retry = not (
+            close_ema_fallbacks
+            or forager_cached_ema_fallbacks
+            or forager_cached_metric_max_age_by_symbol
+        )
         Passivbot._emit_ema_bundle_completed_event(
             self,
             symbols=symbols,
@@ -17738,6 +17769,81 @@ class Passivbot:
         hsl = hsl_live.owner(self)
         hsl_enabled = hsl_live.runtime.enabled(self)
         prepared_account = hsl.account_facts()
+        preparation = await Passivbot._prepare_orchestrator_inputs(self, symbols)
+        if hsl_enabled:
+            await hsl.wait_for_ordinary_fill_refresh()
+        market_epoch = self._ensure_freshness_ledger().epoch
+        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        if await hsl.refresh_ordinary_account(
+            prepared_account, allow_new_refresh=hsl_enabled
+        ):
+            if not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch:
+                # A confirming read may change the epoch or spend the first
+                # quotes' freshness headroom. Reuse only quotes accepted by the
+                # canonical provider, retaining their real acquisition timestamps.
+                market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+            hsl.require_ordinary_account(prepared_account)
+        else:
+            prepared_account = None
+        # Remote acquisition may renew the factual fill tape. Rebuild every
+        # fill-derived trailing input from the current cohort, without remote
+        # I/O, before consuming HSL or native strategy inputs. An observation
+        # replaced after this point still invalidates even an equal payload.
+        receipts = await hsl.prepare_ordinary_consumption(prepared_account)
+        return Passivbot._calculate_prepared_ideal_orders(
+            self, preparation, market_snapshots, receipts
+        )
+
+    async def _reconcile_prepared_ordinary(
+        self, preparation: _OrchestratorPreparation, market_snapshots, receipts
+    ):
+        self._current_planning_snapshot = None
+        market_prices = {
+            symbol: snapshot.last for symbol, snapshot in market_snapshots.items()
+        }
+
+        async def calculate():
+            if not preparation.symbols:
+                self._hsl_planning_wave = hsl_live.owner(self).capture(
+                    ordinary_receipts=receipts
+                )
+                return {}
+            ideal_orders = self._calculate_prepared_ideal_orders(
+                preparation, market_snapshots, receipts
+            )
+            return await self._finalize_exchange_ideal_orders(
+                ideal_orders, market_prices=market_prices
+            )
+
+        return await reconciler.calc_orders_to_cancel_and_create(
+            self, calculate_ideal_orders=calculate, sort_prices=market_prices
+        )
+
+    def _orchestrator_preparation_inputs(self):
+        return (
+            getattr(self, "config", None),
+            getattr(self, "coin_overrides", None),
+            getattr(self, "markets_dict", None),
+        )
+
+    def _orchestrator_preparation_is_current(self, preparation):
+        symbols = preparation.symbols
+        if symbols != self._build_live_symbol_universe() or any(
+            before is not after
+            for before, after in zip(
+                preparation.inputs, self._orchestrator_preparation_inputs()
+            )
+        ):
+            return False
+        modes = self._build_orchestrator_mode_overrides(symbols)
+        unavailable = self._apply_exchange_symbol_unavailable_planning_policy(
+            symbols, modes, now_ms=utc_ms()
+        )
+        return modes == preparation.mode_overrides and unavailable == preparation.exchange_unavailable_symbols
+
+    async def _prepare_orchestrator_inputs(self, symbols: list[str]) -> _OrchestratorPreparation:
+        """Load candle and strategy features without acquiring an order permission."""
+        inputs = Passivbot._orchestrator_preparation_inputs(self)
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         exchange_unavailable_symbols = (
             self._apply_exchange_symbol_unavailable_planning_policy(
@@ -17786,29 +17892,46 @@ class Passivbot:
         forager_m1_log_range_emas = getattr(
             self, "_orchestrator_forager_m1_log_range_emas", {}
         )
-        trailing_unavailable_symbols = set(
-            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
+        return _OrchestratorPreparation(
+            symbols=symbols,
+            inputs=inputs,
+            allow_quote_retry=bool(
+                getattr(self, "_orchestrator_ema_bundle_allows_quote_retry", False)
+            ),
+            mode_overrides=mode_overrides,
+            exchange_unavailable_symbols=exchange_unavailable_symbols,
+            m1_close_emas=m1_close_emas,
+            m1_volume_emas=m1_volume_emas,
+            m1_log_range_emas=m1_log_range_emas,
+            h1_log_range_emas=h1_log_range_emas,
+            ema_unavailable_symbols=ema_unavailable_symbols,
+            allow_missing_strategy_inputs_symbols=allow_missing_strategy_inputs_symbols,
+            forager_m1_log_range_emas=forager_m1_log_range_emas,
+            signed_rms_directionality=getattr(self, "_orchestrator_signed_rms_directionality", {}),
+            forager_signed_rms_directionality=getattr(self, "_orchestrator_forager_signed_rms_directionality", {}),
+            rms_directionality_unavailable=getattr(self, "_orchestrator_rms_directionality_unavailable", {}),
         )
-        if hsl_enabled:
-            await hsl.wait_for_ordinary_fill_refresh()
-        market_epoch = self._ensure_freshness_ledger().epoch
-        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        if await hsl.refresh_ordinary_account(
-            prepared_account, allow_new_refresh=hsl_enabled
-        ):
-            if not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch:
-                # A confirming read may change the epoch or spend the first
-                # quotes' freshness headroom. Reuse only quotes accepted by the
-                # canonical provider, retaining their real acquisition timestamps.
-                market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-            hsl.require_ordinary_account(prepared_account)
-        else:
-            prepared_account = None
-        # Remote acquisition may renew the factual fill tape. Rebuild every
-        # fill-derived trailing input from the current cohort, without remote
-        # I/O, before consuming HSL or native strategy inputs. An observation
-        # replaced after this point still invalidates even an equal payload.
-        receipts = await hsl.prepare_ordinary_consumption(prepared_account)
+
+    def _calculate_prepared_ideal_orders(
+        self,
+        preparation: _OrchestratorPreparation,
+        market_snapshots: dict[str, MarketSnapshot],
+        receipts: hsl_live.OrdinaryReceipts,
+    ) -> dict[str, list]:
+        """Consume prepared features with the current account and market facts."""
+        hsl = hsl_live.owner(self)
+        symbols = preparation.symbols
+        mode_overrides = {
+            side: dict(modes) for side, modes in preparation.mode_overrides.items()
+        }
+        exchange_unavailable_symbols = preparation.exchange_unavailable_symbols
+        m1_close_emas = preparation.m1_close_emas
+        m1_volume_emas = preparation.m1_volume_emas
+        m1_log_range_emas = preparation.m1_log_range_emas
+        h1_log_range_emas = preparation.h1_log_range_emas
+        ema_unavailable_symbols = preparation.ema_unavailable_symbols
+        allow_missing_strategy_inputs_symbols = preparation.allow_missing_strategy_inputs_symbols
+        forager_m1_log_range_emas = preparation.forager_m1_log_range_emas
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
@@ -18001,17 +18124,15 @@ class Passivbot:
                     "allow_missing_strategy_inputs": (
                         symbol in allow_missing_strategy_inputs_symbols
                     ),
-                    "rms_directionality_unavailable": getattr(
-                        self, "_orchestrator_rms_directionality_unavailable", {}
-                    ).get(symbol, {}),
+                    "rms_directionality_unavailable": (
+                        preparation.rms_directionality_unavailable.get(symbol, {})
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
                         "m1": {
                             "signed_rms_directionality": sorted(
-                                getattr(self, "_orchestrator_signed_rms_directionality", {})
-                                .get(symbol, {})
-                                .items()
+                                preparation.signed_rms_directionality.get(symbol, {}).items()
                             ),
                             "close": m1_close_pairs,
                             "log_range": m1_lr_pairs,
@@ -18021,9 +18142,7 @@ class Passivbot:
                     },
                     "forager_m1": {
                         "signed_rms_directionality": sorted(
-                            getattr(self, "_orchestrator_forager_signed_rms_directionality", {})
-                            .get(symbol, {})
-                            .items()
+                            preparation.forager_signed_rms_directionality.get(symbol, {}).items()
                         ),
                         "close": [],
                         "log_range": forager_m1_lr_pairs,
@@ -18222,10 +18341,12 @@ class Passivbot:
         return {symbol: float(snap.last) for symbol, snap in snapshots.items()}
 
     async def _get_orchestrator_market_snapshots(
-        self, symbols: list[str], *, record_surface: bool = True
+        self, symbols: list[str], *, record_surface: bool = True, refresh: bool = False
     ) -> dict[str, MarketSnapshot]:
         """Acquire quotes and publish the cohort when it belongs to planning."""
-        snapshots = await market_data.get_orchestrator_market_snapshots(self, symbols)
+        snapshots = await market_data.get_orchestrator_market_snapshots(
+            self, symbols, refresh=refresh
+        )
         if record_surface:
             self._record_market_snapshot_surface(symbols, snapshots)
         return snapshots
@@ -18508,6 +18629,11 @@ class Passivbot:
         market_prices = await self._fetch_market_prices(
             {order["symbol"] for order in orders}
         )
+        return self._sort_orders_at_market_prices(orders, log_label, market_prices)
+
+    def _sort_orders_at_market_prices(
+        self, orders: list[dict], log_label: str, market_prices: dict[str, float | None]
+    ) -> list[dict]:
         missing_symbols = sorted(
             {
                 order["symbol"]

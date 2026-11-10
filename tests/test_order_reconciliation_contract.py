@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
+from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
 import passivbot_rust as pbr
 import pytest
 
@@ -13,10 +18,119 @@ from exchanges.kucoin import KucoinBot
 from exchanges.okx import OKXBot
 from exchanges.weex import WeexBot
 from live import reconciler
+from live.order_churn_gate import OrderChurnGateState
 
 
 def _client_id(pb_order_type: str) -> str:
     return f"pb-0x{pbr.order_type_snake_to_id(pb_order_type):04x}-test"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outside_reconciler", [False, True])
+async def test_ordinary_planning_failure_ends_churn_history(outside_reconciler):
+    symbol = "BTC/USDT:USDT"
+    state = OrderChurnGateState()
+    state.history_by_symbol[symbol] = deque()
+    emit = Mock()
+    bot = SimpleNamespace(
+        exchange="okx",
+        active_symbols=[symbol],
+        _order_churn_gate_state=state,
+        _emit_order_churn_evidence_event=emit,
+        calc_ideal_orders=AsyncMock(side_effect=RuntimeError("planner unavailable")),
+    )
+
+    if outside_reconciler:
+        reconciler.record_ordinary_planning_failure(bot)
+        bot.calc_ideal_orders.assert_not_awaited()
+    else:
+        with pytest.raises(RuntimeError, match="planner unavailable"):
+            await reconciler.calc_orders_to_cancel_and_create(bot)
+
+    assert state.generation == state.reset_count == 1
+    assert not state.history_by_symbol
+    emit.assert_called_once_with(
+        generation=1,
+        reset=True,
+        reset_count=1,
+        reason_counts={"planning_failed": 1},
+        churn_count=0,
+        order_count=1,
+        symbols=[symbol],
+        history_symbol_count=0,
+        snapshot_status="skipped",
+    )
+
+
+def test_ordinary_planning_failure_skips_unsupported_churn_connector():
+    bot = SimpleNamespace(_order_churn_gate_enabled_for_connector=False)
+
+    reconciler.record_ordinary_planning_failure(bot)
+
+    assert not hasattr(bot, "_order_churn_gate_state")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connector", "context", "limit"),
+    [
+        (OKXBot, "okx_order_cap_sort", 100),
+        (BitgetBot, "bitget_order_cap_sort", 100),
+        (KucoinBot, "kucoin_order_cap_sort", 150),
+    ],
+)
+async def test_supplied_market_prices_preserve_exchange_order_cap(connector, context, limit):
+    symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    market_prices = {symbol: 100.0 for symbol in symbols}
+    ideal_orders = {
+        symbol: [
+            {"symbol": symbol, "side": "buy", "price": float(price)}
+            for price in range(10, 100)
+        ]
+        for symbol in symbols
+    }
+    get_prices = AsyncMock(return_value=market_prices)
+    bot = SimpleNamespace(active_symbols=symbols, _get_live_last_prices=get_prices)
+    finalize = connector._finalize_exchange_ideal_orders
+
+    legacy = await finalize(bot, ideal_orders)
+    get_prices.assert_awaited_once_with(
+        ideal_orders.keys(),
+        max_age_ms=10_000,
+        context=context,
+        allow_completed_candle_fallback=True,
+    )
+    get_prices.reset_mock()
+    prepared = await finalize(bot, ideal_orders, market_prices=market_prices)
+
+    get_prices.assert_not_awaited()
+    assert prepared == legacy
+    assert sum(map(len, prepared.values())) == limit
+    for orders in prepared.values():
+        assert [order["price"] for order in orders] == list(range(99, 99 - limit // 2, -1))
+
+
+@pytest.mark.asyncio
+async def test_supplied_market_prices_preserve_hyperliquid_price_rounding():
+    symbol = "BTC/USDC:USDC"
+    ideal_orders = {
+        symbol: [
+            {"side": "buy", "price": 12_345.6},
+            {"side": "sell", "price": 12_345.6},
+        ]
+    }
+    bot = SimpleNamespace(
+        n_decimal_places=6, n_significant_figures=5, price_steps={symbol: 0.001}
+    )
+    finalize = HyperliquidBot._finalize_exchange_ideal_orders
+
+    legacy = await finalize(bot, deepcopy(ideal_orders))
+    prepared = await finalize(
+        bot, deepcopy(ideal_orders), market_prices={symbol: 12_345.6}
+    )
+
+    assert prepared == legacy
+    assert [order["price"] for order in prepared[symbol]] == [12_345.0, 12_346.0]
 
 
 def test_hyperliquid_native_cloid_is_a_client_order_identity():
