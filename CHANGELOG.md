@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
+
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.

@@ -195,7 +195,7 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
-from config.universe import get_side_universe_sources, require_side_universe_sources
+from config.universe import get_authored_side_universe_sources, require_side_universe_sources
 
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
@@ -2017,8 +2017,7 @@ class Passivbot:
     def _max_configured_entry_cooldown_minutes(self) -> float:
         overrides = getattr(self, "coin_overrides", {}) or {}
         config = getattr(self, "config", {})
-        from config.universe import universe_source_view
-        source = get_side_universe_sources(universe_source_view(config), 'approved_coins', {})
+        source = get_authored_side_universe_sources(config, "approved_coins", {})
         horizons = []
         for pside in ("long", "short"):
             if not self.is_pside_enabled(pside):
