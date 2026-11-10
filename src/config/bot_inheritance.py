@@ -684,8 +684,12 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
         paths[path] = value
     source = policy.source_view()
     prepared = policy._prepared
-    # Derived values must be recalculated by their owner after source/gene edits.
-    derived = list(policy._derived) if channel == "derived" else []
+    # Coin source replacements invalidate inherited membership without changing
+    # numeric transforms. Other authored and gene edits can affect both.
+    coin_sources_only = channel == "authored" and bool(paths) and all(
+        path[2:] in SOURCE_FIELDS for path in paths
+    )
+    derived = list(policy._derived) if channel == "derived" or coin_sources_only else []
     genes = set(policy._genes)
     for path, value in paths.items():
         if path[1] == "portfolio":
@@ -744,11 +748,13 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
         else:
             genes = {entry for entry in genes if not _intersects(path, entry)}
     result = resolve_bot_policy(source, policy.catalog)
-    # A derived write does not reopen unrelated formatter representations.
-    # Source/gene writes deliberately clear all normalized values so their
-    # owning formatter recomputes them from the new raw policy.
-    normalized = tuple(entry for entry in policy._normalized
-                       if not any(_intersects(path, entry.path) for path in paths)) if channel == "derived" else ()
+    normalized = ()
+    if coin_sources_only:
+        normalized = policy._normalized
+    elif channel == "derived":
+        # A derived write does not reopen unrelated formatter representations.
+        normalized = tuple(entry for entry in policy._normalized
+                           if not any(_intersects(path, entry.path) for path in paths))
     return replace(result, _prepared=prepared, _derived=tuple(derived),
                    _genes=frozenset(genes), _normalized=normalized)
 

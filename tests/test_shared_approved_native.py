@@ -106,7 +106,8 @@ def test_actual_registry_and_candidate_planner_keep_prepared_universe(tmp_path, 
                 with pytest.raises(ValueError, match='prepared long approved_coins membership'):
                     registry.planner.prepare('unprepared-source-edit', vector)
                 materialize_side_universe_sources(evaluator.config, 'approved_coins', {'long':['COIN00','COIN02'],'short':['COIN01']})
-                prepare_bound_plan(evaluator.config)
+                rebound = prepare_bound_plan(evaluator.config)
+                assert [binding.bound for binding in rebound.bindings] == evaluator.bounds
                 with pytest.raises(ValueError, match='dataset-owned execution inputs'):
                     registry.planner.prepare('different-file-base', vector)
     finally:
