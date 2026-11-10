@@ -1033,8 +1033,8 @@ fn event_tape_to(
     let mut account = BTreeMap::<PairKey, Vec<&PositionFact>>::new();
     // mark, pre-fill account, execution, ambiguous/post-fill account, budget,
     // first supported unknown-episode quote. Source clocks own economic time.
-    let mut timeline = Vec::<(i64, u8, i64, PairKey, usize)>::new();
-    let mut cohorts = BTreeMap::<i64, Vec<(PairKey, usize)>>::new();
+    let mut timeline = Vec::<(i64, u8, i64, &PairKey, usize)>::new();
+    let mut cohorts = BTreeMap::<i64, Vec<(&PairKey, usize)>>::new();
     for (k, facts) in &ledger.pairs {
         positions.entry(k.clone()).or_insert_with(|| {
             let mut p = facts.metadata.clone();
@@ -1076,24 +1076,18 @@ fn event_tape_to(
             if f.timestamp == ledger.anchor_now {
                 reasons.insert("ambiguous_bootstrap_fill_phase".into());
             }
-            cohorts.entry(f.timestamp).or_default().push((k.clone(), i));
+            cohorts.entry(f.timestamp).or_default().push((k, i));
         }
         for (&t, _) in facts.prices.range((
             std::ops::Bound::Excluded(ledger.anchor_now),
             std::ops::Bound::Included(ledger.last_now),
         )) {
             if t.rem_euclid(60_000) == 0 {
-                timeline.push((t, 0, 0, k.clone(), 0));
+                timeline.push((t, 0, 0, k, 0));
             }
         }
         if !marks.contains(k) {
-            timeline.push((
-                facts.initial_mark_at.max(ledger.anchor_now),
-                5,
-                0,
-                k.clone(),
-                0,
-            ));
+            timeline.push((facts.initial_mark_at.max(ledger.anchor_now), 5, 0, k, 0));
         }
         let initial = ledger.anchor["snapshot"]["pairs"]
             .as_array()
@@ -1166,7 +1160,7 @@ fn event_tape_to(
                 // Keep source ordering even where several older source clocks
                 // are clamped onto the immutable initializer boundary. Indices
                 // retain capture order for actual equal-source observations.
-                timeline.push((at, phase, source, k.clone(), observations.len()));
+                timeline.push((at, phase, source, k, observations.len()));
                 observations.push(fact);
             }
             previous = (
@@ -1178,7 +1172,8 @@ fn event_tape_to(
         account.insert(k.clone(), observations);
         fills.insert(k.clone(), canonical);
     }
-    if let Some(k) = positions.keys().next() {
+    let budget_key = positions.keys().next().cloned();
+    if let Some(k) = &budget_key {
         for fact in ledger
             .budgets
             .values()
@@ -1190,14 +1185,14 @@ fn event_tape_to(
             {
                 reasons.insert("ambiguous_budget_fill_phase".into());
             }
-            timeline.push((fact.timestamp, 4, 0, k.clone(), 0));
+            timeline.push((fact.timestamp, 4, 0, k, 0));
         }
     }
     for (t, cohort) in cohorts {
         let one_pair = cohort.iter().all(|(k, _)| k == &cohort[0].0);
         let sequences: BTreeSet<_> = cohort
             .iter()
-            .filter_map(|(k, i)| fills[k][*i].sequence)
+            .filter_map(|(k, i)| fills[*k][*i].sequence)
             .collect();
         let exact = (one_pair || ledger.global_sequence) && sequences.len() == cohort.len();
         if cohort.len() > 1 && !exact {
@@ -1205,7 +1200,7 @@ fn event_tape_to(
         }
         for (k, i) in cohort {
             let sequence = if exact {
-                fills[&k][i].sequence.unwrap()
+                fills[k][i].sequence.unwrap()
             } else {
                 0
             };
@@ -1217,7 +1212,7 @@ fn event_tape_to(
     let mut fill_time = None;
     let mut ordinal = -1;
     while cursor < timeline.len() {
-        let (t, phase, _, ref k, i) = timeline[cursor];
+        let (t, phase, _, k, i) = timeline[cursor];
         if through.is_some_and(|cutoff| t > cutoff) {
             break;
         }
@@ -1274,7 +1269,7 @@ fn event_tape_to(
                     timeline[cursor..end]
                         .iter()
                         .rev()
-                        .find(|(_, _, _, key, _)| key == pair)
+                        .find(|(_, _, _, key, _)| *key == pair)
                         .map_or(position.size == 0.0, |(_, _, _, _, index)| {
                             account[pair][*index].position.size == 0.0
                         })
@@ -1296,7 +1291,7 @@ fn event_tape_to(
                 )?;
             }
             let mut changed = phase == 0 || phase == 4;
-            for (_, _, _, pair, index) in &timeline[cursor..end] {
+            for &(_, _, _, pair, index) in &timeline[cursor..end] {
                 if phase == 4 {
                     continue;
                 }
@@ -1315,7 +1310,7 @@ fn event_tape_to(
                         changed = true;
                     }
                 } else {
-                    let actual = &account[pair][*index].position;
+                    let actual = &account[pair][index].position;
                     changed |= p.size != actual.size || p.basis != actual.basis;
                     if p.size != actual.size {
                         reasons.insert("current_quantity_reconciliation".into());
