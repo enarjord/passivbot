@@ -53,6 +53,16 @@ def _inputs(interval=1, offset=0):
             "config_version": CONFIG_SCHEMA_VERSION,
             "bot": {
                 "portfolio": {"strategy_kind": "ema_anchor"},
+                # These short windows include coarser candles.
+                "global": {
+                    "entry_cooldown": {"weights_minutes": {
+                        "adverse_directionality": 0.0, "exposure_ratio": 0.0,
+                    }},
+                    "forager": {"score_weights": {
+                        "ema_readiness": 0.21, "log_range": 0.61,
+                        "volume": 0.18, "rms_directionality": 0.0,
+                    }},
+                },
                 "long": {"enabled": True},
                 "short": {"enabled": True},
             },
@@ -64,6 +74,7 @@ def _inputs(interval=1, offset=0):
     config["backtest"].update(
         exchanges=["binance"], coins={"binance": coins},
         candle_interval_minutes=interval, filter_by_min_effective_cost=False,
+        limit_order_fill_buffer_fraction=0.0,
     )
     config["bot"]["portfolio"]["warmup"].update(activation_span_fraction=1.0, max_minutes=1)
     for side in ("long", "short"):

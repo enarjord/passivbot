@@ -308,20 +308,11 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, c
     cfg["optimize"]["pymoo"]["shared"].update(
         mutation_probability=1.0, mutation_probability_per_variable=0.5,
     )
-    # This checkpoint test varies HSL alone. Other strategy genes retain the
-    # minute-scale fixture's fixed policy, including no hourly-volatility input.
-    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-    from config.param_paths import resolve_optimizer_key_path
-
-    fixed_bounds = {}
-    kind = cfg['bot']["portfolio"]['strategy_kind']
-    for key in flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind=kind):
-        value = cfg
-        for part in resolve_optimizer_key_path(cfg, key):
-            value = value[part]
-        set_flat_optimize_bound(fixed_bounds, kind, key, [value, value])
-    cfg["optimize"]["bounds"] = fixed_bounds
-    cfg["optimize"]["bounds"]["portfolio"]["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.1]}
+    # Only the HSL threshold varies. Unlisted coordinates retain the
+    # minute-scale fixture's fixed policy.
+    cfg["optimize"]["bounds"] = {
+        "portfolio": {"hsl": {"drawdown_threshold_fraction": [0.01, 0.1]}},
+    }
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.
     guard = tmp_path / "guard"

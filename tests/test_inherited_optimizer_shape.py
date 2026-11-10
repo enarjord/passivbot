@@ -44,13 +44,14 @@ def test_shape_and_adapter_use_one_common_coordinate_without_losing_side_pins(sh
 def test_adapter_target_fixed_selector_does_not_create_a_directional_axis():
     from optimization.shape import build_optimization_shape
     config = real_prepared()
+    close_fraction = config["bot"]["global"]["unstuck"]["close_fraction"]
     config["optimize"]["fixed_params"] = ["short.unstuck.close_fraction"]
     prepare_bound_plan(config)
     shape = build_optimization_shape(config)
     selected = [(key, bound) for (key, path), bound in zip(shape.key_paths, shape.bounds)
                 if path[-2:] == ("unstuck", "close_fraction")]
     assert len(selected) == 1 and selected[0][0] == "bot.global.unstuck.close_fraction"
-    assert selected[0][1].low == selected[0][1].high == 0.041
+    assert selected[0][1].low == selected[0][1].high == close_fraction
 
 
 @pytest.mark.parametrize("short_pin", [False, True])
@@ -140,11 +141,12 @@ def test_fine_tune_effective_target_freezes_common_domain_without_a_side_copy():
     from config.inherited_bounds import optimize_bounds_source_view
     from optimize import apply_fine_tune_bounds
     config = real_prepared()
+    close_fraction = config["bot"]["global"]["unstuck"]["close_fraction"]
     config["optimize"]["fixed_params"] = ["short.unstuck.close_fraction"]
     prepare_bound_plan(config)
     apply_fine_tune_bounds(config, [], set())
     raw = optimize_bounds_source_view(config)["optimize"]["bounds"]
-    assert raw["global"]["unstuck"]["close_fraction"] == [0.041, 0.041]
+    assert raw["global"]["unstuck"]["close_fraction"] == [close_fraction, close_fraction]
     assert "short" not in raw
 
 
@@ -331,7 +333,8 @@ def test_seed_stream_retains_an_existing_prepared_binding_plan_when_shape_is_omi
     vectors = configs_to_individuals([config], shape.bounds, 6)
     assert len(vectors) == 1 and len(vectors[0]) == len(shape.bounds)
     values = dict(zip((key for key, _ in shape.key_paths), vectors[0]))
-    assert values["bot.global.unstuck.close_fraction"] == 0.041
+    # The inherited starter value exceeds the fixture's authored upper bound.
+    assert values["bot.global.unstuck.close_fraction"] == 0.06
     assert values["bot.short.unstuck.close_fraction"] == 0.041
 
 

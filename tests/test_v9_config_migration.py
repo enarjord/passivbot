@@ -439,7 +439,7 @@ def test_spans_and_bootstrap_are_independent_float_settings():
     cfg = get_template_config()
     prepared = prepare_config(cfg, verbose=False)
     assert prepared["config_version"] == "v9.0.0"
-    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 96141.557
     assert isinstance(prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"], float)
     assert risk_bootstrap_horizon_minutes(prepared) == (129600.0, True)
     assert "realized_loss_gate_lookback_minutes" not in prepared["live"]

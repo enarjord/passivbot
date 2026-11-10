@@ -185,7 +185,11 @@ def test_cli_discovers_expanded_fields_but_preserves_sparse_equal_declarations()
     assert "bot.long.risk.total_wallet_exposure_limit_ratio" in keys
     assert "bot.short.strategy.ema_anchor.ema_span_0_minutes" in keys
     assert "bot.global.entry_cooldown.max_duration_minutes" in keys
-    prepared = prepare_config(source(), verbose=False)
+    authored = source()
+    authored["bot"]["global"]["entry_cooldown"] = {
+        "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+    }
+    prepared = prepare_config(authored, verbose=False)
     args = parser.parse_args(["--bot.long.risk.total_wallet_exposure_limit_ratio", "2.25",
         "--bot.global.entry_cooldown.max_duration_minutes", "null",
         "--bot.global.universe.ignored_coins", "null",
