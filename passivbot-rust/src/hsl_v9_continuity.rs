@@ -1115,12 +1115,10 @@ fn event_tape_to(
             std::ops::Bound::Included(ledger.anchor_now),
             std::ops::Bound::Included(ledger.last_now),
         )) {
-            let mut sources = vec![
-                fact.position_at.unwrap_or(captured),
-                fact.position_latest_at.unwrap_or(captured),
-            ];
-            sources.sort_unstable();
-            sources.dedup();
+            let first = fact.position_at.unwrap_or(captured);
+            let latest = fact.position_latest_at.unwrap_or(captured);
+            let sources = std::iter::once(first.min(latest))
+                .chain((first != latest).then_some(first.max(latest)));
             for source in sources {
                 if ledger.boundary.is_some() && source <= ledger.anchor_now {
                     continue;
@@ -1236,7 +1234,9 @@ fn event_tape_to(
                 for (pair, p) in &mut positions {
                     if pair.0 == k.0 {
                         p.mark = price;
-                        marks.insert(pair.clone());
+                        if !marks.contains(pair) {
+                            marks.insert(pair.clone());
+                        }
                     }
                 }
             }
@@ -1303,7 +1303,9 @@ fn event_tape_to(
                 let p = positions.get_mut(pair).unwrap();
                 if phase == 0 {
                     p.mark = ledger.pairs[pair].prices[&t];
-                    marks.insert(pair.clone());
+                    if !marks.contains(pair) {
+                        marks.insert(pair.clone());
+                    }
                 } else if phase == 5 {
                     // A current quote initializes an otherwise unpriceable new
                     // unknown episode at its own observation clock only.
