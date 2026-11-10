@@ -521,3 +521,52 @@ async def test_shutdown_cancels_owned_account_reporting():
     instance.cancel_inputs()
     await asyncio.gather(instance._account_report, return_exceptions=True)
     assert instance._account_report.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('activity_pass', [1, 4, 8])
+async def test_fake_step_retains_completed_and_protective_work_from_every_pass(monkeypatch, activity_pass):
+    """Scheduler placement cannot erase work already performed at the same replay timestamp."""
+    from types import SimpleNamespace
+    from live import hsl_live
+
+    calls = 0
+
+    async def cycle():
+        nonlocal calls
+        calls += 1
+        return dict(updated=True, ordinary_completed=calls == activity_pass,
+                    ordinary_executed=False, protective_work=calls == activity_pass)
+
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None)
+    monkeypatch.setattr(hsl_live, 'owner', lambda bot: instance)
+    result = await runner._run_fake_cycle_ready(object())
+    assert result['ordinary_completed'] is True
+    assert result['protective_work'] is True
+    assert result['ordinary_executed'] is False
+    assert result['preparation_pending'] is True
+    assert result['passes'] == calls == 8
+
+
+@pytest.mark.asyncio
+async def test_fake_step_keeps_execution_while_waiting_for_source_consumption(monkeypatch):
+    """Finishing a history read must not erase the preceding ordinary execution."""
+    import asyncio
+    from types import SimpleNamespace
+    from live import hsl_live
+
+    reads = asyncio.create_task(asyncio.sleep(0))
+    calls = 0
+
+    async def cycle():
+        nonlocal calls
+        calls += 1
+        return dict(updated=True, ordinary_completed=calls == 1,
+                    ordinary_executed=calls == 1, protective_work=False)
+
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads)
+    monkeypatch.setattr(hsl_live, 'owner', lambda bot: instance)
+    result = await runner._run_fake_cycle_ready(object())
+    assert result['ordinary_executed'] and result['ordinary_completed']
+    assert result['passes'] == calls == 8
+    assert result['preparation_pending'] is True

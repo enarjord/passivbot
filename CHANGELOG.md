@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve completed planning, ordinary execution and protective work across all
+  bounded internal passes of an offline fake-live replay step. This prevents
+  scheduler-dependent repeatability failures while retaining strict readiness,
+  pending-work and exchange-result comparisons. Live execution is unchanged.
+
 - Stop CPU backtests and exact optimizer evaluations from reading a never-updated
   volume or volatility EMA when two settings share the same span. A strategy
   volatility span equal to the other side's unused forager volatility span, or equal
