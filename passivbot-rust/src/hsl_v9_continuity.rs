@@ -405,27 +405,30 @@ impl Ledger {
 
     fn bootstrap(&self) -> Result<Input, String> {
         let mut raw = self.anchor.clone();
-        let original: BTreeMap<_, _> = raw["snapshot"]["pairs"]
-            .as_array()
-            .ok_or("invalid bootstrap pairs")?
-            .iter()
-            .map(|p| {
+        let mut original: BTreeMap<_, _> = std::mem::take(
+            raw["snapshot"]["pairs"]
+                .as_array_mut()
+                .ok_or("invalid bootstrap pairs")?,
+        )
+        .into_iter()
+        .map(|p| {
+            (
                 (
-                    (
-                        p["symbol"].as_str().unwrap().to_owned(),
-                        u8::from(p["position"]["pside"] == "short"),
-                    ),
-                    p.clone(),
-                )
-            })
-            .collect();
+                    p["symbol"].as_str().unwrap().to_owned(),
+                    u8::from(p["position"]["pside"] == "short"),
+                ),
+                p,
+            )
+        })
+        .collect();
         let mut pairs = vec![];
+        let mut retained_pairs = vec![];
         for (k, facts) in &self.pairs {
             if !original.contains_key(k) && !facts.fills.iter().any(|f| self.bootstrap_fill(k, f)) {
                 continue;
             }
-            let mut pair = if let Some(p) = original.get(k) {
-                p.clone()
+            let mut pair = if let Some(p) = original.remove(k) {
+                p
             } else {
                 let mut position = facts.metadata.clone();
                 position.size = 0.0;
@@ -460,36 +463,38 @@ impl Ledger {
                     .ok_or("invalid anchor position clock")?;
                 pair["position_at"] = json!(initial.min(at));
             }
-            pair["prices"] = serde_json::to_value(
-                facts
-                    .prices
-                    .range(self.origin..=self.anchor_now)
-                    .map(|(&t, &p)| (t.to_string(), p))
-                    .collect::<BTreeMap<_, _>>(),
-            )
-            .map_err(|e| e.to_string())?;
-            pair["fills"] = serde_json::to_value(
-                facts
-                    .fills
-                    .iter()
-                    .filter(|f| self.bootstrap_fill(k, f))
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|e| e.to_string())?;
+            pair["prices"] = json!({});
+            pair["fills"] = json!([]);
             pairs.push(pair);
+            retained_pairs.push((k, facts));
         }
         raw["snapshot"]["pairs"] = Value::Array(pairs);
         if !raw["snapshot"]["pairs"].as_array().unwrap().is_empty() {
             raw["snapshot"].as_object_mut().unwrap().remove("flat_coin");
         }
-        raw["budget_observations"] = serde_json::to_value(
-            self.budgets
-                .values()
-                .filter(|f| f.timestamp <= self.anchor_now)
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| e.to_string())?;
-        serde_json::from_value(raw).map_err(|e| e.to_string())
+        raw["budget_observations"] = json!([]);
+        let mut input: Input = serde_json::from_value(raw).map_err(|e| e.to_string())?;
+        // The ledger stores validated typed facts. Keep the original account
+        // provenance above and reuse its retained inputs without a JSON round trip.
+        for (pair, (key, facts)) in input.snapshot.pairs.iter_mut().zip(retained_pairs) {
+            pair.prices = facts
+                .prices
+                .range(self.origin..=self.anchor_now)
+                .map(|(&timestamp, &price)| (timestamp, price))
+                .collect();
+            pair.fills = facts
+                .fills
+                .iter()
+                .filter(|fill| self.bootstrap_fill(key, fill))
+                .cloned()
+                .collect();
+        }
+        input.budget_observations = self
+            .budgets
+            .range(..=(self.anchor_now, i64::MAX))
+            .map(|(_, fact)| fact.clone())
+            .collect();
+        Ok(input)
     }
 }
 
@@ -1028,8 +1033,8 @@ fn event_tape_to(
     let mut account = BTreeMap::<PairKey, Vec<&PositionFact>>::new();
     // mark, pre-fill account, execution, ambiguous/post-fill account, budget,
     // first supported unknown-episode quote. Source clocks own economic time.
-    let mut timeline = Vec::<(i64, u8, i64, PairKey, usize)>::new();
-    let mut cohorts = BTreeMap::<i64, Vec<(PairKey, usize)>>::new();
+    let mut timeline = Vec::<(i64, u8, i64, &PairKey, usize)>::new();
+    let mut cohorts = BTreeMap::<i64, Vec<(&PairKey, usize)>>::new();
     for (k, facts) in &ledger.pairs {
         positions.entry(k.clone()).or_insert_with(|| {
             let mut p = facts.metadata.clone();
@@ -1071,24 +1076,18 @@ fn event_tape_to(
             if f.timestamp == ledger.anchor_now {
                 reasons.insert("ambiguous_bootstrap_fill_phase".into());
             }
-            cohorts.entry(f.timestamp).or_default().push((k.clone(), i));
+            cohorts.entry(f.timestamp).or_default().push((k, i));
         }
         for (&t, _) in facts.prices.range((
             std::ops::Bound::Excluded(ledger.anchor_now),
             std::ops::Bound::Included(ledger.last_now),
         )) {
             if t.rem_euclid(60_000) == 0 {
-                timeline.push((t, 0, 0, k.clone(), 0));
+                timeline.push((t, 0, 0, k, 0));
             }
         }
         if !marks.contains(k) {
-            timeline.push((
-                facts.initial_mark_at.max(ledger.anchor_now),
-                5,
-                0,
-                k.clone(),
-                0,
-            ));
+            timeline.push((facts.initial_mark_at.max(ledger.anchor_now), 5, 0, k, 0));
         }
         let initial = ledger.anchor["snapshot"]["pairs"]
             .as_array()
@@ -1110,12 +1109,10 @@ fn event_tape_to(
             std::ops::Bound::Included(ledger.anchor_now),
             std::ops::Bound::Included(ledger.last_now),
         )) {
-            let mut sources = vec![
-                fact.position_at.unwrap_or(captured),
-                fact.position_latest_at.unwrap_or(captured),
-            ];
-            sources.sort_unstable();
-            sources.dedup();
+            let first = fact.position_at.unwrap_or(captured);
+            let latest = fact.position_latest_at.unwrap_or(captured);
+            let sources = std::iter::once(first.min(latest))
+                .chain((first != latest).then_some(first.max(latest)));
             for source in sources {
                 if ledger.boundary.is_some() && source <= ledger.anchor_now {
                     continue;
@@ -1163,7 +1160,7 @@ fn event_tape_to(
                 // Keep source ordering even where several older source clocks
                 // are clamped onto the immutable initializer boundary. Indices
                 // retain capture order for actual equal-source observations.
-                timeline.push((at, phase, source, k.clone(), observations.len()));
+                timeline.push((at, phase, source, k, observations.len()));
                 observations.push(fact);
             }
             previous = (
@@ -1175,7 +1172,8 @@ fn event_tape_to(
         account.insert(k.clone(), observations);
         fills.insert(k.clone(), canonical);
     }
-    if let Some(k) = positions.keys().next() {
+    let budget_key = positions.keys().next().cloned();
+    if let Some(k) = &budget_key {
         for fact in ledger
             .budgets
             .values()
@@ -1187,14 +1185,14 @@ fn event_tape_to(
             {
                 reasons.insert("ambiguous_budget_fill_phase".into());
             }
-            timeline.push((fact.timestamp, 4, 0, k.clone(), 0));
+            timeline.push((fact.timestamp, 4, 0, k, 0));
         }
     }
     for (t, cohort) in cohorts {
         let one_pair = cohort.iter().all(|(k, _)| k == &cohort[0].0);
         let sequences: BTreeSet<_> = cohort
             .iter()
-            .filter_map(|(k, i)| fills[k][*i].sequence)
+            .filter_map(|(k, i)| fills[*k][*i].sequence)
             .collect();
         let exact = (one_pair || ledger.global_sequence) && sequences.len() == cohort.len();
         if cohort.len() > 1 && !exact {
@@ -1202,7 +1200,7 @@ fn event_tape_to(
         }
         for (k, i) in cohort {
             let sequence = if exact {
-                fills[&k][i].sequence.unwrap()
+                fills[k][i].sequence.unwrap()
             } else {
                 0
             };
@@ -1214,7 +1212,7 @@ fn event_tape_to(
     let mut fill_time = None;
     let mut ordinal = -1;
     while cursor < timeline.len() {
-        let (t, phase, _, ref k, i) = timeline[cursor];
+        let (t, phase, _, k, i) = timeline[cursor];
         if through.is_some_and(|cutoff| t > cutoff) {
             break;
         }
@@ -1231,7 +1229,9 @@ fn event_tape_to(
                 for (pair, p) in &mut positions {
                     if pair.0 == k.0 {
                         p.mark = price;
-                        marks.insert(pair.clone());
+                        if !marks.contains(pair) {
+                            marks.insert(pair.clone());
+                        }
                     }
                 }
             }
@@ -1269,7 +1269,7 @@ fn event_tape_to(
                     timeline[cursor..end]
                         .iter()
                         .rev()
-                        .find(|(_, _, _, key, _)| key == pair)
+                        .find(|(_, _, _, key, _)| *key == pair)
                         .map_or(position.size == 0.0, |(_, _, _, _, index)| {
                             account[pair][*index].position.size == 0.0
                         })
@@ -1291,14 +1291,16 @@ fn event_tape_to(
                 )?;
             }
             let mut changed = phase == 0 || phase == 4;
-            for (_, _, _, pair, index) in &timeline[cursor..end] {
+            for &(_, _, _, pair, index) in &timeline[cursor..end] {
                 if phase == 4 {
                     continue;
                 }
                 let p = positions.get_mut(pair).unwrap();
                 if phase == 0 {
                     p.mark = ledger.pairs[pair].prices[&t];
-                    marks.insert(pair.clone());
+                    if !marks.contains(pair) {
+                        marks.insert(pair.clone());
+                    }
                 } else if phase == 5 {
                     // A current quote initializes an otherwise unpriceable new
                     // unknown episode at its own observation clock only.
@@ -1308,7 +1310,7 @@ fn event_tape_to(
                         changed = true;
                     }
                 } else {
-                    let actual = &account[pair][*index].position;
+                    let actual = &account[pair][index].position;
                     changed |= p.size != actual.size || p.basis != actual.basis;
                     if p.size != actual.size {
                         reasons.insert("current_quantity_reconciliation".into());

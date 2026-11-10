@@ -1,3 +1,8 @@
+import json
+
+import pytest
+
+from live import hsl_budget
 from live.hsl_budget import BudgetObservations, CURRENT_ORDER
 
 
@@ -111,3 +116,71 @@ def test_exposure_policy_in_captured_facts_is_detached_from_inputs_and_future_ca
         0.2, 0.2, 0.4,
     ]
     assert first[-1]["exposure_budget"]["wallet_exposure_limit_ratio"] == 0.9
+
+
+def encode(history, *, start=0, now=60_000, balance=100, slots=1, balance_at=None, exposure=None):
+    return history._encode_rows(history._capture_rows(
+        ("coin", "long", "A"), start=start, now=now, balance=balance, slots=slots,
+        scale=exposure is not None, exposure=exposure, balance_at=balance_at,
+    ))
+
+
+def test_budget_json_encodes_only_new_rows_and_releases_retired_versions(monkeypatch):
+    history = BudgetObservations()
+    observed = []
+
+    def dumps(value, **kwargs):
+        observed.append(value)
+        return json.dumps(value, **kwargs)
+
+    monkeypatch.setattr(hsl_budget, "dumps", dumps)
+    initial = encode(history)
+    assert len(observed) == 2
+    observed.clear()
+    assert encode(history) == initial
+    assert not observed
+    retired = next(reversed(history._encoded_rows))
+    revised = encode(history, balance=200)
+    assert json.loads(revised)[-1]["balance"] == 200
+    assert len(observed) == 1
+    assert retired not in history._encoded_rows
+
+    encode(history, start=60_000, now=70_000)
+    live_ids = {id(fact) for facts in history._scopes.values() for fact in facts}
+    assert set(history._encoded_rows) == live_ids
+    assert history._encoded_bytes == sum(map(len, history._encoded_rows.values()))
+    history.retain_scopes(set())
+    assert not history._encoded_rows and history._encoded_bytes == 0
+
+
+@pytest.mark.parametrize("entry_limit,byte_limit", [(2, 4_096), (100, 320)])
+def test_budget_json_keeps_exact_rows_at_the_cache_limit(monkeypatch, entry_limit, byte_limit):
+    monkeypatch.setattr(hsl_budget, "_MAX_ENCODED_ROWS", entry_limit)
+    monkeypatch.setattr(hsl_budget, "_MAX_ENCODED_BYTES", byte_limit)
+    history, reference = BudgetObservations(), BudgetObservations()
+    for kwargs in (
+        dict(now=10),
+        dict(now=30, balance=200),
+        dict(now=40, start=15, balance=300),
+        dict(now=60, start=15, balance=250, balance_at=20, slots=2),
+        dict(now=70, start=25, balance=270, balance_at=20, slots=2),
+    ):
+        assert encode(history, **kwargs) == json.dumps(capture(reference, **kwargs), allow_nan=False)
+        assert len(history._encoded_rows) <= entry_limit
+        assert history._encoded_bytes == sum(map(len, history._encoded_rows.values())) <= byte_limit
+        live_ids = {id(fact) for facts in history._scopes.values() for fact in facts}
+        assert set(history._encoded_rows) <= live_ids
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_budget_json_does_not_cache_nonfinite_rows(value):
+    history, reference = BudgetObservations(), BudgetObservations()
+    encode(history)
+    capture(reference)
+    with pytest.raises(ValueError) as baseline:
+        json.dumps(capture(reference, balance=value), allow_nan=False)
+    with pytest.raises(ValueError) as actual:
+        encode(history, balance=value)
+    assert str(actual.value) == str(baseline.value)
+    assert len(history._encoded_rows) == 1
+    assert encode(history, balance=200) == json.dumps(capture(reference, balance=200), allow_nan=False)
