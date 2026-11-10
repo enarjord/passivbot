@@ -601,6 +601,7 @@ async def _run_fake_cycle_ready(bot):
     # Settle fast fake reads/planning at one scenario timestamp. An outage
     # remains pending after a bounded number of production passes; never
     # await arbitrary ordinary work to completion before protection.
+    activity = {}
     for attempt in range(8):
         # poll_inputs() runs at the start of cycle(). A read completing
         # during that cycle still needs a subsequent consuming pass.
@@ -612,7 +613,15 @@ async def _run_fake_cycle_ready(bot):
             )
             if task is not None and task.done()
         }
-        result = await instance.cycle()
+        pass_result = await instance.cycle()
+        # A replay step contains several production passes. Retain work already
+        # observed in this step instead of reporting only the last pass, whose
+        # pending task state depends on event-loop scheduling. Availability and
+        # other diagnostics still describe the latest authoritative pass.
+        for key in ("ordinary_completed", "ordinary_executed", "protective_work"):
+            if key in pass_result:
+                activity[key] = activity.get(key, False) or pass_result[key]
+        result = dict(pass_result, **activity)
         input_tasks = [
             task
             for task in (
@@ -625,7 +634,7 @@ async def _run_fake_cycle_ready(bot):
             if task.done():
                 task.result()  # Never relegate a final-step failure to shutdown.
         inputs_consumed = all(task in completed_before for task in input_tasks)
-        if not result["updated"] or (result["ordinary_executed"] and inputs_consumed):
+        if not pass_result["updated"] or (pass_result["ordinary_executed"] and inputs_consumed):
             return dict(result, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
