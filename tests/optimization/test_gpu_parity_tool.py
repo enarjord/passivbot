@@ -429,6 +429,12 @@ def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl
     assert date_to_ts(config["backtest"]["start_date"]) == timestamps[0]
     assert date_to_ts(config["backtest"]["end_date"]) == timestamps[-1] + 60_000
     assert config["bot"]["long"]["hsl"]["enabled"] == (hsl in {"coin", "position_side"})
+    for side in ("long", "short"):
+        bot = config["bot"][side]
+        assert bot["forager"]["score_weights"]["rms_directionality"] == 0.0
+        assert bot["entry_cooldown"]["weights_minutes"] == {
+            "adverse_directionality": 0.0, "exposure_ratio": 0.0,
+        }
     again = gpu_parity.fixture_inputs(options)
     assert gpu_parity._identity(config, (candles, btc, timestamps), markets, "binance") == (
         gpu_parity._identity(again[0], (again[1], again[3], again[4]), again[2], "binance")

@@ -3093,7 +3093,7 @@ async def main():
         type=str,
         default=None,
         nargs="?",
-        help="path to json/hjson passivbot config (defaults to in-code schema defaults if omitted)",
+        help="path to JSON/HJSON config (uses the in-code starter if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -3220,7 +3220,7 @@ async def main():
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(
-        args.config_path, allow_result_records=True,
+        args.config_path, allow_result_records=True, use_starter=True,
     )
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys

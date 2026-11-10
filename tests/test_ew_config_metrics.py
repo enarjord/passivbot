@@ -8,7 +8,8 @@ from config.ew import (
     validate_ew_config,
 )
 from config.metrics import DEFAULT_EW_HALF_LIFE_DAYS, validate_core_metric_requests
-from config.schema import get_template_config
+from config.load import prepare_config
+from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
 
 
 @pytest.mark.parametrize(
@@ -24,16 +25,18 @@ def test_positive_half_lives_are_preserved(value):
     assert validate_ew_half_life_days(value) == value
 
 
-def test_default_and_null_resolve_one_authoritative_half_life():
+def test_omitted_half_life_uses_profile_and_explicit_null_uses_native_fallback():
     assert DEFAULT_EW_HALF_LIFE_DAYS == 180.0
+    source = {"config_version": CONFIG_SCHEMA_VERSION}
+    assert prepare_config(source, verbose=False)["backtest"]["ew_half_life_days"] == 360.0
+    source["backtest"] = {"ew_half_life_days": None}
     assert (
-        get_template_config()["backtest"]["ew_half_life_days"]
+        prepare_config(source, verbose=False)["backtest"]["ew_half_life_days"]
         == DEFAULT_EW_HALF_LIFE_DAYS
     )
-    config = get_template_config()
-    config["backtest"]["ew_half_life_days"] = None
-    validate_ew_config(config)
-    assert config["backtest"]["ew_half_life_days"] == DEFAULT_EW_HALF_LIFE_DAYS
+
+
+def test_one_ew_metric_selector():
     assert EW_METRICS == {"cagr_fraction_strategy_equity_ew"}
     assert is_ew_metric("cagr_fraction_strategy_equity_ew_max")
     assert not is_ew_metric("sharpe_ratio_strategy_equity_ew")

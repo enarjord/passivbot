@@ -23,6 +23,17 @@ def enable_side(config, side):
         config["bot"].setdefault(side, {})["enabled"] = True
 
 
+def fixed_cooldown_config():
+    config = get_template_config()
+    config["bot"]["global"]["entry_cooldown"] = {
+        "base_duration_minutes": 24.1,
+        "min_duration_minutes": 0.0,
+        "max_duration_minutes": None,
+        "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+    }
+    return config
+
+
 def adaptive_input(*, score=-0.75, exposure=0.0, base=0.0):
     bp = {
         "risk_entry_cooldown_minutes": base,
@@ -110,7 +121,7 @@ def test_rms_real_replay_and_flat_tail():
 
 
 def test_config_limits_zero_weights():
-    cfg = prepare_config(get_template_config(), verbose=False)
+    cfg = prepare_config(fixed_cooldown_config(), verbose=False)
     ec = cfg["bot"]["long"]["entry_cooldown"]
     assert maximum_duration(ec) == 24.1
     ec["base_duration_minutes"] = 0
@@ -248,7 +259,7 @@ def test_cooldown_cli_and_partial_override_keep_effective_weights():
 def test_zero_base_adaptive_fill_horizon_uses_ceiling():
     from passivbot import Passivbot
 
-    cfg = get_template_config()
+    cfg = fixed_cooldown_config()
     cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
     cfg = prepare_config(cfg, verbose=False)
     enable_side(cfg, "long")
@@ -271,6 +282,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     cfg = get_expanded_config_prototype()
     enable_side(cfg, "long")
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
+    cfg["bot"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = 60.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
         "adverse_directionality": [0.0, 20.0]
@@ -328,21 +340,28 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     from config_utils import clean_config
     from config.optimize_bounds import flatten_optimize_bounds
 
-    cfg = get_expanded_config_prototype()
+    cfg = get_template_config()
     parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
         parsed["optimize"]["bounds"], strategy_kind=parsed['bot']["portfolio"]['strategy_kind']
     )
     for side in ("long", "short"):
-        assert original[f"{side}_forager_score_weights_rms_directionality"] == [0.0, 0.0]
-        assert original[f"{side}_rms_directionality_ema_span_minutes"] == [60.0, 60.0]
-    for side in ("long", "short"):
-        assert original[f"{side}_entry_cooldown_weights_minutes_exposure_ratio"] == [0.0, 0.0]
-        assert original[f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] == [0.0, 0.0]
-        assert original[f"{side}_entry_cooldown_min_duration_minutes"] == [0.0, 0.0]
-        assert f"{side}_entry_cooldown_max_duration_minutes" not in original
-    cfg["optimize"]["bounds"]["long"]["forager"]["score_weights"]["rms_directionality"] = [0.0, 1.0]
-    cfg["optimize"]["bounds"]["long"]["forager"]["rms_directionality_ema_span_minutes"] = [20.0, 80.5]
+        forager = parsed["bot"][side]["forager"]
+        cooldown = parsed["bot"][side]["entry_cooldown"]
+        weight = forager["score_weights"]["rms_directionality"]
+        span = forager["rms_directionality_ema_span_minutes"]
+        assert original[f"{side}_forager_score_weights_rms_directionality"] == [weight, weight]
+        assert original[f"{side}_rms_directionality_ema_span_minutes"] == [span, span]
+        for modifier, value in cooldown["weights_minutes"].items():
+            assert original[f"{side}_entry_cooldown_weights_minutes_{modifier}"] == [value, value]
+        for field in ("min_duration_minutes", "max_duration_minutes"):
+            assert original[f"{side}_entry_cooldown_{field}"] == [cooldown[field], cooldown[field]]
+    cfg["optimize"]["bounds"]["long"] = {
+        "forager": {
+            "score_weights": dict.fromkeys(forager["score_weights"], [0.0, 1.0]),
+            "rms_directionality_ema_span_minutes": [20.0, 80.5],
+        }
+    }
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
@@ -655,7 +674,7 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     from passivbot import Passivbot
 
     bot = Passivbot.__new__(Passivbot)
-    cfg = get_template_config()
+    cfg = fixed_cooldown_config()
     cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
     bot.config = prepare_config(cfg, verbose=False)
     enable_side(bot.config, "long")
@@ -1180,7 +1199,7 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
     from config.runtime_compile import compile_runtime_config
 
     bot = Passivbot.__new__(Passivbot)
-    cfg = get_template_config()
+    cfg = fixed_cooldown_config()
     cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
     cfg = prepare_config(cfg, verbose=False)
     enable_side(cfg, side)
@@ -1365,11 +1384,13 @@ async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monke
 def test_coin_zero_modifier_shadows_positive_fixed_runtime_pin(side, modifier):
     from config.overrides import parse_overrides
 
-    cfg = get_expanded_config_prototype()
-    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    cfg = fixed_cooldown_config()
+    cfg["bot"][side]["entry_cooldown"] = {"max_duration_minutes": 60.0}
     path = f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"
     cfg["optimize"]["fixed_runtime_overrides"] = {path: 10.0}
-    cfg["optimize"]["bounds"][side]["entry_cooldown"].setdefault("weights_minutes", {})[modifier] = [0.0, 10.0]
+    cfg["optimize"]["bounds"][side] = {
+        "entry_cooldown": {"weights_minutes": {modifier: [0.0, 10.0]}},
+    }
     cfg = prepare_config(cfg, verbose=False)
     cfg["coin_overrides"] = {"BTC": {"bot": {side: {"entry_cooldown": {
         "max_duration_minutes": None, "weights_minutes": {modifier: 0.0},
@@ -1464,7 +1485,7 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     from config.runtime_compile import compile_runtime_config
 
     bot = Passivbot.__new__(Passivbot)
-    cfg = prepare_config(get_template_config(), verbose=False)
+    cfg = prepare_config(fixed_cooldown_config(), verbose=False)
     enable_side(cfg, side)
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=float(pside == side))
@@ -1514,7 +1535,7 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
 
     other = "short" if side == "long" else "long"
     bot = Passivbot.__new__(Passivbot)
-    cfg = prepare_config(get_template_config(), verbose=False)
+    cfg = prepare_config(fixed_cooldown_config(), verbose=False)
     enable_side(cfg, "long")
     enable_side(cfg, "short")
     for pside in ("long", "short"):

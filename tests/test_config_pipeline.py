@@ -836,6 +836,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
         "volume": 0.323,
         "ema_readiness": 0.434,
         "log_range": 0.242,
+        "rms_directionality": 0.0,
     }
     source["bot"]["long"]["forager"]["score_weights"] = rounded
     source["bot"]["short"]["forager"]["score_weights"] = rounded
@@ -1364,6 +1365,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
         "volume": 0.0,
         "ema_readiness": 0.0,
         "log_range": 0.0,
+        "rms_directionality": 0.0,
     }
     source["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 0.0
     source["bot"]["long"]["forager"]["log_range_ema_span_minutes"] = 0.0
@@ -1388,6 +1390,7 @@ def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
         "volume": 0.0,
         "ema_readiness": 0.0,
         "log_range": 0.0,
+        "rms_directionality": 0.0,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)

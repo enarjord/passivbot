@@ -21,14 +21,21 @@ def _fixture(side, coin_count, entry_kind):
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     set_side_universe_sources(config, 'approved_coins', {'long': coins, 'short': coins})
     config["backtest"].update(
-        coins={"bybit": coins}, exchanges=["bybit"], starting_balance=1000.0
+        coins={"bybit": coins}, exchanges=["bybit"], starting_balance=1000.0,
+        limit_order_fill_buffer_fraction=0.0,
     )
     for direction in ("long", "short"):
         bot = config["bot"][direction]
         bot["enabled"] = direction == side
         bot["universe"]["minimum_coin_age_days"] = 0.0
         bot["universe"]["filter_by_min_effective_cost"] = False
-        bot["entry_cooldown"]["base_duration_minutes"] = 0.0
+        bot["entry_cooldown"].update(
+            base_duration_minutes=0.0,
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
+        bot["forager"]["score_weights"]["rms_directionality"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
         # These short sizing fixtures have no completed hourly observation.

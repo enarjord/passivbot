@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from backtest_universe import effective_backtest_data_coins
-from config.schema import get_expanded_config_prototype as get_template_config
+from config.schema import get_expanded_config_prototype
 from config.optimize_bounds import set_flat_optimize_bound
 from optimization.warmup import (
     _apply_config_overrides,
@@ -38,6 +38,27 @@ def _set_bounds(config, entries):
         set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']["portfolio"]['strategy_kind'], key, value)
 
 
+def _warmup_config():
+    """Start with no RMS consumers so each test enables only the intended one."""
+    config = get_expanded_config_prototype()
+    for scope in ("global", "long", "short"):
+        bot = config["bot"][scope]
+        bot["forager"]["score_weights"]["rms_directionality"] = 0.0
+        bot["entry_cooldown"].update(
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
+    for side in ("long", "short"):
+        _set_bounds(config, {
+            f"{side}_forager_score_weights_rms_directionality": [0.0, 0.0],
+            f"{side}_entry_cooldown_min_duration_minutes": [0.0, 0.0],
+            f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 0.0],
+            f"{side}_entry_cooldown_weights_minutes_exposure_ratio": [0.0, 0.0],
+        })
+    return config
+
+
 def _make_optimizer_config() -> dict:
     """Build a config where template bot and bounds disagree on warmup.
 
@@ -48,7 +69,7 @@ def _make_optimizer_config() -> dict:
     Bounds pin that field to [0, 0] and cap ema_span_0_minutes at 100, so the
     largest warmup the optimizer can actually produce is 100 * 0.3 = 30 min.
     """
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.3
@@ -128,7 +149,7 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
 
 
 def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
@@ -147,7 +168,7 @@ def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
 
 
 def test_optimizer_data_config_reaches_zero_capacity_when_explicitly_activated():
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
@@ -160,7 +181,7 @@ def test_optimizer_data_config_reaches_zero_capacity_when_explicitly_activated()
 
 
 def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
 
@@ -171,7 +192,7 @@ def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
 
 
 def test_optimizer_rejects_invalid_effective_fixed_runtime_value_before_backend():
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config["optimize"]["fixed_runtime_overrides"] = {
@@ -297,7 +318,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     from optimization.warmup import _build_optimizer_boundary_configs
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -352,7 +373,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
 def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -371,7 +392,7 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
 def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, searched):
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -411,7 +432,7 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
 def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_known):
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -456,7 +477,7 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
         "BTC": [symbol], symbol: [symbol], "BTCUSDT": [symbol],
     })
     coin, override_key = (symbol, "BTC") if exact_dataset else ("BTC", "binance::BTCUSDT")
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -499,7 +520,7 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
 def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots, searched):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -541,7 +562,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
 def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = _warmup_config()
     for activation_side in ("long", "short"):
         cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
@@ -562,7 +583,7 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
 def _mirrored_weight_config(strategy, short_bounds):
     from config import prepare_config
 
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config["bot"]["portfolio"]["strategy_kind"] = strategy
@@ -704,7 +725,7 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
     from optimization.shape import build_optimization_shape
     from optimization.warmup import build_optimizer_vector_config
 
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
@@ -755,7 +776,7 @@ def test_preflight_validates_effective_zero_weight_activation_without_mutating_g
     from optimize import install_anchored_fine_tune_plan
     from optimization import warmup
 
-    config = get_template_config()
+    config = _warmup_config()
     for activation_side in ("long", "short"):
         config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
@@ -803,7 +824,7 @@ def test_effective_preflight_keeps_forager_normalization_owner_errors(monkeypatc
     from config import prepare_config
     from optimization import warmup
 
-    config = prepare_config(get_template_config(), verbose=False)
+    config = prepare_config(_warmup_config(), verbose=False)
     candidate = warmup.build_optimizer_max_config(config)
     candidate["bot"]["long"]["forager"]["score_weights"]["volume"] = invalid
     monkeypatch.setattr(warmup, "_build_optimizer_boundary_configs", lambda _config: [candidate])

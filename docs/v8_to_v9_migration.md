@@ -15,6 +15,10 @@ The converter uses the source defaults and optimizer domains for the tagged
 `v8.0.0` and `v8.1.0` schemas and the final public `v8.6.0` schema.
 Schema versions are independent of the package version and Git tag. Sparse
 strategy and risk settings keep the defaults from their verified source.
+The converter materializes the legacy date and fill-buffer defaults, search budget,
+population, and rounding precision when absent. It retains the established v9 conversion
+fallbacks for omitted metric selections. The runnable starter's newer defaults apply to
+ordinary v9 loading.
 
 For another v8 schema, first materialize a copy using the exact runtime that
 last loaded it. Keep the output beside the input so referenced files resolve
@@ -276,8 +280,9 @@ Conflicting reducer choices fail, and identical objectives created by formula ch
 are consolidated with their old/new lists and counts recorded in the report.
 
 Only `cagr_fraction_strategy_equity_ew` retains exponential recency weighting. Its
-native default half-life is 180 days; omitted or `null` values resolve to that default.
-Explicit half-lives must be finite and positive, including fractional days below one.
+native fallback half-life is 180 days. In a v9 config, explicit `null` selects that fallback
+and omission defaults to 360 days. Explicit numeric half-lives must be finite and positive,
+including fractional days below one.
 One resolved value applies across the campaign; scenarios cannot override it.
 
 Annualized metrics use 365.25 days per year. Volatility, Sharpe, Sortino and Omega use

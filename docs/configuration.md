@@ -7,9 +7,10 @@ trading, dataset and optimizer rules.
 
 This document explains the canonical config schema used by Passivbot.
 
-- The source of truth for defaults is `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
-- If you omit `config_path`, Passivbot loads those in-code defaults.
+- The canonical schema defaults hydrate omitted fields in explicit configs.
+- The runnable starter in `src/config/schema.py` matches the
+  [shipped example](https://github.com/enarjord/passivbot/blob/v9/configs/examples/default_trailing_martingale_long.json). It supplies
+  the full policy for bare `backtest` and `optimize`, and for bare `live` after local account setup.
 
 For the recommended user workflow, examples, and best practices, see [Config Workflow](config_workflow.md).
 
@@ -26,8 +27,9 @@ for the distinction between schema, package version and tags.
 
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
-- **ew_half_life_days**: Positive finite half-life in days for `cagr_fraction_strategy_equity_ew`. The native default is `180`; omission or `null` resolves to that default. Fractional values below one day are allowed. One resolved value applies across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5`. See the [metric definitions](metrics.md).
-- **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
+- **ew_half_life_days**: Positive finite half-life in days for `cagr_fraction_strategy_equity_ew`. Omission defaults to `360`. Explicit `null` selects the native fallback of `180`. Fractional values below one day are allowed. One resolved value applies across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5`. See the [metric definitions](metrics.md).
+- **end_date**: End date of backtest, e.g., `2024-06-23`. The default `"now"` uses a
+  rolling cutoff two UTC calendar days before the run date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
   Binance backtests fill missing v2 1m data from Binance Vision monthly archives first, eligible
   daily archives second, and CCXT last. Monthly archives are used only for closed, published months
@@ -205,8 +207,8 @@ For example, this authored config enables long with a common profile:
 Setting `short.enabled` to `true` gives it the same profile. Hedge/one-way behavior also depends
 on portfolio policy and venue support. Exposure and position limits remain **per side**: enabling
 both does not divide one account-wide budget. Either side object may be omitted when that side
-should remain disabled. New schema defaults use one common numerical starter profile, retaining
-the former long defaults; activation defaults false independently for each side.
+should remain disabled. Schema defaults use the shared numerical starter profile.
+Omitted activation flags default to false independently for each side.
 
 For authored profiles, use `global` when the same base settings are intended for reuse across
 directions, with side blocks containing activation and intentional differences. Keep a profile
@@ -431,7 +433,8 @@ The old volume-drop filter is removed; volume continues to contribute through it
   - These spans control the raw inputs to forager ranking; they are separate from strategy log-range spans such as `log_range_ema_span_1h_candles` and `offset_log_range_ema_span_1h_candles`.
 - **forager.score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `log_range`, `rms_directionality`.
-  - The RMS directionality weight defaults to zero; see the canonical template for other weights.
+  - The starter uses a positive RMS directionality weight, which requires completed one-minute
+    candles when ranking uses that input.
   - Positive weights are relative and normalized to unit sum before use.
   - If all weights are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
@@ -879,10 +882,10 @@ after migration.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.portfolio.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
 - **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. A selector matching one effective target of a shared coordinate freezes that entire coordinate; independent side variation requires explicit side bounds. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
-- **iters**: Number of backtests per optimize session.
+- **iters**: Nominal evaluation budget for an optimize session. Default is `2048`.
 - **n_cpus**: Number of CPU cores utilized in parallel.
 - **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age. Default is `1000`.
-- **population_size**: Size of population for genetic optimization algorithm. With the default `pymoo` backend, `null` means auto: NSGA-II resolves to `250`, while NSGA-III resolves to a default population budget of `500` and chooses the finest auto reference-direction grid that fits inside that budget. Set an explicit integer to change the NSGA-III per-generation evaluation budget and auto reference-direction coarseness.
+- **population_size**: Size of population for genetic optimization algorithm. Default is `128`. With the `pymoo` backend, `null` means auto: NSGA-II resolves to `250`, while NSGA-III resolves to a default population budget of `500` and chooses the finest auto reference-direction grid that fits inside that budget. Set an explicit integer to change the NSGA-III per-generation evaluation budget and auto reference-direction coarseness.
 - **backend**: `pymoo` (default) or `gpu`; both use pymoo NSGA-II/NSGA-III search.
   `optimize.pymoo.algorithm="auto"` selects NSGA-II for at most three objectives and NSGA-III
   for four or more. Operator controls live under `optimize.pymoo.shared`. GPU execution uses
@@ -895,10 +898,11 @@ after migration.
     `optimize.objective_scenario`; a name selects that scenario; explicit `null`
     selects suite aggregation. `reducer` supports `mean`, `min`, `max`, `std` and
     `median`, and is invalid with a named scenario.
-  - The default profile maximizes `cagr_fraction_strategy_equity` and minimizes
-    `ulcer_index_fraction_strategy_equity`. String shorthand uses the catalog's
-    recommended scoring direction. Primarily useful limit metrics, such as maximum
-    drawdown, require an explicit goal if deliberately used as objectives.
+  - The default profile maximizes mean `cagr_fraction_strategy_equity_ew` and minimizes
+    worst-case `ulcer_index_fraction_strategy_equity` and
+    `peak_recovery_max_days_strategy_equity`. With suite mode off, these apply to the single run.
+    String shorthand uses the catalog's recommended scoring direction. Primarily useful limit
+    metrics, such as maximum drawdown, require an explicit goal if used as objectives.
   - The optimizer reduces raw values before applying its common bounded objective
     adapter. Saved objective values retain raw units and explicit statuses; penalties
     remain separate. Selected unavailable values or infinite limit violations make

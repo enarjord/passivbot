@@ -1,12 +1,10 @@
 # RMS directionality and adaptive entry cooldown
 
-Both features are opt-in. New weights default to zero; existing cooldown durations,
-Forager weights, CLI aliases and optimizer bounds retain their defaults. CPU backtests,
-CPU optimization and live planning share the Rust calculations. GPU screening supports
-both features for EMA Anchor and Trailing Martingale on Metal and CUDA, with the same
-configuration, optimizer dimensions, and per-coin cooldown overrides. GPU arithmetic is
-float32; exact Rust validation still determines accepted optimizer results. Start a fresh
-GPU search after this parameter-layout change; older checkpoints are incompatible.
+The starter uses RMS directionality for Forager ranking and adaptive entry cooldown.
+CPU backtests, CPU optimization and live planning share the Rust calculations. GPU screening
+supports both features for EMA Anchor and Trailing Martingale on Metal and CUDA, with the same
+configuration, optimizer dimensions, and per-coin cooldown overrides. GPU arithmetic is float32.
+See [optimizer checkpoint compatibility](optimizing.md) before reusing saved fitness.
 
 ## One indicator, two consumers
 
@@ -26,7 +24,8 @@ penalty. Small two-way moves cancel; isolated shocks receive less penalty than
 consistent trends. This is directionality, not absolute price-move magnitude.
 
 `bot.<side>.forager.rms_directionality_ema_span_minutes` is the shared floating-point span,
-default 60. Both consumers on that side use it. The supported range is 1–100000.
+defaulting to 2169.1726 minutes. Both consumers on that side use it. The supported range
+is 1–100000.
 For deterministic restart reconstruction, both runtimes use exactly
 `ceil(20 * span)` returns, requiring one more completed close, with exponential
 weights throughout. Live reconstructs the window; CPU backtests maintain its
@@ -35,8 +34,8 @@ this bounded initialization is separate from a simple moving average. A flat
 tail makes RMS decay approximately by `(1-a)^(minutes/2)` until the prior movement
 leaves the replay history. At span 60 its flat-tail half-life is about 42 minutes.
 
-`bot.<side>.forager.score_weights.rms_directionality` defaults to zero. The existing
-cross-candidate lower-is-better normalization converts U into a higher-is-better
+The starter sets a positive `bot.<side>.forager.score_weights.rms_directionality` weight.
+Cross-candidate lower-is-better normalization converts U into a higher-is-better
 component, then combines it with the other relative weights. An absolute `1-U`
 score is not substituted for that existing normalization. With insufficient
 competition to require ranking, this input is not required for selection. CPU backtests
@@ -85,9 +84,10 @@ With base 5, exposure ratio 0.8, and adverse score 0.75, the example gives
 would give 15 minutes. At fixed positive base, additive minutes can express the
 same policies as `base * (1 + score * weight)` after rescaling the weight.
 
-All values and weights are finite and nonnegative. The default floor is zero;
-the default ceiling is null (unbounded fixed duration). Enabling either modifier
-requires a finite ceiling, with `floor <= ceiling`, to bound fill-history coverage.
+All values and weights are finite and nonnegative. The starter uses a one-minute floor
+and a 360-minute ceiling. Positive modifier weights require a finite ceiling, with
+`floor <= ceiling`, to bound fill-history coverage. A null ceiling is valid with both
+modifier weights set to zero.
 Each cooldown leaf can be overridden per coin and side. A partial weight override
 inherits the other weight. Zero weights do not require their input.
 
@@ -105,8 +105,9 @@ introduce logical-order completion tracking or exempt re-entry fragments.
 
 ## Optimization and evaluation
 
-Adaptive optimizer bounds are visible fixed ranges by default: widen bounds under the matching nested config paths,
-for example `optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
+The starter searches adaptive cooldown weights and all four Forager ranking weights
+together. An explicit config can set its own bounds under matching nested paths, such as
+`optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
 or `optimize.bounds.long.forager.score_weights.rms_directionality`. The existing
 Forager bound shorthand also supports `score_weights_rms_directionality`. Missing
 RMS directionality weight/span and cooldown weight/minimum-duration bounds are hydrated
@@ -114,9 +115,8 @@ as `[configured_value, configured_value]`. A missing maximum-duration bound is
 hydrated only when the configured ceiling is finite; a null ceiling remains unbounded
 and has no numeric optimizer bound. Explicit bounds are preserved. Keep a
 finite ceiling in the base config, or supply numeric ceiling bounds, when a searched
-modifier can become positive. A ceiling search can start from the default null ceiling;
-an unbounded starting-config ceiling
-projects to the upper search bound. History loading covers positive consumer weights and
+modifier can become positive. A ceiling search can start from a config with a null ceiling.
+The unbounded starting-config ceiling projects to the upper search bound. History loading covers positive consumer weights and
 maximum float spans reachable through optimizer bounds, even when fixed weights are zero.
 This history budget does not impose a delay on candidates that do not consume RMS.
 Ordinary backtest, optimizer and suite metadata stamp only the shared non-RMS activation budget;

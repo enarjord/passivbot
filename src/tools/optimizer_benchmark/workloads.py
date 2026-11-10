@@ -69,8 +69,9 @@ def apply_features(config, case, coins, markets, bars):
         config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.001
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
-    if "fill_buffer" in flags:
-        config["backtest"]["limit_order_fill_buffer_fraction"] = 0.001
+    config["backtest"]["limit_order_fill_buffer_fraction"] = (
+        0.001 if "fill_buffer" in flags else 0.0
+    )
     if "slippage" in flags:
         config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
@@ -171,6 +172,12 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
         if value is None or isinstance(value, bool):
             continue
         if path[-1] == "max_positions" or value == 0.0 and (_is_distance_sensitivity(path[-1]) or "retracement" in path[-1]):
+            enabled = False
+        if path[2] == "entry_cooldown" and path[-1] != "base_duration_minutes" and "adaptive_cooldown" not in flags:
+            enabled = False
+        if path[2:] == ("forager", "score_weights", "rms_directionality") and "forager_rms_directionality" not in flags:
+            enabled = False
+        if path[-1] == "rms_directionality_ema_span_minutes" and bounds_config is None:
             enabled = False
         if path[-1] == "memory_ema_span_minutes" and bounds_config is None:
             enabled = False

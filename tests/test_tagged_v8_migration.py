@@ -43,6 +43,22 @@ def test_sparse_config_uses_its_source_trading_defaults_and_domains(
     assert long["risk"]["total_exposure_enforcer"]["enabled"] is repair
     assert long["unstuck"]["close_fraction"] == unstuck
     assert long["unstuck"]["ema_span_0_minutes"] == span
+    for side in ("long", "short"):
+        cooldown = prepared["bot"][side]["entry_cooldown"]
+        assert cooldown["weights_minutes"] == {
+            "adverse_directionality": 0.0, "exposure_ratio": 0.0,
+        }
+        assert cooldown["min_duration_minutes"] == 0.0
+        assert cooldown["max_duration_minutes"] is None
+        forager = prepared["bot"][side]["forager"]
+        assert forager["score_weights"]["rms_directionality"] == 0.0
+        assert forager["rms_directionality_ema_span_minutes"] == 60.0
+    assert prepared["backtest"]["start_date"] == "2021-04-20"
+    assert prepared["backtest"]["ew_half_life_days"] == 180.0
+    assert prepared["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
+    assert prepared["optimize"]["iters"] == 200000
+    assert prepared["optimize"]["population_size"] is None
+    assert prepared["optimize"]["round_to_n_significant_digits"] == 3
     entry = long["strategy"]["trailing_martingale"]["entry"]
     assert entry["initial_qty_fraction"] == initial
     assert entry["ema_span_0_minutes"] == span
@@ -53,6 +69,22 @@ def test_sparse_config_uses_its_source_trading_defaults_and_domains(
         frozen = get_released_v8_defaults(schema_version=version)
         assert frozen["config_version"] == version
         assert frozen["bot"]["long"]["hsl"]["restart_after_red_policy"] == "threshold"
+
+
+def test_sparse_migration_keeps_previous_optimizer_metric_fallbacks():
+    source = sparse("v8.6.0")
+    source["optimize"] = {}
+    migrated = migrate(source, memory_span_minutes=123.5).config
+    assert migrated["optimize"]["scoring"] == [
+        {"goal": "max", "metric": "cagr_fraction_strategy_equity"},
+        {"goal": "min", "metric": "ulcer_index_fraction_strategy_equity"},
+    ]
+    assert migrated["optimize"]["limits"] == [
+        {"enabled": True, "metric": "drawdown_max_fraction_strategy_equity",
+         "penalize_if": "greater_than", "reducer": "mean", "value": 0.8},
+        {"enabled": True, "metric": "backtest_completion_fraction",
+         "penalize_if": "less_than", "value": 0.99},
+    ]
 
 
 @pytest.mark.parametrize("version", ["v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0", "v8.99.0"])

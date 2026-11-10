@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
+  long-only Trailing Martingale starter. The shipped example and in-code starter share a
+  40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains
+  opt-in. Bare `passivbot live` uses the starter after the operator adds a local account
+  entry named `passivbot_default`. Explicit configs still require side activation and coin
+  approval for new entries. The changed native fingerprint requires reevaluation of saved optimizer
+  fitness.
+
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 

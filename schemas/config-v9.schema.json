@@ -119,7 +119,7 @@
                 "number",
                 "null"
               ],
-              "default": 180.0,
+              "default": 360.0,
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -187,7 +187,7 @@
             },
             "limit_order_fill_buffer_fraction": {
               "type": "number",
-              "default": 0.0,
+              "default": 0.0005,
               "x-passivbot-unit": "fraction",
               "x-passivbot-denominator": "limit order price",
               "x-passivbot-consumers": [
@@ -428,116 +428,66 @@
                   "label": "base"
                 },
                 {
-                  "label": "subset_1_top",
+                  "label": "subset_1",
                   "coins": [
-                    "BTC",
-                    "ETH",
-                    "BNB",
-                    "XRP",
-                    "SOL",
-                    "TRX",
-                    "HYPE",
-                    "DOGE",
-                    "XLM",
-                    "XMR",
-                    "ADA",
-                    "CC",
-                    "ZEC",
-                    "LINK"
-                  ]
-                },
-                {
-                  "label": "subset_2_mid1",
-                  "coins": [
-                    "BCH",
-                    "GRAM",
-                    "HBAR",
-                    "LTC",
-                    "AVAX",
-                    "SUI",
-                    "CRO",
-                    "NEAR",
-                    "TAO",
-                    "MNT",
-                    "ASTER",
-                    "WLD",
-                    "DOT"
-                  ]
-                },
-                {
-                  "label": "subset_3_bottom",
-                  "coins": [
-                    "ONDO",
-                    "UNI",
-                    "MORPHO",
                     "AAVE",
-                    "ATOM",
-                    "RENDER",
-                    "KAS",
-                    "ALGO",
-                    "POL",
-                    "ENA",
-                    "FIL",
                     "APT",
-                    "ARB",
-                    "INJ"
-                  ]
-                },
-                {
-                  "label": "subset_4_mix",
-                  "coins": [
-                    "BTC",
-                    "XRP",
-                    "HYPE",
-                    "XMR",
-                    "ZEC",
-                    "GRAM",
-                    "AVAX",
-                    "NEAR",
-                    "ASTER",
-                    "ONDO",
-                    "AAVE",
-                    "KAS",
-                    "ENA",
-                    "ARB"
-                  ]
-                },
-                {
-                  "label": "subset_5_mix",
-                  "coins": [
-                    "ETH",
-                    "SOL",
-                    "DOGE",
-                    "ADA",
-                    "LINK",
-                    "HBAR",
-                    "SUI",
-                    "TAO",
-                    "WLD",
-                    "UNI",
                     "ATOM",
-                    "ALGO",
-                    "FIL",
-                    "INJ"
+                    "BNB",
+                    "CC",
+                    "ENA",
+                    "GRAM",
+                    "INJ",
+                    "LTC",
+                    "ONDO",
+                    "RENDER",
+                    "TAO",
+                    "XLM",
+                    "ZEC"
                   ]
                 },
                 {
-                  "label": "subset_6_mix",
+                  "label": "subset_2",
                   "coins": [
-                    "BNB",
-                    "TRX",
-                    "XLM",
-                    "CC",
-                    "BCH",
-                    "LTC",
-                    "CRO",
-                    "MNT",
-                    "DOT",
+                    "ADA",
+                    "ARB",
+                    "AVAX",
+                    "BTC",
+                    "DOGE",
+                    "ETH",
+                    "HBAR",
+                    "KAS",
                     "MORPHO",
-                    "RENDER",
                     "POL",
-                    "APT"
+                    "SOL",
+                    "UNI",
+                    "XMR"
                   ]
+                },
+                {
+                  "label": "subset_3",
+                  "coins": [
+                    "ALGO",
+                    "ASTER",
+                    "BCH",
+                    "BTW",
+                    "DOT",
+                    "FIL",
+                    "HYPE",
+                    "LINK",
+                    "NEAR",
+                    "QNT",
+                    "SUI",
+                    "WLD",
+                    "XRP"
+                  ]
+                },
+                {
+                  "label": "cost_stress",
+                  "overrides": {
+                    "backtest.limit_order_fill_buffer_fraction": 0.001,
+                    "backtest.maker_fee_override_fraction": 0.0006
+                  }
                 }
               ],
               "x-passivbot-consumers": [
@@ -749,7 +699,7 @@
             },
             "start_date": {
               "type": "string",
-              "default": "2021-04-20",
+              "default": "2021-04-01",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -807,7 +757,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 24.1,
+                      "default": 3.4098966,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -818,9 +768,8 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0,
-                        60,
-                        0.1
+                        1,
+                        60
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
@@ -829,7 +778,7 @@
                         "number",
                         "null"
                       ],
-                      "default": null,
+                      "default": 360.0,
                       "description": "Null means no ceiling; enabled modifier weights require a finite ceiling.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
@@ -844,7 +793,7 @@
                     },
                     "min_duration_minutes": {
                       "type": "number",
-                      "default": 0.0,
+                      "default": 1.0,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -854,6 +803,10 @@
                         "optimize"
                       ],
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        1,
+                        1
+                      ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "weights_minutes": {
@@ -861,7 +814,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 11.242806,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -873,11 +826,15 @@
                             "optimize"
                           ],
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 16.628462,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -889,6 +846,10 @@
                             "optimize"
                           ],
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "forbidden"
                         }
                       },
@@ -927,7 +888,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 2274.0,
+                      "default": 1747.2975,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -939,14 +900,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
-                        2880,
-                        1
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 60.0,
+                      "default": 2169.1726,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -957,6 +917,10 @@
                         "optimize"
                       ],
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        10,
+                        3000
+                      ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "score_hysteresis_margin": {
@@ -979,7 +943,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.21,
+                          "default": 0.1978654292597687,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -993,14 +957,13 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.61,
+                          "default": 0.362967082971877,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -1014,30 +977,13 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.0,
-                          "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
-                          "minimum": 0.0,
-                          "x-passivbot-unit": "relative weight",
-                          "x-passivbot-denominator": "sum of authored forager weights",
-                          "x-passivbot-scope": "global",
-                          "x-passivbot-consumers": [
-                            "live",
-                            "backtest",
-                            "optimize"
-                          ],
-                          "x-passivbot-optimizable": true,
-                          "x-passivbot-coin-override": "forbidden"
-                        },
-                        "volume": {
-                          "type": "number",
-                          "default": 0.18,
+                          "default": 0.39918534095105473,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -1051,8 +997,27 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
+                          ],
+                          "x-passivbot-coin-override": "forbidden"
+                        },
+                        "volume": {
+                          "type": "number",
+                          "default": 0.03998214681729961,
+                          "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
+                          "minimum": 0.0,
+                          "x-passivbot-unit": "relative weight",
+                          "x-passivbot-denominator": "sum of authored forager weights",
+                          "x-passivbot-scope": "global",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0,
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         }
@@ -1061,7 +1026,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 310.0,
+                      "default": 518.62365,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -1072,9 +1037,8 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        180,
-                        2880,
-                        1
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     }
@@ -1212,7 +1176,7 @@
                   "properties": {
                     "max_positions": {
                       "type": "integer",
-                      "default": 7,
+                      "default": 10,
                       "minimum": 0,
                       "x-passivbot-unit": "positions",
                       "x-passivbot-scope": "global",
@@ -1223,8 +1187,8 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        7,
-                        7,
+                        10,
+                        10,
                         1
                       ],
                       "x-passivbot-coin-override": "forbidden"
@@ -1344,7 +1308,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.37,
+                      "default": 0.39417859,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -1357,8 +1321,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
-                        0.4,
-                        0.01
+                        0.5
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     }
@@ -1584,7 +1547,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.84,
+                              "default": 0.93803486,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -1598,14 +1561,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.05,
-                                1.0,
-                                0.01
+                                1.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0005,
+                              "default": 0.0057765653,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "global",
@@ -1618,14 +1580,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.01
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 22.95,
+                              "default": 24.787212,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1639,14 +1600,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 52.34,
+                              "default": 49.906207,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1660,14 +1620,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0027,
+                              "default": -0.0030097131,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "global",
@@ -1679,15 +1638,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.005,
-                                0.01,
-                                0.0001
+                                -0.03,
+                                0.03
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.0001,
+                              "default": -0.00058227967,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1700,15 +1658,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.05,
-                                0.05,
-                                0.0001
+                                -0.1,
+                                0.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.48,
+                              "default": 0.56895399,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1722,14 +1679,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                10.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 3.22,
+                              "default": 5.0051617,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1743,8 +1699,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                25.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             }
@@ -1774,7 +1729,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 790.0,
+                              "default": 951.23145,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "global",
                               "x-passivbot-consumers": [
@@ -1785,15 +1740,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1080.0,
+                              "default": 1056.4949,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "global",
                               "x-passivbot-consumers": [
@@ -1804,15 +1758,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0028,
+                              "default": 0.0027829935,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "global",
@@ -1825,14 +1778,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 -0.05,
-                                0.005,
-                                0.0001
+                                0.005
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0081,
+                              "default": 0.0077516943,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "global",
@@ -1845,14 +1797,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.005,
-                                0.1,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.94,
+                              "default": 0.9568071,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -1865,15 +1816,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                0.2,
-                                1.2,
-                                0.01
+                                0.1,
+                                1.7
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0008,
+                              "default": 0.00080691599,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "global",
@@ -1886,14 +1836,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.02
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.334,
+                              "default": 0.35159298,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1907,14 +1856,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 15.5,
+                              "default": 19.828034,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1928,14 +1876,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 50.42,
+                              "default": 40.343733,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1949,14 +1896,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.019,
+                              "default": 0.039986647,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "global",
@@ -1969,14 +1915,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.001,
-                                0.035,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.007,
+                              "default": 1.7900066,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1990,14 +1935,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.58,
+                              "default": 4.5892069,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -2011,14 +1955,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 17.68,
+                              "default": 20.462763,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -2032,8 +1975,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "forbidden"
                             }
@@ -2042,7 +1984,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 683.0,
+                          "default": 768.63555,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "global",
@@ -2054,15 +1996,14 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            168.0,
-                            2016.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 604.0,
+                          "default": 583.95467,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "global",
@@ -2074,9 +2015,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            5.0,
-                            2880.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         }
@@ -2183,7 +2123,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.041,
+                      "default": 0.11659791,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -2197,14 +2137,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
-                        0.12,
-                        0.001
+                        0.12
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.0269,
+                      "default": -0.049689319,
                       "exclusiveMinimum": -1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -2217,8 +2156,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
-                        0.01,
-                        0.0001
+                        0.01
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
@@ -2236,7 +2174,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 790.0,
+                      "default": 513.39957,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -2247,15 +2185,14 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 1080.0,
+                      "default": 2042.1798,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -2266,9 +2203,8 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
@@ -2286,7 +2222,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.466,
+                      "default": 0.55288224,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -2299,14 +2235,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
-                        0.9,
-                        0.001
+                        0.9
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0052,
+                      "default": 0.0032770496,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
@@ -2319,9 +2254,8 @@
                       ],
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0.005,
-                        0.2,
-                        0.0001
+                        0.0001,
+                        0.2
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     }
@@ -2352,7 +2286,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 24.1,
+                      "default": 3.4098966,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2364,9 +2298,8 @@
                       "x-passivbot-optimizer-key": "long_risk_entry_cooldown_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0,
-                        60,
-                        0.1
+                        1,
+                        60
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -2375,7 +2308,7 @@
                         "number",
                         "null"
                       ],
-                      "default": null,
+                      "default": 360.0,
                       "description": "Null means no ceiling; enabled modifier weights require a finite ceiling.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
@@ -2391,7 +2324,7 @@
                     },
                     "min_duration_minutes": {
                       "type": "number",
-                      "default": 0.0,
+                      "default": 1.0,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2402,6 +2335,10 @@
                       ],
                       "x-passivbot-optimizer-key": "long_entry_cooldown_min_duration_minutes",
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        1,
+                        1
+                      ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "weights_minutes": {
@@ -2409,7 +2346,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 11.242806,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -2422,11 +2359,15 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_adverse_directionality",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 16.628462,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -2439,6 +2380,10 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_exposure_ratio",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         }
                       },
@@ -2477,7 +2422,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 2274.0,
+                      "default": 1747.2975,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2490,14 +2435,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
-                        2880,
-                        1
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 60.0,
+                      "default": 2169.1726,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -2509,6 +2453,10 @@
                       ],
                       "x-passivbot-optimizer-key": "long_rms_directionality_ema_span_minutes",
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        10,
+                        3000
+                      ],
                       "x-passivbot-coin-override": "forbidden"
                     },
                     "score_hysteresis_margin": {
@@ -2531,7 +2479,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.21,
+                          "default": 0.1978654292597687,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2546,14 +2494,13 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.61,
+                          "default": 0.362967082971877,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2568,14 +2515,13 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 0.39918534095105473,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2588,11 +2534,15 @@
                           ],
                           "x-passivbot-optimizer-key": "long_forager_score_weights_rms_directionality",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0,
+                            1
+                          ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "volume": {
                           "type": "number",
-                          "default": 0.18,
+                          "default": 0.03998214681729961,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2607,8 +2557,7 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
-                            1,
-                            0.01
+                            1
                           ],
                           "x-passivbot-coin-override": "forbidden"
                         }
@@ -2617,7 +2566,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 310.0,
+                      "default": 518.62365,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2629,9 +2578,8 @@
                       "x-passivbot-optimizer-key": "long_forager_volume_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        180,
-                        2880,
-                        1
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     }
@@ -2773,7 +2721,7 @@
                   "properties": {
                     "max_positions": {
                       "type": "integer",
-                      "default": 7,
+                      "default": 10,
                       "minimum": 0,
                       "x-passivbot-unit": "positions",
                       "x-passivbot-scope": "long",
@@ -2785,8 +2733,8 @@
                       "x-passivbot-optimizer-key": "long_n_positions",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        7,
-                        7,
+                        10,
+                        10,
                         1
                       ],
                       "x-passivbot-coin-override": "forbidden"
@@ -2909,7 +2857,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.37,
+                      "default": 0.39417859,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -2923,8 +2871,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
-                        0.4,
-                        0.01
+                        0.5
                       ],
                       "x-passivbot-coin-override": "allowed"
                     }
@@ -3160,7 +3107,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.84,
+                              "default": 0.93803486,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -3175,14 +3122,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.05,
-                                1.0,
-                                0.01
+                                1.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0005,
+                              "default": 0.0057765653,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "long",
@@ -3196,14 +3142,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.01
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 22.95,
+                              "default": 24.787212,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3218,14 +3163,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 52.34,
+                              "default": 49.906207,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3240,14 +3184,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0027,
+                              "default": -0.0030097131,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "long",
@@ -3260,15 +3203,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.005,
-                                0.01,
-                                0.0001
+                                -0.03,
+                                0.03
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.0001,
+                              "default": -0.00058227967,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3282,15 +3224,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.05,
-                                0.05,
-                                0.0001
+                                -0.1,
+                                0.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.48,
+                              "default": 0.56895399,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3305,14 +3246,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                10.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 3.22,
+                              "default": 5.0051617,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3327,8 +3267,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                25.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             }
@@ -3358,7 +3297,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 790.0,
+                              "default": 951.23145,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "long",
                               "x-passivbot-consumers": [
@@ -3370,15 +3309,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1080.0,
+                              "default": 1056.4949,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "long",
                               "x-passivbot-consumers": [
@@ -3390,15 +3328,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0028,
+                              "default": 0.0027829935,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "long",
@@ -3412,14 +3349,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 -0.05,
-                                0.005,
-                                0.0001
+                                0.005
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0081,
+                              "default": 0.0077516943,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "long",
@@ -3433,14 +3369,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.005,
-                                0.1,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.94,
+                              "default": 0.9568071,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -3454,15 +3389,14 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                0.2,
-                                1.2,
-                                0.01
+                                0.1,
+                                1.7
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0008,
+                              "default": 0.00080691599,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "long",
@@ -3476,14 +3410,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.02
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.334,
+                              "default": 0.35159298,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3498,14 +3431,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 15.5,
+                              "default": 19.828034,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3520,14 +3452,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 50.42,
+                              "default": 40.343733,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3542,14 +3473,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.019,
+                              "default": 0.039986647,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "long",
@@ -3563,14 +3493,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.001,
-                                0.035,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.007,
+                              "default": 1.7900066,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3585,14 +3514,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.58,
+                              "default": 4.5892069,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3607,14 +3535,13 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 17.68,
+                              "default": 20.462763,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3629,8 +3556,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             }
@@ -3639,7 +3565,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 683.0,
+                          "default": 768.63555,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "long",
@@ -3652,15 +3578,14 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            168.0,
-                            2016.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 604.0,
+                          "default": 583.95467,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "long",
@@ -3673,9 +3598,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            5.0,
-                            2880.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         }
@@ -3786,7 +3710,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.041,
+                      "default": 0.11659791,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -3801,14 +3725,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
-                        0.12,
-                        0.001
+                        0.12
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.0269,
+                      "default": -0.049689319,
                       "exclusiveMinimum": -1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -3822,8 +3745,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
-                        0.01,
-                        0.0001
+                        0.01
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -3841,7 +3763,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 790.0,
+                      "default": 513.39957,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -3853,15 +3775,14 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 1080.0,
+                      "default": 2042.1798,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -3873,9 +3794,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -3893,7 +3813,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.466,
+                      "default": 0.55288224,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -3907,14 +3827,13 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
-                        0.9,
-                        0.001
+                        0.9
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0052,
+                      "default": 0.0032770496,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
@@ -3928,9 +3847,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0.005,
-                        0.2,
-                        0.0001
+                        0.0001,
+                        0.2
                       ],
                       "x-passivbot-coin-override": "allowed"
                     }
@@ -4187,7 +4105,7 @@
                   "properties": {
                     "memory_ema_span_minutes": {
                       "type": "number",
-                      "default": 43200.0,
+                      "default": 96141.557,
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
                       "minimum": 1.0,
                       "x-passivbot-unit": "minutes",
@@ -4268,7 +4186,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 24.1,
+                      "default": 3.4098966,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4291,7 +4209,7 @@
                         "number",
                         "null"
                       ],
-                      "default": null,
+                      "default": 360.0,
                       "description": "Null means no ceiling; enabled modifier weights require a finite ceiling.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
@@ -4307,7 +4225,7 @@
                     },
                     "min_duration_minutes": {
                       "type": "number",
-                      "default": 0.0,
+                      "default": 1.0,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4325,7 +4243,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 11.242806,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -4342,7 +4260,7 @@
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 16.628462,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -4393,7 +4311,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 2274.0,
+                      "default": 1747.2975,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4413,7 +4331,7 @@
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 60.0,
+                      "default": 2169.1726,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -4447,7 +4365,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.21,
+                          "default": 0.1978654292597687,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4469,7 +4387,7 @@
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.61,
+                          "default": 0.362967082971877,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4491,7 +4409,7 @@
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.0,
+                          "default": 0.39918534095105473,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4504,11 +4422,16 @@
                           ],
                           "x-passivbot-optimizer-key": "short_forager_score_weights_rms_directionality",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0,
+                            1,
+                            0.01
+                          ],
                           "x-passivbot-coin-override": "forbidden"
                         },
                         "volume": {
                           "type": "number",
-                          "default": 0.18,
+                          "default": 0.03998214681729961,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4533,7 +4456,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 310.0,
+                      "default": 518.62365,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4689,7 +4612,7 @@
                   "properties": {
                     "max_positions": {
                       "type": "integer",
-                      "default": 7,
+                      "default": 10,
                       "minimum": 0,
                       "x-passivbot-unit": "positions",
                       "x-passivbot-scope": "short",
@@ -4824,7 +4747,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.37,
+                      "default": 0.39417859,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -5075,7 +4998,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.84,
+                              "default": 0.93803486,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -5097,7 +5020,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0005,
+                              "default": 0.0057765653,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "short",
@@ -5118,7 +5041,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 22.95,
+                              "default": 24.787212,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5140,7 +5063,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 52.34,
+                              "default": 49.906207,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5162,7 +5085,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0027,
+                              "default": -0.0030097131,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "short",
@@ -5183,7 +5106,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.0001,
+                              "default": -0.00058227967,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5205,7 +5128,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.48,
+                              "default": 0.56895399,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5227,7 +5150,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 3.22,
+                              "default": 5.0051617,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5273,7 +5196,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 790.0,
+                              "default": 951.23145,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "short",
                               "x-passivbot-consumers": [
@@ -5293,7 +5216,7 @@
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1080.0,
+                              "default": 1056.4949,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "short",
                               "x-passivbot-consumers": [
@@ -5313,7 +5236,7 @@
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0028,
+                              "default": 0.0027829935,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "short",
@@ -5334,7 +5257,7 @@
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0081,
+                              "default": 0.0077516943,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "short",
@@ -5355,7 +5278,7 @@
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.94,
+                              "default": 0.9568071,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -5377,7 +5300,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0008,
+                              "default": 0.00080691599,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "short",
@@ -5398,7 +5321,7 @@
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.334,
+                              "default": 0.35159298,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5420,7 +5343,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 15.5,
+                              "default": 19.828034,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5442,7 +5365,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 50.42,
+                              "default": 40.343733,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5464,7 +5387,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.019,
+                              "default": 0.039986647,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "short",
@@ -5485,7 +5408,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.007,
+                              "default": 1.7900066,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5507,7 +5430,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.58,
+                              "default": 4.5892069,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5529,7 +5452,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 17.68,
+                              "default": 20.462763,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5554,7 +5477,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 683.0,
+                          "default": 768.63555,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "short",
@@ -5575,7 +5498,7 @@
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 604.0,
+                          "default": 583.95467,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "short",
@@ -5701,7 +5624,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.041,
+                      "default": 0.11659791,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -5723,7 +5646,7 @@
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.0269,
+                      "default": -0.049689319,
                       "exclusiveMaximum": 1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -5756,7 +5679,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 790.0,
+                      "default": 513.39957,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -5776,7 +5699,7 @@
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 1080.0,
+                      "default": 2042.1798,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -5808,7 +5731,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.466,
+                      "default": 0.55288224,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -5829,7 +5752,7 @@
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0052,
+                      "default": 0.0032770496,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
@@ -6509,7 +6432,7 @@
             },
             "iters": {
               "type": "integer",
-              "default": 200000,
+              "default": 2048,
               "x-passivbot-consumers": [
                 "optimize"
               ]
@@ -6519,16 +6442,24 @@
               "default": [
                 {
                   "enabled": true,
-                  "metric": "drawdown_max_fraction_strategy_equity",
-                  "penalize_if": "greater_than",
-                  "reducer": "mean",
-                  "value": 0.8
-                },
-                {
-                  "enabled": true,
                   "metric": "backtest_completion_fraction",
                   "penalize_if": "less_than",
-                  "value": 0.99
+                  "reducer": "min",
+                  "value": 1.0
+                },
+                {
+                  "enabled": false,
+                  "metric": "drawdown_max_fraction_strategy_equity",
+                  "penalize_if": "greater_than",
+                  "reducer": "max",
+                  "value": 0.5
+                },
+                {
+                  "enabled": false,
+                  "metric": "peak_recovery_max_days_strategy_equity",
+                  "penalize_if": "greater_than",
+                  "reducer": "max",
+                  "value": 240
                 }
               ],
               "x-passivbot-consumers": [
@@ -6628,7 +6559,7 @@
                 "integer",
                 "null"
               ],
-              "default": null,
+              "default": 128,
               "x-passivbot-consumers": [
                 "optimize"
               ]
@@ -6917,7 +6848,7 @@
             },
             "round_to_n_significant_digits": {
               "type": "integer",
-              "default": 3,
+              "default": 8,
               "x-passivbot-consumers": [
                 "optimize"
               ]
@@ -6927,11 +6858,21 @@
               "default": [
                 {
                   "goal": "max",
-                  "metric": "cagr_fraction_strategy_equity"
+                  "metric": "cagr_fraction_strategy_equity_ew",
+                  "reducer": "mean",
+                  "scenario": null
                 },
                 {
                   "goal": "min",
-                  "metric": "ulcer_index_fraction_strategy_equity"
+                  "metric": "ulcer_index_fraction_strategy_equity",
+                  "reducer": "max",
+                  "scenario": null
+                },
+                {
+                  "goal": "min",
+                  "metric": "peak_recovery_max_days_strategy_equity",
+                  "reducer": "max",
+                  "scenario": null
                 }
               ],
               "x-passivbot-consumers": [
@@ -7261,8 +7202,8 @@
                           "x-passivbot-target": "bot.long.risk.max_positions",
                           "examples": [
                             [
-                              7,
-                              7,
+                              10,
+                              10,
                               1
                             ]
                           ]
@@ -7414,8 +7355,7 @@
                           "examples": [
                             [
                               0,
-                              0.4,
-                              0.01
+                              0.5
                             ]
                           ]
                         }
@@ -7455,7 +7395,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.forager.score_weights.rms_directionality"
+                              "x-passivbot-target": "bot.long.forager.score_weights.rms_directionality",
+                              "examples": [
+                                [
+                                  0,
+                                  1
+                                ]
+                              ]
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -7487,8 +7433,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             },
@@ -7522,8 +7467,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             },
@@ -7557,8 +7501,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             }
@@ -7590,7 +7533,13 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.forager.rms_directionality_ema_span_minutes"
+                          "x-passivbot-target": "bot.long.forager.rms_directionality_ema_span_minutes",
+                          "examples": [
+                            [
+                              10,
+                              3000
+                            ]
+                          ]
                         },
                         "log_range_ema_span_minutes": {
                           "anyOf": [
@@ -7622,8 +7571,7 @@
                           "examples": [
                             [
                               10,
-                              2880,
-                              1
+                              3000
                             ]
                           ]
                         },
@@ -7656,9 +7604,8 @@
                           "x-passivbot-target": "bot.long.forager.volume_ema_span_minutes",
                           "examples": [
                             [
-                              180,
-                              2880,
-                              1
+                              10,
+                              3000
                             ]
                           ]
                         }
@@ -7836,9 +7783,8 @@
                           "x-passivbot-target": "bot.long.entry_cooldown.base_duration_minutes",
                           "examples": [
                             [
-                              0,
-                              60,
-                              0.1
+                              1,
+                              60
                             ]
                           ]
                         },
@@ -7868,7 +7814,13 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.long.entry_cooldown.min_duration_minutes"
+                          "x-passivbot-target": "bot.long.entry_cooldown.min_duration_minutes",
+                          "examples": [
+                            [
+                              1,
+                              1
+                            ]
+                          ]
                         },
                         "weights_minutes": {
                           "type": "object",
@@ -7900,7 +7852,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.entry_cooldown.weights_minutes.exposure_ratio"
+                              "x-passivbot-target": "bot.long.entry_cooldown.weights_minutes.exposure_ratio",
+                              "examples": [
+                                [
+                                  1,
+                                  100
+                                ]
+                              ]
                             },
                             "adverse_directionality": {
                               "anyOf": [
@@ -7928,7 +7886,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.entry_cooldown.weights_minutes.adverse_directionality"
+                              "x-passivbot-target": "bot.long.entry_cooldown.weights_minutes.adverse_directionality",
+                              "examples": [
+                                [
+                                  1,
+                                  100
+                                ]
+                              ]
                             }
                           }
                         },
@@ -7996,8 +7960,7 @@
                           "examples": [
                             [
                               0.01,
-                              0.12,
-                              0.001
+                              0.12
                             ]
                           ]
                         },
@@ -8031,8 +7994,7 @@
                           "examples": [
                             [
                               -0.2,
-                              0.01,
-                              0.0001
+                              0.01
                             ]
                           ]
                         },
@@ -8065,9 +8027,8 @@
                           "x-passivbot-target": "bot.long.unstuck.ema_span_0_minutes",
                           "examples": [
                             [
-                              60,
-                              2880,
-                              10
+                              10,
+                              3000
                             ]
                           ]
                         },
@@ -8100,9 +8061,8 @@
                           "x-passivbot-target": "bot.long.unstuck.ema_span_1_minutes",
                           "examples": [
                             [
-                              60,
-                              2880,
-                              10
+                              10,
+                              3000
                             ]
                           ]
                         },
@@ -8135,9 +8095,8 @@
                           "x-passivbot-target": "bot.long.unstuck.loss_allowance_fraction",
                           "examples": [
                             [
-                              0.005,
-                              0.2,
-                              0.0001
+                              0.0001,
+                              0.2
                             ]
                           ]
                         },
@@ -8171,8 +8130,7 @@
                           "examples": [
                             [
                               0.4,
-                              0.9,
-                              0.001
+                              0.9
                             ]
                           ]
                         }
@@ -8219,9 +8177,8 @@
                                   "x-passivbot-target": "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes",
                                   "examples": [
                                     [
-                                      100.0,
-                                      2880.0,
-                                      10.0
+                                      10.0,
+                                      3000.0
                                     ]
                                   ]
                                 },
@@ -8254,9 +8211,8 @@
                                   "x-passivbot-target": "bot.long.strategy.trailing_martingale.entry.ema_span_1_minutes",
                                   "examples": [
                                     [
-                                      100.0,
-                                      2880.0,
-                                      10.0
+                                      10.0,
+                                      3000.0
                                     ]
                                   ]
                                 },
@@ -8289,9 +8245,8 @@
                                   "x-passivbot-target": "bot.long.strategy.trailing_martingale.entry.reentry_qty_multiplier",
                                   "examples": [
                                     [
-                                      0.2,
-                                      1.2,
-                                      0.01
+                                      0.1,
+                                      1.7
                                     ]
                                   ]
                                 },
@@ -8325,8 +8280,7 @@
                                   "examples": [
                                     [
                                       0.005,
-                                      0.1,
-                                      0.0001
+                                      0.05
                                     ]
                                   ]
                                 },
@@ -8360,8 +8314,7 @@
                                   "examples": [
                                     [
                                       -0.05,
-                                      0.005,
-                                      0.0001
+                                      0.005
                                     ]
                                   ]
                                 },
@@ -8395,8 +8348,7 @@
                                   "examples": [
                                     [
                                       0.001,
-                                      0.035,
-                                      0.0001
+                                      0.05
                                     ]
                                   ]
                                 },
@@ -8430,8 +8382,7 @@
                                   "examples": [
                                     [
                                       0.0,
-                                      5.0,
-                                      0.001
+                                      5.0
                                     ]
                                   ]
                                 },
@@ -8465,8 +8416,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -8500,8 +8450,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -8535,8 +8484,7 @@
                                   "examples": [
                                     [
                                       0.0001,
-                                      0.01,
-                                      0.0001
+                                      0.02
                                     ]
                                   ]
                                 },
@@ -8570,8 +8518,7 @@
                                   "examples": [
                                     [
                                       0.0,
-                                      5.0,
-                                      0.001
+                                      5.0
                                     ]
                                   ]
                                 },
@@ -8605,8 +8552,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -8640,8 +8586,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 }
@@ -8676,9 +8621,8 @@
                               "x-passivbot-target": "bot.long.strategy.trailing_martingale.log_range_ema_span_1h_candles",
                               "examples": [
                                 [
-                                  168.0,
-                                  2016.0,
-                                  1.0
+                                  10.0,
+                                  3000.0
                                 ]
                               ]
                             },
@@ -8711,9 +8655,8 @@
                               "x-passivbot-target": "bot.long.strategy.trailing_martingale.log_range_ema_span_minutes",
                               "examples": [
                                 [
-                                  5.0,
-                                  2880.0,
-                                  1.0
+                                  10.0,
+                                  3000.0
                                 ]
                               ]
                             },
@@ -8751,8 +8694,7 @@
                                   "examples": [
                                     [
                                       0.05,
-                                      1.0,
-                                      0.01
+                                      1.0
                                     ]
                                   ]
                                 },
@@ -8785,9 +8727,8 @@
                                   "x-passivbot-target": "bot.long.strategy.trailing_martingale.close.threshold_base_fraction",
                                   "examples": [
                                     [
-                                      -0.005,
-                                      0.01,
-                                      0.0001
+                                      -0.03,
+                                      0.03
                                     ]
                                   ]
                                 },
@@ -8820,9 +8761,8 @@
                                   "x-passivbot-target": "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient",
                                   "examples": [
                                     [
-                                      -0.05,
-                                      0.05,
-                                      0.0001
+                                      -0.1,
+                                      0.0
                                     ]
                                   ]
                                 },
@@ -8856,8 +8796,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      10.0
                                     ]
                                   ]
                                 },
@@ -8891,8 +8830,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      25.0
                                     ]
                                   ]
                                 },
@@ -8926,8 +8864,7 @@
                                   "examples": [
                                     [
                                       0.0001,
-                                      0.01,
-                                      0.0001
+                                      0.01
                                     ]
                                   ]
                                 },
@@ -8961,8 +8898,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -8996,8 +8932,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 }
@@ -9595,7 +9530,14 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.short.forager.score_weights.rms_directionality"
+                              "x-passivbot-target": "bot.short.forager.score_weights.rms_directionality",
+                              "examples": [
+                                [
+                                  0,
+                                  1,
+                                  0.01
+                                ]
+                              ]
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -11542,8 +11484,8 @@
                           "x-passivbot-target": "bot.global.risk.max_positions",
                           "examples": [
                             [
-                              7,
-                              7,
+                              10,
+                              10,
                               1
                             ]
                           ]
@@ -11695,8 +11637,7 @@
                           "examples": [
                             [
                               0,
-                              0.4,
-                              0.01
+                              0.5
                             ]
                           ]
                         }
@@ -11736,7 +11677,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.global.forager.score_weights.rms_directionality"
+                              "x-passivbot-target": "bot.global.forager.score_weights.rms_directionality",
+                              "examples": [
+                                [
+                                  0,
+                                  1
+                                ]
+                              ]
                             },
                             "ema_readiness": {
                               "anyOf": [
@@ -11768,8 +11715,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             },
@@ -11803,8 +11749,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             },
@@ -11838,8 +11783,7 @@
                               "examples": [
                                 [
                                   0,
-                                  1,
-                                  0.01
+                                  1
                                 ]
                               ]
                             }
@@ -11871,7 +11815,13 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.forager.rms_directionality_ema_span_minutes"
+                          "x-passivbot-target": "bot.global.forager.rms_directionality_ema_span_minutes",
+                          "examples": [
+                            [
+                              10,
+                              3000
+                            ]
+                          ]
                         },
                         "log_range_ema_span_minutes": {
                           "anyOf": [
@@ -11903,8 +11853,7 @@
                           "examples": [
                             [
                               10,
-                              2880,
-                              1
+                              3000
                             ]
                           ]
                         },
@@ -11937,9 +11886,8 @@
                           "x-passivbot-target": "bot.global.forager.volume_ema_span_minutes",
                           "examples": [
                             [
-                              180,
-                              2880,
-                              1
+                              10,
+                              3000
                             ]
                           ]
                         }
@@ -12117,9 +12065,8 @@
                           "x-passivbot-target": "bot.global.entry_cooldown.base_duration_minutes",
                           "examples": [
                             [
-                              0,
-                              60,
-                              0.1
+                              1,
+                              60
                             ]
                           ]
                         },
@@ -12149,7 +12096,13 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.entry_cooldown.min_duration_minutes"
+                          "x-passivbot-target": "bot.global.entry_cooldown.min_duration_minutes",
+                          "examples": [
+                            [
+                              1,
+                              1
+                            ]
+                          ]
                         },
                         "weights_minutes": {
                           "type": "object",
@@ -12181,7 +12134,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.global.entry_cooldown.weights_minutes.exposure_ratio"
+                              "x-passivbot-target": "bot.global.entry_cooldown.weights_minutes.exposure_ratio",
+                              "examples": [
+                                [
+                                  1,
+                                  100
+                                ]
+                              ]
                             },
                             "adverse_directionality": {
                               "anyOf": [
@@ -12209,7 +12168,13 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.global.entry_cooldown.weights_minutes.adverse_directionality"
+                              "x-passivbot-target": "bot.global.entry_cooldown.weights_minutes.adverse_directionality",
+                              "examples": [
+                                [
+                                  1,
+                                  100
+                                ]
+                              ]
                             }
                           }
                         },
@@ -12277,8 +12242,7 @@
                           "examples": [
                             [
                               0.01,
-                              0.12,
-                              0.001
+                              0.12
                             ]
                           ]
                         },
@@ -12312,8 +12276,7 @@
                           "examples": [
                             [
                               -0.2,
-                              0.01,
-                              0.0001
+                              0.01
                             ]
                           ]
                         },
@@ -12346,9 +12309,8 @@
                           "x-passivbot-target": "bot.global.unstuck.ema_span_0_minutes",
                           "examples": [
                             [
-                              60,
-                              2880,
-                              10
+                              10,
+                              3000
                             ]
                           ]
                         },
@@ -12381,9 +12343,8 @@
                           "x-passivbot-target": "bot.global.unstuck.ema_span_1_minutes",
                           "examples": [
                             [
-                              60,
-                              2880,
-                              10
+                              10,
+                              3000
                             ]
                           ]
                         },
@@ -12416,9 +12377,8 @@
                           "x-passivbot-target": "bot.global.unstuck.loss_allowance_fraction",
                           "examples": [
                             [
-                              0.005,
-                              0.2,
-                              0.0001
+                              0.0001,
+                              0.2
                             ]
                           ]
                         },
@@ -12452,8 +12412,7 @@
                           "examples": [
                             [
                               0.4,
-                              0.9,
-                              0.001
+                              0.9
                             ]
                           ]
                         }
@@ -12500,9 +12459,8 @@
                                   "x-passivbot-target": "bot.global.strategy.trailing_martingale.entry.ema_span_0_minutes",
                                   "examples": [
                                     [
-                                      100.0,
-                                      2880.0,
-                                      10.0
+                                      10.0,
+                                      3000.0
                                     ]
                                   ]
                                 },
@@ -12535,9 +12493,8 @@
                                   "x-passivbot-target": "bot.global.strategy.trailing_martingale.entry.ema_span_1_minutes",
                                   "examples": [
                                     [
-                                      100.0,
-                                      2880.0,
-                                      10.0
+                                      10.0,
+                                      3000.0
                                     ]
                                   ]
                                 },
@@ -12570,9 +12527,8 @@
                                   "x-passivbot-target": "bot.global.strategy.trailing_martingale.entry.reentry_qty_multiplier",
                                   "examples": [
                                     [
-                                      0.2,
-                                      1.2,
-                                      0.01
+                                      0.1,
+                                      1.7
                                     ]
                                   ]
                                 },
@@ -12606,8 +12562,7 @@
                                   "examples": [
                                     [
                                       0.005,
-                                      0.1,
-                                      0.0001
+                                      0.05
                                     ]
                                   ]
                                 },
@@ -12641,8 +12596,7 @@
                                   "examples": [
                                     [
                                       -0.05,
-                                      0.005,
-                                      0.0001
+                                      0.005
                                     ]
                                   ]
                                 },
@@ -12676,8 +12630,7 @@
                                   "examples": [
                                     [
                                       0.001,
-                                      0.035,
-                                      0.0001
+                                      0.05
                                     ]
                                   ]
                                 },
@@ -12711,8 +12664,7 @@
                                   "examples": [
                                     [
                                       0.0,
-                                      5.0,
-                                      0.001
+                                      5.0
                                     ]
                                   ]
                                 },
@@ -12746,8 +12698,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -12781,8 +12732,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -12816,8 +12766,7 @@
                                   "examples": [
                                     [
                                       0.0001,
-                                      0.01,
-                                      0.0001
+                                      0.02
                                     ]
                                   ]
                                 },
@@ -12851,8 +12800,7 @@
                                   "examples": [
                                     [
                                       0.0,
-                                      5.0,
-                                      0.001
+                                      5.0
                                     ]
                                   ]
                                 },
@@ -12886,8 +12834,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -12921,8 +12868,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 }
@@ -12957,9 +12903,8 @@
                               "x-passivbot-target": "bot.global.strategy.trailing_martingale.log_range_ema_span_1h_candles",
                               "examples": [
                                 [
-                                  168.0,
-                                  2016.0,
-                                  1.0
+                                  10.0,
+                                  3000.0
                                 ]
                               ]
                             },
@@ -12992,9 +12937,8 @@
                               "x-passivbot-target": "bot.global.strategy.trailing_martingale.log_range_ema_span_minutes",
                               "examples": [
                                 [
-                                  5.0,
-                                  2880.0,
-                                  1.0
+                                  10.0,
+                                  3000.0
                                 ]
                               ]
                             },
@@ -13032,8 +12976,7 @@
                                   "examples": [
                                     [
                                       0.05,
-                                      1.0,
-                                      0.01
+                                      1.0
                                     ]
                                   ]
                                 },
@@ -13066,9 +13009,8 @@
                                   "x-passivbot-target": "bot.global.strategy.trailing_martingale.close.threshold_base_fraction",
                                   "examples": [
                                     [
-                                      -0.005,
-                                      0.01,
-                                      0.0001
+                                      -0.03,
+                                      0.03
                                     ]
                                   ]
                                 },
@@ -13101,9 +13043,8 @@
                                   "x-passivbot-target": "bot.global.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient",
                                   "examples": [
                                     [
-                                      -0.05,
-                                      0.05,
-                                      0.0001
+                                      -0.1,
+                                      0.0
                                     ]
                                   ]
                                 },
@@ -13137,8 +13078,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      10.0
                                     ]
                                   ]
                                 },
@@ -13172,8 +13112,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      25.0
                                     ]
                                   ]
                                 },
@@ -13207,8 +13146,7 @@
                                   "examples": [
                                     [
                                       0.0001,
-                                      0.01,
-                                      0.0001
+                                      0.01
                                     ]
                                   ]
                                 },
@@ -13242,8 +13180,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 },
@@ -13277,8 +13214,7 @@
                                   "examples": [
                                     [
                                       0.01,
-                                      80.0,
-                                      0.01
+                                      100.0
                                     ]
                                   ]
                                 }
@@ -13918,9 +13854,8 @@
                       "x-passivbot-optimizer-key": "long_risk_entry_cooldown_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0,
-                        60,
-                        0.1
+                        1,
+                        60
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -13936,6 +13871,10 @@
                       ],
                       "x-passivbot-optimizer-key": "long_entry_cooldown_min_duration_minutes",
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        1,
+                        1
+                      ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "weights_minutes": {
@@ -13956,6 +13895,10 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_exposure_ratio",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         },
                         "adverse_directionality": {
@@ -13972,6 +13915,10 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_adverse_directionality",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         }
                       }
@@ -14052,8 +13999,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
-                        0.4,
-                        0.01
+                        0.5
                       ],
                       "x-passivbot-coin-override": "allowed"
                     }
@@ -14079,8 +14025,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
-                        0.12,
-                        0.001
+                        0.12
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14099,8 +14044,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
-                        0.01,
-                        0.0001
+                        0.01
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14117,9 +14061,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14136,9 +14079,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14157,9 +14099,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0.005,
-                        0.2,
-                        0.0001
+                        0.0001,
+                        0.2
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14178,8 +14119,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
-                        0.9,
-                        0.001
+                        0.9
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -14245,9 +14185,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14264,9 +14203,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14285,9 +14223,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                0.2,
-                                1.2,
-                                0.01
+                                0.1,
+                                1.7
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14306,8 +14243,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.005,
-                                0.1,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14326,8 +14262,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 -0.05,
-                                0.005,
-                                0.0001
+                                0.005
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14346,8 +14281,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.001,
-                                0.035,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14367,8 +14301,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14388,8 +14321,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14409,8 +14341,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14429,8 +14360,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.02
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14450,8 +14380,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14471,8 +14400,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14492,8 +14420,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14530,9 +14457,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            168.0,
-                            2016.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         },
@@ -14550,9 +14476,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            5.0,
-                            2880.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         },
@@ -14576,8 +14501,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.05,
-                                1.0,
-                                0.01
+                                1.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14595,9 +14519,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.005,
-                                0.01,
-                                0.0001
+                                -0.03,
+                                0.03
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14616,9 +14539,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.05,
-                                0.05,
-                                0.0001
+                                -0.1,
+                                0.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14638,8 +14560,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                10.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14659,8 +14580,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                25.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14679,8 +14599,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.01
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14700,8 +14619,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -14721,8 +14639,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             }
@@ -16203,9 +16120,8 @@
                       "x-passivbot-optimizer-key": "long_risk_entry_cooldown_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0,
-                        60,
-                        0.1
+                        1,
+                        60
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16221,6 +16137,10 @@
                       ],
                       "x-passivbot-optimizer-key": "long_entry_cooldown_min_duration_minutes",
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-recommended-bounds": [
+                        1,
+                        1
+                      ],
                       "x-passivbot-coin-override": "allowed"
                     },
                     "weights_minutes": {
@@ -16241,6 +16161,10 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_exposure_ratio",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         },
                         "adverse_directionality": {
@@ -16257,6 +16181,10 @@
                           ],
                           "x-passivbot-optimizer-key": "long_entry_cooldown_weights_minutes_adverse_directionality",
                           "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            100
+                          ],
                           "x-passivbot-coin-override": "allowed"
                         }
                       }
@@ -16337,8 +16265,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
-                        0.4,
-                        0.01
+                        0.5
                       ],
                       "x-passivbot-coin-override": "allowed"
                     }
@@ -16364,8 +16291,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
-                        0.12,
-                        0.001
+                        0.12
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16384,8 +16310,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
-                        0.01,
-                        0.0001
+                        0.01
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16402,9 +16327,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16421,9 +16345,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        60,
-                        2880,
-                        10
+                        10,
+                        3000
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16442,9 +16365,8 @@
                       "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
-                        0.005,
-                        0.2,
-                        0.0001
+                        0.0001,
+                        0.2
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16463,8 +16385,7 @@
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
-                        0.9,
-                        0.001
+                        0.9
                       ],
                       "x-passivbot-coin-override": "allowed"
                     },
@@ -16530,9 +16451,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16549,9 +16469,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                100.0,
-                                2880.0,
-                                10.0
+                                10.0,
+                                3000.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16570,9 +16489,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                0.2,
-                                1.2,
-                                0.01
+                                0.1,
+                                1.7
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16591,8 +16509,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.005,
-                                0.1,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16611,8 +16528,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 -0.05,
-                                0.005,
-                                0.0001
+                                0.005
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16631,8 +16547,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.001,
-                                0.035,
-                                0.0001
+                                0.05
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16652,8 +16567,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16673,8 +16587,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16694,8 +16607,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16714,8 +16626,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.02
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16735,8 +16646,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0,
-                                5.0,
-                                0.001
+                                5.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16756,8 +16666,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16777,8 +16686,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16815,9 +16723,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            168.0,
-                            2016.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         },
@@ -16835,9 +16742,8 @@
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                           "x-passivbot-recommended-bounds": [
-                            5.0,
-                            2880.0,
-                            1.0
+                            10.0,
+                            3000.0
                           ],
                           "x-passivbot-coin-override": "allowed"
                         },
@@ -16861,8 +16767,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.05,
-                                1.0,
-                                0.01
+                                1.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16880,9 +16785,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.005,
-                                0.01,
-                                0.0001
+                                -0.03,
+                                0.03
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16901,9 +16805,8 @@
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
-                                -0.05,
-                                0.05,
-                                0.0001
+                                -0.1,
+                                0.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16923,8 +16826,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                10.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16944,8 +16846,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                25.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16964,8 +16865,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.0001,
-                                0.01,
-                                0.0001
+                                0.01
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -16985,8 +16885,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             },
@@ -17006,8 +16905,7 @@
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
                                 0.01,
-                                80.0,
-                                0.01
+                                100.0
                               ],
                               "x-passivbot-coin-override": "allowed"
                             }

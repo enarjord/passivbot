@@ -402,7 +402,7 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     )
     monkeypatch.setattr(pb.sys, "argv", ["passivbot"])
     monkeypatch.setattr(pb, "configure_logging", lambda **kw: None)
-    monkeypatch.setattr(pb, "load_input_config", lambda *a: (config, None, None))
+    monkeypatch.setattr(pb, "load_input_config", lambda *a, **kw: (config, None, None))
     monkeypatch.setattr(pb, "prepare_config", lambda *a, **kw: config)
     monkeypatch.setattr(
         pb, "resolve_live_log_file_settings", lambda *a, **kw: {"log_file": None}

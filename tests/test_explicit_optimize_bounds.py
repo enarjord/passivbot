@@ -106,6 +106,10 @@ def test_sorting_does_not_open_template_ranges_and_null_stays_outside_genome():
     source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
+    source["bot"]["long"]["entry_cooldown"].update(
+        max_duration_minutes=None,
+        weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+    )
     source["optimize"]["bounds"] = {}
     prepared = prepare_config(source, verbose=False)
     assert "bot.long.entry_cooldown.max_duration_minutes" not in gene_bounds(prepared)
@@ -117,6 +121,7 @@ def weight_source(bounds):
     source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
+    source["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 0.0
     source["optimize"]["bounds"] = {"long": {"forager": bounds}}
     return source
 
@@ -434,7 +439,7 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
     prescribed = apply_recommended_bounds(source)
     assert source == before
     assert sum(bound.low != bound.high for bound in gene_bounds(prescribed).values()) > 1
-    assert flattened(prescribed)["long_entry_ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
+    assert flattened(prescribed)["long_entry_ema_span_0_minutes"] == [10.0, 3000.0]
     infile, outfile = tmp_path / "input.json", tmp_path / "search.json"
     infile.write_text(json.dumps(source))
     assert main([str(infile), str(outfile)]) == 0
@@ -455,7 +460,7 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
     prescribed = apply_recommended_bounds(source)
     assert prescribed["bot"]["portfolio"]["strategy_kind"] == strategy
     assert prescribed["bot"]["portfolio"]["hsl"]["scope"] == scope
-    assert flattened(prescribed)["long_forager_score_weights_rms_directionality"] == [0.0, 1.0, 0.01]
+    assert flattened(prescribed)["long_forager_score_weights_rms_directionality"] == [0.0, 1.0]
     assert gene_bounds(prepare_config(prescribed, verbose=False)) == gene_bounds(prescribed)
 
 

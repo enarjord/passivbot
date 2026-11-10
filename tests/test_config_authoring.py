@@ -354,11 +354,11 @@ def test_resolved_refuses_unavailable_market_universe_and_missing_coin_file(tmp_
 def test_explain_defaults_declared_metadata_and_search_source():
     source = {"config_version": "v9.0.0", "bot": {"long": {}}, "live": {}}
     report = explain_config(source, "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes")
-    assert report["value"] == 790.0
+    assert report["value"] == 951.23145
     assert report["types"] == ["float"]
     assert report["scope"] == "long"
     assert report["unit"] == "minutes"
-    assert report["default"] == {"declared": True, "value": 790.0}
+    assert report["default"] == {"declared": True, "value": 951.23145}
     assert report["sources"][0]["kind"] == "default_or_derived"
     assert report["search"]["status"] == "omitted_fixed"
     assert report["search"]["bounds_source"] == "configured_value"

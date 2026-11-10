@@ -37,7 +37,7 @@ async def test_grouped_custom_endpoint_selection_preserves_cli_precedence(
     monkeypatch.setattr(passivbot.sys, "argv", ["passivbot", *argv])
     monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
     monkeypatch.setattr(
-        passivbot, "load_input_config", lambda *args: (config, "", deepcopy(config))
+        passivbot, "load_input_config", lambda *args, **kwargs: (config, "", deepcopy(config))
     )
     monkeypatch.setattr(
         passivbot,

@@ -162,16 +162,22 @@ and an approved coin universe. Inspect it offline with
 passivbot live configs/private/live.json
 ```
 
-A live launch can contact the exchange, change account settings, and place or cancel orders.
-Omitting the config path leaves both position sides disabled for new entries and still starts
-the live runtime. Use the [offline fake harness](docs/fake_live.md) to test without an exchange.
+To opt into the built-in starter for live trading, add the intended exchange account to your
+local `api-keys.json` under the alias `passivbot_default`, then run `passivbot live`. This
+starter enables long entries. A live launch can contact the exchange, change account settings,
+and place or cancel orders. Use the [offline fake harness](docs/fake_live.md) to test without
+an exchange.
+
+With the full install, `passivbot backtest` and `passivbot optimize` also run from the built-in
+starter. They use cached market data where available and public data sources otherwise. Suite mode
+is opt-in with `--suite`.
 
 The direct-script entrypoints `python3 src/main.py ...`, `python3 src/backtest.py ...`,
 and `python3 src/optimize.py ...` also accept the current configuration.
 
-The canonical hardcoded defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile, so
-copying it is the recommended starting point for new configs.
+The built-in starter matches the [shipped example](configs/examples/default_trailing_martingale_long.json).
+Copy the example to customize it. See [Config Workflow](docs/config_workflow.md) for how bare
+commands, explicit config files, and CLI overrides select their settings.
 
 ### Logging
 

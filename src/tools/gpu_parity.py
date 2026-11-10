@@ -198,7 +198,16 @@ def fixture_inputs(args):
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
         bot["unstuck"]["enabled"] = args.unstuck and side in active
-        bot["entry_cooldown"]["base_duration_minutes"] = 0.0
+        # Synthetic histories can be much shorter than the starter's RMS
+        # window. Leave RMS consumers off unless a caller enables them.
+        bot["forager"]["score_weights"]["rms_directionality"] = 0.0
+        bot["forager"]["rms_directionality_ema_span_minutes"] = 60.0
+        bot["entry_cooldown"].update(
+            base_duration_minutes=0.0,
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
     if args.hsl == "portfolio":
         config["bot"]["portfolio"]["hsl"].update(
             enabled=True, drawdown_threshold_fraction=args.hsl_drawdown_threshold_fraction,

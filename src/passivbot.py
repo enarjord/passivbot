@@ -133,6 +133,7 @@ from live import exchange_params
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
+from config.schema import STARTER_LIVE_USER
 from config.policy import minimum_cost_filter
 from config.access import (
     get_optional_config_value,
@@ -20477,7 +20478,10 @@ async def _run_live(startup_context: dict):
         type=str,
         nargs="?",
         default=None,
-        help="path to json/hjson passivbot config (defaults to in-code schema defaults if omitted)",
+        help=(
+            f"path to JSON/HJSON config (omit to use the starter for {STARTER_LIVE_USER}; "
+            "an explicitly selected different account uses schema defaults)"
+        ),
     )
     add_help_all_argument(
         parser,
@@ -20538,7 +20542,11 @@ async def _run_live(startup_context: dict):
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     startup_context["stage"] = "load_config"
-    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    cli_user = getattr(args, "live.account.user", None)
+    use_starter = not args.config_path and cli_user in (None, STARTER_LIVE_USER)
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        args.config_path, use_starter=use_starter,
+    )
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys
     )
@@ -20631,7 +20639,15 @@ async def _run_live(startup_context: dict):
     )
 
     startup_context["stage"] = "load_user_info"
-    user_info = load_user_info(live_user)
+    try:
+        user_info = load_user_info(live_user)
+    except Exception:
+        if use_starter:
+            logging.error(
+                "[config] Configure account %s in local api-keys.json to use the live starter.",
+                STARTER_LIVE_USER,
+            )
+        raise
     # Reconfigure logging with exchange prefix now that we know the exchange
     exchange_prefix = token(user_info["exchange"] + ":" + live_user, 32)
     configure_logging(

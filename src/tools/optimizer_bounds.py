@@ -64,13 +64,14 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     mode = result.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
     profile = generated_template(get_expanded_config_prototype(), mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
-    # RmsDirectionality is optional in the starting profile. A positive fixed
-    # coordinate cannot coexist with varying normalized sibling weights.
     effective_bot = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).effective_view()
     for side in ("long", "short"):
-        weights = effective_bot[side]["forager"]["score_weights"]
-        if weights.get("rms_directionality", 0.0) > 0:
-            result["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["rms_directionality"] = [0.0, 1.0, 0.01]
+        cooldown = result["optimize"]["bounds"][side]["entry_cooldown"]
+        # Keep the configured floor. Positive adaptive weights require a
+        # finite ceiling, which an explicit unbounded policy does not supply.
+        cooldown.pop("min_duration_minutes", None)
+        if effective_bot[side]["entry_cooldown"]["max_duration_minutes"] is None:
+            cooldown.pop("weights_minutes", None)
     _anchor_file_references(result, base_config_path=base_config_path)
     result = prepare_config(result, base_config_path=base_config_path, verbose=False)
     result = strip_config_metadata(result)
@@ -82,9 +83,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "Sparse authored v9 bounds freeze omitted independent genes. The lean starter "
-            "and no-config optimizer command contain no search ranges. This explicit preset "
-            "supplies visible recommended side and portfolio domains."
+            "Sparse authored v9 bounds freeze omitted independent genes. This explicit "
+            "preset supplies visible recommended side and portfolio domains."
         ),
     )
     parser.add_argument("input", type=Path, help="Authored v9 configuration")

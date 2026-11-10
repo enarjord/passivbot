@@ -16,6 +16,9 @@ from tools.generate_config_field_reference import DEFAULT_OUTPUT, main, render_r
 def _settings(value, path=()):
     # Containers that own dynamic members or records have descriptors themselves.
     # Their numeric member contracts are checked separately below.
+    if len(path) == 4 and path[:2] == ("backtest", "scenarios") and path[-1] == "overrides":
+        yield path, value
+        return
     if isinstance(value, dict) and value:
         for name, child in value.items():
             if (*path, name) != ("optimize", "bounds"):
@@ -30,9 +33,13 @@ def _settings(value, path=()):
 
 def test_every_template_setting_has_an_explicit_descriptor():
     registry = get_field_registry()
-    missing = [".".join(map(str, path)) for path, _ in _settings(get_expanded_config_prototype())
+    template = get_expanded_config_prototype()
+    missing = [".".join(map(str, path)) for path, _ in _settings(template)
                if registry.find(path) is None]
     assert missing == []
+    for scenario in template["backtest"]["scenarios"]:
+        for override in scenario.get("overrides", {}):
+            assert registry.find(tuple(override.split("."))) is not None
 
 
 def test_only_documented_optional_authority_lacks_exact_path_defaults():
@@ -92,27 +99,23 @@ def test_fractional_consumer_fields_are_declared_as_float(path):
 
 
 @pytest.mark.parametrize(
-    "path,numeric_type",
+    "path,numeric_type,default",
     [
-        ("live.account.balance_override", float),
-        ("live.candles.max_forager_candle_staleness_minutes", float),
-        ("live.api.max_concurrent_api_requests", int),
-        ("optimize.seed", int),
-        ("optimize.population_size", int),
-        ("optimize.gpu.batch_size", int),
-        ("backtest.ew_half_life_days", float),
-        ("bot.long.entry_cooldown.max_duration_minutes", float),
+        ("live.account.balance_override", float, None),
+        ("live.candles.max_forager_candle_staleness_minutes", float, None),
+        ("live.api.max_concurrent_api_requests", int, None),
+        ("optimize.seed", int, None),
+        ("optimize.population_size", int, 128),
+        ("optimize.gpu.batch_size", int, None),
+        ("backtest.ew_half_life_days", float, 360.0),
+        ("bot.long.entry_cooldown.max_duration_minutes", float, 360.0),
     ],
 )
-def test_nullable_fields_retain_declared_numeric_types(path, numeric_type):
+def test_nullable_fields_retain_declared_numeric_types(path, numeric_type, default):
     field = get_field_registry().find(tuple(path.split(".")))
     assert field.numeric_type is numeric_type
     assert field.nullable
-    if path == "backtest.ew_half_life_days":
-        from config.metrics import DEFAULT_EW_HALF_LIFE_DAYS
-        assert field.default == DEFAULT_EW_HALF_LIFE_DAYS
-    else:
-        assert field.default is None
+    assert field.default == default
 
 
 def test_registry_defaults_are_isolated_and_optional_authority_is_absent():

@@ -1113,7 +1113,61 @@ def materialize_released_v8_bot_defaults(config, *, changes):
             ))
 
     for side in ("long", "short"):
+        # Tagged versions predate adaptive cooldown and RMS ranking. Preserve
+        # their inactive policy when new v9 configs default to active inputs.
+        frozen = _RELEASED_V8_DEFAULTS["bot"][side]
+        cooldown = defaults[side].setdefault("entry_cooldown", {})
+        for key in ("min_duration_minutes", "max_duration_minutes", "weights_minutes"):
+            cooldown.setdefault(key, frozen["entry_cooldown"][key])
+        forager = defaults[side]["forager"]
+        forager.setdefault(
+            "unilateralness_ema_span_1m", frozen["forager"]["unilateralness_ema_span_1m"],
+        )
+        forager["score_weights"].setdefault(
+            "unilateralness", frozen["forager"]["score_weights"]["unilateralness"],
+        )
         fill(bot.setdefault(side, {}), defaults[side], ("bot", side))
+
+
+def materialize_released_v8_research_defaults(config, *, changes, schema_version):
+    """Pin research fallbacks whose normal v9 defaults now belong to the new starter."""
+    released = get_released_v8_defaults(schema_version=schema_version)
+    defaults = {
+        "backtest": {
+            "start_date": released["backtest"]["start_date"],
+            "limit_order_fill_buffer_fraction": released["backtest"].get(
+                "limit_order_fill_buffer_pct", 0.0,
+            ),
+            "ew_half_life_days": 180.0,
+        },
+        "optimize": {
+            **{
+                key: released["optimize"][key]
+                for key in ("iters", "population_size", "round_to_n_significant_digits")
+            },
+            # Missing metric selections used these canonical v9 fallbacks.
+            # Authored v8 selections already passed through formula migration.
+            "scoring": [
+                {"goal": "max", "metric": "cagr_fraction_strategy_equity"},
+                {"goal": "min", "metric": "ulcer_index_fraction_strategy_equity"},
+            ],
+            "limits": [
+                {"enabled": True, "metric": "drawdown_max_fraction_strategy_equity",
+                 "penalize_if": "greater_than", "reducer": "mean", "value": 0.8},
+                {"enabled": True, "metric": "backtest_completion_fraction",
+                 "penalize_if": "less_than", "value": 0.99},
+            ],
+        },
+    }
+    for section, entries in defaults.items():
+        target = config[section]
+        for key, value in entries.items():
+            if key not in target:
+                target[key] = value
+                changes.append(dict(
+                    path=f"{section}.{key}", old=None, new=deepcopy(value),
+                    reason="materialized research fallback for sparse released-v8 conversion",
+                ))
 
 
 def normalize_released_v8_position_counts(config, *, changes):

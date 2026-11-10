@@ -5,11 +5,11 @@ from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .bot_defaults import get_common_bot_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
-from .metrics import DEFAULT_EW_HALF_LIFE_DAYS
 
 CONFIG_SCHEMA_VERSION = "v9.0.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
+STARTER_LIVE_USER = "passivbot_default"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
 # generous bound also keeps hours-to-milliseconds conversion finite and well
 # within the integer ranges used by persisted/structured timestamp consumers.
@@ -59,7 +59,7 @@ def _build_template_config():
                 "organillo_csv": None,
                 "organillo_sha256": None,
                 "end_date": "now",
-                "ew_half_life_days": DEFAULT_EW_HALF_LIFE_DAYS,
+                "ew_half_life_days": 360.0,
                 "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": None,
                 "gap_tolerance_ohlcvs_minutes": 120,
@@ -69,7 +69,7 @@ def _build_template_config():
                 "equity_floor_fraction": 0.05,
                 "maker_fee_override_fraction": 0.0004,
                 "market_order_slippage_fraction": 0.0005,
-                "limit_order_fill_buffer_fraction": 0.0,
+                "limit_order_fill_buffer_fraction": 0.0005,
                 "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
                 "market_settings_sources": {},
                 "offline": False,
@@ -77,119 +77,35 @@ def _build_template_config():
                 "scenarios": [
                     {"label": "base"},
                     {
-                        "label": "subset_1_top",
+                        "label": "subset_1",
                         "coins": [
-                            "BTC",
-                            "ETH",
-                            "BNB",
-                            "XRP",
-                            "SOL",
-                            "TRX",
-                            "HYPE",
-                            "DOGE",
-                            "XLM",
-                            "XMR",
-                            "ADA",
-                            "CC",
-                            "ZEC",
-                            "LINK",
+                            "AAVE", "APT", "ATOM", "BNB", "CC", "ENA", "GRAM",
+                            "INJ", "LTC", "ONDO", "RENDER", "TAO", "XLM", "ZEC",
                         ],
                     },
                     {
-                        "label": "subset_2_mid1",
+                        "label": "subset_2",
                         "coins": [
-                            "BCH",
-                            "GRAM",
-                            "HBAR",
-                            "LTC",
-                            "AVAX",
-                            "SUI",
-                            "CRO",
-                            "NEAR",
-                            "TAO",
-                            "MNT",
-                            "ASTER",
-                            "WLD",
-                            "DOT",
+                            "ADA", "ARB", "AVAX", "BTC", "DOGE", "ETH", "HBAR",
+                            "KAS", "MORPHO", "POL", "SOL", "UNI", "XMR",
                         ],
                     },
                     {
-                        "label": "subset_3_bottom",
+                        "label": "subset_3",
                         "coins": [
-                            "ONDO",
-                            "UNI",
-                            "MORPHO",
-                            "AAVE",
-                            "ATOM",
-                            "RENDER",
-                            "KAS",
-                            "ALGO",
-                            "POL",
-                            "ENA",
-                            "FIL",
-                            "APT",
-                            "ARB",
-                            "INJ",
+                            "ALGO", "ASTER", "BCH", "BTW", "DOT", "FIL", "HYPE",
+                            "LINK", "NEAR", "QNT", "SUI", "WLD", "XRP",
                         ],
                     },
                     {
-                        "label": "subset_4_mix",
-                        "coins": [
-                            "BTC",
-                            "XRP",
-                            "HYPE",
-                            "XMR",
-                            "ZEC",
-                            "GRAM",
-                            "AVAX",
-                            "NEAR",
-                            "ASTER",
-                            "ONDO",
-                            "AAVE",
-                            "KAS",
-                            "ENA",
-                            "ARB",
-                        ],
-                    },
-                    {
-                        "label": "subset_5_mix",
-                        "coins": [
-                            "ETH",
-                            "SOL",
-                            "DOGE",
-                            "ADA",
-                            "LINK",
-                            "HBAR",
-                            "SUI",
-                            "TAO",
-                            "WLD",
-                            "UNI",
-                            "ATOM",
-                            "ALGO",
-                            "FIL",
-                            "INJ",
-                        ],
-                    },
-                    {
-                        "label": "subset_6_mix",
-                        "coins": [
-                            "BNB",
-                            "TRX",
-                            "XLM",
-                            "CC",
-                            "BCH",
-                            "LTC",
-                            "CRO",
-                            "MNT",
-                            "DOT",
-                            "MORPHO",
-                            "RENDER",
-                            "POL",
-                            "APT",
-                        ],
+                        "label": "cost_stress",
+                        "overrides": {
+                            "backtest.limit_order_fill_buffer_fraction": 0.001,
+                            "backtest.maker_fee_override_fraction": 0.0006,
+                        },
                     },
                 ],
-                "start_date": "2021-04-20",
+                "start_date": "2021-04-01",
                 "starting_balance": 100000,
                 "suite_enabled": False,
                 "taker_fee_override_fraction": 0.00055,
@@ -209,7 +125,7 @@ def _build_template_config():
                         "max_drawdown_fraction": 1.0,
                         "memory_ema_span_minutes": 43200.0,
                     },
-                    "unstuck": {"memory_ema_span_minutes": 43200.0},
+                    "unstuck": {"memory_ema_span_minutes": 96141.557},
                 },
                 "global": get_common_bot_defaults(),
                 "long": _side_bot_prototype(),
@@ -222,6 +138,7 @@ def _build_template_config():
                     "balance_override": None,
                     "leverage": 10,
                     "margin_mode_preference": "cross",
+                    # Preserve account selection for existing authored configs.
                     "user": "bybit_01",
                 },
                 "api": {
@@ -317,11 +234,11 @@ def _build_template_config():
                     "prefilter": deepcopy(PREFILTER_DEFAULTS),
                     "fixed_params": [],
                     "fixed_runtime_overrides": {},
-                    "iters": 200000,
+                    "iters": 2048,
                     "n_cpus": 4,
                     "objective_scenario": None,
                     "pareto_max_size": 1000,
-                    "population_size": None,
+                    "population_size": 128,
                     "seed": None,
                     "gpu": {
                         "tuning_mode": "auto",
@@ -350,26 +267,50 @@ def _build_template_config():
                             "mutation_probability_per_variable": "auto",
                         },
                     },
-                    "round_to_n_significant_digits": 3,
+                    "round_to_n_significant_digits": 8,
                     "write_all_results": True,
                     "limits": [
                         {
                             "enabled": True,
-                            "metric": "drawdown_max_fraction_strategy_equity",
-                            "penalize_if": "greater_than",
-                            "reducer": "mean",
-                            "value": 0.8,
-                        },
-                        {
-                            "enabled": True,
                             "metric": "backtest_completion_fraction",
                             "penalize_if": "less_than",
-                            "value": 0.99,
+                            "reducer": "min",
+                            "value": 1.0,
+                        },
+                        {
+                            "enabled": False,
+                            "metric": "drawdown_max_fraction_strategy_equity",
+                            "penalize_if": "greater_than",
+                            "reducer": "max",
+                            "value": 0.50,
+                        },
+                        {
+                            "enabled": False,
+                            "metric": "peak_recovery_max_days_strategy_equity",
+                            "penalize_if": "greater_than",
+                            "reducer": "max",
+                            "value": 240,
                         },
                     ],
                     "scoring": [
-                        {"goal": "max", "metric": "cagr_fraction_strategy_equity"},
-                        {"goal": "min", "metric": "ulcer_index_fraction_strategy_equity"},
+                        {
+                            "goal": "max",
+                            "metric": "cagr_fraction_strategy_equity_ew",
+                            "reducer": "mean",
+                            "scenario": None,
+                        },
+                        {
+                            "goal": "min",
+                            "metric": "ulcer_index_fraction_strategy_equity",
+                            "reducer": "max",
+                            "scenario": None,
+                        },
+                        {
+                            "goal": "min",
+                            "metric": "peak_recovery_max_days_strategy_equity",
+                            "reducer": "max",
+                            "scenario": None,
+                        },
                     ],
                 },
             },
@@ -391,4 +332,28 @@ def get_template_config():
     result["bot"]["long"] = {}
     result["bot"]["short"] = {}
     result["optimize"]["bounds"] = {}
+    return result
+
+
+def get_starter_config():
+    """Return the runnable authored profile for commands without a config path."""
+    result = get_template_config()
+    result["bot"]["long"]["enabled"] = True
+    result["bot"]["short"]["enabled"] = False
+    result["bot"]["global"]["universe"]["approved_coins"] = [
+        "AAVE", "ADA", "ALGO", "APT", "ARB", "ASTER", "ATOM", "AVAX", "BCH", "BNB",
+        "BTC", "BTW", "CC", "DOGE", "DOT", "ENA", "ETH", "FIL", "GRAM", "HBAR",
+        "HYPE", "INJ", "KAS", "LINK", "LTC", "MORPHO", "NEAR", "ONDO", "POL", "QNT",
+        "RENDER", "SOL", "SUI", "TAO", "UNI", "WLD", "XLM", "XMR", "XRP", "ZEC",
+    ]
+    result["live"]["account"]["user"] = STARTER_LIVE_USER
+    kind = result["bot"]["portfolio"]["strategy_kind"]
+    common_bounds = get_optimize_bounds_defaults()["long"]
+    common_bounds["strategy"] = {kind: common_bounds["strategy"][kind]}
+    hsl_memory = result["bot"]["global"]["hsl"]["memory_ema_span_minutes"]
+    common_bounds["hsl"]["memory_ema_span_minutes"] = [hsl_memory, hsl_memory]
+    result["optimize"]["bounds"] = {
+        "global": common_bounds,
+        "portfolio": {"unstuck": {"memory_ema_span_minutes": [10080, 129600]}},
+    }
     return result

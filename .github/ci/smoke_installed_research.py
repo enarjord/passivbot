@@ -74,6 +74,9 @@ def write_offline_fixture():
         "bot": {
             "global": {
                 "universe": {"approved_coins": ["BTC"], "minimum_coin_age_days": 0},
+                # The local fixture supplies one day of candles.
+                "entry_cooldown": {"weights_minutes": {"adverse_directionality": 0.0}},
+                "forager": {"score_weights": {"rms_directionality": 0.0}},
                 "strategy": {
                     "trailing_martingale": {
                         "entry": {

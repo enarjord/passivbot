@@ -87,9 +87,9 @@ unfinished underwater tail, false when recovered or flat, and null when support 
 
 ## Exponential recency weighting
 
-The single EW quantity is CAGR EW. `backtest.ew_half_life_days` resolves to **180 days** by
-default, including an omitted or null input; an explicit finite positive value sets one common
-campaign half-life. Scenario overrides are rejected.
+The single EW quantity is CAGR EW. An omitted `backtest.ew_half_life_days` defaults to
+**360 days**. Explicit `null` selects the native fallback of 180 days. An explicit finite
+positive value sets one common campaign half-life. Scenario overrides are rejected.
 
 For minute intervals, define `z_k = log(E_k / E_(k-1))`, interval days `delta_k`, and
 `w_k = 2^(-age_of_interval_endpoint_days / half_life_days)`:

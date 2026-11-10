@@ -44,7 +44,7 @@ from config_utils import (
     parse_overrides,
     format_config,
 )
-from config.schema import get_expanded_config_prototype
+from config.schema import DEFAULT_EXAMPLE_CONFIG_PATH, get_expanded_config_prototype, get_starter_config
 from warmup_utils import compute_backtest_warmup_minutes
 from released_v8_fixtures import released_v8_policy
 
@@ -149,9 +149,8 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
 
 
 def test_default_trailing_martingale_long_example_matches_template_and_rust_defaults():
-    raw = json.loads(
-        Path("configs/examples/default_trailing_martingale_long.json").read_text()
-    )
+    raw = json.loads(Path(DEFAULT_EXAMPLE_CONFIG_PATH).read_text())
+    assert raw == get_starter_config()
     template_common = get_template_config()["bot"]["global"]
 
     assert raw["bot"]["long"] == {"enabled": True}
@@ -164,6 +163,24 @@ def test_default_trailing_martingale_long_example_matches_template_and_rust_defa
         raw["bot"]["global"]["strategy"]["trailing_martingale"]
         == get_strategy_defaults("trailing_martingale")["long"]
     )
+
+
+def test_starter_config_has_continuous_search_and_contains_its_seed():
+    from optimization.shape import build_optimization_shape
+
+    config = prepare_config(get_starter_config(), verbose=False)
+    shape = build_optimization_shape(config)
+    assert sum(bound.low < bound.high for bound in shape.bounds) == 41
+    for (_, path), bound in zip(shape.key_paths, shape.bounds, strict=True):
+        value = config
+        for part in path:
+            value = value[part]
+        assert bound.low <= value <= bound.high, path
+        assert bound.low == bound.high or bound.step is None, path
+
+    assert config["optimize"]["bounds"]["portfolio"]["loss_gate"][
+        "memory_ema_span_minutes"
+    ] == [43200.0, 43200.0]
 
 
 def test_shipped_example_configs_load_with_grouped_canonical_shape():
@@ -1442,7 +1459,7 @@ def test_update_config_with_args_records_old_new_values():
     assert entry["step"] == "update_config_with_args"
     diff = entry["details"]["diffs"][0]
     assert diff["path"] == "backtest.start_date"
-    assert diff["old"] == "2021-04-20"
+    assert diff["old"] == "2021-04-01"
     assert diff["new"] == "2022-01-01"
 
 

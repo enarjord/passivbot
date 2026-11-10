@@ -617,8 +617,14 @@ def migrate_v8_to_v9(
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
                                 sparse=_coin_patch, best_effort=best_effort, base_config_path=base_config_path)
     if not _coin_patch:
-        from .released_v8 import normalize_released_v8_position_counts
+        from .released_v8 import (
+            materialize_released_v8_research_defaults,
+            normalize_released_v8_position_counts,
+        )
 
+        materialize_released_v8_research_defaults(
+            result, changes=changes, schema_version=schema_version,
+        )
         normalize_released_v8_position_counts(result, changes=changes)
         # Released v8 used numeric capacity/search bounds as entry activation.
         # Preserve those values and reachability rather than infer a boolean

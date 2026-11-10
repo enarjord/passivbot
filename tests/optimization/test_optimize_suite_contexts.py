@@ -162,6 +162,13 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable
     # The data view covers both reachable sides; directional scenarios must
     # retain their distinct runtime gates instead of deduplicating against base.
     config["bot"]["short"]["enabled"] = True
+    for side in ("long", "short"):
+        # Isolate ranking as the only possible RMS consumer.
+        config["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
+        bounds = config["optimize"]["bounds"][side]
+        bounds["entry_cooldown"].setdefault("weights_minutes", {})["adverse_directionality"] = [0.0, 0.0]
+        config["bot"][side]["forager"]["score_weights"]["rms_directionality"] = 0.0
+        bounds["forager"]["score_weights"]["rms_directionality"] = [0.0, 0.0]
     if rms_search:
         config['bot']["portfolio"]['warmup']['max_minutes'] = 3
         forager = config["optimize"]["bounds"]["long"]["forager"]

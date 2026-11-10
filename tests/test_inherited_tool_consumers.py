@@ -31,10 +31,32 @@ def test_explicit_preset_reopens_visible_domains_from_lean_common_weights(kind):
     loaded = prepare_config(exported, verbose=False)
     assert len([binding for binding in get_bound_plan(loaded).bindings
                 if binding.bound.low != binding.bound.high]) > 5
-    for side in ("long", "short"):
-        assert exported["optimize"]["bounds"][side]["forager"]["score_weights"]["rms_directionality"] == [0.0, 1.0, 0.01]
+    for side, expected in (("long", [0.0, 1.0]), ("short", [0.0, 1.0, 0.01])):
+        assert exported["optimize"]["bounds"][side]["forager"]["score_weights"]["rms_directionality"] == expected
     assert raw == before
     assert get_template_config()["optimize"]["bounds"] == {}
+
+
+def test_recommended_bounds_preserve_unbounded_cooldown_with_zero_adaptive_weights():
+    from tools.optimizer_bounds import apply_recommended_bounds
+
+    raw = source()
+    raw["bot"]["long"]["entry_cooldown"] = {
+        "max_duration_minutes": None,
+        "min_duration_minutes": 0.0,
+        "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+    }
+    exported = apply_recommended_bounds(raw)
+    loaded = prepare_config(exported, verbose=False)
+    cooldown = loaded["bot"]["long"]["entry_cooldown"]
+    assert cooldown["max_duration_minutes"] is None
+    assert cooldown["min_duration_minutes"] == 0.0
+    weights = {
+        binding.authoring_path[-1]: (binding.bound.low, binding.bound.high)
+        for binding in get_bound_plan(loaded).bindings
+        if binding.authoring_path[:4] == ("bot", "long", "entry_cooldown", "weights_minutes")
+    }
+    assert weights == {"adverse_directionality": (0.0, 0.0), "exposure_ratio": (0.0, 0.0)}
 
 
 def test_common_bound_flags_are_discovered_without_authoring_any_default_range():
