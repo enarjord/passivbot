@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Skip the canonical candle index lookup when a websocket update has no finalized candle to process.
+
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 
