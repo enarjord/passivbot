@@ -149,13 +149,25 @@ async def test_restart_reconstructs_without_proof(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pnl_only_enrichment_after_cached_empty_refresh(tmp_path):
+async def test_pnl_only_enrichment_after_cached_empty_refresh(tmp_path, monkeypatch):
     manager = await ready(tmp_path)
+    synthesized = []
+    original_synthesize = manager._synthesize_missing_pnls
+
+    def count_synthesis(payload):
+        synthesized.append([row['id'] for row in payload if row['pnl_status'] == 'pending'])
+        return original_synthesize(payload)
+
+    monkeypatch.setattr(manager, '_synthesize_missing_pnls', count_synthesis)
     opened = manager._events[0]
     manager.fetcher.events = [{**opened.to_dict(), 'id': 'close', 'source_ids': ['close'], 'timestamp': opened.timestamp+1000,
                                'qty': -2., 'side': 'sell', 'price': 110., 'pb_order_type': 'close',
                                'pnl': 0., 'pnl_status': 'pending'}]
     await manager.refresh()
+    assert synthesized == [['close']]
+    manager.fetcher.events = [manager.get_events()[-1].to_dict()]
+    await manager.refresh()
+    assert synthesized == [['close']]
     manager.fetcher.events = []
     await manager.refresh()
     await manager.refresh()
@@ -170,6 +182,7 @@ async def test_pnl_only_enrichment_after_cached_empty_refresh(tmp_path):
     assert sum(event.pnl + event.fee_paid for event in manager.get_events()) == pytest.approx(25.)
     assert manager.get_events()[-1].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
     assert manager._empty_refresh_proof is None
+    assert synthesized == [['close']]
 
 
 @pytest.mark.asyncio

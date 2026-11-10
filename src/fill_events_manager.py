@@ -5234,7 +5234,11 @@ class FillEventsManager:
             order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
             apply_exchange_raw_position_overrides(payload)
-            synthesized_days = self._synthesize_missing_pnls(payload)
+            synthesized_days = (
+                self._synthesize_missing_pnls(payload)
+                if any(ev.pnl_pending for ev in self._events)
+                else set()
+            )
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
             all_days_persisted.update(synthesized_days)
