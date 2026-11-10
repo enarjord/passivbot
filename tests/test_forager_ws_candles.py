@@ -110,6 +110,46 @@ async def test_ws_requires_canonical_basis_then_persists_only_finalized_rows(
 
 
 @pytest.mark.asyncio
+async def test_ws_checks_canonical_basis_only_for_finalized_candidates(tmp_path, monkeypatch):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=3 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+    )
+    checked = []
+    get_last_final_ts = cm.get_last_final_ts
+
+    def check_basis(*args, **kwargs):
+        checked.append(args[0])
+        return get_last_final_ts(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "get_last_final_ts", check_basis)
+    opening = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+    updated = [2 * ONE_MIN_MS, 100, 102, 99, 101.5, 3]
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [opening], now_ms=2 * ONE_MIN_MS + 1_000
+    ) == 0
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [updated], now_ms=2 * ONE_MIN_MS + 2_000
+    ) == 0
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [updated], now_ms=2 * ONE_MIN_MS + 3_000
+    ) == 0
+    assert checked == []
+
+    successor = [3 * ONE_MIN_MS, 101.5, 102, 101, 101.7, 1]
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [successor], now_ms=3 * ONE_MIN_MS + 1_000
+    ) == 1
+    assert checked == [symbol]
+    disk = cm._load_from_disk(symbol, 2 * ONE_MIN_MS, 2 * ONE_MIN_MS, timeframe="1m")
+    assert disk[disk["ts"] == 2 * ONE_MIN_MS]["c"].tolist() == [101.5]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fail_first_write", [False, True])
 async def test_ws_finalizes_first_candle_of_new_utc_day(
     tmp_path, monkeypatch, fail_first_write

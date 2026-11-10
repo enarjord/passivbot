@@ -5980,12 +5980,6 @@ class CandlestickManager:
                     dtype=CANDLE_DTYPE,
                 )
                 rows_by_ts[predecessor_ts] = predecessor[0]
-        # A first-ever WS snapshot must not become a restart-sensitive trading
-        # basis. REST or previously persisted canonical data must exist first.
-        if int(self.get_last_final_ts(symbol) or 0) <= 0:
-            self._live_ws_ohlcv_observations[symbol] = current
-            return 0
-
         candidate_rows = []
         for ts, row in rows_by_ts.items():
             if ts > latest_finalized:
@@ -5996,6 +5990,11 @@ class CandlestickManager:
             ):
                 candidate_rows.append(tuple(row.tolist()))
         if not candidate_rows:
+            self._live_ws_ohlcv_observations[symbol] = current
+            return 0
+        # A first-ever WS snapshot must not become a restart-sensitive trading
+        # basis. REST or previously persisted canonical data must exist first.
+        if int(self.get_last_final_ts(symbol) or 0) <= 0:
             self._live_ws_ohlcv_observations[symbol] = current
             return 0
         candidates = np.array(candidate_rows, dtype=CANDLE_DTYPE)
