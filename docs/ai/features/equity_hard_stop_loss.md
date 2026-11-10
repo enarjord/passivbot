@@ -115,7 +115,8 @@ acquisition timestamps. Preparation and quote retries leave planner surface publ
 to the owner. For expired quotes the owner can start one background refresh for the full quote cohort
 alongside the scheduled account read while retaining the prepared candle and EMA inputs
 within the same completed-candle minute. Age-bounded EMA carry-forward and cache-only
-candidate readiness require new preparation. The owner keeps its normal inter-cycle wait and consumes only completed quote work.
+candidate readiness require new preparation. Apply the same reuse checks when the
+shared cache supplies a replacement for expired prepared quotes. The owner keeps its normal inter-cycle wait and consumes only completed quote work.
 The planner, venue order caps and reconciliation ranking use the same accepted
 quote cohort.
 

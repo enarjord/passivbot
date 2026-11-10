@@ -615,7 +615,9 @@ async def test_expired_entry_quotes_get_one_nonblocking_retry(owner_handoff, ret
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expiry", ["fresh", "at_entry", "during_protection"])
+@pytest.mark.parametrize(
+    "expiry", ["fresh", "at_entry", "during_protection", "replaced_during_protection"]
+)
 async def test_age_bounded_ema_inputs_require_full_preparation_after_quote_expiry(
     owner_handoff, expiry
 ):
@@ -640,30 +642,44 @@ async def test_age_bounded_ema_inputs_require_full_preparation_after_quote_expir
         assert not preparation.strategy.allow_quote_retry
         fixture.clock[0] += 5_001 if expiry == "at_entry" else 4_999
         protect = owner.protect
-        if expiry == "during_protection":
+        refreshed_quotes = {}
+        replace_quotes = expiry == "replaced_during_protection"
+        if expiry == "during_protection" or replace_quotes:
             prior_epoch = ledger.epoch
 
             async def expire_after_account_refresh(**kwargs):
                 result = await protect(**kwargs)
                 if ledger.epoch != prior_epoch:
                     fixture.clock[0] += 2
+                    if replace_quotes:
+                        refreshed_quotes.update(await bot.market_snapshot_provider.get_snapshots(
+                            SYMBOLS, max_age_ms=5_000
+                        ))
                 return result
 
             owner.protect = expire_after_account_refresh
 
         result = await owner.cycle()
         assert result["updated"] and result["ordinary_completed"]
-        assert ema_calls == fixture.quote_reads == [NOW]
+        assert ema_calls == [NOW]
+        assert fixture.quote_reads == ([NOW, NOW + 5_001] if replace_quotes else [NOW])
+        if replace_quotes:
+            assert set(refreshed_quotes) == set(preparation.quotes) == set(SYMBOLS)
+            assert all(quote.fetched_ms == NOW + 5_001 for quote in refreshed_quotes.values())
+            assert all(quote.fetched_ms == NOW for quote in preparation.quotes.values())
 
         if expiry == "fresh":
             expected_strategy = preparation.strategy
             assert not fixture.defers
         else:
             assert not result["ordinary_executed"]
-            assert not fixture.captures and market.revision == 0
-            assert [details["defer_reason"] for details in fixture.defers] == [
-                "prepared_market_inputs_unavailable"
-            ]
+            assert not fixture.captures and "execute" not in fixture.events
+            assert market.revision == 0
+            reason = (
+                "prepared_strategy_inputs_expired"
+                if replace_quotes else "prepared_market_inputs_unavailable"
+            )
+            assert [details["defer_reason"] for details in fixture.defers] == [reason]
 
             owner.protect = protect
             replacement = owner._ordinary
@@ -679,6 +695,8 @@ async def test_age_bounded_ema_inputs_require_full_preparation_after_quote_expir
         [(strategy, quotes, _)] = fixture.captures
         assert strategy is expected_strategy
         assert {quote.fetched_ms for quote in quotes.values()} == {fixture.quote_reads[-1]}
+        if replace_quotes:
+            assert all(quote is refreshed_quotes[symbol] for symbol, quote in quotes.items())
         assert market.revision == 1
     finally:
         await stop_preparation(owner, original, replacement)

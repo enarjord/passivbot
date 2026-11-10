@@ -944,8 +944,6 @@ class Owner:
             raise
 
     def _ready_ordinary_quotes(self, preparation):
-        from utils import utc_ms
-
         bot = self.bot
         symbols = preparation.strategy.symbols
         if not symbols:
@@ -957,16 +955,30 @@ class Owner:
         if quotes is not None or bot.exchange != "hyperliquid":
             return quotes
         # Hyperliquid's explicit canonical fallback need not populate the provider.
+        if self._prepared_ordinary_quotes_current(preparation):
+            return preparation.quotes
+        return None
+
+    def _prepared_ordinary_quotes_current(self, preparation):
+        from utils import utc_ms
+
         now = int(utc_ms())
-        fallback = preparation.quotes
-        if set(fallback) == set(symbols) and all(
+        max_age_ms = self.bot._live_market_snapshot_fetch_max_age_ms()
+        quotes = preparation.quotes
+        return set(quotes) == set(preparation.strategy.symbols) and all(
             0 < snap.fetched_ms <= now
             and now - snap.fetched_ms <= max_age_ms
             and snap.is_valid()
-            for snap in fallback.values()
-        ):
-            return fallback
-        return None
+            for snap in quotes.values()
+        )
+
+    def _require_ordinary_quotes(self, preparation):
+        quotes = self._ready_ordinary_quotes(preparation)
+        if quotes is None:
+            raise OrdinaryPlanDeferred("prepared_market_inputs_unavailable")
+        if preparation.quotes_reacquired or not self._prepared_ordinary_quotes_current(preparation):
+            self._require_reusable_strategy(preparation)
+        return quotes
 
     def _ordinary_account_cohort(self):
         bot = self.bot
@@ -995,9 +1007,7 @@ class Owner:
             anchors = preparation.trailing_anchors
             if anchors != bot._get_last_position_change_anchors():
                 raise OrdinaryPlanDeferred("prepared_trailing_inputs_changed")
-            quotes = self._ready_ordinary_quotes(preparation)
-            if quotes is None:
-                raise OrdinaryPlanDeferred("prepared_market_inputs_unavailable")
+            quotes = self._require_ordinary_quotes(preparation)
             candles = {}
             if anchors:
                 # The remote preload ran in preparation. Read the current local
@@ -1010,11 +1020,7 @@ class Owner:
                     raise OrdinaryPlanDeferred("prepared_trailing_inputs_changed")
                 if not bot._orchestrator_preparation_is_current(strategy):
                     raise OrdinaryPlanDeferred("prepared_universe_changed")
-                quotes = self._ready_ordinary_quotes(preparation)
-                if quotes is None:
-                    raise OrdinaryPlanDeferred("prepared_market_inputs_unavailable")
-            if preparation.quotes_reacquired:
-                self._require_reusable_strategy(preparation)
+                quotes = self._require_ordinary_quotes(preparation)
             receipts = await self._consume_ordinary_candles(preparation.account, candles)
             if self._ordinary_account_cohort() != account_cohort:
                 raise OrdinaryPlanDeferred("account_cohort_changed_during_consumption")
