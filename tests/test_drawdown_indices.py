@@ -19,7 +19,8 @@ def test_real_replay_drawdown_indices_match_saved_full_resolution_curve():
                              'configs/examples/default_trailing_martingale_long.json'),
                          verbose=False)
     config['backtest'].update(exchanges=['binance'], coins={'binance': ['BTC']},
-                              start_date='2021-01-01', end_date='2021-02-05')
+                              start_date='2021-01-01', end_date='2021-02-05',
+                              filter_by_min_effective_cost=False)
     config['bot']['portfolio']['warmup'].update(activation_span_fraction=1.0, max_minutes=60)
     config['bot']['long']['enabled'] = True
     config['bot']['short']['enabled'] = False
