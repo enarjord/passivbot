@@ -42,10 +42,12 @@ def test_retired_development_names_are_rejected(parts, old, new, load):
 
 def _inputs(*, target=2.0, debt_cap=0.975):
     config = get_expanded_config_prototype()
+    config["optimize"]["bounds"] = {}
     config["backtest"].update(
         start_date="2021-01-01", coins={"binance": ["BTC"]}, starting_balance=1000.0,
         btc_collateral_target_ratio=target, max_usd_debt_to_wallet_value_ratio=debt_cap,
         maker_fee_override_fraction=0.0, taker_fee_override_fraction=0.0,
+        limit_order_fill_buffer_fraction=0.0,
     )
     config["bot"]["portfolio"]["strategy_kind"] = "ema_anchor"
     config["bot"]["portfolio"]["warmup"].update(
@@ -57,6 +59,12 @@ def _inputs(*, target=2.0, debt_cap=0.975):
         bot["enabled"] = side == "long"
         bot["universe"].update(minimum_coin_age_days=0.0, filter_by_min_effective_cost=False)
         bot["hsl"]["enabled"] = False
+        bot["entry_cooldown"].update(
+            base_duration_minutes=24.1,
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
         bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         bot["strategy"]["ema_anchor"].update(
             base_qty_fraction=0.1, ema_span_0_minutes=1.0, ema_span_1_minutes=1.0,

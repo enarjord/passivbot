@@ -28,11 +28,21 @@ def inputs(mode="coin"):
     set_risk_memory_spans(cfg, 1440.0)
     cfg["backtest"]["starting_balance"] = 1000.0
     cfg["backtest"]["btc_collateral_target_ratio"] = 0.0
+    cfg["backtest"]["limit_order_fill_buffer_fraction"] = 0.0
+    cfg["optimize"]["bounds"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
         cfg["bot"][side]["hsl"].update(enabled=False)
         cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1)
+        # The fixture isolates HSL on a short history with a fixed entry cooldown.
+        cfg["bot"][side]["entry_cooldown"].update(
+            base_duration_minutes=24.1,
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
+        cfg["bot"][side]["forager"]["score_weights"]["rms_directionality"] = 0.0
         # This minute-scale HSL fixture starts trading before an hourly candle
         # exists. Its strategy does not consume hourly volatility.
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]

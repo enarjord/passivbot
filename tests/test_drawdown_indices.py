@@ -24,6 +24,10 @@ def test_real_replay_drawdown_indices_match_saved_full_resolution_curve():
     config['bot']['long']['enabled'] = True
     config['bot']['short']['enabled'] = False
     config['bot']['long']['universe']['minimum_coin_age_days'] = 0
+    config['bot']['long']['entry_cooldown']['weights_minutes'] = {
+        'adverse_directionality': 0.0,
+        'exposure_ratio': 0.0,
+    }
     n = 50000
     timestamps = 1609459200000 + np.arange(n, dtype=np.int64) * 60_000
     price = 100 + 10 * np.sin(np.arange(n) / 75)

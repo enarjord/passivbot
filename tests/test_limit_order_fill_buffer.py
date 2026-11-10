@@ -22,10 +22,10 @@ def test_buffer_survives_config_and_backtest_payload(buffer):
     assert params['limit_order_fill_buffer_fraction'] == buffer
 
 
-def test_older_configs_receive_zero_default():
+def test_missing_buffer_receives_starter_default():
     cfg = get_template_config()
     del cfg['backtest']["limit_order_fill_buffer_fraction"]
-    assert prepare_config(cfg, verbose=False)['backtest']["limit_order_fill_buffer_fraction"] == 0.0
+    assert prepare_config(cfg, verbose=False)['backtest']["limit_order_fill_buffer_fraction"] == 0.0005
 
 
 @pytest.mark.parametrize('buffer', [-0.0001, 1.0, 2.0, float('nan'), float('inf'), -float('inf'), None, True, 'invalid'])
@@ -77,6 +77,7 @@ def _native_args():
     cfg['backtest']['coins'] = {'binance': ['BTC']}
     cfg['backtest']['btc_collateral_target_ratio'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
+    cfg['backtest']['limit_order_fill_buffer_fraction'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
     cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     for side in ['long', 'short']:
@@ -85,6 +86,7 @@ def _native_args():
         cfg['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
+        cfg['bot'][side]['entry_cooldown']['weights_minutes']['adverse_directionality'] = 0.0
         cfg['bot'][side]['risk']['max_positions'] = 1
         cfg['bot'][side]['risk']['total_wallet_exposure_limit_ratio'] = 1.0 if side == 'long' else 0.0
         cfg['bot'][side]['strategy']['trailing_martingale']['entry']['ema_gate_mode'] = 'disabled'
@@ -134,6 +136,7 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
     from suite_runner import SuiteScenario, apply_scenario
 
     cfg = get_template_config()
+    baseline_buffer = cfg['backtest']["limit_order_fill_buffer_fraction"]
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': ['BTC']})
     set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     cfg['backtest']['exchanges'] = ['binance']
@@ -148,7 +151,7 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
         base_coin_sources={'BTC': 'binance'},
     )
     assert get_backtest_execution_settings(changed).limit_order_fill_buffer_fraction == 0.0001
-    assert cfg['backtest']["limit_order_fill_buffer_fraction"] == 0.0
+    assert cfg['backtest']["limit_order_fill_buffer_fraction"] == baseline_buffer
 
 
 @pytest.mark.parametrize("use_bundle", [False, True])
