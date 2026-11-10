@@ -74,6 +74,9 @@ since the latest release tag; these features may already be available when insta
 - Reduce live HSL replay CPU by reading retained budget facts directly during forward replay.
   The changed native fingerprint requires reevaluation of saved optimizer fitness.
 
+- Reduce live HSL replay CPU by decoding native inputs without cloning their JSON payload.
+  The changed native fingerprint requires reevaluation of saved optimizer fitness.
+
 - Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per
   capture batch.
 
