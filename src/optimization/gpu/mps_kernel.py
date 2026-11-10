@@ -505,23 +505,24 @@ _METAL_WINDOWED_TICKS = (
 )
 
 
-def _with_metal_tick_windows(source):
+def _with_metal_tick_windows(source, *, strategy="trailing_martingale"):
     """Bind bounded tick buffers without changing absolute replay indices.
 
-    Only TM's five local tick inputs are transformed. Bars and clamped
-    market-execution ticks remain full resident; hourly transport is separate.
-    Assert the native declaration surface so source drift fails before replay.
+    Bars and clamped market-execution ticks remain resident. Assert the native
+    declaration surface so source drift fails before replay.
     """
-    declarations = dict(fill_ticks=9, touch_ticks=8, touch_nearest_ticks=7,
-                        touch_min_qty_bits=7, touch_min_qty_relation=7)
+    if strategy == "ema_anchor":
+        declarations = dict(fill_ticks=6, touch_ticks=7)
+    else:
+        declarations = dict(fill_ticks=9, touch_ticks=8, touch_nearest_ticks=7,
+                            touch_min_qty_bits=7, touch_min_qty_relation=7)
     for name, expected in declarations.items():
         pattern = rf"\bconstant int\* {name}\b"
         if len(re.findall(pattern, source)) != expected:
             raise RuntimeError(f"Metal tick-window declaration contract changed: {name}")
         source = re.sub(pattern, f"PassivbotTickWindow {name}", source)
-    for kernel_name in ("passivbot_trailing_martingale_multicoin",
-                        "passivbot_trailing_martingale_multicoin_fused",
-                        "passivbot_trailing_martingale_multicoin_long"):
+    for suffix in ("", "_fused", "_long"):
+        kernel_name = f"passivbot_{strategy}_multicoin{suffix}"
         pattern = rf"(kernel void {kernel_name}\()(.*?)(\) \{{)"
         matches = list(re.finditer(pattern, source, flags=re.DOTALL))
         if len(matches) != 1:
@@ -530,6 +531,8 @@ def _with_metal_tick_windows(source):
         signature = match.group(2)
         bindings = []
         for name, width in _METAL_WINDOWED_TICKS:
+            if name not in declarations:
+                continue
             declaration = f"PassivbotTickWindow {name}"
             if signature.count(declaration) != 1:
                 raise RuntimeError("Metal tick-window kernel argument contract changed")
@@ -552,15 +555,14 @@ struct PassivbotTickWindow {
     return view + source
 
 
-def _with_compact_metal_hourly_ranges(source):
+def _with_compact_metal_hourly_ranges(source, *, strategy="trailing_martingale"):
     """Decode exact sparse 1m hour observations at their original absolute indices."""
     pattern = r"\bconstant float\* hour_log_ranges\b"
     if len(re.findall(pattern, source)) != 7:
         raise RuntimeError("Metal compact-hourly declaration contract changed")
     source = re.sub(pattern, "PassivbotHourlyRangeView hour_log_ranges", source)
-    for kernel_name in ("passivbot_trailing_martingale_multicoin",
-                        "passivbot_trailing_martingale_multicoin_fused",
-                        "passivbot_trailing_martingale_multicoin_long"):
+    for suffix in ("", "_fused", "_long"):
+        kernel_name = f"passivbot_{strategy}_multicoin{suffix}"
         wrapper = rf"(kernel void {kernel_name}\()(.*?)(\) \{{)"
         matches = list(re.finditer(wrapper, source, flags=re.DOTALL))
         if len(matches) != 1:
@@ -599,7 +601,7 @@ def _metal_tick_window_paths(data, *, device, supported, temporal):
             raise ValueError("GPU tick paths require the streamed-input contract")
         return {}
     if device not in {"mps", "cuda"} or not supported or not temporal:
-        raise ValueError("Streamed GPU ticks require temporal Metal/CUDA Trailing Martingale")
+        raise ValueError("Streamed GPU ticks require a supported temporal Metal/CUDA replay")
     if len(paths) != len(_METAL_WINDOWED_TICKS):
         raise ValueError("Streamed GPU ticks require every tick input to be disk-backed")
     for name, width in _METAL_WINDOWED_TICKS:
@@ -705,6 +707,8 @@ def _cuda_tick_window_arguments(kernel_args, paths, *, begin, stop, available):
     failed = quarantined = False
     try:
         for slot, (name, _width) in enumerate(_METAL_WINDOWED_TICKS, start=2):
+            if name not in paths:
+                continue
             # Default blocking copies preserve integer bytes; mappings stay owned
             # through replay so interruption cannot release an in-flight source.
             array = np.load(paths[name], mmap_mode="c", allow_pickle=False)
@@ -759,8 +763,14 @@ def _ema_anchor_multicoin_shader_library(
     organillo_enabled: bool = False,
     core_metric_mask: int = 0,
     core_ew_half_life_days: float = 180.0,
+    cuda_tick_windows: bool = False,
+    compact_hourly_ranges: bool = False,
 ):
-    gpu_device(torch)
+    device = gpu_device(torch)
+    if cuda_tick_windows and (device != "cuda" or not temporal_chunking):
+        raise ValueError("EMA Anchor tick windows require temporal CUDA replay")
+    if compact_hourly_ranges and not cuda_tick_windows:
+        raise ValueError("Compact hourly shaders require streamed tick windows")
     import passivbot_rust
 
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
@@ -787,6 +797,10 @@ def _ema_anchor_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
         )
+    if cuda_tick_windows:
+        source = _with_metal_tick_windows(source, strategy="ema_anchor")
+    if compact_hourly_ranges:
+        source = _with_compact_metal_hourly_ranges(source, strategy="ema_anchor")
     from optimization.gpu.core_metrics import with_core_metrics
     source = with_core_metrics(source, core_metric_mask, core_ew_half_life_days)
     if mps_coin_capacity is not None:
@@ -1157,6 +1171,8 @@ class _MulticoinReplayRunner:
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
     supports_metal_tick_windows = False
+    supports_cuda_tick_windows = False
+    windowed_tick_fields = _METAL_WINDOWED_TICKS
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -1288,9 +1304,14 @@ class _MulticoinReplayRunner:
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
         self._streamed_tick_paths = _metal_tick_window_paths(
             data, device=self.bars.device.type,
-            supported=self.supports_metal_tick_windows,
+            supported=(self.supports_cuda_tick_windows if self.bars.device.type == "cuda"
+                       else self.supports_metal_tick_windows),
             temporal=self._temporal_replay_enabled(),
         )
+        self._streamed_tick_paths = {
+            name: self._streamed_tick_paths[name]
+            for name, _ in self.windowed_tick_fields if name in self._streamed_tick_paths
+        }
         self.hour_log_ranges = data["hour_log_ranges"]
         self.compact_hourly_ranges = bool(data.get("compact_hourly_ranges", False))
         if self.compact_hourly_ranges:
@@ -1861,10 +1882,13 @@ class _MulticoinReplayRunner:
             "replay_state_bytes_per_candidate": self._replay_state_bytes,
         }
         if tick_paths:
+            bytes_per_coin = sum(
+                width * (1 if self.bars.device.type == "cuda" and name == "touch_min_qty_relation" else 4)
+                for name, width in self.windowed_tick_fields
+            )
             self._last_temporal_dispatch.update(
                 streamed_tick_inputs=True,
-                tick_window_bytes=min(self.n, chunk_bars + 2) * self.n_coins
-                * (25 if self.bars.device.type == "cuda" else 28),
+                tick_window_bytes=min(self.n, chunk_bars + 2) * self.n_coins * bytes_per_coin,
             )
         if profile_pipeline:
             launch_profile["dispatch_count"] = dispatch_count
@@ -2048,6 +2072,8 @@ class _MulticoinReplayRunner:
 class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     """EMA Anchor parameter layout, packing and kernel dispatch."""
 
+    supports_cuda_tick_windows = True
+    windowed_tick_fields = _METAL_WINDOWED_TICKS[:2]
     hsl_native_cache_enabled = False
 
     parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
@@ -2162,6 +2188,8 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "exposure_rms_enabled", False),
             self.organillo_enabled,
             self.core_metric_mask, self.core_ew_half_life_days,
+            bool(getattr(self, "_streamed_tick_paths", {})),
+            bool(getattr(self, "compact_hourly_ranges", False)),
         )
 
 
@@ -2377,6 +2405,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
 
     hsl_native_coin_cache_enabled = False
     supports_metal_tick_windows = True
+    supports_cuda_tick_windows = True
 
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"

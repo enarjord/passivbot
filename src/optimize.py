@@ -3467,7 +3467,7 @@ def _run_gpu_preparation_preflight(config: Dict[str, Any], suite_cfg: Mapping[st
     validate_optimizer_preparation(config, suite_cfg)
 
 
-def _gpu_cached_input_preflight(path, shape, dtype, *, stream_tick_inputs=False, input_memory_budget=None):
+def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input_memory_budget=None):
     """Reject an exact cached candle payload before decoding its history."""
     if len(shape) != 3 or shape[2] != 4:
         return
@@ -3475,12 +3475,15 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, stream_tick_inputs=False,
     from optimization.gpu.runtime import gpu_device
     from optimization.gpu.residency import (
         check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
-        prefer_streamed_ticks,
+        prefer_streamed_ticks, supports_streamed_ticks,
     )
     device = gpu_device(torch)
-    if stream_tick_inputs and input_memory_budget is not None:
-        stream_tick_inputs = prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
-                                                  interval_ms=60_000, device=device)
+    stream_tick_inputs = (
+        input_memory_budget is not None
+        and supports_streamed_ticks(strategy_kind, device)
+        and prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
+                                  interval_ms=60_000, device=device)
+    )
     required = multicoin_resident_bytes(shape[0], shape[1], device=device,
         stream_tick_inputs=stream_tick_inputs,
         compact_hourly_ranges=stream_tick_inputs)
@@ -4019,7 +4022,7 @@ async def main():
         )
         def cached_input_preflight(path, shape, dtype):
             _gpu_cached_input_preflight(path, shape, dtype,
-                stream_tick_inputs=config["bot"]["portfolio"]["strategy_kind"] == "trailing_martingale",
+                strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
                 input_memory_budget=gpu_input_memory_budget)
         array_manager = (SharedArrayManager(
             file_backed=True,

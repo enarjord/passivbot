@@ -346,11 +346,11 @@ def metal_runtime():
     return torch
 
 
-def _tick_window_fixture(sides, hsl):
+def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale"):
     from tools.gpu_parity import build_parser, fixture_inputs
 
     inputs = fixture_inputs(build_parser().parse_args([
-        "--fixture", "trailing_martingale", "--coins", "2", "--sides", sides,
+        "--fixture", strategy_kind, "--coins", "2", "--sides", sides,
         "--bars", "1537", "--seed", "43", "--hsl", hsl, "--unstuck",
         "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "120", "--hsl-memory-ema-span-minutes", "1440",
@@ -376,9 +376,14 @@ def _tick_window_fixture(sides, hsl):
                                volume_ema_span_minutes=7.5,
                                log_range_ema_span_minutes=11.25)
         bot["forager"]["score_weights"]["rms_directionality"] = 0.35
-        strategy = bot["strategy"]["trailing_martingale"]
-        strategy["entry"].update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25)
-        strategy.update(log_range_ema_span_minutes=9.5, log_range_ema_span_1h_candles=2.5)
+        strategy = bot["strategy"][strategy_kind]
+        if strategy_kind == "ema_anchor":
+            strategy.update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25,
+                            offset_log_range_ema_span_minutes=9.5,
+                            offset_log_range_ema_span_1h_candles=2.5)
+        else:
+            strategy["entry"].update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25)
+            strategy.update(log_range_ema_span_minutes=9.5, log_range_ema_span_1h_candles=2.5)
         bot["unstuck"].update(ema_span_0_minutes=5.5, ema_span_1_minutes=11.25)
     return inputs
 

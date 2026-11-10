@@ -296,6 +296,13 @@ def capture_cuda_input_memory_budget(torch):
     )
 
 
+def supports_streamed_ticks(strategy_kind, device):
+    return (
+        strategy_kind == "trailing_martingale" and device in {"mps", "cuda"}
+        or strategy_kind == "ema_anchor" and device == "cuda"
+    )
+
+
 def prefer_streamed_ticks(candles, coins, budget, *, interval_ms=None, device="mps"):
     """Prefer resident inputs when comfortable, streaming only if it saves memory.
 

@@ -34,14 +34,20 @@ def cuda_streaming_runtime(monkeypatch):
     return torch
 
 
-@pytest.mark.parametrize("sides,hsl,chunk_bars", [
-    ("long", "disabled", 17), ("short", "disabled", 61),
-    ("both", "disabled", 17), ("long", "coin", 61),
-    ("both", "coin", 17), ("short", "portfolio", 17),
-    ("both", "portfolio", 61),
+@pytest.mark.parametrize("strategy,sides,hsl,chunk_bars", [
+    ("trailing_martingale", "long", "disabled", 17),
+    ("trailing_martingale", "short", "disabled", 61),
+    ("trailing_martingale", "both", "disabled", 17),
+    ("trailing_martingale", "long", "coin", 61),
+    ("trailing_martingale", "both", "coin", 17),
+    ("trailing_martingale", "short", "portfolio", 17),
+    ("trailing_martingale", "both", "portfolio", 61),
+    ("ema_anchor", "long", "disabled", 17),
+    ("ema_anchor", "short", "coin", 61),
+    ("ema_anchor", "both", "portfolio", 17),
 ])
 def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
-    cuda_streaming_runtime, monkeypatch, sides, hsl, chunk_bars,
+    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, chunk_bars,
 ):
     from optimization.gpu import mps_kernel, residency, service as replay_module
     from optimization.gpu.executor import BacktestRequest
@@ -49,7 +55,7 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     from tools.gpu_parity import _native_dataset
 
     torch = cuda_streaming_runtime
-    inputs = _tick_window_fixture(sides, hsl)
+    inputs = _tick_window_fixture(sides, hsl, strategy)
     assert int(inputs[4][0] // 60_000 % 60) != 0
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     original_prepare = replay_module._prepared_multicoin_data
@@ -121,6 +127,9 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     assert all(item["temporal_chunk_bars"] == chunk_bars for item in dispatches)
     assert all(not item.get("streamed_tick_inputs", False) for item in dispatches[:2])
     assert all(item["streamed_tick_inputs"] is True for item in dispatches[2:])
+    bytes_per_coin = 16 if strategy == "ema_anchor" else 25
+    assert all(item["tick_window_bytes"] == (chunk_bars + 2) * 2 * bytes_per_coin
+               for item in dispatches[2:])
     assert all(not Path(directory).exists() for directory in spill_directories)
 
 
