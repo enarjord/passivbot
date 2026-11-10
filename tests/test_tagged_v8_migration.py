@@ -56,8 +56,7 @@ def test_sparse_config_uses_its_source_trading_defaults_and_domains(
     assert prepared["backtest"]["start_date"] == "2021-04-20"
     assert prepared["backtest"]["ew_half_life_days"] == 180.0
     assert prepared["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
-    frozen = get_released_v8_defaults(schema_version=version)
-    assert prepared["backtest"]["scenarios"] == frozen["backtest"]["scenarios"]
+    assert prepared["backtest"]["scenarios"] == []
     assert prepared["optimize"]["iters"] == 200000
     assert prepared["optimize"]["population_size"] is None
     assert prepared["optimize"]["round_to_n_significant_digits"] == 3
@@ -68,6 +67,7 @@ def test_sparse_config_uses_its_source_trading_defaults_and_domains(
     short_spans = prepared["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]["entry"]
     assert short_spans["ema_span_0_minutes"] == [100, 2880 if version == "v8.0.0" else 1440, 10]
     if version != "v8.6.0":
+        frozen = get_released_v8_defaults(schema_version=version)
         assert frozen["config_version"] == version
         assert frozen["bot"]["long"]["hsl"]["restart_after_red_policy"] == "threshold"
 

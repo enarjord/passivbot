@@ -1135,7 +1135,6 @@ def materialize_released_v8_research_defaults(config, *, changes, schema_version
     defaults = {
         "backtest": {
             "start_date": released["backtest"]["start_date"],
-            "scenarios": released["backtest"]["scenarios"],
             "limit_order_fill_buffer_fraction": released["backtest"].get(
                 "limit_order_fill_buffer_pct", 0.0,
             ),
