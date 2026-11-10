@@ -10,6 +10,7 @@ use crate::hsl_prices::HslPriceGrid;
 use crate::hsl_snapshot;
 use crate::hsl_support::{budget, normalize_admitted};
 use pyo3::{exceptions::PyValueError, prelude::*};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1783,8 +1784,7 @@ impl HslV9Replay {
     fn evaluate(&mut self, input_json: &str) -> PyResult<String> {
         let raw: Value =
             serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let input: Input = serde_json::from_value(raw.clone())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let input = Input::deserialize(&raw).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let output = self.consume(raw, input).map_err(PyValueError::new_err)?;
         serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
     }
@@ -1795,8 +1795,8 @@ impl HslV9Replay {
     ) -> PyResult<String> {
         let raw: Value =
             serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let mut input: Input = serde_json::from_value(raw.clone())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let mut input =
+            Input::deserialize(&raw).map_err(|e| PyValueError::new_err(e.to_string()))?;
         attach_grids(&mut input, grids).map_err(PyValueError::new_err)?;
         let output = self.consume(raw, input).map_err(PyValueError::new_err)?;
         serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))

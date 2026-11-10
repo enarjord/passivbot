@@ -13,6 +13,8 @@ since the latest release tag; these features may already be available when insta
 
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
+- Skip an unused gap scan when preparing provisional candle continuity.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
@@ -72,6 +74,9 @@ since the latest release tag; these features may already be available when insta
   a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
 
 - Reduce live HSL replay CPU by reading retained budget facts directly during forward replay.
+  The changed native fingerprint requires reevaluation of saved optimizer fitness.
+
+- Reduce live HSL replay CPU by decoding native inputs without cloning their JSON payload.
   The changed native fingerprint requires reevaluation of saved optimizer fitness.
 
 - Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per

@@ -615,6 +615,8 @@ deletes stale historical gaps nor changes fetch, synthesis, retry or trading pol
 Full metadata reads and index serialization still scale with total history.
 Completed-candle health computes aggregate known-gap counts from current metadata and retry
 clocks. The detailed gap summary includes per-gap rows.
+Provisional candle reads build their width-sensitive gap mask directly from current metadata
+and physical cache holes.
 
 Deferred-prefix and range-splitting queries, candle read-cohort indexes, and health
 coverage masks select overlapping factual records before enhancing retry metadata.
