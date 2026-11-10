@@ -70,6 +70,8 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce live HSL CPU use when capturing long histories of observed risk budgets.
 
+- Reuse encoded live HSL budget facts within a bounded memory budget.
+
 - Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
   a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
 

@@ -728,13 +728,13 @@ def capture(
         if budgets is None:
             budgets = BudgetObservations()
             bot._hsl_budget_observations = budgets
-        payload["budget_observations"] = budgets.capture(
+        budget_rows = budgets._capture_rows(
             scope, start=start, now=now_ms, balance=balance, slots=slots,
             scale=policy["scale_budget_with_excess_allowance"],
             exposure=payload["exposure_budget"],
             balance_at=snapshot["balance_at"],
         )
-        payload["invalidated_price_symbols"] = sorted({
+        invalidated_price_symbols = sorted({
             key[0] for key in keys if key in pairs
             and {"candle_conflict", "unusable_historical_candle"}.intersection(
                 projected[key[0]][2]
@@ -750,7 +750,14 @@ def capture(
                     reasons.update(pair.reasons)
         for key in keys:
             reasons.update(pair_reasons.get(key, ()))
-        metadata = json.dumps(payload, allow_nan=False)
+        # Keep the standard encoder's field order and separators. The budget
+        # rows belong to this synchronous capture and are encoded in place.
+        metadata = (
+            json.dumps(payload, allow_nan=False)[:-1]
+            + ', "budget_observations": ' + budgets._encode_rows(budget_rows)
+            + ', "invalidated_price_symbols": '
+            + json.dumps(invalidated_price_symbols, allow_nan=False) + "}"
+        )
         submitted = _SubmittedFacts.from_payload(metadata, payload)
         grids = tuple(projected[key[0]][0] for key in keys if key in pairs)
         if replays is None:

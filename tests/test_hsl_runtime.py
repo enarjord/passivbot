@@ -113,6 +113,27 @@ def run(value, marks=None, sources=None, **changes):
     return evaluate(requests), unavailable
 
 
+def test_live_capture_budget_metadata_matches_strict_default_json():
+    value = bot()
+    value.config["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    requests, unavailable = capture(
+        value, quotes(), {}, symbols={"long": [SYMBOL], "short": []},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
+    )
+    assert not unavailable
+    [request] = requests
+    payload = json.loads(request.metadata)
+    expected_keys = (
+        "snapshot", "slots", "memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes",
+        "drawdown_threshold_fraction", "cooldown_ms", "scale_budget_with_excess_allowance",
+        "exposure_budget", "budget_observations", "invalidated_price_symbols",
+    )
+    assert tuple(payload) == expected_keys
+    assert payload["exposure_budget"] is not None
+    assert all(row["exposure_budget"] == payload["exposure_budget"] for row in payload["budget_observations"])
+    assert request.metadata == json.dumps(payload, allow_nan=False)
+
+
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):

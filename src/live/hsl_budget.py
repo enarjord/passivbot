@@ -2,12 +2,15 @@
 
 from bisect import bisect_left, bisect_right
 from copy import deepcopy
+from json import dumps
 from operator import itemgetter
 
 
 CURRENT_ORDER = 2**63 - 1
 _FACT_ORDER = itemgetter("timestamp", "order")
 _TIMESTAMP = itemgetter("timestamp")
+_MAX_ENCODED_ROWS = 16_384
+_MAX_ENCODED_BYTES = 4 * 1024 * 1024
 
 
 class BudgetObservations:
@@ -15,16 +18,78 @@ class BudgetObservations:
         self._scopes = {}
         self._policies = {}
         self._captured = {}
+        self._encoded_rows = {}
+        self._encoded_bytes = 0
 
     def retain_scopes(self, scopes):
         """Release dormant owners' duplicate budgets without declaring flatness."""
-        for mapping in (self._scopes, self._policies, self._captured):
+        for key in tuple(self._scopes):
+            if key not in scopes:
+                self._forget_rows(self._scopes.pop(key))
+        for mapping in (self._policies, self._captured):
             for key in tuple(mapping):
                 if key not in scopes:
                     del mapping[key]
 
+    def _forget_rows(self, rows):
+        for fact in rows:
+            self._encoded_bytes -= len(self._encoded_rows.pop(id(fact), ""))
+
     def capture(self, scope, *, start, now, balance, slots, scale, exposure,
                 balance_at=None):
+        history = self._capture_rows(
+            scope, start=start, now=now, balance=balance, slots=slots, scale=scale,
+            exposure=exposure, balance_at=balance_at,
+        )
+        # Public observations stay detached, including their exposure policy.
+        snapshot = []
+        memo = {}
+        for fact in history:
+            snapshot_fact = fact.copy()
+            if fact["exposure_budget"] is not None:
+                snapshot_fact["exposure_budget"] = deepcopy(fact["exposure_budget"], memo)
+            snapshot.append(snapshot_fact)
+        return snapshot
+
+    def _encode_rows(self, history):
+        """Encode retained rows from the current synchronous capture as strict JSON."""
+        parts = []
+        uncached_start = None
+        cache_open = (
+            len(self._encoded_rows) < _MAX_ENCODED_ROWS
+            and self._encoded_bytes < _MAX_ENCODED_BYTES
+        )
+        for index, fact in enumerate(history):
+            # The owner replaces whole records and removes their cached encoding
+            # before dropping a reference. Retained rows are never edited in place.
+            key = id(fact)
+            part = self._encoded_rows.get(key)
+            if part is None and cache_open:
+                part = dumps(fact, allow_nan=False)
+                size = self._encoded_bytes + len(part)  # Default JSON encoding is ASCII.
+                if size <= _MAX_ENCODED_BYTES:
+                    self._encoded_rows[key] = part
+                    self._encoded_bytes = size
+                    cache_open = len(self._encoded_rows) < _MAX_ENCODED_ROWS
+                else:
+                    cache_open = False
+            if part is None:
+                if uncached_start is None:
+                    uncached_start = index
+                continue
+            if uncached_start is not None:
+                # Encode an uncached run in one call when the memo is full.
+                parts.append(dumps(history[uncached_start:index], allow_nan=False)[1:-1])
+                uncached_start = None
+            parts.append(part)
+        if not parts:
+            return dumps(history, allow_nan=False)
+        if uncached_start is not None:
+            parts.append(dumps(history[uncached_start:], allow_nan=False)[1:-1])
+        return "[" + ", ".join(parts) + "]"
+
+    def _capture_rows(self, scope, *, start, now, balance, slots, scale, exposure,
+                      balance_at=None):
         if balance_at is None:
             balance_at = now
         if type(balance_at) is not int or not 0 <= balance_at <= now:
@@ -51,6 +116,7 @@ class BudgetObservations:
             key = (at, CURRENT_ORDER)
             index = bisect_left(history, key, key=_FACT_ORDER)
             if index < len(history) and _FACT_ORDER(history[index]) == key:
+                self._forget_rows((history[index],))
                 history[index] = current
             else:
                 history.insert(index, current)
@@ -70,14 +136,6 @@ class BudgetObservations:
             record(source_at, values)
         left = bisect_right(history, start, key=_TIMESTAMP) - 1
         if left > 0:
+            self._forget_rows(history[:left])
             del history[:left]
-        # Only the optional exposure policy needs a recursive copy. The
-        # remaining observation fields are scalars.
-        snapshot = []
-        memo = {}
-        for fact in history:
-            snapshot_fact = fact.copy()
-            if fact["exposure_budget"] is not None:
-                snapshot_fact["exposure_budget"] = deepcopy(fact["exposure_budget"], memo)
-            snapshot.append(snapshot_fact)
-        return snapshot
+        return history

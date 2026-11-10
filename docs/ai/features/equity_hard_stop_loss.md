@@ -191,6 +191,10 @@ steps, initializer duplicates and diagnostic event vectors. Routine pruning neve
 remembered drawdown or renews/cancels a known cooldown. A time horizon bounds age, not bytes
 under arbitrary event rates.
 
+Live capture can reuse strict JSON encodings of retained budget rows within a bounded in-memory
+memo. Replacement and pruning release the corresponding encodings. Captures beyond the memo's
+limits still encode the complete budget facts with the same wire format.
+
 Expire dormant owners and their budget maps after their horizon. Partial capture absence
 is not proof of flatness. Restart, owner loss, incompatible policy or a correction requiring
 discarded support uses explicit bounded approximate reconstruction, which may shift timing
