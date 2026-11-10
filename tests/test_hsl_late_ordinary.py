@@ -313,11 +313,19 @@ async def test_protection_can_make_account_pending_before_preparation_first_turn
 @pytest.mark.asyncio
 @pytest.mark.parametrize("handoff", ["ready_at_entry", "same_cycle"])
 async def test_late_handoff_uses_current_account_and_exact_unstamped_quote_cohort(
-    owner_handoff, handoff
+    owner_handoff, handoff, monkeypatch
 ):
+    from live import event_emitters
+
     fixture = owner_handoff
     owner, bot, ledger = fixture.owner, fixture.bot, fixture.ledger
     market = ledger.surfaces["market_snapshot"]
+    cycle_timings = []
+
+    def record_cycle(_bot, *, timings_ms, **kwargs):
+        cycle_timings.append(dict(timings_ms))
+
+    monkeypatch.setattr(event_emitters, "emit_live_cycle_completed", record_cycle)
     task = await start_preparation(fixture)
     try:
         # The owner services another pass while the exact same task remains blocked.
@@ -326,6 +334,8 @@ async def test_late_handoff_uses_current_account_and_exact_unstamped_quote_cohor
         assert fixture.events == ["account", "protection", "account", "protection"]
         assert owner._ordinary is task and not task.done()
         assert not fixture.quote_reads and not fixture.captures
+        assert len(cycle_timings) == 2
+        assert all("ordinary_calculate" not in timings for timings in cycle_timings)
 
         fixture.clock[0] += 15_000
         fixture.raw_balance = 1000.001
@@ -370,6 +380,9 @@ async def test_late_handoff_uses_current_account_and_exact_unstamped_quote_cohor
         result = await owner.cycle()
 
         assert result["ordinary_completed"] and result["ordinary_executed"]
+        assert len(cycle_timings) == 3
+        calculation_ms = cycle_timings[-1]["ordinary_calculate"]
+        assert type(calculation_ms) is int and calculation_ms >= 0
         assert fixture.events[-5:] == [
             "account", "protection_start", "protection_done", "calculate", "execute"
         ]

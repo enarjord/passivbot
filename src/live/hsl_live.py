@@ -1224,7 +1224,7 @@ class Owner:
         completed_cycle = False
         ordinary_executed = False
         retry_after_refresh = False
-        timings = dict(authoritative=0, protection=0, ordinary_calculate=0, ordinary_execute=0)
+        timings = dict(authoritative=0, protection=0, ordinary_execute=0)
         cycle_id = None
         ordinary_admission = None
         ordinary_elapsed_ms = None
