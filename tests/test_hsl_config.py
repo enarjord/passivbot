@@ -375,7 +375,7 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
     monkeypatch.setattr(passivbot.sys, "argv", ["passivbot"])
     monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
     monkeypatch.setattr(
-        passivbot, "load_input_config", lambda *args: (cfg, "", deepcopy(cfg))
+        passivbot, "load_input_config", lambda *args, **kwargs: (cfg, "", deepcopy(cfg))
     )
 
     class OfflineBoundary(Exception):
@@ -841,3 +841,29 @@ def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp
         assert result["optimize"]["fixed_runtime_overrides"].get("bot.long.hsl.restart_after_red_policy") is None
     else:
         assert result["backtest"]["scenarios"][0]["overrides"].get("bot.long.hsl.restart_after_red_policy") is None
+
+
+@pytest.mark.parametrize("prepare_first", [False, True])
+def test_coin_override_validation_keeps_omitted_adaptive_bounds_fixed(prepare_first):
+    from config import CONFIG_SCHEMA_VERSION
+    from config.overrides import parse_overrides
+
+    config = {
+        "config_version": CONFIG_SCHEMA_VERSION,
+        "bot": {"global": {"entry_cooldown": {
+            "max_duration_minutes": None,
+            "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        }}},
+        "coin_overrides": {"BTC": {"bot": {"long": {"hsl": {"enabled": True}}}}},
+    }
+    # parse_overrides requires the parent strategy, HSL scope, and version even
+    # when the caller supplies an otherwise sparse authored document.
+    config["bot"]["portfolio"] = {"strategy_kind": "trailing_martingale", "hsl": {"scope": "coin"}}
+    if prepare_first:
+        config = prepare_config(config, verbose=False)
+    original = deepcopy(config)
+
+    resolved = parse_overrides(config, verbose=False)
+
+    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["enabled"] is True
+    assert config == original

@@ -194,6 +194,25 @@ def test_schema_defaults_to_online():
     assert get_template_config()["backtest"]["offline"] is False
 
 
+def minute_cache_config():
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 1
+    # These caches contain minute-scale history and exercise data preparation.
+    config["optimize"]["bounds"] = {}
+    for side in ("long", "short"):
+        bot = config["bot"][side]
+        bot["universe"]["minimum_coin_age_days"] = 0
+        bot["entry_cooldown"]["weights_minutes"] = {
+            "adverse_directionality": 0.0, "exposure_ratio": 0.0,
+        }
+        bot["forager"]["score_weights"] = {
+            "ema_readiness": 1.0, "log_range": 0.0,
+            "volume": 0.0, "rms_directionality": 0.0,
+        }
+    return config
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exchange", ["binance", "combined"])
 async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, exchange):
@@ -201,16 +220,12 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     from utils import ts_to_date
     metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
-    config = get_expanded_config_prototype()
-    config["bot"]["long"]["enabled"] = True
+    config = minute_cache_config()
     config["backtest"].update(offline=True, exchanges=["binance"],
                               start_date=ts_to_date(START), end_date=ts_to_date(START + 9*60000),
                               compress_cache=False, gap_tolerance_ohlcvs_minutes=0)
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
-    for side in ("long", "short"):
-        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -511,14 +526,10 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
         data = json.loads(path.read_text())
         data["ETH"] = value
         path.write_text(json.dumps(data))
-    config = get_expanded_config_prototype()
-    config["bot"]["long"]["enabled"] = True
+    config = minute_cache_config()
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
     set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})
-    for side in ("long", "short"):
-        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -621,17 +632,13 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
     from utils import ts_to_date
 
     monkeypatch.chdir(tmp_path)
-    config = get_expanded_config_prototype()
-    config["bot"]["long"]["enabled"] = True
+    config = minute_cache_config()
     config["backtest"].update(
         exchanges=["bybit", "hyperliquid"], start_date=ts_to_date(START),
         end_date=ts_to_date(START + 9 * 60000), compress_cache=False,
     )
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
-    for side in ("long", "short"):
-        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
     ts = START + np.arange(10, dtype=np.int64) * 60000
     hlcvs = np.tile([101.0, 99.0, 100.0, 10.0], (10, 1, 1))

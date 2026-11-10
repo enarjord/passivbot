@@ -64,13 +64,26 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     mode = result.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
     profile = generated_template(get_expanded_config_prototype(), mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
-    # RmsDirectionality is optional in the starting profile. A positive fixed
-    # coordinate cannot coexist with varying normalized sibling weights.
     effective_bot = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).effective_view()
     for side in ("long", "short"):
-        weights = effective_bot[side]["forager"]["score_weights"]
-        if weights.get("rms_directionality", 0.0) > 0:
-            result["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["rms_directionality"] = [0.0, 1.0, 0.01]
+        bounds = result["optimize"]["bounds"][side]
+        cooldown = bounds["entry_cooldown"]
+        policy = effective_bot[side]["entry_cooldown"]
+        cooldown.pop("min_duration_minutes", None)
+        modifiers = cooldown.pop("weights_minutes", {})
+        if policy["max_duration_minutes"] is not None:
+            active_modifiers = {
+                name: domain for name, domain in modifiers.items() if policy["weights_minutes"][name] > 0.0
+            }
+            if active_modifiers:
+                cooldown["weights_minutes"] = active_modifiers
+        # Keep disabled RMS consumers fixed. Opening either search dimension
+        # can make an existing coarser-candle replay require one-minute data.
+        forager = bounds["forager"]
+        if effective_bot[side]["forager"]["score_weights"]["rms_directionality"] == 0.0:
+            forager["score_weights"].pop("rms_directionality", None)
+            if policy["weights_minutes"]["adverse_directionality"] == 0.0:
+                forager.pop("rms_directionality_ema_span_minutes", None)
     _anchor_file_references(result, base_config_path=base_config_path)
     result = prepare_config(result, base_config_path=base_config_path, verbose=False)
     result = strip_config_metadata(result)
@@ -82,9 +95,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "Sparse authored v9 bounds freeze omitted independent genes. The lean starter "
-            "and no-config optimizer command contain no search ranges. This explicit preset "
-            "supplies visible recommended side and portfolio domains."
+            "Sparse authored v9 bounds freeze omitted independent genes. This explicit "
+            "preset supplies visible recommended side and portfolio domains."
         ),
     )
     parser.add_argument("input", type=Path, help="Authored v9 configuration")

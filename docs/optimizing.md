@@ -40,9 +40,9 @@ Optional [configuration prefilters](config_prefilter.md) return graded constrain
 before CPU or native GPU replay. All checks are disabled by default; each must be
 explicitly enabled under `optimize.prefilter.checks`.
 
-The canonical defaults live in `src/config/schema.py` and keep both sides disabled.
-The maintained example `configs/examples/default_trailing_martingale_long.json` enables long
-trading and provides a starting profile. See [Config Workflow](config_workflow.md).
+`passivbot optimize` uses the in-code long-only starter when you omit the config path. It
+matches the shipped example, including its approved universe and explicit CPU search ranges.
+See [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
 
@@ -53,9 +53,9 @@ pip install -e ".[full]"
 ## Session identity and output names
 
 For exponential recency weighting, select `cagr_fraction_strategy_equity_ew`.
-`backtest.ew_half_life_days` resolves to 180 days when omitted or null; an explicit value must be
-positive and finite. CPU and native GPU use the same calendar-weighted minute log-growth
-[definition](metrics.md). One half-life applies across the campaign. Half-life and metric definition
+`backtest.ew_half_life_days` defaults to 360 days when omitted. Explicit `null` selects the
+native fallback of 180 days. An explicit numeric value must be positive and finite. CPU and
+native GPU use the same calendar-weighted minute log-growth [definition](metrics.md). One half-life applies across the campaign. Half-life and metric definition
 version participate in evaluation identity; changing either requires fresh evaluation. Old
 candidate configurations may still seed that fresh run.
 
@@ -124,11 +124,11 @@ Explicit `enable_overrides` relationships can still derive effective target valu
 sources, even when a target's own gene is omitted or fixed. Review these relationships with bounds;
 a fixed independent gene does not imply a fixed derived result.
 Use `passivbot tool optimizer-bounds input.json search.json` to write recommended ranges explicitly.
-Omitting the config path starts from schema defaults with no variable bounds.
-Enable a side, choose its coins, and supply explicit ranges to search, such as
-`-ltwel 0.5,1.0` for long total wallet exposure. Fixed, runtime, scenario, and anchor
-precedence still applies. Anchors and seeds are clamped to the effective domains,
-including omitted fixed coordinates.
+With no config path, the starter supplies an enabled long side, approved coins, and explicit
+search ranges. A supplied config declares its own side activation, coin approval, and ranges.
+CLI overrides can change those ranges, such as `-ltwel 0.5,1.0` for long total wallet exposure.
+Fixed, runtime, scenario, and anchor precedence still applies. Anchors and seeds are clamped to
+the effective domains, including omitted fixed coordinates.
 
 Normalized Forager weights must be searched together when they have positive participating
 coordinates. A partial weight fine-tune, scenario pin, or fixed positive sibling fails with an actionable
@@ -136,7 +136,7 @@ group diagnostic; either select the entire group or freeze it. A missing zero co
 permitted only when it remains zero through normalization, including the all-zero fallback.
 
 ```bash
-passivbot optimize configs/examples/default_trailing_martingale_long.json
+passivbot optimize
 ```
 
 - Pass a config path to use your own policy and bounds
@@ -480,9 +480,9 @@ Recommended defaults for typical Passivbot runs:
   variation much more local or much more aggressive.
 - Keep `crossover_probability_per_variable: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
-- Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
-  NSGA-II resolves null population size to `250`, while NSGA-III uses a default population budget
-  of `500` and chooses the finest compatible reference-direction grid.
+- The starter uses a population of `128`. To use the backend's automatic population size, set
+  `population_size: null` and keep `ref_dirs.n_partitions: "auto"`. NSGA-II then uses `250`,
+  while NSGA-III uses a budget of `500` and chooses the finest compatible reference-direction grid.
 - Keep `pareto_max_size: 1000` unless archived front updates become a measured bottleneck for your
   machine or workflow.
 - If you need more or less exploration pressure, change `population_size` first. It is the main

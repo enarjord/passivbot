@@ -251,6 +251,7 @@ def test_retired_leaf_selectors_reject_and_canonical_gene_identity_is_preserved(
         f"{side}_{key}"
         for side in ("long", "short")
         for key in ("risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes",
+                    "entry_cooldown_max_duration_minutes",
                     "entry_cooldown_weights_minutes_exposure_ratio",
                     "entry_cooldown_weights_minutes_adverse_directionality")
     }

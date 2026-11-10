@@ -579,6 +579,9 @@ def _validate_effective_coin_config(
     validate_override_paths(effective, patch)
     validation_input = normalization_template(get_expanded_config_prototype(), effective)
     nested_update(validation_input, effective)
+    # Preserve the caller's effective search domains. Omitted domains fix
+    # effective values and must not acquire recommended ranges during validation.
+    validation_input["optimize"]["bounds"] = effective.get("optimize", {}).get("bounds", {})
     effective = validation_input
     for root in ("bot", "live"):
         if root in patch:

@@ -37,7 +37,12 @@ def config():
     side["risk"].update(
         max_positions=1, total_wallet_exposure_limit_ratio=1.0, we_excess_allowance_fraction=0.0
     )
-    side["entry_cooldown"].update(base_duration_minutes=5.0)
+    side["entry_cooldown"].update(
+        base_duration_minutes=5.0,
+        min_duration_minutes=0.0,
+        max_duration_minutes=None,
+        weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+    )
     strategy = side["strategy"]["trailing_martingale"]
     strategy["entry"].update(
         initial_qty_fraction=0.1,

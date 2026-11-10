@@ -215,16 +215,14 @@ offline mode.
 ## Usage
 
 ```shell
-passivbot backtest configs/examples/default_trailing_martingale_long.json
-```
-Or
-```shell
+passivbot backtest
 passivbot backtest path/to/config.json
 ```
-The starter explicitly enables long trading. If you omit the config path, the in-code defaults
-leave both sides disabled. Enable the intended side and supply approved coins, for example
-`passivbot backtest --bot.long.enabled y -s BTC`.
-See [Config Workflow](config_workflow.md) for the recommended way to copy and customize configs.
+
+Omitting the config path uses the long-only starter and its approved universe. For a smaller
+run, pass CLI overrides such as `passivbot backtest -s BTC -sd 2025`. An explicit config
+supplies its own activation and coin approval. See [Config Workflow](config_workflow.md) for
+how to copy and customize the starter.
 
 ## Backtest Results
 

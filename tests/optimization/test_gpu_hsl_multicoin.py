@@ -34,6 +34,7 @@ def make_proxy(
     dispatch_budget=1000000,
 ):
     config = generated_template(get_expanded_config_prototype(), mode)
+    config["optimize"]["bounds"] = {}
     assert coin_count >= 1
     coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
     config['bot']["portfolio"]['strategy_kind'] = strategy
@@ -41,11 +42,22 @@ def make_proxy(
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     config["backtest"].update(
-        starting_balance=1000.0, btc_collateral_target_ratio=0.0
+        starting_balance=1000.0,
+        btc_collateral_target_ratio=0.0,
+        limit_order_fill_buffer_fraction=0.0,
     )
     for side in ("long", "short"):
-        config["bot"][side]["enabled"] = side in sides
-        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
+        bot = config["bot"][side]
+        bot["enabled"] = side in sides
+        bot["universe"]["minimum_coin_age_days"] = 0.0
+        # The short fixture exercises HSL without adaptive cooldown or RMS history.
+        bot["entry_cooldown"].update(
+            base_duration_minutes=24.1,
+            min_duration_minutes=0.0,
+            max_duration_minutes=None,
+            weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
+        )
+        bot["forager"]["score_weights"]["rms_directionality"] = 0.0
         config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit_ratio': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
         config["bot"][side]["hsl"].update(
             enabled=enabled and mode != "portfolio",

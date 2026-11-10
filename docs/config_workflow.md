@@ -4,8 +4,12 @@ This is the recommended way to work with Passivbot configs on the current config
 
 ## Source Of Truth
 
-- The canonical hardcoded defaults live in `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
+- The canonical schema defaults hydrate omitted fields in explicit config files. An omitted
+  activation flag leaves its side disabled, an omitted approval source does not grant coin
+  approval, and an omitted optimizer bound fixes its effective parameter value.
+- The in-code starter in `src/config/schema.py` matches the
+  [shipped example](https://github.com/enarjord/passivbot/blob/v9/configs/examples/default_trailing_martingale_long.json). It declares
+  activation, approval, and optimizer bounds explicitly.
 - New configs use the final `config_version: "v9.0.0"` layout. Normal loading rejects
   unknown/retired fields and never migrates policy implicitly. Use the explicit
   [v8 converter](v8_to_v9_migration.md) for released v8 inputs, with the required semantic
@@ -13,9 +17,6 @@ This is the recommended way to work with Passivbot configs on the current config
   are separate. Unreleased intermediate schemas, `pb_multi` and pre-v8 layouts are unsupported.
 - Retained strategies are `trailing_martingale` and `ema_anchor`. The v7 strategy and its
   dedicated migration command have been removed.
-- If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
-  Both sides are disabled by default. A simulation requires an explicitly enabled side
-  and approved coins.
 
 ## Recommended Workflow
 
@@ -70,41 +71,46 @@ live/scenario coin settings still control data preparation.
 
 ## What The Default Profile Is
 
-The in-code starter keeps both sides disabled. The maintained
-`configs/examples/default_trailing_martingale_long.json` example explicitly enables long
-and disables short. Its shared numerical profile is:
+The in-code starter and shipped example explicitly enable longs and disable shorts. The
+Trailing Martingale profile is shared through `bot.global` and inherited by each side.
 
-- trailing martingale style configuration
-- `bot.global.risk.max_positions = 7`, inherited separately by each side
-- `bot.global.risk.total_wallet_exposure_limit_ratio = 1.5`, a per-side budget rather than a shared pool
-- HSL present but disabled with `bot.global.hsl.enabled = false`
-- HSL signal mode set to per-coin slots with `bot.portfolio.hsl.scope = "coin"`
-- approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it
-- optimizer backend defaulting to `pymoo`
+- Each side has 10 slots and a total wallet exposure limit of `1.5`.
+- The 40-coin approval list, forager ranking, and adaptive entry cooldown are shared.
+- Coin-scope HSL is disabled.
+- Backtesting uses a rolling end date and venue market settings. The five-scenario suite is
+  available with `--suite`.
+- CPU `pymoo` optimization uses explicit search ranges, a budget of 2,048 evaluations, and a
+  population of 128. The enabled limit requires 100% backtest completion in every evaluated
+  scenario.
 
 ## When To Omit A Config Path
 
-Omitting `config_path` is useful when inspecting defaults or trying CLI overrides.
-For a simulation, provide the intended side and symbols on the command line.
+`passivbot backtest` and `passivbot optimize` use the starter when you omit the config path.
+Use the full install and either cached or accessible public market data. CLI overrides can
+narrow the universe or dates for a shorter run.
 
-It is usually better to pass an explicit config file for normal backtest, optimize, and live workflows, because:
+To run `passivbot live` with the starter, provision the intended account in your local
+`api-keys.json` under `passivbot_default`. This opts that account into the starter's long
+entries. You can also select that alias explicitly. With no config path, choosing a different
+alias via `-u` uses the schema defaults and leaves new entries disabled unless the CLI
+explicitly supplies activation and coin approval.
 
-- your exact settings are easier to reproduce
-- diffs are easier to review
-- you avoid depending on future default changes
+Use an explicit config file to keep your exact settings reviewable and reproducible across
+default changes. CLI overrides apply on top of the selected config.
 
 ## Command Examples
 
-Backtest from the canonical default:
+Backtest or optimize the starter:
 
 ```bash
-passivbot backtest --bot.long.enabled y -s BTC -sd 2025 --suite n
+passivbot backtest
+passivbot optimize
 ```
 
-Optimize from the canonical default with an explicit exposure range:
+Run a narrower backtest with CLI overrides:
 
 ```bash
-passivbot optimize --bot.long.enabled y -s BTC -sd 2025 -c 4 --suite n -ltwel 0.5,1.0
+passivbot backtest -s BTC -sd 2025
 ```
 
 Live from an explicit config:

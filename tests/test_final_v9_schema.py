@@ -74,7 +74,7 @@ def test_canonical_defaults_and_sparse_defaults_load():
     complete = prepare_config(get_template_config(), verbose=False)
     sparse = prepare_config({"config_version": "v9.0.0", "bot": {}, "live": {}}, verbose=False)
     assert complete["bot"]["portfolio"]["hsl"] == {"scope": "coin"}
-    assert sparse["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert sparse["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 96141.557
     assert sparse["bot"]["long"]["enabled"] is False
     assert sparse["bot"]["short"]["enabled"] is False
     assert sparse["bot"]["long"]["risk"] == complete["bot"]["long"]["risk"]
@@ -183,11 +183,11 @@ def test_aggregate_controls_cannot_be_coin_overridden(patch):
         prepare_config(config, verbose=False)
 
 
-def test_new_memory_dimensions_default_fixed_at_effective_config_values():
-    config = get_expanded_config_prototype()
+def test_omitted_memory_dimensions_fix_effective_config_values():
+    config = get_template_config()
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 71.5
     config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 83.5
-    config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 19.5
+    config["bot"]["long"]["hsl"] = {"memory_ema_span_minutes": 19.5}
     result = prepare_config(config, verbose=False)
     bounds = result["optimize"]["bounds"]
     assert bounds["portfolio"]["unstuck"]["memory_ema_span_minutes"] == [71.5, 71.5]

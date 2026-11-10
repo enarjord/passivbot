@@ -93,7 +93,8 @@ and `w_k = 2^(-age_of_interval_endpoint_days / half_life_days)`:
 CAGR_EW = expm1(365.25 * sum(w_k * z_k) / sum(w_k * delta_k))
 ```
 
-One fixed positive half-life applies across a campaign. The source-owned default is 180 days; omitted/null configuration resolves to that value. Decaying prior numerator and
+One fixed positive half-life applies across a campaign. Authored omission defaults to 360 days.
+Explicit null resolves to the native fallback of 180 days. Decaying prior numerator and
 denominator before adding the newest interval is equivalent and needs constant storage.
 As half-life tends to infinity, this tends to ordinary CAGR on the same window.
 

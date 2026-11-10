@@ -43,8 +43,8 @@ schema fallback, authored `bot.global`, explicit side leaf pins and permitted co
 runtime hydration.
 False, zero, empty lists and equal values retain explicit side authority; approval null inherits
 and ignored null clears. Whole-side omission equals an empty side object. One portfolio strategy
-kind selects the engine; new directional numerical fallbacks deliberately share the former long
-starter profile. Budgets remain per side, not an implicitly divided portfolio allocation.
+kind selects the engine. Directional numerical fallbacks share the starter profile.
+Budgets remain per side, not an implicitly divided portfolio allocation.
 
 `bot.portfolio` owns account-wide settings/state, including unstuck realized memory. Typed source,
 normalized execution values, explicit optimizer derivations and frozen source memberships remain
@@ -66,7 +66,9 @@ Activation never inherits: only an explicit true enables the corresponding side,
 empty side objects stay disabled. Reject `bot.global.enabled` with an actionable error; do not
 ignore or migrate it. Other nested feature switches remain inheritable. Both-disabled policy is
 valid for held-position management. Activation is fixed policy, separate from capacity, selection
-and operational modes.
+and operational modes. The no-path CLI starter explicitly declares long activation and shared
+approval, as does the shipped example. Explicit config omissions keep their schema semantics.
+
 Simulation entry points require a runnable effective universe: at least one explicitly enabled
 side with positive exposure/position capacity and approved coins remaining after resolution.
 Apply CLI, fixed optimizer policy, reachable optimizer capacity, and scenario overrides before

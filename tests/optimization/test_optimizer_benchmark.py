@@ -849,6 +849,28 @@ def test_retired_optional_entry_gate_is_not_a_workload_feature():
         apply_features({}, Case("trailing_martingale", features=("entry_gate_off",)), [], {}, 128)
 
 
+def test_fixed_cooldown_workload_keeps_adaptive_and_rms_features_off(real_runtime):
+    from tools.gpu_parity import build_parser, fixture_inputs
+    from tools.optimizer_benchmark.workloads import apply_features, sampled_population
+
+    config, _candles, markets, _btc, _timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "long", "--coins", "4", "--bars", "128",
+    ]))
+    case = Case("trailing_martingale", sides="long", features=("cooldown",))
+    apply_features(config, case, config["backtest"]["coins"]["binance"], markets, 128)
+    population, _vectors, bounds = sampled_population(config, case, 3, 7)
+
+    assert any(spec["path"][-1] == "base_duration_minutes" and spec["low"] < spec["high"]
+               for spec in bounds)
+    for candidate in population:
+        assert candidate["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
+        assert candidate["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] == 0.0
+        cooldown = candidate["bot"]["long"]["entry_cooldown"]
+        assert cooldown["max_duration_minutes"] is None
+        assert cooldown["min_duration_minutes"] == 0.0
+        assert cooldown["weights_minutes"] == {"adverse_directionality": 0.0, "exposure_ratio": 0.0}
+
+
 @pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
 def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scope, real_runtime):
     from tools.gpu_parity import build_parser, fixture_inputs

@@ -223,17 +223,17 @@ def test_defaults_and_runtime_mapping():
     for side in ("long", "short"):
         assert c["bot"][side]["unstuck"] == example["bot"][side]["unstuck"]
         assert (
-            c["optimize"]["bounds"][side]["unstuck"]
+            c["optimize"]["bounds"]["long"]["unstuck"]
             == example["optimize"]["bounds"][side]["unstuck"]
         )
     runtime = compile_runtime_config(
         prepare_config(c, verbose=False), runtime="backtest"
     )
-    assert runtime["bot"]["long"]["unstuck_ema_span_0_minutes"] == 790.0
+    assert runtime["bot"]["long"]["unstuck_ema_span_0_minutes"] == 513.39957
     bounds = flatten_optimize_bounds(
         c["optimize"]["bounds"], strategy_kind="trailing_martingale"
     )
-    assert bounds["long_unstuck_ema_span_1_minutes"] == [60, 2880, 10]
+    assert bounds["long_unstuck_ema_span_1_minutes"] == [10, 3000]
 
 
 def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():

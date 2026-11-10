@@ -75,23 +75,32 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
             "score_weights": {
-                "ema_readiness": [0, 1, 0.01],
-                "log_range": [0, 1, 0.01],
-                "volume": [0, 1, 0.01],
+                "ema_readiness": [0, 1],
+                "log_range": [0, 1],
+                "rms_directionality": [0, 1],
+                "volume": [0, 1],
             },
-            "log_range_ema_span_minutes": [10, 2880, 1],
-            "volume_ema_span_minutes": [180, 2880, 1]
+            "log_range_ema_span_minutes": [10, 3000],
+            "rms_directionality_ema_span_minutes": [10, 3000],
+            "volume_ema_span_minutes": [10, 3000],
         },
         "hsl": {
             "cooldown_after_red_minutes": [2160, 2160, 10],
             "drawdown_fraction_ema_span_minutes": [720, 720, 1],
-            "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
+            "drawdown_threshold_fraction": [0.15, 0.15, 0.001],
         },
-        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
+        "entry_cooldown": {
+            "base_duration_minutes": [1, 60],
+            "min_duration_minutes": [1, 1],
+            "weights_minutes": {
+                "adverse_directionality": [1, 100],
+                "exposure_ratio": [1, 100],
+            },
+        },
         "risk": {
-            "max_positions": [7, 7, 1],
+            "max_positions": [10, 10, 1],
             "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
-            "we_excess_allowance_fraction": [0, 0.4, 0.01],
+            "we_excess_allowance_fraction": [0, 0.5],
             "position_exposure_enforcer": {
                 'threshold_ratio': [1, 1, 0.001],
             },
@@ -100,12 +109,12 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             },
         },
         "unstuck": {
-            "close_fraction": [0.01, 0.12, 0.001],
-            "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-            "ema_span_0_minutes": [60, 2880, 10],
-            "ema_span_1_minutes": [60, 2880, 10],
-            "loss_allowance_fraction": [0.005, 0.2, 0.0001],
-            "exposure_trigger_ratio": [0.4, 0.9, 0.001],
+            "close_fraction": [0.01, 0.12],
+            "ema_distance_fraction": [-0.2, 0.01],
+            "ema_span_0_minutes": [10, 3000],
+            "ema_span_1_minutes": [10, 3000],
+            "loss_allowance_fraction": [0.0001, 0.2],
+            "exposure_trigger_ratio": [0.4, 0.9],
         },
     },
     "short": {
@@ -113,6 +122,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "score_weights": {
                 "ema_readiness": [0, 1, 0.01],
                 "log_range": [0, 1, 0.01],
+                "rms_directionality": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
             "log_range_ema_span_minutes": [10, 1440, 1],

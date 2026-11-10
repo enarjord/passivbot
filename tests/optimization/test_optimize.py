@@ -1950,7 +1950,7 @@ class TestIndividualToConfig:
         vector[key_to_idx["long_close_retracement_base_fraction"]] = -0.0005
         vector[key_to_idx["long_close_retracement_log_range_1h_coefficient"]] = 37.0
         vector[key_to_idx["long_close_retracement_log_range_1m_coefficient"]] = 38.0
-        vector[key_to_idx["long_close_threshold_log_range_1h_coefficient"]] = 39.0
+        vector[key_to_idx["long_close_threshold_log_range_1h_coefficient"]] = 9.0
 
         result = individual_to_config(
             vector,
@@ -1964,7 +1964,7 @@ class TestIndividualToConfig:
         assert close["retracement_base_fraction"] == pytest.approx(0.0)
         assert close["retracement_log_range_1h_coefficient"] == pytest.approx(0.01)
         assert close["retracement_log_range_1m_coefficient"] == pytest.approx(0.01)
-        assert close["threshold_log_range_1h_coefficient"] == pytest.approx(39.0)
+        assert close["threshold_log_range_1h_coefficient"] == pytest.approx(9.0)
 
     def test_canonicalizes_disabled_close_retracement_params_in_vector_for_dedupe(self):
         template = _independent_close_fixture()
@@ -3930,11 +3930,10 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
+            weights = template["bot"]["long"]["forager"]["score_weights"]
             assert result[0]["bot"]["long"]["forager"]["score_weights"][
                 "log_range"
-            ] == pytest.approx(
-                template["bot"]["long"]["forager"]["score_weights"]["log_range"]
-            )
+            ] == pytest.approx(weights["log_range"] / sum(weights.values()))
         finally:
             os.unlink(path)
 
@@ -4625,6 +4624,9 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["objective_scenario"] = "base"
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
+        ]
         base = Evaluator(
             hlcvs_specs={},
             btc_usd_specs={},

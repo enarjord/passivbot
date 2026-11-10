@@ -1,4 +1,4 @@
-"""Empty simulations fail before acquisition; valid override-driven runs still proceed."""
+"""Empty authored simulations fail before acquisition and runnable CLI inputs proceed."""
 
 from copy import deepcopy
 import json
@@ -103,7 +103,9 @@ def test_resolved_validation_does_not_reread_mutable_sources(tmp_path):
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])
 @pytest.mark.parametrize("suite", ["n", "y"])
-def test_bare_cli_fails_cleanly_without_market_or_candle_requests(command, suite, capsys, monkeypatch):
+def test_explicit_sparse_cli_fails_before_market_or_candle_requests(
+    command, suite, capsys, monkeypatch, tmp_path
+):
     import backtest
     import optimize
     import suite_runner
@@ -113,7 +115,9 @@ def test_bare_cli_fails_cleanly_without_market_or_candle_requests(command, suite
 
     for module in (backtest, optimize, suite_runner):
         monkeypatch.setattr(module, "load_markets", forbidden)
-    assert cli.main([command, "--suite", suite, "-sd", "2026", "-ed", "2026-10-20"]) == 2
+    path = tmp_path / "sparse.json"
+    path.write_text(json.dumps({"config_version": get_template_config()["config_version"]}))
+    assert cli.main([command, str(path), "--suite", suite]) == 2
     error = capsys.readouterr().err
     assert f"Cannot start {command}" in error
     assert "Both position sides are disabled" in error
@@ -124,6 +128,23 @@ def test_bare_cli_fails_cleanly_without_market_or_candle_requests(command, suite
 
 class ReachedMarkets(BaseException):
     pass
+
+
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+@pytest.mark.parametrize("suite_args", [[], ["--suite", "y"]])
+def test_no_path_cli_starter_reaches_market_preparation(command, suite_args, monkeypatch):
+    import backtest
+    import optimize
+    import suite_runner
+
+    async def reached(*args, **kwargs):
+        raise ReachedMarkets
+
+    backtest_module = suite_runner if suite_args else backtest
+    module = optimize if command == "optimize" else backtest_module
+    monkeypatch.setattr(module, "load_markets", reached)
+    with pytest.raises(ReachedMarkets):
+        cli.main([command, *suite_args])
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])

@@ -66,12 +66,15 @@ def test_parsed_template_bounds_freeze_adaptive_defaults():
             assert bounds[f"{side}_entry_cooldown_weights_minutes_{key}"] == [value, value]
         minimum = cooldown["min_duration_minutes"]
         assert bounds[f"{side}_entry_cooldown_min_duration_minutes"] == [minimum, minimum]
-        assert f"{side}_entry_cooldown_max_duration_minutes" not in bounds
+        maximum = cooldown["max_duration_minutes"]
+        assert bounds[f"{side}_entry_cooldown_max_duration_minutes"] == [maximum, maximum]
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     source = get_expanded_config_prototype()
+    omit_rms_directionality_bounds(source)
+    omit_cooldown_bounds(source)
     original = flat_bounds(source)
     for key in (
         "forager_score_weights_rms_directionality", "rms_directionality_ema_span_minutes",
@@ -305,6 +308,10 @@ def test_explicit_cooldown_bounds_survive_roundtrip_with_null_bot_ceiling(form, 
         "max_duration_minutes": [20.0, 100.0, 0.5],
     }
     for side in ("long", "short"):
+        source["bot"][side]["entry_cooldown"].update(
+            max_duration_minutes=None,
+            weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+        )
         target = source["optimize"]["bounds"][side]["entry_cooldown"]
         for key, value in expected.items():
             if form == "flat":

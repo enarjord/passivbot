@@ -341,6 +341,10 @@ def test_two_coin_long_short_native_reports_keep_controller_scopes(
     cfg["backtest"]["coins"]["binance"] = ["AAA", "BBB"]
     for side in ("long", "short"):
         cfg["bot"][side]["risk"]["max_positions"] = 2
+        # These candles need a shallow retracement to rotate to both sides.
+        cfg["bot"][side]["strategy"]["trailing_martingale"]["close"][
+            "retracement_base_fraction"
+        ] = 0.0005
     cfg["bot"]["short"]["hsl"] = deepcopy(cfg["bot"]["long"]["hsl"])
     markets["BBB"] = deepcopy(markets["AAA"])
     bot, strategy, exchange, params = prep_backtest_args(cfg, markets, "binance")

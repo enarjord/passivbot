@@ -50,8 +50,8 @@ def test_sparse_inherited_hsl_remains_protective_and_reports_effective_side_defa
     assert "hsl_balance_override_account_level_replay_unsafe" in codes
     assert "side_config_missing" not in codes
     assert report["cache"]["readiness"]["surfaces"]["hsl"]["status"] != "disabled"
-    assert report["forager"]["total_configured_max_positions"] == 14.0
-    assert all(report["forager"]["sides"][side]["max_positions"] == 7 for side in ("long", "short"))
+    assert report["forager"]["total_configured_max_positions"] == 20.0
+    assert all(report["forager"]["sides"][side]["max_positions"] == 10 for side in ("long", "short"))
     assert path.read_bytes() == original
 
 
@@ -100,7 +100,7 @@ def test_diff_resolves_shared_hsl_and_capacity_without_overriding_side_pins(tmp_
     assert changes["bot.long.hsl.enabled"]["before"]["value"] is False
     assert changes["bot.long.hsl.enabled"]["after"]["value"] is True
     assert "bot.short.hsl.enabled" not in changes
-    assert changes["bot.long.risk.max_positions"]["before"]["value"] == 7
+    assert changes["bot.long.risk.max_positions"]["before"]["value"] == 10
     assert changes["bot.long.risk.max_positions"]["after"]["value"] == 3
     assert "bot.short.risk.max_positions" not in changes
 

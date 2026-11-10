@@ -88,6 +88,7 @@ def test_backtest_with_candle_interval():
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["candle_interval_minutes"] = 5
     config["backtest"]["filter_by_min_effective_cost"] = False
+    config["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
     config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0

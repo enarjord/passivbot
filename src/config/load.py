@@ -6,13 +6,17 @@ from .parse import load_raw_config
 from .project import project_config
 from .result_records import extract_result_config
 from .runtime_compile import compile_runtime_config
-from .schema import get_template_config
+from .schema import get_starter_config, get_template_config
 
 
 def load_input_config(
-    config_path: str | None, *, log_info: bool = True, allow_result_records: bool = False
+    config_path: str | None,
+    *,
+    log_info: bool = True,
+    allow_result_records: bool = False,
+    use_starter: bool = False,
 ) -> tuple[dict, str, dict]:
-    """Keep input documents intact unless the caller opts into result extraction."""
+    """Load authored input or select the in-code profile for an omitted path."""
     if config_path:
         if log_info:
             logging.info("loading config %s", config_path)
@@ -21,8 +25,11 @@ def load_input_config(
             source = extract_result_config(source)
         return source, config_path, deepcopy(source)
     if log_info:
-        logging.info("loading schema defaults from src/config/schema.py")
-    source = get_template_config()
+        logging.info(
+            "loading %s from src/config/schema.py",
+            "starter config" if use_starter else "schema defaults",
+        )
+    source = get_starter_config() if use_starter else get_template_config()
     return source, "", deepcopy(source)
 
 

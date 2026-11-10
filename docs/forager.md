@@ -56,8 +56,9 @@ from the active strategy; the gap is a signed scale-one fraction. The normalized
 `forager.score_weights.rms_directionality` optionally penalizes sustained one-way movement
 in either direction. It uses the absolute signed RMS score from completed one-minute close
 returns. Lower values rank better; normalization reverses this penalty for the combined score.
-The weight defaults to zero. See [adaptive entry cooldown and RMS](adaptive_entry_cooldown.md)
-for the formula, normalization, completed-candle readiness and decay through flat prices.
+The starter includes a positive directionality weight. See
+[adaptive entry cooldown and RMS](adaptive_entry_cooldown.md) for the formula,
+normalization, completed-candle readiness and decay through flat prices.
 
 ## Weights And Hysteresis
 

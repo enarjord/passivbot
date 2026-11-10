@@ -30,7 +30,7 @@ def test_native_metadata_declares_one_common_profile_with_directional_ids(kind):
     assert spec == before == get_strategy_spec(kind)
 
 
-def test_common_shared_profile_retains_former_long_values_and_separate_permission():
+def test_common_shared_profile_retains_starter_values_and_separate_permission():
     common = get_common_bot_defaults()
     prototype = get_expanded_config_prototype()["bot"]
     assert prototype["global"] == common
@@ -43,7 +43,7 @@ def test_common_shared_profile_retains_former_long_values_and_separate_permissio
     assert "enabled" not in common
     assert common["universe"]["approved_coins"] == []
     assert common["risk"]["total_wallet_exposure_limit_ratio"] == 1.5
-    assert common["risk"]["max_positions"] == 7
+    assert common["risk"]["max_positions"] == 10
     assert common["forager"]["score_hysteresis_margin"] == 0.02
     common["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     assert get_common_bot_defaults()["risk"]["total_wallet_exposure_limit_ratio"] == 1.5

@@ -349,7 +349,9 @@ def test_compiled_aliases_are_effective_only_and_cannot_become_authored_fields()
     prepared = load(source())
     authored = bot_policy_source_view(prepared)["bot"]
     compiled = compile_runtime_config(prepared, runtime="backtest")
-    assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == 24.1
+    assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == (
+        prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"]
+    )
     assert bot_policy_source_view(compiled)["bot"] == authored
     assert bot_policy_source_view(compile_runtime_config(compiled, runtime="backtest"))["bot"] == authored
     compiled["bot"]["long"]["risk_entry_cooldown_minutes"] = 0.0

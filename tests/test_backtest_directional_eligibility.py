@@ -24,7 +24,13 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
                 "portfolio": {"strategy_kind": "ema_anchor"},
                 "global": {
                     "unstuck": {"enabled": False},
-                    "entry_cooldown": {"base_duration_minutes": 0.0},
+                    "entry_cooldown": {
+                        "base_duration_minutes": 0.0,
+                        "min_duration_minutes": 0.0,
+                        "max_duration_minutes": None,
+                        "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                    },
+                    "forager": {"rms_directionality_ema_span_minutes": 60.0},
                 },
                 "long": {"enabled": True},
                 "short": {"enabled": True},
@@ -44,6 +50,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
             "start_date": "2024-01-01",
             "end_date": "2024-01-02",
             "starting_balance": 1_000.0,
+            "limit_order_fill_buffer_fraction": 0.0,
             "filter_by_min_effective_cost": False,
             "dynamic_wel_by_tradability": True,
             "candle_interval_minutes": 1,
@@ -81,11 +88,13 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         "ema_readiness": 0.0,
         "log_range": 1.0,
         "volume": 0.0,
+        "rms_directionality": 0.0,
     }
     config["bot"]["short"]["forager"]["score_weights"] = {
         "ema_readiness": 0.0,
         "log_range": 0.0,
         "volume": 1.0,
+        "rms_directionality": 0.0,
     }
     if not include_dataset:
         config["backtest"].pop("coins")
