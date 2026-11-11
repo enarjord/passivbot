@@ -14507,49 +14507,30 @@ class Passivbot:
         c_mult = float(self.c_mults[symbol])
         if min_qty <= 0.0 and qty_step > 0.0:
             min_qty = qty_step
-        calc_min_entry_qty = getattr(pbr, "calc_min_entry_qty_py", None)
-        if calc_min_entry_qty is not None:
-            min_entry_qty = float(
-                calc_min_entry_qty(price, c_mult, qty_step, min_qty, min_cost)
-            )
-        else:
-            if price <= 0.0 or c_mult <= 0.0:
-                min_entry_qty = min_qty
-            else:
-                min_cost_qty = min_cost / price / c_mult
-                if qty_step > 0.0:
-                    min_cost_qty = (
-                        math.ceil(max(0.0, min_cost_qty) / qty_step) * qty_step
-                    )
-                min_entry_qty = max(min_qty, min_cost_qty)
+        min_entry_qty = pbr.calc_min_entry_qty_py(price, c_mult, qty_step, min_qty, min_cost)
         return float(pbr.qty_to_cost(min_entry_qty, price, c_mult))
 
     async def update_effective_min_cost(self, symbol=None):
-        """Update the effective minimum order cost for one or all symbols."""
+        """Refresh the legacy minimum-cost filter from an explicit market snapshot."""
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
-        if symbol is None:
-            symbols = sorted(self.get_symbols_approved_or_has_pos())
-        else:
-            symbols = [symbol]
+        symbols = sorted(self.get_symbols_approved_or_has_pos()) if symbol is None else [symbol]
+        for requested in symbols:
+            self.effective_min_cost.pop(requested, None)
         last_prices = await self._get_live_last_prices(
             symbols, max_age_ms=600_000, context="effective_min_cost"
         )
-        for symbol in symbols:
-            try:
-                self.effective_min_cost[symbol] = (
-                    self._calc_effective_min_cost_at_price(
-                        symbol, float(last_prices[symbol])
-                    )
+        for requested in symbols:
+            price = last_prices.get(requested)
+            if price is None or not math.isfinite(price) or price <= 0.0:
+                logging.warning(
+                    "[entry] effective minimum cost unavailable | symbol=%s reason=market_price",
+                    Passivbot._log_symbol(requested),
                 )
-            except Exception as e:
-                logging.error(
-                    "error with %s for %s: %s",
-                    get_function_name(),
-                    Passivbot._log_symbol(symbol),
-                    e,
-                )
-                traceback.print_exc()
+                continue
+            self.effective_min_cost[requested] = self._calc_effective_min_cost_at_price(
+                requested, price
+            )
 
     async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
@@ -17673,8 +17654,6 @@ class Passivbot:
         # Complete slow preparatory work before capturing the ticker snapshot
         # used for Rust planning. This keeps the planning snapshot fresh through
         # the create-side safety guard instead of aging it during EMA loading.
-        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
-            await self.update_effective_min_cost()
         warmed_forager_normal_symbols = await self._warmup_new_forager_normal_symbols(
             symbols
         )
@@ -17872,11 +17851,7 @@ class Passivbot:
                 and symbol not in ema_unavailable_symbols
                 and not exchange_cooldown_blocks_symbol
             )
-            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
-            if effective_min_cost <= 0.0:
-                effective_min_cost = self._calc_effective_min_cost_at_price(
-                    symbol, mprice
-                )
+            effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
 
             def side_input(pside: str) -> dict:
                 mode = self._mode_override_to_orchestrator_mode(

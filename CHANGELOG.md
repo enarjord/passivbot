@@ -114,6 +114,8 @@ since the latest release tag; these features may already be available when insta
   market settings from another venue. Align preload dates, coins, and scenario
   history demand with the selected portfolios.
 
+- Compute the live initial-entry minimum cost from the plan's current quote and exchange rules.
+
 - Defer ordinary planning when its captured quotes expire or required snapshot inputs are absent,
   preserving the failed cohort's diagnostic details and retrying without restarting the bot.
   Preserve failure propagation for unrelated errors and malformed native results, including in
