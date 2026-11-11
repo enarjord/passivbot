@@ -73,7 +73,7 @@ jobs:
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
         run: >-
           .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
-          -p ci_pytest_shard --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
+          -p ci_pytest_shard -p ci_pytest_timings --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
           --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
 
       - name: Run original tagged v8 migration regressions

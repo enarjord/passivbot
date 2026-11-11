@@ -40,3 +40,28 @@ The required checks retain the names `Python 3.12`, `Python 3.14` and `Rust`.
 Each Python aggregate runs even after failure, cancellation or skipping, and only
 accepts success from its own version's reusable workflow. It cannot be satisfied
 by the other Python version. The Rust job is unchanged.
+
+## Comparing runtimes
+
+Compare completed runs with the same Python versions and test layout. Use
+`created_at` to `started_at` for initial job wait and `started_at` to
+`completed_at` for job runtime. Dependent jobs' initial wait includes time
+waiting on their prerequisites. The workflow's trigger-to-completion time
+includes both waiting and execution.
+
+```bash
+gh api "repos/enarjord/passivbot/actions/runs/$RUN_ID" \
+  --jq '[.created_at, .updated_at, .conclusion] | @tsv'
+gh api "repos/enarjord/passivbot/actions/runs/$RUN_ID/jobs?per_page=100" \
+  --jq '.jobs[] | [.name, .created_at, .started_at, .completed_at, .conclusion] | @tsv'
+```
+
+Each Python shard logs `CI_TEST_FILE` JSON records sorted by total test time.
+The records sum pytest's setup, call, and teardown durations by file. They
+exclude collection and CI setup. With parallel pytest workers, summed test time
+can exceed the pytest step's wall time. Use job step timestamps for wall time.
+
+```bash
+gh api "repos/enarjord/passivbot/actions/jobs/$JOB_ID/logs" \
+  | sed -n 's/^.* CI_TEST_FILE //p'
+```
