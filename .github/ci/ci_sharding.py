@@ -8,6 +8,13 @@ from pathlib import Path, PurePosixPath
 
 FORMAT_VERSION = 1
 
+# Whole files moved out of the busiest shards based on timings from both Python versions.
+EIGHT_SHARD_OVERRIDES = {
+    "tests/optimization/test_native_projection.py": 6,
+    "tests/test_config_authoring_provenance.py": 6,
+    "tests/test_shared_bot_policy.py": 1,
+}
+
 
 def validate_shard(index, count):
     if type(count) is not int or count <= 0:
@@ -22,6 +29,8 @@ def shard_for_path(path, count):
             or PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts
             or PurePosixPath(path).as_posix() != path):
         raise ValueError("test paths must be canonical repository-relative POSIX paths")
+    if count == 8 and path in EIGHT_SHARD_OVERRIDES:
+        return EIGHT_SHARD_OVERRIDES[path]
     return int.from_bytes(hashlib.sha256(path.encode("utf-8")).digest(), "big") % count
 
 

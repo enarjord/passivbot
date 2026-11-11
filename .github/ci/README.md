@@ -1,10 +1,12 @@
 # Python CI shards
 
 The main workflow calls `python-tests.yml` separately for Python 3.12 and 3.14.
-Each version runs eight shards. A test file belongs to the shard given by
-`int.from_bytes(sha256(relative_posix_path.encode("utf-8")).digest(), "big") % 8`.
-The path is relative to the repository root; the entire digest is used, without
-salts or timing tables.
+Each version runs eight shards. Most files are assigned by taking the SHA-256
+digest of their repository-relative POSIX path as an integer modulo the shard
+count. The eight-shard matrix uses a small set of whole-file overrides in
+`ci_sharding.py` based on [measured runtimes on both Python versions](https://github.com/enarjord/passivbot/actions/runs/43056104234).
+When rebalancing, compare the slowest shards on both versions and include the
+extra checks on shard zero in the comparison.
 
 `ci_pytest_shard` is opt-in. It performs normal pytest collection, including the
 existing default marker filter, before choosing a shard. Every item in a file
