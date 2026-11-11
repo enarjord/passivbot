@@ -458,12 +458,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Without limits, copy the full loaded set."
         ),
     )
-    parser.add_argument(
-        "-H",
-        "--human-readable",
-        action="store_true",
-        help="Show short objective labels and display units. Default: exact metric keys and raw values.",
-    )
     view_group = parser.add_mutually_exclusive_group()
     view_group.add_argument(
         "--front",
@@ -1677,55 +1671,8 @@ def select_candidate(
     return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
 
 
-_METRIC_LABELS = {
-    "backtest_completion_fraction": "Backtest completion",
-    "cagr_fraction_strategy_equity": "CAGR",
-    "cagr_fraction_strategy_equity_ew": "Age-weighted CAGR",
-    "drawdown_max_fraction_strategy_equity": "Max drawdown",
-    "fills_gap_max_days": "Max gap between fills",
-    "fills_gap_time_weighted_mean_hours": "Weighted gap between fills",
-    "gross_exposure_max_ratio_strategy_equity": "Max gross exposure",
-    "gross_exposure_rms_ratio_strategy_equity": "RMS gross exposure",
-    "gross_turnover_ratio_per_day": "Gross turnover",
-    "hsl_execution_episode_count": "HSL execution episodes",
-    "hsl_panic_episode_loss_max_fraction": "Max HSL episode loss",
-    "hsl_panic_episode_loss_mean_fraction": "Mean HSL episode loss",
-    "hsl_red_time_fraction": "Time in HSL red",
-    "hsl_triggers_per_year": "HSL triggers",
-    "loss_profit_ratio": "Loss/profit ratio",
-    "omega_ratio_strategy_equity": "Omega ratio",
-    "pain_index_fraction_strategy_equity": "Pain index",
-    "peak_recovery_max_days_strategy_equity": "Max equity recovery",
-    "position_exposure_utilization_rms_ratio_long": "RMS long utilization",
-    "position_exposure_utilization_rms_ratio_short": "RMS short utilization",
-    "position_held_max_days": "Max hold time",
-    "position_held_time_weighted_mean_hours": "Weighted hold time",
-    "sharpe_ratio_strategy_equity": "Sharpe ratio",
-    "short_net_profit_contribution_fraction": "Short net profit contribution",
-    "sortino_ratio_strategy_equity": "Sortino ratio",
-    "ulcer_index_fraction_strategy_equity": "Ulcer index",
-    "volatility_annual_fraction_strategy_equity": "Annualized volatility",
-}
-_METRIC_UNIT_SUFFIXES = {"hours": " h", "days": " d", "per_year": "/yr", "per_day": "/d"}
-
-
-def _metric_label(metric: str, human_readable: bool) -> str:
-    return _METRIC_LABELS.get(metric, metric) if human_readable else metric
-
-
-def _format_objective_value(metric: str, value: float, human_readable: bool) -> str:
-    if not math.isfinite(value):
-        return "+inf" if value > 0 else "-inf"
-    if not human_readable:
-        return f"{value:.6g}"
-    unit = CORE_METRIC_CATALOG.get(metric, {}).get("unit")
-    if unit == "fraction":
-        if abs(value) > 1e306:
-            return f"{value:.4g} (fraction)"
-        if 0 < abs(value) < 0.00005 or abs(value) >= 10:
-            return f"{value * 100:.4g}%"
-        return f"{value:.2%}"
-    return f"{value:.4g}{_METRIC_UNIT_SUFFIXES.get(unit, '')}"
+def _format_objective_value(value: float) -> str:
+    return "+inf" if value == math.inf else f"{value:.6g}"
 
 
 def _report_table(
@@ -1833,7 +1780,7 @@ def _report_header(source, *, loaded, retained, front, ranked=None, limits, scen
     return lines
 
 
-def _report_sensitivity(sensitivity, labels, selected, human_readable):
+def _report_sensitivity(sensitivity, labels, selected):
     if not sensitivity or not sensitivity["check_count"]:
         return []
     checked = sensitivity["check_count"]
@@ -1851,16 +1798,14 @@ def _report_sensitivity(sensitivity, labels, selected, human_readable):
             check for check in sensitivity["checks"] if check["winner"] != selected
         )
         if check["kind"] == "weight_transfer":
-            src = _metric_label(check["from_metric"], human_readable)
-            dest = _metric_label(check["to_metric"], human_readable)
+            src = check["from_metric"]
+            dest = check["to_metric"]
             step = 100 * weight_fraction
             unit = "percentage point" if step == 1 else "percentage points"
             change = f"move {step:g} {unit} of weight from {src} to {dest}"
         else:
-            key = check["metric"]
-            label = _metric_label(key, human_readable)
-            value = _format_objective_value(key, check["target"], human_readable)
-            change = f"set {label} target to {value}"
+            value = _format_objective_value(check["target"])
+            change = f"set {check['metric']} target to {value}"
         winner = labels.get(check["winner"], check["winner"])
         lines.append(f"  {winner} ranks first if you {change}.")
     return lines
@@ -1891,22 +1836,21 @@ def _report_qualification(qualification, shortlist, labels):
     return lines
 
 
-def _objective_rows(specs, human_readable, *value_columns):
+def _objective_rows(specs, *value_columns):
     rows = []
     for spec in specs:
         metric = spec.metric
         direction = "↑" if spec.goal == "max" else "↓"
-        label = _metric_label(metric, human_readable)
-        rows.append([f"{direction} {label}", *[column(metric) for column in value_columns]])
+        rows.append([f"{direction} {metric}", *[column(metric) for column in value_columns]])
     return rows
 
 
-def _format_saved_value(values, metric, human_readable):
+def _format_saved_value(values, metric):
     value = values[metric]
     if value is None:
         status = values["metric_status"][metric]["status"]
         return {"positive_infinity": "+inf", "negative_infinity": "-inf"}.get(status, status)
-    return _format_objective_value(metric, value, human_readable)
+    return _format_objective_value(value)
 
 
 def format_selection_result(
@@ -1916,11 +1860,6 @@ def format_selection_result(
     args: argparse.Namespace,
 ) -> str:
     result = evaluation.result
-    human_readable = getattr(args, "human_readable", False)
-
-    def display(metric, value):
-        return _format_objective_value(metric, value, human_readable)
-
     source = _report_source(pareto_dir, args)
     labels = record["candidate_labels"]
     lines = _report_header(
@@ -1951,14 +1890,14 @@ def format_selection_result(
         shortlist = shortlist[:2]
     alternative = shortlist[1] if len(shortlist) > 1 else None
     headers = ["Objective", "Selected"]
-    columns = [lambda metric: display(metric, result.objective_values[metric])]
+    columns = [lambda metric: _format_objective_value(result.objective_values[metric])]
     if alternative:
         headers.append("#2")
-        columns.append(lambda metric: _format_saved_value(alternative["objectives"], metric, human_readable))
-    targets = settings.get("targets")
+        columns.append(lambda metric: _format_saved_value(alternative["objectives"], metric))
+    targets = result.details.get("targets")
     if targets:
         headers.append("Target")
-        columns.append(lambda metric: display(metric, targets[metric]) if metric in targets else "—")
+        columns.append(lambda metric: _format_objective_value(targets[metric]) if metric in targets else "—")
     best = result.details["ideal_point"]
     worst = {}
     for spec in evaluation.active_specs:
@@ -1970,8 +1909,8 @@ def format_selection_result(
     extrema_scope = "Pool" if result.method == "reference" else "Front"
     headers.extend([f"{extrema_scope} best", f"{extrema_scope} worst"])
     columns.extend([
-        lambda metric: display(metric, best[metric]),
-        lambda metric: display(metric, worst[metric]),
+        lambda metric: _format_objective_value(best[metric]),
+        lambda metric: _format_objective_value(worst[metric]),
     ])
     utilities = result.details.get("selected_utilities")
     if utilities:
@@ -1982,7 +1921,7 @@ def format_selection_result(
         headers.append("Weight")
         columns.append(lambda metric: f"{weights[metric]:.6g}")
     lines.append("")
-    rows = _objective_rows(evaluation.active_specs, human_readable, *columns)
+    rows = _objective_rows(evaluation.active_specs, *columns)
     lines.extend(_report_table(headers, rows, right_align=range(1, len(headers))))
     lines.append(f"{extrema_scope} extrema may come from different files.")
     if weights:
@@ -1995,22 +1934,20 @@ def format_selection_result(
             lines.append(f"  #{row['rank']}  {labels.get(filename, filename)}")
             if row is not alternative:
                 values = [
-                    f"{_metric_label(metric, human_readable)} "
-                    f"{_format_saved_value(row['objectives'], metric, human_readable)}"
+                    f"{metric} {_format_saved_value(row['objectives'], metric)}"
                     for metric in result.objective_values
                 ]
                 lines.extend(f"      {value}" for value in values)
     contributions = result.details.get("distance_components")
     if contributions and sum(contributions.values()) > 0:
         metric = max(contributions, key=contributions.get)
-        label = _metric_label(metric, human_readable)
         share = contributions[metric] / sum(contributions.values())
         origin = "ideal" if result.method == "ideal" else "target"
-        lines.extend(["", f"{label} accounts for {share:.0%} of squared distance to {origin}."])
+        lines.extend(["", f"{metric} accounts for {share:.0%} of squared distance to {origin}."])
 
     sensitivity = record["sensitivity"]
     if sensitivity:
-        lines.extend(_report_sensitivity(sensitivity, labels, selected, human_readable))
+        lines.extend(_report_sensitivity(sensitivity, labels, selected))
     lines.extend(_report_qualification(record["qualification"], shortlist, labels))
 
     replay = ["passivbot", "backtest", _command_path(result.candidate.path)]
@@ -2090,12 +2027,10 @@ def _format_inspection(pareto_dir, candidates, scoring_specs, args):
         source, loaded=len(candidates), retained=len(filtered), front=len(front),
         limits=limits, scenario=scenario,
     )
-    human_readable = getattr(args, "human_readable", False)
     rows = _objective_rows(
         specs,
-        human_readable,
-        lambda metric: _format_objective_value(metric, extrema[metric][0], human_readable),
-        lambda metric: _format_objective_value(metric, extrema[metric][1], human_readable),
+        lambda metric: _format_objective_value(extrema[metric][0]),
+        lambda metric: _format_objective_value(extrema[metric][1]),
         lambda metric: extrema[metric][2],
     )
     lines.append("")

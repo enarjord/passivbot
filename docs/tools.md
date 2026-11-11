@@ -104,9 +104,8 @@ The terminal report shows the selected candidate and the next-ranked alternative
 Objective arrows show the direction used for ranking. The default table shows exact metric
 keys and values in raw units, rounded to at most six significant digits for display. Use
 the keys directly in filters such as
-`-l 'cagr_fraction_strategy_equity_ew>0.5'`. Use `-H` / `--human-readable` for short labels and
-display units, including percentages for fractions. `-h` opens help. Selection and JSON output
-retain full numerical precision.
+`-l 'cagr_fraction_strategy_equity_ew>0.5'`. Selection and JSON output retain full numerical
+precision.
 
 The table shows the best and worst observed value for each objective in the ranked pool. These
 extrema can come from different files. When the method provides them, it also shows the selected

@@ -935,16 +935,7 @@ def test_run_from_args_prints_bordered_raw_values(sample_pareto_dir: Path, capsy
     assert "passivbot tool pareto-plot " in captured
 
 
-@pytest.mark.parametrize(
-    "flags,label,selected,alternative",
-    [
-        ([], "cagr_fraction_strategy_equity", "0.650001", "1"),
-        (["-H"], "CAGR", "65.00%", "100.00%"),
-    ],
-)
-def test_narrow_report_keeps_objective_values_visible(
-    sample_pareto_dir: Path, capsys, monkeypatch, flags, label, selected, alternative,
-):
+def test_narrow_report_keeps_objective_values_visible(sample_pareto_dir: Path, capsys, monkeypatch):
     monkeypatch.setenv("COLUMNS", "40")
     metric = "cagr_fraction_strategy_equity"
     value = 0.650001234567
@@ -953,16 +944,30 @@ def test_narrow_report_keeps_objective_values_visible(
         "balanced",
         {metric: value, "omega_ratio_strategy_equity": 0.65, "sortino_ratio_strategy_equity": 0.65},
     )
-    result = run_from_args(build_parser().parse_args([str(sample_pareto_dir), *flags]))
+    result = run_from_args(build_parser().parse_args([str(sample_pareto_dir)]))
     assert result.objective_values[metric] == value
     lines = capsys.readouterr().out.splitlines()
 
-    index = next(i for i, line in enumerate(lines) if line.startswith(f"| ↑ {label} "))
+    index = next(i for i, line in enumerate(lines) if line.startswith(f"| ↑ {metric} "))
     assert lines[index - 1].startswith("+-")
     assert [
         tuple(cell.strip() for cell in row.split("|")[1:-1])
         for row in lines[index + 2 : index + 5]
-    ] == [("Selected", selected), ("#2", alternative), ("Front best", alternative)]
+    ] == [("Selected", "0.650001"), ("#2", "1"), ("Front best", "1")]
+
+
+@pytest.mark.parametrize(("target", "display"), [("inf", "+inf"), ("-inf", "-inf")])
+def test_reference_text_shows_infinite_target(sample_pareto_dir, capsys, monkeypatch, target, display):
+    monkeypatch.setenv("COLUMNS", "160")
+    metric = "omega_ratio_strategy_equity"
+    args = build_parser().parse_args([
+        str(sample_pareto_dir), "--method", "reference", "--target", f"{metric}={target}",
+        "--show-top", "1",
+    ])
+    run_from_args(args)
+    output = capsys.readouterr().out
+    row = next(line for line in output.splitlines() if line.startswith(f"| ↑ {metric} "))
+    assert row.split("|")[3].strip() == display
 
 
 def test_default_json_keeps_five_ranked_members(sample_pareto_dir: Path, capsys):

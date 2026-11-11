@@ -9,8 +9,7 @@ since the latest release tag; these features may already be available when insta
 - Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
   next-ranked alternative, and the observed best and worst values. The report includes utility
   and normalized weights where applicable, plus copyable backtest and browser commands. Use
-  `--human-readable` for short labels and display units, `--front` for objective ranges and
-  leaders, or `--list-metrics` to find metric keys and units.
+  `--front` for objective ranges and leaders or `--list-metrics` to find metric keys and units.
 
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
