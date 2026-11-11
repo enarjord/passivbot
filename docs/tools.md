@@ -225,7 +225,7 @@ See the [campaign qualification runbook](ai/runbooks/optimization_campaign.md#cp
 
 `passivbot tool pareto-plot [PATH]` exports a standalone HTML explorer with all saved
 objective, aggregate/mean, and statistic metrics. Choose X/Y metrics or switch to X/Y/Z
-inside the page; no rerun, server, or internet connection is needed. Use the full install
+inside the page. The viewer runs offline. Use the full install
 profile (`python3 -m pip install -e ".[full]"`).
 
 ```bash
@@ -261,41 +261,70 @@ sensitivity and any matching qualification evidence. For example, use the same
 `--method`, `--objectives` and `--limit` arguments in both commands. With `--scenario`,
 the chart uses that scenario's stored values. Browser axis, direction and filter changes leave
 the CLI selection fixed. The panel still identifies it when the selected point is off the chart
-or excluded by a browser filter.
+or excluded by a browser filter. Use `passivbot tool pareto PATH --json` for the CLI
+selection record in a script.
 
-**Closest on plotted axes** is a separate marker. It uses equal-weight Euclidean distance
-on the visible candidates' normalized raw coordinates. Constant axes (range at most `1e-15`)
-contribute zero distance and exact ties retain the first member in saved loading order.
-The **theoretical ideal** diamond marks the best visible value on each axis. Different
-candidates can provide those values. Both geometric markers update with axis or filter changes.
-Direction selectors use saved scoring goals or known metric goals. Choose a direction for
-unknown goals, including standard deviations, to show the geometric markers. In 2D,
-maximization axes are reversed so better values lie toward the lower-left. 3D axes use
-normal orientation.
+Use **Selector on plotted axes** to rank candidates with finite coordinates that pass the plot
+limits. The star marks the first candidate in **Plotted-axis shortlist**. Each axis scales to
+its current visible raw range. An axis with range at most `1e-15` has zero distance and full
+utility. Exact ties retain the saved loading order after any method-specific tie breaks.
+
+| Selector | Preference |
+|---|---|
+| Euclidean ideal | Minimize weighted Euclidean distance to the best visible value on each axis. Equal weights are the default. |
+| Knee point | Prefer the strongest bend toward the ideal from the axis extremes, using only non-dominated visible points. Falls back to maximin if no bend toward the ideal is detected. |
+| Maximin | Maximize the worst normalized axis utility, then favor higher total utility. |
+| Weighted utility | Maximize the weighted average of normalized axis utilities. |
+| Axis priority | Optimize X first. Use Y and then Z to break ties. |
+
+The knee selector adapts the idea of finding the largest bulge of a Pareto front to the
+visible saved points. See [Das's characterization of Pareto knees](https://doi.org/10.1007/BF01195985).
+
+The **theoretical ideal** diamond combines the best visible value on each axis. Different
+candidates can provide those values. Direction controls default to saved scoring goals or
+known metric goals. Choose a direction for unknown goals, including standard deviations,
+to enable plotted-axis selection. In 2D, maximization axes are reversed so better values
+lie toward the lower-left. 3D axes use normal orientation. **Download view JSON** captures
+the plotted-axis ranking with candidate filenames, raw values, and scores. The JSON also
+records the axes, directions, enabled limits, and selector settings.
 
 Limit cards offer inclusive floors and ceilings, a slider over the saved range, and an exact
 numeric input that also permits thresholds outside that range. Moving a slider or entering a
-number enables the limit; uncheck its box to disable it. **Add** creates a limit on any metric,
-including one not plotted. Enabled limits remain active when axes change. **Reset all limits**
-restores the unfiltered data. The ideal is recomputed from candidates surviving every enabled
-limit and having finite values on every selected axis. Counts report exclusions from limits
-and missing axis values separately. The geometric markers disappear when the chart is empty. Axis and color ranges
-stay fixed to the saved data during filtering, so changes remain visually comparable; zoom
-and the 3D camera are retained when only limits change.
+number enables the limit. Uncheck its box to disable it. **Add** creates a limit on any metric.
+Enabled limits apply across all views and remain active when axes change. **Reset all limits**
+restores the unfiltered data. The scatter reports exclusions from limits and missing axis
+values separately. In 2D, the axes and Y color scale fit the plotted candidates when enabled
+limits change. In 3D, the axes, Z color scale, and camera stay stable during filtering. Hover
+for candidate filenames and raw values, drag to zoom in 2D or rotate in 3D, or use the toolbar
+to reset or export PNG.
 
-Hover for candidate filenames and raw values. Drag to zoom in 2D or rotate in 3D; the toolbar
-supports reset and PNG export. Color follows Y in 2D and Z in 3D. This shows saved members
-without recomputing a lower-dimensional Pareto front. Missing optional metrics are recorded
-as unavailable, never zero; missing required scoring objectives still fail through the shared
-loader. JSON sidecars without scoring metadata are ignored.
+**Metric profiles** shows parallel coordinates for up to eight metrics among candidates that
+pass the plot limits. Each metric scales to its finite range in that pool, with better values
+toward the top when a direction is known. Larger values go toward the top for metrics with
+unknown direction. Constant values sit in the middle and missing values leave gaps. Click a
+scatter or profile point, or use **Inspect candidate**, to compare its raw metrics and deltas
+with the scatter pick.
+
+**Parameter correlations** ranks numeric bot parameters and per-coin bot overrides by the
+absolute Pearson or Spearman coefficient for a chosen backtest metric. It uses candidates
+that pass the plot limits and requires at least three finite paired observations and
+variation in both variables. The table shows up to 20 results and their pair counts.
+Search by parameter path or click a result for a scatter of the raw values. Correlations
+describe associations among saved candidates and can reflect other parameters that vary
+alongside the selected parameter.
+
+Missing optional metrics are recorded as unavailable. Missing required scoring objectives
+fail through the shared loader. JSON sidecars without scoring metadata are ignored.
 
 Default plots go in `pareto_plots/` under the current working directory, named after the
 input: `optimize_results/<run>/pareto` or its run directory produces `pareto_plots/<run>.html`;
 a custom front directory uses its directory name, and a single JSON uses its filename stem.
 Both initial dimensions use the same filename because the HTML supports switching views.
 The generated directory is ignored by Git. `--output` overrides this location. Use `--force`
-to replace existing output and `--open` to launch a browser. Regenerate older HTML files to obtain the new controls. Exports contain filenames, saved metric values, and any attached qualification evidence,
-so keep plots made from private results private. Large fronts produce larger HTML files.
+to replace existing output and `--open` to launch a browser. Regenerate older HTML files
+to obtain the new controls. Exports contain filenames, saved metric values, varying numeric
+bot parameters, and any attached qualification evidence, so keep plots made from private
+results private. Large fronts produce larger HTML files.
 
 ## Pareto transformations / static plots
 

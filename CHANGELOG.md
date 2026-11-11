@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Refit both 2D Pareto plot axes when filters change. Explore filtered candidates with metric
+  profiles, bot parameter correlations, and interactive selectors for the plotted axes. Download
+  the plotted-axis ranking and its settings as JSON.
+
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
 - Distinguish HSL observation freshness from unavailable scopes in the console and suppress

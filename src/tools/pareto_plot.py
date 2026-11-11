@@ -29,6 +29,7 @@ from pareto_explorer import (
     load_selection_candidates,
     project_candidates_to_scenario,
 )
+from tools.pareto_plot_correlations import build_parameter_columns
 from tools.pareto_plot_page import PAGE, SCRIPT
 
 
@@ -219,6 +220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         evaluation = evaluate_selection(candidates, scoring_specs, args)
         dataset = build_dataset(evaluation.selection_candidates, scoring_specs)
+        dataset["parameters"] = build_parameter_columns(evaluation.selection_candidates)
         dataset["selection"] = build_selection_record(evaluation, args)
         selected = select_metrics(args.metrics, dataset)
         source = Path(args.path).expanduser().resolve() if args.path else pareto_dir
