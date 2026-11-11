@@ -2482,19 +2482,24 @@ class Passivbot:
         else:
             mode = "DISABLED"
 
-        n_pos_long = int(self.bot_value("long", "n_positions") or 0)
-        n_pos_short = int(self.bot_value("short", "n_positions") or 0)
-        n_pos = f"{n_pos_long}L/{n_pos_short}S"
-
-        twel_long = float(self.bot_value("long", "total_wallet_exposure_limit_ratio") or 0.0)
-        twel_short = float(
-            self.bot_value("short", "total_wallet_exposure_limit_ratio") or 0.0
-        )
-        twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
+        position_limits = []
+        exposure_limits = []
+        for side, label in (("long", "L"), ("short", "S")):
+            if activation[side]:
+                max_positions = int(self.bot_value(side, "n_positions") or 0)
+                twel = float(self.bot_value(side, "total_wallet_exposure_limit_ratio") or 0.0)
+                position_limits.append(f"{label}:{max_positions}")
+                exposure_limits.append(f"{label}:{twel:.0%}")
+            else:
+                position_limits.append(f"{label}:disabled")
+                exposure_limits.append(f"{label}:disabled")
 
         # Build content lines and calculate width dynamically
         line1 = f"  PASSIVBOT  │  {exchange}:{user}  │  {now}  "
-        line2 = f"  Mode: {mode}  │  Positions: {n_pos}  │  TWEL: {twel_str}  "
+        line2 = (
+            f"  Mode: {mode}  │  Max positions: {' '.join(position_limits)}"
+            f"  │  TWEL: {' '.join(exposure_limits)}  "
+        )
         width = max(len(line1), len(line2), 50)  # minimum 50 chars
         border = "═" * width
 
