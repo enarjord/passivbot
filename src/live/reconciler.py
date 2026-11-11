@@ -3345,19 +3345,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
                     extra.append(f"unchanged_cancel={untouched_cancel}")
                 if untouched_create:
                     extra.append(f"unchanged_create={untouched_create}")
-                log_level = (
-                    logging.INFO
-                    if bot._order_plan_summary_is_interesting(
-                        total_pre_cancel=total_pre_cancel,
-                        total_cancel=total_cancel,
-                        total_pre_create=total_pre_create,
-                        total_create=total_create,
-                        total_skipped=total_skipped,
-                    )
-                    else logging.DEBUG
-                )
-                logging.log(
-                    log_level,
+                logging.debug(
                     "[order] order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
                     total_pre_cancel,
                     total_cancel,

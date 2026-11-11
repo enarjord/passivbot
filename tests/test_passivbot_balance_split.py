@@ -2826,13 +2826,14 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
         {"symbol": "BTC/USDC:USDC", "status": "canceled"},
     ]
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         bot.handle_order_update(batch)
         bot.handle_order_update(batch)
         now[0] += 5.1
         bot.handle_order_update(batch)
 
     ws_logs = [record.message for record in caplog.records if "[ws]" in record.message]
+    assert all(record.levelno == logging.DEBUG for record in caplog.records if "[ws]" in record.message)
     assert ws_logs == [
         "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
         "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
@@ -3105,41 +3106,6 @@ def test_log_staged_refresh_timings_skips_structured_debug_sample():
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert sink.events == []
     assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
-    bot = _unit_bot()
-
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=1,
-            total_cancel=1,
-            total_pre_create=1,
-            total_create=1,
-            total_skipped=0,
-        )
-        is False
-    )
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=6,
-            total_cancel=3,
-            total_pre_create=5,
-            total_create=2,
-            total_skipped=4,
-        )
-        is True
-    )
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=10,
-            total_cancel=0,
-            total_pre_create=10,
-            total_create=0,
-            total_skipped=10,
-        )
-        is False
-    )
 
 
 def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
@@ -9992,7 +9958,6 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     bot._hsl_live = SimpleNamespace(bind=lambda *args, **kwargs: None)
     bot._current_planning_snapshot = None
     bot._last_plan_detail = {}
-    bot._order_plan_summary_is_interesting = lambda **kwargs: False
     bot.PB_modes = {"long": {}, "short": {}}
     bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 

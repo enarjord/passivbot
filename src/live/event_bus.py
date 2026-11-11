@@ -1624,8 +1624,8 @@ def _console_order_wave_summary(event: LiveEvent) -> list[str]:
     elapsed = _data_int(data, "elapsed_ms")
     if elapsed is not None:
         parts.append(f"elapsed={elapsed}ms")
-    symbols = _compact_csv(data.get("symbols"), limit=4)
-    if symbols:
+    symbols = _compact_csv(data.get("symbols"), limit=2)
+    if symbols and len(" ".join(parts)) + len(symbols) <= 105:
         parts.append(f"symbols={symbols}")
     return parts
 
@@ -3484,9 +3484,18 @@ def format_console_event(event: LiveEvent) -> str:
         if trailing_status is not None:
             return trailing_status
     base = f"[{_console_tag(event)}]"
-    if event.status:
-        base += f" {event.status}"
-    if event.cycle_id and event.event_type != EventTypes.ORDER_WAVE_COMPLETED:
+    status = event.status
+    order_wave = event.event_type == EventTypes.ORDER_WAVE_COMPLETED
+    if order_wave and status in {"deferred", "skipped"} and any(
+        (_data_int(event.data, field) or 0) > 0
+        for field in ("cancel_posted", "create_posted")
+    ):
+        status = "partially executed"
+    if status:
+        base += f" {status}"
+    if order_wave and event.reason_code:
+        base += f" reason={event.reason_code}"
+    if event.cycle_id and not order_wave:
         base += f" cycle={event.cycle_id}"
     for part in _console_data_summary(event):
         base += f" {part}"
@@ -3494,7 +3503,7 @@ def format_console_event(event: LiveEvent) -> str:
         base += f" symbol={event.symbol}"
     if event.pside:
         base += f" pside={event.pside}"
-    if event.reason_code:
+    if event.reason_code and not order_wave:
         base += f" reason={event.reason_code}"
     if event.message:
         base += f" {event.message}"
