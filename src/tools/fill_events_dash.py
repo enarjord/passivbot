@@ -603,7 +603,16 @@ def build_cache_health_panel(summaries: List[Dict[str, Any]]) -> html.Div:
     return dbc.Row(cards)
 
 
-def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port: int = 8050) -> None:
+DEFAULT_HOST = "127.0.0.1"
+
+
+def serve_dash(
+    accounts: Dict[str, Dict[str, Any]],
+    default_days: int = 30,
+    port: int = 8050,
+    *,
+    host: str = DEFAULT_HOST,
+) -> None:
     """Serve the Dash application."""
     _ensure_loaded(accounts)
     now = pd.Timestamp.utcnow()
@@ -1141,7 +1150,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
         raise PreventUpdate
 
     # Run server
-    logging.info(f"Starting dashboard on http://localhost:{port}")
+    logging.info("Starting fill dashboard | host=%s port=%d", host, port)
     logging.info("Press Ctrl+C to stop the server")
 
     def force_exit():
@@ -1158,7 +1167,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     try:
-        app.run_server(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        app.run_server(host=host, port=port, debug=False, use_reloader=False)
     except SystemExit:
         pass
     except KeyboardInterrupt:
@@ -1201,6 +1210,7 @@ def parse_args() -> argparse.Namespace:
         default="info",
         help="Logging verbosity (warning/info/debug/trace or 0-3)",
     )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind address (default: %(default)s)")
     parser.add_argument(
         "--port",
         type=int,
@@ -1218,7 +1228,7 @@ def main() -> None:
     if not accounts:
         logging.error("No accounts could be loaded. Check your --users argument and api-keys.json")
         sys.exit(1)
-    serve_dash(accounts, default_days=args.lookback_days, port=args.port)
+    serve_dash(accounts, default_days=args.lookback_days, port=args.port, host=args.host)
 
 
 if __name__ == "__main__":
