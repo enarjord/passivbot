@@ -1344,6 +1344,9 @@ its own version heading. See [release status](docs/releases.md).
   Keep panic-loss reporting separate from trading state, including completed,
   recovered and unfinished panic segments.
 
+- Report when a held position waits over a minute for a planned close replacement after
+  cancellation, and when the wait clears.
+
 - Live console health now distinguishes active trailing input waits, fill freshness, recent cycle/write activity, and pending HSL preparation. Recovery records show observed blocker phases; candle cache notices identify their warmup scope. HSL reasons remain readable, shared candle receive failures are coalesced with durable per-symbol details, and routine KuCoin history re-fetches stay at DEBUG.
 - Command log archives use unique run suffixes so simultaneous starts and long shared command prefixes cannot select the same file. Live log prefixes include the configured user.
 - Structured cycle timings retain numeric authoritative refresh durations and report finite HSL protective passes separately from overlapping ordinary preparation.
