@@ -6,8 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Cap allowance-scaled auto-unstuck closes at the remaining position size on both sides.
-
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
   40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains
@@ -149,6 +147,8 @@ since the latest release tag; these features may already be available when insta
   Preserve immediate mode recovery messages with bounded grouped transitions and HSL
   unavailability reasons, suppress empty forager selection chatter caused only by slot changes,
   and label pre-acknowledgement order messages as submissions.
+- Cap allowance-scaled auto-unstuck closes at the remaining position size on both sides.
+
 - Show live unstuck diagnostics after startup, on meaningful state changes, and every
   20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
   and open-order state. Keep repeated observations quiet and label stale plans.
