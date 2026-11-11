@@ -938,7 +938,7 @@ def test_run_from_args_prints_bordered_raw_values(sample_pareto_dir: Path, capsy
 @pytest.mark.parametrize(
     "flags,label,selected,alternative",
     [
-        ([], "cagr_fraction_strategy_equity", "0.65", "1.0"),
+        ([], "cagr_fraction_strategy_equity", "0.650001", "1"),
         (["-H"], "CAGR", "65.00%", "100.00%"),
     ],
 )
@@ -946,7 +946,15 @@ def test_narrow_report_keeps_objective_values_visible(
     sample_pareto_dir: Path, capsys, monkeypatch, flags, label, selected, alternative,
 ):
     monkeypatch.setenv("COLUMNS", "40")
-    run_from_args(build_parser().parse_args([str(sample_pareto_dir), *flags]))
+    metric = "cagr_fraction_strategy_equity"
+    value = 0.650001234567
+    _write_candidate(
+        sample_pareto_dir,
+        "balanced",
+        {metric: value, "omega_ratio_strategy_equity": 0.65, "sortino_ratio_strategy_equity": 0.65},
+    )
+    result = run_from_args(build_parser().parse_args([str(sample_pareto_dir), *flags]))
+    assert result.objective_values[metric] == value
     lines = capsys.readouterr().out.splitlines()
 
     index = next(i for i, line in enumerate(lines) if line.startswith(f"| ↑ {label} "))

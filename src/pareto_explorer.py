@@ -1717,12 +1717,12 @@ def _format_objective_value(metric: str, value: float, human_readable: bool) -> 
     if not math.isfinite(value):
         return "+inf" if value > 0 else "-inf"
     if not human_readable:
-        return repr(value)
+        return f"{value:.6g}"
     unit = CORE_METRIC_CATALOG.get(metric, {}).get("unit")
     if unit == "fraction":
         if abs(value) > 1e306:
             return f"{value:.4g} (fraction)"
-        if 0 < abs(value) < 0.00005 or abs(value) >= 10_000:
+        if 0 < abs(value) < 0.00005 or abs(value) >= 10:
             return f"{value * 100:.4g}%"
         return f"{value:.2%}"
     return f"{value:.4g}{_METRIC_UNIT_SUFFIXES.get(unit, '')}"

@@ -124,7 +124,7 @@ def test_reference_text_distinguishes_front_and_ranked_pool(front, capsys, monke
     assert "Pool best" in output
     assert "Pool worst" in output
     row = next(line for line in output.splitlines() if line.startswith("| ↑ cagr_fraction_strategy_equity"))
-    assert row.split("|")[-4].strip() == "-100.0"
+    assert row.split("|")[-4].strip() == "-100"
 
 
 def test_lexicographic_priority_defines_active_objectives(front, capsys):

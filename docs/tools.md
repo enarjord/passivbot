@@ -102,9 +102,11 @@ use that scenario's scalar value; set `scenario=null` on a limit to reduce the f
 
 The terminal report shows the selected candidate and the next-ranked alternative by default.
 Objective arrows show the direction used for ranking. The default table shows exact metric
-keys and raw values, so you can copy them into filters such as
+keys and values in raw units, rounded to at most six significant digits for display. Use
+the keys directly in filters such as
 `-l 'cagr_fraction_strategy_equity_ew>0.5'`. Use `-H` / `--human-readable` for short labels and
-display units, including percentages for fractions. `-h` opens help.
+display units, including percentages for fractions. `-h` opens help. Selection and JSON output
+retain full numerical precision.
 
 The table shows the best and worst observed value for each objective in the ranked pool. These
 extrema can come from different files. When the method provides them, it also shows the selected
