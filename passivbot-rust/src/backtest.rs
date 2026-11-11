@@ -2087,6 +2087,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         Ok(())
     }
 
+    fn tail_indicates_delisting(end: usize, n_timesteps: usize, interval_minutes: u64) -> bool {
+        const DELIST_TAIL_MINUTES: usize = 24 * 60;
+        n_timesteps.saturating_sub(1).saturating_sub(end)
+            > DELIST_TAIL_MINUTES / interval_minutes.max(1) as usize
+    }
+
     fn validate_held_position_valuation(&self, k: usize) -> Result<(), String> {
         for idx in 0..self.n_coins {
             if self.positions.long[idx].size == 0.0 && self.positions.short[idx].size == 0.0 {
@@ -2111,8 +2117,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         // --- register first & last valid candle for every coin ---
         for idx in 0..self.n_coins {
             if let Some((_start, end)) = self.coin_valid_range(idx) {
-                if end.saturating_add(1400) < n_timesteps {
-                    // add only if delisted more than one day before last timestamp
+                if Self::tail_indicates_delisting(
+                    end, n_timesteps, self.backtest_params.candle_interval_minutes,
+                ) {
+                    // A tail more than one day before the dataset ends indicates a delisting.
                     self.last_valid_timestamps[idx] = Some(end);
                 }
             }
@@ -5493,6 +5501,16 @@ mod tests {
 
         assert_ne!(bt.positions.long[0].size, 0.0);
         assert!(bt.fills.is_empty());
+    }
+
+    #[test]
+    fn delisting_tail_uses_elapsed_minutes_and_requires_more_than_one_day() {
+        for (interval_minutes, one_day_bars) in [(1, 1440), (5, 288)] {
+            let last_valid = 100;
+            let n_timesteps = last_valid + 1 + one_day_bars;
+            assert!(!Backtest::tail_indicates_delisting(last_valid, n_timesteps, interval_minutes));
+            assert!(Backtest::tail_indicates_delisting(last_valid, n_timesteps + 1, interval_minutes));
+        }
     }
 
     #[test]

@@ -224,6 +224,12 @@ inline int multicoin_interval_minutes(float interval_ms) {
     return max(1, int(interval_ms / 60000.0f + 0.5f));
 }
 
+inline bool multicoin_tail_indicates_delisting(
+    int last_valid, int timestep_count, float interval_ms
+) {
+    return timestep_count - 1 - last_valid > 1440 / multicoin_interval_minutes(interval_ms);
+}
+
 inline int multicoin_utc_day_index(
     int start_day_minute, int k, float interval_ms
 ) {

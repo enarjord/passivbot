@@ -14,6 +14,9 @@ since the latest release tag; these features may already be available when insta
   approval for new entries. The changed native fingerprint requires reevaluation of saved optimizer
   fitness.
 
+- Measure the backtest and GPU replay delisting cutoff in elapsed time. Tails longer than 24
+  hours trigger the existing final-candle close policy across candle intervals.
+
 - Skip the canonical candle index lookup when a websocket update has no finalized candle to process.
 
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
