@@ -27,6 +27,8 @@ since the latest release tag; these features may already be available when insta
 
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
+- Fail fast on candle index write contention so another cache writer cannot block the live loop.
+
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
