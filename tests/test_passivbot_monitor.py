@@ -1783,8 +1783,9 @@ def test_log_health_summary_structured_console_owns_periodic_line(caplog, monkey
         "passivbot.live_event_console"
     }
     combined = " ".join(record.message for record in health_records)
-    assert "last_loop=2.5s" in combined and "open_orders=0" in combined
-    assert "ws_reconnects_total=4" in combined and "errors_1h=1/10" in combined
+    assert "last_accepted_plan=? last_order_ack=?" in combined
+    assert "close=resting:0/waiting:0/blocked:0/unknown:1" in combined
+    assert "execution_errors_1h=1/10" in combined
     assert bot.candle_health_called is True
     assert bot.payload_now_ms == 200000
     assert bot.payload_reset_event_pipeline_timing is True
@@ -1792,6 +1793,8 @@ def test_log_health_summary_structured_console_owns_periodic_line(caplog, monkey
     assert event.event_type == EventTypes.HEALTH_SUMMARY
     assert event.cycle_id == "cy_health"
     assert event.data["rss_bytes"] == 987654
+    assert event.data["last_loop_duration_ms"] == 2500
+    assert event.data["ws_reconnects"] == 4
     assert event.data["errors_last_hour"] == 1
     assert confirmed == [17]
     assert restored == []
@@ -1874,9 +1877,10 @@ def test_log_health_summary_uses_legacy_fallback_without_console_sink(
     ]
     assert health_records
     combined = " ".join(record.message for record in health_records)
-    assert "last_loop=39.5s" in combined and "rss=83.6MiB" in combined
-    assert "account_age=?" in combined
+    assert "last_accepted_plan=? last_order_ack=?" in combined
+    assert "account_pending=balance,positions,open_orders" in combined
     assert sink.events[0].event_type == EventTypes.HEALTH_SUMMARY
+    assert sink.events[0].data["rss_bytes"] == 87_658_496
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -1925,8 +1929,8 @@ def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypat
     lines = [record.message for record in caplog.records if "[health]" in record.message]
     assert lines
     assert all(len(line) <= 170 for line in lines)
-    assert "cycle_completed_age=?" in " ".join(lines)
-    assert "last_loop=n/a" in lines[0] and "account_age=?" in lines[0]
+    assert "last_accepted_plan=? last_order_ack=?" in lines[0]
+    assert "account_pending=balance,positions,open_orders" in " ".join(lines)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

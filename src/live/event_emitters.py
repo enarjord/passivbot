@@ -4392,6 +4392,11 @@ def emit_execution_order_event(
     extra: dict | None = None,
 ) -> None:
     try:
+        if status == "succeeded" and reason_code == ReasonCodes.EXCHANGE_ACKNOWLEDGED and event_type in {
+            EventTypes.EXECUTION_CREATE_SUCCEEDED,
+            EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+        }:
+            bot._console_last_order_ack_ms = int(utc_ms())
         order_wave_id, action_id = _execution_event_ids(
             wave, action=action, index=index
         )

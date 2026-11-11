@@ -51,12 +51,16 @@ def observe_ordinary_defer(bot, details):
 
 def observe_ordinary_acceptance(bot, now_ms):
     """An accepted ordinary plan returned from reconciliation, possibly as a no-op."""
+    first_plan = getattr(bot, "_console_ordinary_accepted_ms", None) is None
     bot._console_ordinary_accepted_ms = now_ms
     bot._console_ordinary_wait_started_ms = None
     bot._console_ordinary_last_defer = None
     if getattr(bot, "_console_ordinary_stalled", False):
         bot._console_ordinary_stalled = False
         logging.info("[health] ordinary planning recovered | accepted_plan_returned=yes")
+
+    if first_plan and getattr(bot, "_bot_ready", False):
+        logging.info("[boot] first ordinary plan accepted")
 
 
 def observe_ordinary_outer_cycle(bot, now_ms, *, accepted):
@@ -160,6 +164,7 @@ def readiness_payload(bot, now_ms):
     latest_write = getattr(bot, '_console_last_write_ms', None)
     if not isinstance(latest_write, (int, float)) or not 0 < latest_write <= now_ms:
         latest_write = None
+    last_ack = getattr(bot, "_console_last_order_ack_ms", None)
     completed = getattr(bot, '_console_last_cycle_completed_ms', None)
     owner = getattr(bot, '_hsl_live', None)
     ordinary = getattr(owner, '_ordinary', None)
@@ -186,6 +191,9 @@ def readiness_payload(bot, now_ms):
                 last_cycle_completed_age_ms=(now_ms - completed if completed is not None
                                               and 0 < completed <= now_ms else None),
                 last_write_age_ms=(now_ms - latest_write if latest_write is not None else None),
+                last_order_ack_age_ms=(
+                    now_ms - last_ack if type(last_ack) is int and 0 < last_ack <= now_ms else None
+                ),
                 bot_label=token(getattr(bot, 'user', None)), open_order_count=len(orders),
                 close_coverage=counts, account_pending=missing,
                 account_age_ms=max(ages) if len(ages) == 3 else None)

@@ -60,11 +60,11 @@ def test_heartbeat_labels_unknowns_and_preserves_anomalies_with_bounded_rows():
         event_queue_depth=8, event_queue_maxsize=128, event_dropped_total=2,
         event_sink_error_total=1, event_pipeline_worker_alive=False)
     message = format_periodic_health_summary(data)
-    for expected in ('last_loop=26.0s', 'open_orders=4', 'account_age=?',
-                     'summary_late=71.0s', 'ws_reconnects_total=3', 'errors_1h=1/10',
+    assert message.startswith('[health] last_accepted_plan=? last_order_ack=? pos=10L/2S')
+    for expected in ('account_pending=positions', 'execution_errors_1h=1/10',
                      'event_drop=2', 'sink_err=1', 'event_worker=dead'):
         assert expected in message
-    assert 'ord=+' not in message and 'lag=' not in message
+    assert 'rss=' not in message and 'last_loop=' not in message
     lines = split_health_console(message)
     assert all(len('2026-01-01T00:00:00Z WARNING  [hyperliquid] ' + line) <= 240 for line in lines)
     assert 'event_worker=dead' in lines[-1]
@@ -175,7 +175,51 @@ def test_last_write_survives_retry_cache_pruning(monkeypatch):
 def test_health_labels_execution_budget_and_passive_async_failures_separately():
     message = format_periodic_health_summary(dict(errors_last_hour=0, async_errors_total=4,
         last_cycle_completed_age_ms=0, last_write_age_ms=None))
-    assert 'execution_errors_1h=0/10' in message
+    assert 'execution_errors_1h=' not in message
     assert 'async_errors_total=4' in message
-    assert 'cycle_completed_age=0.0s' in message
-    assert 'last_write=?' in message
+    assert 'last_order_ack=?' in message
+
+
+def test_health_ack_tracks_only_acknowledged_connector_results(monkeypatch):
+    from live.event_bus import EventTypes, ReasonCodes
+    from live.event_emitters import emit_execution_order_event
+
+    bot = SimpleNamespace(
+        _emit_live_event=lambda *args, **kwargs: None,
+        _current_live_event_cycle_id=lambda: None,
+    )
+    monkeypatch.setattr("live.event_emitters.utc_ms", lambda: 1_000)
+    emit_execution_order_event(
+        bot, event_type=EventTypes.EXECUTION_CREATE_FAILED, order=None,
+        action="create", status="failed",
+    )
+    assert readiness_payload(bot, 2_000)["last_order_ack_age_ms"] is None
+    emit_execution_order_event(
+        bot, event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED, order=None,
+        action="create", status="succeeded", reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+    )
+    assert "last_order_ack=1.0s" in format_periodic_health_summary(readiness_payload(bot, 2_000))
+
+
+def test_first_plan_is_logged_once_after_startup(caplog):
+    from live.console_health import observe_ordinary_acceptance
+    from live.event_bus import EventTypes, LiveEvent, format_console_event
+
+    assert format_console_event(LiveEvent(EventTypes.BOT_READY)) == "[boot] startup checks complete"
+    bot = SimpleNamespace(_bot_ready=True)
+    with caplog.at_level(logging.INFO):
+        observe_ordinary_acceptance(bot, 1_000)
+        observe_ordinary_acceptance(bot, 2_000)
+    assert caplog.messages.count("[boot] first ordinary plan accepted") == 1
+
+
+def test_startup_default_and_weight_details_stay_at_debug(caplog):
+    from config.log_output import log_config_message
+
+    with caplog.at_level(logging.DEBUG):
+        log_config_message(True, logging.INFO, "Adding missing key -> val %s -> %s to config", "example", 1)
+        log_config_message(True, logging.INFO, "normalizing bot.long.forager.score_weights to relative unit-sum weights")
+        log_config_message(True, logging.WARNING, "example warning")
+    assert [record.levelno for record in caplog.records] == [
+        logging.DEBUG, logging.DEBUG, logging.WARNING,
+    ]

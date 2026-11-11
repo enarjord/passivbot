@@ -2348,20 +2348,6 @@ def _console_health_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
-def _format_console_duration_ms(duration_ms: int) -> str:
-    total_seconds = max(0, duration_ms // 1000)
-    days, remainder = divmod(total_seconds, 86_400)
-    hours, remainder = divmod(remainder, 3_600)
-    minutes, seconds = divmod(remainder, 60)
-    if days:
-        return f"{days}d{hours}h{minutes}m"
-    if hours:
-        return f"{hours}h{minutes}m{seconds}s"
-    if minutes:
-        return f"{minutes}m{seconds}s"
-    return f"{seconds}s"
-
-
 def split_health_console(message: str, prefix: str = "[health]") -> list[str]:
     parts, line = [], prefix
     for word in message.removeprefix(prefix + ' ').split():
@@ -2376,79 +2362,48 @@ def split_health_console(message: str, prefix: str = "[health]") -> list[str]:
 
 def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     """Render the bounded operator projection for a periodic health summary."""
-    uptime_ms = _data_int(data, "uptime_ms")
-    loop_ms = _data_int(data, "last_loop_duration_ms")
+    progress = data.get("ordinary_progress")
+    progress = progress if isinstance(progress, Mapping) else {}
+    accepted_age = _data_number(progress, "last_accepted_age_ms")
+    ack_age = _data_number(data, "last_order_ack_age_ms")
     long_count = _data_int(data, "positions_long")
     short_count = _data_int(data, "positions_short")
     parts = [
-        f"up={_format_console_duration_ms(uptime_ms or 0)}",
-        (
-            f"last_loop={loop_ms / 1000.0:.1f}s"
-            if loop_ms and loop_ms > 0
-            else "last_loop=n/a"
-        ),
+        f"last_accepted_plan={accepted_age / 1000.:.1f}s" if accepted_age is not None else "last_accepted_plan=?",
+        f"last_order_ack={ack_age / 1000.:.1f}s" if ack_age is not None else "last_order_ack=?",
         f"pos={long_count or 0}L/{short_count or 0}S",
     ]
-
-    label = _data_str(data, "bot_label")
-    if label:
-        parts.insert(0, "bot=" + re.sub(r"[^a-zA-Z0-9_.-]", "_", label)[:32])
-    open_count = _data_int(data, "open_order_count")
-    parts.append(
-        f"open_orders={open_count}" if open_count is not None else "open_orders=?"
-    )
-    if data.get("console_readiness") == "unavailable":
-        parts.append("readiness=unavailable")
     coverage = data.get("close_coverage")
     if isinstance(coverage, Mapping):
         parts.append(
-            "close="
-            + "/".join(
+            "close=" + "/".join(
                 f"{key}:{_data_int(coverage, key) or 0}"
                 for key in ("resting", "waiting", "blocked", "unknown")
             )
         )
-    age = _data_number(data, "account_age_ms")
-    parts.append(
-        f"account_age={age / 1000.:.1f}s" if age is not None else "account_age=?"
-    )
+    if progress.get("stalled") is True:
+        stalled_for = _data_number(progress, "without_acceptance_ms")
+        parts.append(
+            "ordinary_progress=stalled"
+            + (f"/{stalled_for / 1000.:.1f}s" if stalled_for is not None else "")
+        )
+    if data.get("console_readiness") == "unavailable":
+        parts.append("readiness=unavailable")
     pending = data.get("account_pending")
     if isinstance(pending, list) and pending:
         parts.append("account_pending=" + ",".join(str(x) for x in pending[:3]))
-    fills_ages = data.get("account_surface_ages_ms", {})
-    if isinstance(fills_ages, Mapping):
-        age = _data_number(fills_ages, "fills")
-        if age is not None:
-            parts.append(f"fills_age={age / 1000.:.1f}s")
     if data.get("fills_pending") is True:
         parts.append("fills_pending=yes")
-    pending_age = _data_number(data, "ordinary_pending_age_ms")
-    if pending_age is not None:
-        parts.append(f"ordinary_pending={pending_age / 1000.:.1f}s")
-    ordinary_progress = data.get("ordinary_progress")
-    if isinstance(ordinary_progress, Mapping):
-        age = _data_number(ordinary_progress, "last_accepted_age_ms")
-        parts.append(
-            f"ordinary_accepted_age={age / 1000.:.1f}s"
-            if age is not None else "ordinary_accepted_age=?"
-        )
-        if ordinary_progress.get("stalled") is True:
-            stalled_for = _data_number(ordinary_progress, "without_acceptance_ms")
-            parts.append(
-                "ordinary_progress=stalled"
-                + (f"/{stalled_for / 1000.:.1f}s" if stalled_for is not None else "")
-            )
-    ordinary_status = data.get("ordinary_plan_status")
-    if ordinary_status in {"current", "stale", "not_evaluated", "diagnostic_unavailable"}:
-        age = _data_number(data, "ordinary_plan_age_ms")
-        parts.append(f"ordinary_computed={ordinary_status}" + (f"/{age / 1000.:.1f}s" if age is not None else ""))
-        restricted = _data_int(data, "ordinary_restricted_held_count")
-        parts.append(f"ordinary_held_restricted={restricted}" if restricted is not None else "ordinary_held_restricted=?")
+    restricted = _data_int(data, "ordinary_restricted_held_count")
+    if restricted:
+        parts.append(f"ordinary_held_restricted={restricted}")
         samples = data.get("ordinary_restricted_sample")
         if isinstance(samples, list) and samples and isinstance(samples[0], Mapping):
             row = samples[0]
-            label = ":".join(re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get(key, "?")))[:32]
-                             for key in ("symbol", "pside", "effective_mode"))
+            label = ":".join(
+                re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get(key, "?")))[:32]
+                for key in ("symbol", "pside", "effective_mode")
+            )
             parts.append("ordinary_scope=" + label)
             reason = row.get("hsl_unavailable_reason")
             if reason:
@@ -2465,32 +2420,13 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
         row = samples[0]
         parts.append("wait_scope=" + re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get("symbol", "?")))[:32]
                      + ":" + re.sub(r"[^a-zA-Z0-9_]", "_", str(row.get("phase", "?")))[:24])
-    for field, label in (("last_cycle_completed_age_ms", "cycle_completed_age"), ("last_write_age_ms", "last_write")):
-        age = _data_number(data, field)
-        parts.append(f"{label}={age / 1000.:.1f}s" if age is not None else f"{label}=?")
-    cpu = _data_number(data, "cpu_percent")
-    if cpu is not None:
-        parts.append(f"cpu={cpu:.0f}%")
-
     errors = _data_int(data, "errors_last_hour")
-    error_budget_max = _data_int(data, "error_budget_max")
-    parts.append(f"execution_errors_1h={errors or 0}/{error_budget_max or 10}")
+    if errors:
+        error_budget_max = _data_int(data, "error_budget_max")
+        parts.append(f"execution_errors_1h={errors}/{error_budget_max or 10}")
     async_errors = _data_int(data, "async_errors_total")
     if async_errors:
         parts.append(f"async_errors_total={async_errors}")
-
-    ws = _data_int(data, "ws_reconnects")
-    if ws:
-        parts.append(f"ws_reconnects_total={ws}")
-    rate_limits = _data_int(data, "rate_limits")
-    if rate_limits:
-        parts.append(f"rate_limits_total={rate_limits}")
-    rss_bytes = _data_int(data, "rss_bytes")
-    if rss_bytes is not None:
-        parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
-    summary_lag_ms = _data_int(data, "health_summary_lag_ms")
-    if summary_lag_ms:
-        parts.append(f"summary_late={summary_lag_ms / 1000.0:.1f}s")
 
     slow_phases = data.get("slow_phases")
     if isinstance(slow_phases, list):
@@ -2505,14 +2441,6 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
         if shown:
             parts.append("slow=" + ",".join(shown))
 
-    queue_depth = _data_int(data, "event_queue_depth")
-    if queue_depth:
-        queue_max = _data_int(data, "event_queue_maxsize")
-        parts.append(
-            f"event_q={queue_depth}/{queue_max}"
-            if queue_max
-            else f"event_q={queue_depth}"
-        )
     dropped = _data_int(data, "event_dropped_total")
     if dropped:
         parts.append(f"event_drop={dropped}")
@@ -3446,6 +3374,8 @@ def format_console_event(event: LiveEvent) -> str:
         and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY
     ):
         return format_periodic_health_summary(event.data)
+    if event.event_type == EventTypes.BOT_READY:
+        return "[boot] startup checks complete"
     if event.event_type == EventTypes.FILL_INGESTED:
         return _format_console_fill_ingested(event)
     if event.event_type == EventTypes.FILLS_INGESTED_SUMMARY:

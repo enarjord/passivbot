@@ -35,6 +35,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
+- Make live health summaries easier to scan and log the first accepted plan separately from startup checks.
+
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
 
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.

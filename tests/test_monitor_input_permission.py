@@ -126,7 +126,6 @@ def test_last_ordinary_manual_is_separate_from_fast_green_and_market_tradable():
     assert section["restricted_held_count"] == 1
     health = readiness_payload(bot, 1200)
     console = format_periodic_health_summary(health)
-    assert "ordinary_computed=current/0.2s" in console
     assert "ordinary_held_restricted=1" in console
     assert "ordinary_scope=BTC:long:manual" in console
     assert "ordinary_hsl_cause=current_balance_unavailable" in console
@@ -343,7 +342,7 @@ def test_balance_receipt_expiry_is_retained_not_renewed_from_live_ledger():
     assert old["input_expires_at_ms"] == 1100
     assert old["balance_observed_at_ms"] == 100
     assert old["stale_reasons"] == ["input_expired"]
-    assert "ordinary_computed=stale" in format_periodic_health_summary(readiness_payload(bot, 1200))
+    assert readiness_payload(bot, 1200)["ordinary_plan_status"] == "stale"
     bot._hsl_planning_wave = replace(bot._hsl_planning_wave, balance_observed_ms=1200,
         captured_ms=1200, position_observed_ms=1200, mark_observed_ms=(1200,))
     ordinary.observe_plan(bot, diagnostics, mapping, now_ms=1200)
@@ -675,7 +674,7 @@ def test_ordinary_progress_alert_requires_continued_cycles_and_reports_recovery(
     progress = ordinary_progress_payload(bot, 814_000)
     assert progress["ordinary_progress"]["last_defer"] is None
     assert not progress["ordinary_progress"]["stalled"]
-    assert "ordinary_accepted_age=1.0s" in format_periodic_health_summary(progress)
+    assert "last_accepted_plan=1.0s" in format_periodic_health_summary(progress)
 
 
 def test_other_execution_owner_omits_optional_ordinary_path_flag():
