@@ -223,9 +223,17 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
         assert gate["steps"][0]["run"] == 'test "$RESULT" = success'
     rust = main["jobs"]["rust"]
     assert rust["name"] == "Rust"
-    assert [step["run"] for step in rust["steps"] if "run" in step] == [
+    rust_commands = [step for step in rust["steps"] if "run" in step]
+    assert [step["run"] for step in rust_commands if "continue-on-error" not in step] == [
         "cargo test --locked --no-default-features", "cargo check --locked --tests",
     ]
+    assert [step["run"] for step in rust_commands if step.get("continue-on-error") == "true"] == [
+        "cargo fmt --all -- --check", "cargo clippy --locked --all-targets",
+    ]
+    lint = main["jobs"]["python_lint"]
+    assert lint["name"] == "Python undefined names"
+    assert "ruff check --target-version py312 --select F821 src tests .github/ci" in lint["steps"][-1]["run"]
+    assert "continue-on-error" not in lint["steps"][-1]
     shards = shared["jobs"]["shards"]
     assert shards["timeout-minutes"] == "90"
     assert shards["strategy"]["fail-fast"] == "false"
