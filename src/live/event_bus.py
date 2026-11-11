@@ -3382,9 +3382,7 @@ def _hsl_input_console(data: Mapping) -> tuple[Mapping | None, str | None]:
     return row, _hsl_candle_source_console(data)
 
 
-def _format_hsl_console(event: LiveEvent) -> str:
-    data = event.data
-
+def format_hsl_status_console(data: Mapping) -> str:
     # Explicit input quality rather than an ambiguous generic "degraded" label.
     # Cycle correlation and individual estimation reasons remain in the event.
     def token(value: Any, limit: int) -> str:
@@ -3399,12 +3397,11 @@ def _format_hsl_console(event: LiveEvent) -> str:
 
     parts = [
         "[risk] HSL",
-        token(data.get("observation_status"), 22),
+        "observation=" + token(data.get("observation_status"), 22),
         "mode=" + token(data.get("signal_mode"), 13),
-        *(
-            f"{key}={count(key)}"
-            for key in ("green", "red", "inactive", "unavailable", "estimated")
-        ),
+        *(f"{key}={count(key)}" for key in ("green", "red", "inactive")),
+        f"unavailable_scopes={count('unavailable')}",
+        f"estimated={count('estimated')}",
     ]
     row, input_cause = _hsl_input_console(data)
     if input_cause:
@@ -3440,7 +3437,7 @@ def format_console_event(event: LiveEvent) -> str:
 
             return "\n".join(format_sides(sides))
     if event.event_type == EventTypes.HSL_STATUS and event.data.get("engine") == "hsl":
-        return _format_hsl_console(event)
+        return format_hsl_status_console(event.data)
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
         and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY
@@ -3501,6 +3498,25 @@ def format_console_event(event: LiveEvent) -> str:
     return base
 
 
+def hsl_observation_can_be_superseded(data: Mapping) -> bool:
+    """Only replace historical freshness changes without RED or an account outage."""
+    counts = data.get("counts")
+    stale_reasons = data.get("stale_reasons")
+    return (
+        data.get("observation_status") == "stale"
+        and data.get("account_unavailable") == []
+        and isinstance(counts, Mapping)
+        and type(counts.get("red")) is int
+        and counts["red"] == 0
+        and isinstance(stale_reasons, list)
+        and bool(stale_reasons)
+        and all(
+            reason in ("input_expired", "account_generation_changed")
+            for reason in stale_reasons
+        )
+    )
+
+
 def _hsl_console_state(event: LiveEvent) -> tuple | None:
     """Opt in only complete producer-owned state; old/unknown payloads stay visible."""
     if event.event_type != EventTypes.HSL_STATUS or event.data.get("engine") != "hsl":
@@ -3539,23 +3555,23 @@ class ConsoleSummarySink:
     def write(self, event: LiveEvent) -> str | None:
         key = (event.exchange, event.user, event.bot_id, event.event_type)
         state = _hsl_console_state(event)
-        if state is not None and event.data.get("console_replaced_observation") is True:
-            counts = event.data.get("counts", {})
-            if (
-                event.data.get("observation_status") == "stale"
-                and counts.get("red") == 0
-                and counts.get("unavailable") == 0
-            ):
-                count, age = self._replaced_hsl.get(key, (0, 0))
-                self._replaced_hsl[key] = (
-                    min(count + 1, 999999),
-                    max(age, _data_int(event.data, "age_ms") or 0),
-                )
-                self._replaced_hsl.move_to_end(key)
-                while len(self._replaced_hsl) > 256:
-                    self._replaced_hsl.popitem(last=False)
-                self.logger.log(logging.DEBUG, format_console_event(event))
-                return None
+        if (
+            state is not None
+            and event.level == "warning"
+            and event.status == "degraded"
+            and event.data.get("console_replaced_observation") is True
+            and hsl_observation_can_be_superseded(event.data)
+        ):
+            count, age = self._replaced_hsl.get(key, (0, 0))
+            self._replaced_hsl[key] = (
+                min(count + 1, 999999),
+                max(age, _data_int(event.data, "age_ms") or 0),
+            )
+            self._replaced_hsl.move_to_end(key)
+            while len(self._replaced_hsl) > 256:
+                self._replaced_hsl.popitem(last=False)
+            self.logger.log(logging.DEBUG, format_console_event(event))
+            return None
         message = format_console_event(event)
         if state is not None and key in self._replaced_hsl:
             count, age = self._replaced_hsl[key]
@@ -3564,7 +3580,7 @@ class ConsoleSummarySink:
         def emit(text):
             if state is not None:
                 main, separator, detail = text.partition(' replaced_samples=')
-                # Equivalent GREEN replacement churn remains durable detail.
+                # Equivalent historical replacement churn remains durable detail.
                 # Do not spend another INFO record on unchanged observation ages.
                 for line in split_health_console(main, '[risk]'):
                     self.logger.log(_logging_level(event.level), line)
