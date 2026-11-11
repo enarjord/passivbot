@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Handle SIGTERM in live runs and return a failure status for fatal errors and exhausted restart
+  budgets. The shipped Compose configurations allow 60 seconds for shutdown and leave stopped
+  containers for operator review.
+
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
   40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains

@@ -523,7 +523,7 @@ def _force_exit_after_repeated_signal(sig):
 
 
 def signal_handler(sig, frame):
-    """Handle SIGINT by signalling the running bot to stop gracefully."""
+    """Request graceful shutdown for a running bot."""
     bot = globals().get("bot")
     if bot is not None and (
         getattr(bot, "stop_signal_received", False)
@@ -550,9 +550,6 @@ def signal_handler(sig, frame):
             loop.call_soon_threadsafe(lambda: None)
     elif loop is not None:
         loop.call_soon_threadsafe(loop.stop)
-
-
-signal.signal(signal.SIGINT, signal_handler)
 
 
 def get_function_name():
@@ -20571,15 +20568,41 @@ async def main():
     global bot
     bot = None
     context = {"stage": "cli", "incident_id": f"process-{int(utc_ms())}"}
+    loop = asyncio.get_running_loop()
+    live_task = asyncio.current_task()
+    shutdown_requested = False
+
+    def request_shutdown(sig):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            _force_exit_after_repeated_signal(sig)
+        shutdown_requested = True
+        if bot is None:
+            live_task.cancel()
+        else:
+            signal_handler(sig, None)
+
+    def schedule_shutdown(sig, frame):
+        loop.call_soon_threadsafe(request_shutdown, sig)
+
+    previous_handlers = {}
     try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[sig] = signal.signal(sig, schedule_shutdown)
         await _run_live(context)
+    except asyncio.CancelledError:
+        if not shutdown_requested:
+            raise
+        logging.info("[shutdown] stopped during %s", context["stage"])
     except Exception as exc:
-        # Pre-loop failures remain terminal. SystemExit prevents a second, raw
-        # interpreter traceback without changing the unsuccessful exit status.
+        # Avoid a second, raw interpreter traceback for startup failures.
         _log_process_failure(
             "passivbot startup error", exc, action="stop", context=context
         )
         raise SystemExit(1) from None
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 async def _run_live(startup_context: dict):
@@ -20835,30 +20858,23 @@ async def _run_live(startup_context: dict):
             logging.info("Bot stopped via signal; exiting main loop.")
             break
         if fatal_error is not None:
-            break
-
-        logging.info(f"restarting bot...")
-        startup_context["stage"] = "restart_cooldown"
-        print()
-        for z in range(cooldown_secs, -1, -1):
-            if bot is not None and getattr(bot, "stop_signal_received", False):
-                break
-            print(f"\rcountdown {z}...  ")
-            await asyncio.sleep(1)
-        print()
-        if bot is not None and getattr(bot, "stop_signal_received", False):
-            logging.info(
-                "Bot stopped via signal during restart cooldown; exiting main loop."
-            )
-            break
+            raise SystemExit(1)
 
         startup_context["stage"] = "restart_budget"
-        restarts.append(utc_ms())
-        restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
+        now_ms = utc_ms()
+        restarts = [x for x in restarts if x > now_ms - 1000 * 60 * 60 * 24]
         max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))
-        if len(restarts) > max_restarts:
-            _log_restart_budget_exhausted(restarts, max_restarts, failure_state)
-            break
+        if len(restarts) >= max_restarts:
+            _log_restart_budget_exhausted([*restarts, now_ms], max_restarts, failure_state)
+            raise SystemExit(1)
+
+        startup_context["stage"] = "restart_cooldown"
+        # The old bot is already closed. A stop during this wait cancels the
+        # lifecycle task without starting a second shutdown on that instance.
+        bot = None
+        logging.info("[restart] waiting %ds before constructing a replacement", cooldown_secs)
+        await asyncio.sleep(cooldown_secs)
+        restarts.append(utc_ms())
 
 
 if __name__ == "__main__":
