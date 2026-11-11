@@ -1668,6 +1668,15 @@ class BitunixOrderStream:
     KLINE_QUEUE_SIZE = 4
     MAX_CONSECUTIVE_MALFORMED_KLINES = 5
     KLINE_SILENCE_TIMEOUT_SECONDS = 45.0
+    MALFORMED_KLINE_LOG_INTERVAL_SECONDS = 300.0
+    MALFORMED_KLINE_REASONS = {
+        "Bitunix kline websocket has inconsistent OHLC values": "inconsistent_ohlc",
+        "Bitunix kline websocket has invalid price or volume": "invalid_price_or_volume",
+        **{
+            f"Bitunix kline websocket invalid {field}": "invalid_" + field.replace(" ", "_")
+            for field in ("open", "high", "low", "close", "base volume")
+        },
+    }
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
@@ -1681,6 +1690,33 @@ class BitunixOrderStream:
         self._ohlcv_queues: dict[str, asyncio.Queue] = {}
         self._ohlcv_fallback_pending: set[str] = set()
         self._ohlcv_closed = False
+        self._last_malformed_kline_warning: float | None = None
+        self._malformed_kline_drops = 0
+        self._malformed_kline_fallbacks = 0
+        self._malformed_kline_samples: set[str] = set()
+
+    def _log_malformed_kline(self, symbol: str, reason: str, *, fallback: bool) -> None:
+        """Summarize dropped frames across this stream's public sockets."""
+        self._malformed_kline_drops += 1
+        self._malformed_kline_fallbacks += int(fallback)
+        if len(self._malformed_kline_samples) < 3:
+            self._malformed_kline_samples.add(symbol)
+        now = time.monotonic()
+        last = self._last_malformed_kline_warning
+        if last is not None and now - last < self.MALFORMED_KLINE_LOG_INTERVAL_SECONDS:
+            return
+        logging.warning(
+            "[bitunix] [candle] malformed kline updates dropped | "
+            "drops=%d fallback_requests=%d latest_reason=%s sample=%s",
+            self._malformed_kline_drops,
+            self._malformed_kline_fallbacks,
+            reason,
+            ",".join(sorted(self._malformed_kline_samples)),
+        )
+        self._last_malformed_kline_warning = now
+        self._malformed_kline_drops = 0
+        self._malformed_kline_fallbacks = 0
+        self._malformed_kline_samples.clear()
 
     async def _receive_with_keepalive(
         self, ws: aiohttp.ClientWebSocketResponse
@@ -2111,28 +2147,20 @@ class BitunixOrderStream:
                             malformed_counts[malformed_symbol] = (
                                 malformed_counts.get(malformed_symbol, 0) + 1
                             )
+                            reason = self.MALFORMED_KLINE_REASONS.get(str(exc), "invalid_kline_schema")
                             if malformed_symbol not in malformed_warned:
-                                reasons = {
-                                    "Bitunix kline websocket has inconsistent OHLC values": "inconsistent_ohlc",
-                                    "Bitunix kline websocket has invalid price or volume": "invalid_price_or_volume",
-                                    **{
-                                        f"Bitunix kline websocket invalid {field}": "invalid_" + field.replace(" ", "_")
-                                        for field in ("open", "high", "low", "close", "base volume")
-                                    },
-                                }
-                                logging.warning(
-                                    "[bitunix] [candle] malformed kline update dropped "
-                                    "| symbol=%s reason=%s action=drop_update "
-                                    "rest_fallback_after=%d",
+                                logging.debug(
+                                    "[bitunix] [candle] malformed kline update dropped | symbol=%s reason=%s",
                                     malformed_symbol,
-                                    reasons.get(str(exc), "invalid_kline_schema"),
-                                    self.MAX_CONSECUTIVE_MALFORMED_KLINES,
+                                    reason,
                                 )
                                 malformed_warned.add(malformed_symbol)
-                            if (
+                            fallback = (
                                 malformed_counts[malformed_symbol]
                                 >= self.MAX_CONSECUTIVE_MALFORMED_KLINES
-                            ):
+                            )
+                            self._log_malformed_kline(malformed_symbol, reason, fallback=fallback)
+                            if fallback:
                                 self._queue_ohlcv_fallback(
                                     malformed_symbol,
                                     NetworkError(

@@ -20,6 +20,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Skip the canonical candle index lookup when a websocket update has no finalized candle to process.
 
+- Aggregate repeated Bitunix malformed candle warnings across websocket subscriptions.
+
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 
