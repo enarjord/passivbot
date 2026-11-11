@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show a compact Pareto CLI comparison with objective values in readable units, the next-ranked
+  alternative, and copyable backtest and browser commands. Use `--front` to inspect objective
+  ranges and leaders, or `--list-metrics` to find exact metric keys and units.
+
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed

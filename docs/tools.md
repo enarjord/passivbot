@@ -29,11 +29,15 @@ optimizer-style limit expressions, and selects one candidate using a named decis
 If you omit the path entirely, it defaults to the newest local `optimize_results/.../pareto`
 directory by lexicographic run-directory name, considering only runs whose `pareto/`
 subdirectory contains at least one `*.json` candidate. If you point it at an optimize run
-directory instead of the nested `pareto/` directory, it resolves that automatically.
+directory instead of the nested `pareto/` directory, it resolves that automatically. Pass a
+candidate JSON to inspect a single file. CLI limits apply only when supplied on the command
+line.
 
 ```shell
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto
+passivbot tool pareto optimize_results/.../pareto --front
+passivbot tool pareto optimize_results/.../pareto --list-metrics
 passivbot tool pareto optimize_results/.../pareto -m reference \
   --target cagr_fraction_strategy_equity=0.10 \
   --target drawdown_max_fraction_strategy_equity=0.25
@@ -96,10 +100,22 @@ use that scenario's scalar value; set `scenario=null` on a limit to reduce the f
 
 `passivbot tool pareto-explorer` is a CLI alias for the same tool.
 
-The output shows the best observed value on each active objective, the top five candidates by
-default, and how their raw objectives differ from the selected member. Use `--show-top N` to
-change the shortlist size. A positive delta means the alternative has a higher raw value.
-The objective's direction determines whether that is an improvement.
+The terminal report shows the selected candidate and the next-ranked alternative by default.
+Objective arrows show the direction used for ranking. Values are absolute and use readable units,
+including percentages for fractions. The best observed values can come from different files.
+`--show-top N` includes the selected member in the count. Use `--show-top 1` for just the selected
+candidate. JSON and plots continue to include five ranked candidates by default. Their raw
+objective deltas are alternative minus selected, in the metric's original units.
+
+The report prints shell-ready commands to backtest the selected file and open the same source
+and selection preferences in `pareto-plot`. The replay command includes the suite scenario when
+one was selected. The plot command spells out `--objectives`, since `-o` names an output file in
+`pareto-plot`.
+
+Use `--front` to see active-front ranges and the file at each favorable endpoint without ranking.
+It accepts `--objectives`, `--scenario` and limits. Use `--list-metrics` to see exact metric keys,
+raw units, directions and value coverage for the source, with optional scenario and limits.
+Use raw fractions for thresholds, targets and scales. Enter `0.05` for a displayed `5%`.
 
 New Pareto result filenames start with 24 hex characters of the full entry hash. If two entries
 would use the same filename, the writer uses a longer prefix for the new entry. The CLI and HTML
@@ -163,7 +179,8 @@ Weighted methods probe transfers of one percentage point of total weight between
 active objectives by default. Set `--sensitivity-weight-fraction` to change the transfer
 or to `0` to disable these checks. For aspiration, `--sensitivity-target-scales` also
 moves each target by the specified multiple of its scale in both directions. The probes
-keep the ranked pool fixed. They report preference changes that would change the winner.
+keep the ranked pool fixed. The report gives the number of checks that changed the pick and one
+example when a check changed it. Use `--json` for every check.
 
 ### Attach native CPU qualification evidence
 

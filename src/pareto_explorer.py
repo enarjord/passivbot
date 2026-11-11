@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -20,7 +21,11 @@ from config.limits import (
     resolve_reducer_mode,
     resolve_limit_basis,
 )
-from config.metrics import CORE_METRIC_DEFINITION_VERSION, resolve_metric_value
+from config.metrics import (
+    CORE_METRIC_CATALOG,
+    CORE_METRIC_DEFINITION_VERSION,
+    resolve_metric_value,
+)
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
@@ -141,38 +146,6 @@ def _method_explanation(method: str) -> str:
     return METHOD_DESCRIPTIONS.get(method, "").strip()
 
 
-def _selection_rationale_lines(result: SelectionResult) -> List[str]:
-    method = result.method
-    if method == "knee":
-        mode = str(result.details.get("knee_mode", "")).strip()
-        if mode == "hyperplane_distance":
-            return ["Why this winner: strongest balanced compromise away from the extreme-anchor hyperplane."]
-        if mode == "maximin_fallback":
-            return ["Why this winner: strongest worst-objective utility among retained candidates."]
-        return ["Why this winner: only retained candidate."]
-    if method == "reference":
-        return ["Why this winner: smallest weighted distance to the supplied target utilities."]
-    if method == "aspiration":
-        return ["Why this winner: smallest worst weighted aspiration shortfall."]
-    if method == "ideal":
-        return ["Why this winner: smallest weighted distance to the observed ideal point on this front."]
-    if method == "utility":
-        return ["Why this winner: highest weighted normalized utility after objective scaling."]
-    if method == "lexicographic":
-        return ["Why this winner: best on the first priority objective, then tie-broken by the next priorities."]
-    if method == "outranking":
-        return ["Why this winner: strongest net pairwise preference flow against the other retained candidates."]
-    return []
-
-
-def _summarize_anchor_files(anchor_files: Sequence[str], *, preview: int = 4) -> str:
-    if len(anchor_files) <= preview:
-        return ", ".join(str(item) for item in anchor_files)
-    shown = ", ".join(str(item) for item in list(anchor_files)[:preview])
-    hidden = len(anchor_files) - preview
-    return f"{shown} ... (+{hidden} more)"
-
-
 def _display_path(path: Path | str, *, base_dir: Path | None = None) -> str:
     resolved = Path(path).resolve()
     search_bases: List[Path] = []
@@ -216,7 +189,7 @@ def _render_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> List
     return lines
 
 
-def _format_limit_entry(entry: Mapping[str, Any]) -> str:
+def _format_limit_entry(entry: Mapping[str, Any], *, include_scope: bool = False) -> str:
     metric = str(entry.get("metric", "")).strip()
     mode = str(entry.get("penalize_if", "")).strip().lower()
     value = entry.get("value")
@@ -229,6 +202,14 @@ def _format_limit_entry(entry: Mapping[str, Any]) -> str:
         "equal_to": "==",
         "not_equal": "!=",
     }
+    if include_scope:
+        scope = []
+        if "reducer" in entry:
+            scope.append(f"{entry['reducer']} reducer")
+        if "scenario" in entry:
+            scope.append(f"scenario {entry['scenario'] or 'all'}")
+        if scope:
+            metric += f" ({', '.join(scope)})"
     if mode in op_map and value is not None:
         return f"{metric} {op_map[mode]} {value}"
     if mode == "outside_range" and isinstance(range_value, Sequence) and len(range_value) == 2:
@@ -251,20 +232,13 @@ def _format_metric_value(value: Any) -> str:
     return str(value)
 
 
-def _score_label_and_value(result: SelectionResult) -> tuple[str, str]:
+def _score_label_and_value(result: SelectionResult) -> tuple[str, float]:
     if result.method in {"ideal", "reference"}:
-        return "Distance", f"{abs(float(result.score)):.6f}"
+        return "distance", abs(result.score)
     if result.method == "aspiration":
-        return "Worst shortfall", f"{abs(float(result.score)):.6f}"
-    if result.method == "utility":
-        return "Utility score", f"{float(result.score):.6f}"
-    if result.method == "outranking":
-        return "Net flow", f"{float(result.score):.6f}"
-    if result.method == "lexicographic":
-        return "Lexicographic score", f"{float(result.score):.6f}"
-    if result.method == "knee":
-        return "Knee score", f"{float(result.score):.6f}"
-    return "Score", f"{float(result.score):.6f}"
+        return "worst shortfall", abs(result.score)
+    labels = {"utility": "utility score", "outranking": "net flow", "knee": "knee score"}
+    return labels[result.method], result.score
 
 
 def resolve_pareto_directory(path: str | os.PathLike[str]) -> Path:
@@ -391,9 +365,13 @@ def add_selection_arguments(
     parser.add_argument(
         "--show-top",
         type=int,
-        default=5,
         metavar="N",
-        help="Show the top N ranked candidates. Default: 5.",
+        help=(
+            "Show N ranked candidates including the selected file. "
+            "Default: 2 in terminal reports, 5 in JSON."
+            if objective_short
+            else "Include N ranked candidates in the selection record, counting the selected file. Default: 5."
+        ),
     )
     parser.add_argument(
         "--scale",
@@ -426,8 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool pareto",
         description=(
-            "Select a single candidate from a Pareto front directory and optionally copy the "
-            "winner or filtered set."
+            "Summarize a saved Pareto front and select a candidate using its scoring objectives "
+            "unless you override them. CLI limits are opt-in."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
@@ -443,6 +421,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  -l 'cagr_fraction_strategy_equity>0.0'\n"
             "  -l 'drawdown_max_fraction_strategy_equity<=0.35'\n"
             "  --limits '[{\"metric\":\"drawdown_max_fraction_strategy_equity\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
+            "Fractional inputs use raw units (0.05 means 5%). Use --list-metrics for exact keys.\n"
+            "Use an explicit path to revisit a run, or freeze the directory for repeatable selection.\n\n"
             "Outputs:\n"
             "  -s configs/selected.local.json          Copy the selected member.\n"
             "  -f optimize_results/filtered_pareto     Copy members retained after limits.\n"
@@ -453,8 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         type=str,
         help=(
-            "Pareto directory or optimization run directory. Defaults to the "
-            "lexicographically latest optimize_results/<run>/pareto with JSON candidates."
+            "Pareto directory, optimization run directory, or candidate JSON. Defaults to the "
+            "latest populated optimize_results/<run>/pareto by directory name."
         ),
     )
     add_selection_arguments(parser, objective_short=True)
@@ -478,7 +458,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Without limits, copy the full loaded set."
         ),
     )
-    parser.add_argument(
+    view_group = parser.add_mutually_exclusive_group()
+    view_group.add_argument(
+        "--front",
+        action="store_true",
+        help="Show active-front ranges and objective leaders without selecting a candidate.",
+    )
+    view_group.add_argument(
+        "--list-metrics",
+        action="store_true",
+        help="List saved metric keys, raw units, directions, and value coverage.",
+    )
+    view_group.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -1680,216 +1671,176 @@ def select_candidate(
     return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
 
 
-def format_selection_result(
-    pareto_dir: Path,
+_METRIC_LABELS = {
+    "backtest_completion_fraction": "Backtest completion",
+    "cagr_fraction_strategy_equity": "CAGR",
+    "cagr_fraction_strategy_equity_ew": "Age-weighted CAGR",
+    "drawdown_max_fraction_strategy_equity": "Max drawdown",
+    "fills_gap_max_days": "Max gap between fills",
+    "fills_gap_time_weighted_mean_hours": "Weighted gap between fills",
+    "gross_exposure_max_ratio_strategy_equity": "Max gross exposure",
+    "gross_exposure_rms_ratio_strategy_equity": "RMS gross exposure",
+    "gross_turnover_ratio_per_day": "Gross turnover",
+    "hsl_execution_episode_count": "HSL execution episodes",
+    "hsl_panic_episode_loss_max_fraction": "Max HSL episode loss",
+    "hsl_panic_episode_loss_mean_fraction": "Mean HSL episode loss",
+    "hsl_red_time_fraction": "Time in HSL red",
+    "hsl_triggers_per_year": "HSL triggers",
+    "loss_profit_ratio": "Loss/profit ratio",
+    "omega_ratio_strategy_equity": "Omega ratio",
+    "pain_index_fraction_strategy_equity": "Pain index",
+    "peak_recovery_max_days_strategy_equity": "Max equity recovery",
+    "position_exposure_utilization_rms_ratio_long": "RMS long utilization",
+    "position_exposure_utilization_rms_ratio_short": "RMS short utilization",
+    "position_held_max_days": "Max hold time",
+    "position_held_time_weighted_mean_hours": "Weighted hold time",
+    "sharpe_ratio_strategy_equity": "Sharpe ratio",
+    "short_net_profit_contribution_fraction": "Short net profit contribution",
+    "sortino_ratio_strategy_equity": "Sortino ratio",
+    "ulcer_index_fraction_strategy_equity": "Ulcer index",
+    "volatility_annual_fraction_strategy_equity": "Annualized volatility",
+}
+_METRIC_UNIT_SUFFIXES = {"hours": " h", "days": " d", "per_year": "/yr", "per_day": "/d"}
+
+
+def _format_objective_value(metric: str, value: float) -> str:
+    if not math.isfinite(value):
+        return "+inf" if value > 0 else "-inf"
+    unit = CORE_METRIC_CATALOG.get(metric, {}).get("unit")
+    if unit == "fraction":
+        if abs(value) > 1e306:
+            return f"{value:.4g} (fraction)"
+        if 0 < abs(value) < 0.00005 or abs(value) >= 10_000:
+            return f"{value * 100:.4g}%"
+        return f"{value:.2%}"
+    return f"{value:.4g}{_METRIC_UNIT_SUFFIXES.get(unit, '')}"
+
+
+def _report_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
     *,
-    candidates: Sequence[ParetoCandidate],
-    loaded_count: int,
-    retained_count: int,
-    scenario: Optional[str] = None,
-    scenario_front_count: Optional[int] = None,
-    active_front_count: Optional[int] = None,
-    active_limits: Sequence[Dict[str, Any]],
-    result: SelectionResult,
-    record: Mapping[str, Any],
-) -> str:
-    labels = record["candidate_labels"]
-    selected_filename = result.candidate.filename
-    score_label, score_value = _score_label_and_value(result)
-    selected_display_path = _display_path(result.candidate.path)
-    backtest_command = f"passivbot backtest {selected_display_path}"
-    lines: List[str] = []
-    summary_rows = [
-        ("Pareto directory", _display_path(pareto_dir)),
-        ("Loaded candidates", str(loaded_count)),
-        ("Retained after limits", str(retained_count)),
-        ("Active front", str(len(candidates) if active_front_count is None else active_front_count)),
-    ]
-    if result.method == "reference":
-        summary_rows.extend([
-            ("Ranked candidates", str(len(candidates))),
-            ("Normalization", "post-limit pool (reference targets)"),
-        ])
-    if scenario is not None:
-        summary_rows.extend(
-            [
-                ("Scenario", scenario),
-                ("Scenario front", str(scenario_front_count or 0)),
-                ("Front scope", "saved aggregate Pareto members"),
-            ]
-        )
-    summary_rows.extend(
-        [
-            ("Applied limits", str(len(active_limits))),
-            ("Method", result.method),
-            (score_label, score_value),
-            ("Selected file", labels.get(selected_filename, selected_filename)),
-            ("Selected path", selected_display_path),
-        ]
-    )
-    lines.extend(_render_key_value_box(summary_rows))
-    if scenario is not None:
-        lines.append(
-            "Scenario-front note: rebuilt only from saved aggregate Pareto members; "
-            "candidates discarded by the suite optimizer are not recoverable here."
-        )
-    lines.append(f"Backtest command: {backtest_command}")
-    lines.append(f"Method summary: {_method_explanation(result.method)}")
-    active_metrics = result.details.get("active_metrics")
-    objective_goals = {spec["metric"]: spec["goal"] for spec in record["objectives"]}
-    if isinstance(active_metrics, list) and active_metrics:
-        lines.append("Active objectives:")
-        objective_rows = []
-        for metric in active_metrics:
-            goal = objective_goals[metric]
-            objective_rows.append([str(metric), str(goal)])
-        lines.extend(_render_table(["metric", "goal"], objective_rows))
-    if active_limits:
-        lines.append("Limit filters:")
-        for entry in active_limits:
-            lines.append(f"  - {_format_limit_entry(entry)}")
-    weights = result.details.get("weights")
-    targets = result.details.get("targets")
-    if isinstance(targets, Mapping) and targets:
-        lines.append("Aspiration targets:" if result.method == "aspiration" else "Reference targets:")
-        for metric, value in targets.items():
-            lines.append(f"  - {metric} = {_format_metric_value(value)}")
-    scales = result.details.get("scales")
-    if scales:
-        lines.append("Fixed scales in raw metric units:")
-        for metric, value in scales.items():
-            lines.append(f"  - {metric} = {_format_metric_value(value)}")
-    shortfalls = result.details.get("shortfalls")
-    if shortfalls:
-        lines.append("Directional aspiration shortfalls in scale units:")
-        for metric, value in shortfalls.items():
-            lines.append(f"  - {metric} = {_format_metric_value(value)}")
-    priority = result.details.get("priority")
-    if isinstance(priority, list) and priority:
-        lines.append(f"Priority order: {', '.join(str(metric) for metric in priority)}")
-    knee_mode = result.details.get("knee_mode")
-    if isinstance(knee_mode, str) and knee_mode:
-        lines.append(f"Knee mode: {knee_mode}")
-    anchor_files = result.details.get("anchor_files")
-    if isinstance(anchor_files, list) and anchor_files:
-        anchor_labels = [labels.get(name, name) for name in anchor_files]
-        lines.append(
-            f"Anchor files ({len(anchor_labels)}): {_summarize_anchor_files(anchor_labels)}"
-        )
-    lines.extend(_selection_rationale_lines(result))
-    selected_utilities = result.details.get("selected_utilities")
-    utility_contributions = result.details.get("utility_contributions")
-    target_utilities = result.details.get("target_utilities")
-    distance_components = result.details.get("distance_components")
-    ideal_point = result.details.get("ideal_point")
-    if "minimum_selected_utility" in result.details:
-        lines.append(
-            f"Minimum selected utility: {float(result.details['minimum_selected_utility']):.6f}"
-        )
-    if isinstance(selected_utilities, Mapping) and selected_utilities:
-        metric_rows: List[List[str]] = []
-        for metric, value in result.objective_values.items():
-            goal = objective_goals[metric]
-            row = [
-                metric,
-                str(goal),
-                _format_metric_value(value),
-                _format_metric_value(selected_utilities.get(metric, "")),
-                _format_metric_value(ideal_point.get(metric, "")) if isinstance(ideal_point, Mapping) else "",
-            ]
-            if isinstance(weights, Mapping) and weights:
-                row.append(_format_metric_value(weights.get(metric, "")))
-            if isinstance(distance_components, Mapping) and distance_components:
-                row.append(_format_metric_value(distance_components.get(metric, "")))
-            if isinstance(utility_contributions, Mapping) and utility_contributions:
-                row.append(_format_metric_value(utility_contributions.get(metric, "")))
-            if isinstance(targets, Mapping) and targets:
-                row.append(_format_metric_value(targets.get(metric, "")))
-            elif isinstance(target_utilities, Mapping) and target_utilities and result.method != "ideal":
-                row.append(_format_metric_value(target_utilities.get(metric, "")))
-            metric_rows.append(row)
-
-        headers = ["metric", "goal", "value", "utility", "ideal"]
-        if isinstance(weights, Mapping) and weights:
-            headers.append("weight")
-        if isinstance(distance_components, Mapping) and distance_components:
-            headers.append("distance")
-        if isinstance(utility_contributions, Mapping) and utility_contributions:
-            headers.append("contrib")
-        if isinstance(targets, Mapping) and targets:
-            headers.append("target")
-        elif isinstance(target_utilities, Mapping) and target_utilities and result.method != "ideal":
-            headers.append("target_u")
-        lines.extend(["", "Objective table:"])
-        lines.extend(_render_table(headers, metric_rows))
-    else:
-        lines.extend(["", "Objectives:"])
-        for metric, value in result.objective_values.items():
-            goal = objective_goals[metric]
-            lines.append(f"  {metric} ({goal}): {value}")
-    shortlist = record["top_candidates"]
-    if len(shortlist) > 1:
-        lines.extend(["", "Top candidates:", "Metric columns show raw changes from the selected member."])
-        metrics = list(result.objective_values)
-        headers = ["rank", "file", "score"]
-        if result.method == "aspiration":
-            headers.append("tie-break score")
-        if result.method != "lexicographic":
-            headers.append("score behind")
-        headers.extend(metrics)
-        top_rows = []
-        for row in shortlist:
-            filename = row["file"]
-            columns = [f"#{row['rank']}", labels.get(filename, filename), f"{row['score']:.6f}"]
-            if result.method == "aspiration":
-                columns.append(f"{row['secondary_score']:.6f}")
-            if result.method != "lexicographic":
-                columns.append(_format_record_metric(row, "score_margin"))
-            deltas = row["objective_deltas"]
-            columns.extend(_format_record_metric(deltas, metric) for metric in metrics)
-            top_rows.append(columns)
-        lines.extend(_render_table(headers, top_rows))
-    sensitivity = record["sensitivity"]
-    if sensitivity:
-        lines.append(
-            f"Sensitivity: {sensitivity['changed_check_count']} of "
-            f"{sensitivity['check_count']} checks changed the pick."
-        )
-        changed = {}
-        for check in sensitivity["checks"]:
-            winner = check["winner"]
-            if winner == record["selected"]["file"]:
-                continue
-            if check["kind"] == "weight_transfer":
-                description = (
-                    f"transfer {sensitivity['weight_transfer_fraction']:.2%} weight "
-                    f"from {check['from_metric']} to {check['to_metric']}"
-                )
-            else:
-                description = f"set {check['metric']} target to {check['target']:.6g}"
-            changed.setdefault(winner, description)
-        for winner, description in changed.items():
-            lines.append(f"  - {labels.get(winner, winner)} wins if you {description}.")
-    lines.extend(_format_qualification(record["qualification"], shortlist, labels))
-    return "\n".join(lines)
-
-
-def _format_record_metric(metrics: Mapping[str, Any], metric: str) -> str:
-    value = metrics.get(metric)
-    if value is not None:
-        return _format_metric_value(value)
-    return metrics.get("metric_status", {}).get(metric, {}).get("status", "unavailable")
-
-
-def _format_qualification(
-    qualification: Mapping[str, Any] | None,
-    shortlist: Sequence[Mapping[str, Any]],
-    labels: Mapping[str, str],
+    right_align: Sequence[int] = (),
 ) -> list[str]:
-    if qualification is None:
-        return ["Qualification evidence: no native CPU replay evidence attached."]
+    widths = [max(map(len, column)) for column in zip(headers, *rows)]
+    terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    if sum(widths) + 2 * (len(widths) - 1) > terminal_width:
+        lines = []
+        for name, *values in rows:
+            lines.append(name)
+            lines.extend(f"  {key}: {value}" for key, value in zip(headers[1:], values))
+        return lines
 
-    lines = [f"Qualification evidence: Rust CPU {qualification['engine_sha256']}"]
+    def align(row):
+        return "  ".join(
+            value.rjust(width) if idx in right_align else value.ljust(width)
+            for idx, (value, width) in enumerate(zip(row, widths))
+        ).rstrip()
+
+    return [align(headers), *(align(row) for row in rows)]
+
+
+def _command_path(path: Path) -> str:
+    displayed = _display_path(path)
+    return f"./{displayed}" if displayed.startswith("-") else displayed
+
+
+def _report_source(pareto_dir: Path, args: argparse.Namespace) -> str:
+    raw_path = getattr(args, "path", None)
+    if raw_path and Path(raw_path).expanduser().is_file():
+        # Keep the supplied filename, even if it is a link to a different basename.
+        path = Path(raw_path).expanduser().absolute()
+        if path.is_relative_to(Path.cwd()):
+            path = path.relative_to(Path.cwd())
+        return f"./{path}" if str(path).startswith("-") else str(path)
+    return _command_path(pareto_dir)
+
+
+def _plot_command(source: str, args: argparse.Namespace) -> str:
+    command = ["passivbot", "tool", "pareto-plot", source, "--open"]
+    for attr, flag in (
+        ("method", "--method"),
+        ("scenario", "--scenario"),
+        ("limit_entries", "--limit"),
+        ("limits_payload", "--limits"),
+        ("objectives", "--objectives"),
+        ("weight", "--weight"),
+        ("target", "--target"),
+        ("priority", "--priority"),
+        ("show_top", "--show-top"),
+        ("scale", "--scale"),
+        ("sensitivity_weight_fraction", "--sensitivity-weight-fraction"),
+        ("sensitivity_target_scales", "--sensitivity-target-scales"),
+        ("qualification", "--qualification"),
+    ):
+        value = getattr(args, attr, None)
+        if value is None or (attr == "method" and value == "ideal"):
+            continue
+        for item in value if isinstance(value, (list, tuple)) else [value]:
+            token = str(item)
+            if token.startswith("-"):
+                command.append(f"{flag}={token}")
+            else:
+                command.extend([flag, token])
+    return shlex.join(command)
+
+
+def _report_header(source, *, loaded, retained, front, ranked=None, limits, scenario):
+    counts = [f"{loaded} loaded"] if retained != loaded or front != loaded else []
+    if retained != loaded:
+        counts.append(f"{retained} after limits")
+    if ranked is None or ranked != front:
+        counts.append(f"{front} on active front")
+    if ranked is not None:
+        counts.append(f"{ranked} ranked")
+    if limits:
+        noun = "limit" if len(limits) == 1 else "limits"
+        counts.append(f"{len(limits)} CLI {noun}")
+    else:
+        counts.append("no CLI limits")
+    lines = [f"Source: {source}", f"Candidates: {' · '.join(counts)}"]
+    if scenario is not None:
+        lines.append(f"Scenario: {scenario} · rebuilt from saved aggregate Pareto members")
+    if limits:
+        lines.extend(f"  Exclude if {_format_limit_entry(entry, include_scope=True)}" for entry in limits)
+    return lines
+
+
+def _report_sensitivity(sensitivity, labels, selected):
+    if not sensitivity or not sensitivity["check_count"]:
+        return []
+    checked = sensitivity["check_count"]
+    changed = sensitivity["changed_check_count"]
+    probes = []
+    weight_fraction = sensitivity["weight_transfer_fraction"]
+    if weight_fraction is not None:
+        probes.append(f"{100 * weight_fraction:g}-percentage-point weight transfers")
+    if sensitivity["target_step_scales"] is not None:
+        probes.append(f"target shifts of {sensitivity['target_step_scales']:g} scale units")
+    scope = f"on this pool ({'; '.join(probes)})"
+    lines = [f"Sensitivity: {changed}/{checked} checks changed the pick {scope}."]
+    if changed:
+        check = next(
+            check for check in sensitivity["checks"] if check["winner"] != selected
+        )
+        if check["kind"] == "weight_transfer":
+            src = _METRIC_LABELS.get(check["from_metric"], check["from_metric"])
+            dest = _METRIC_LABELS.get(check["to_metric"], check["to_metric"])
+            step = 100 * weight_fraction
+            unit = "percentage point" if step == 1 else "percentage points"
+            change = f"move {step:g} {unit} of weight from {src} to {dest}"
+        else:
+            key = check["metric"]
+            change = f"set {_METRIC_LABELS.get(key, key)} target to {_format_objective_value(key, check['target'])}"
+        winner = labels.get(check["winner"], check["winner"])
+        lines.append(f"  {winner} ranks first if you {change}.")
+    return lines
+
+
+def _report_qualification(qualification, shortlist, labels):
+    if qualification is None:
+        return ["CPU replay evidence: none attached."]
+    lines = ["CPU replay evidence (attached):"]
     subjects = [
         (labels.get(row["file"], row["file"]), qualification["candidates"].get(row["file_sha256"]))
         for row in shortlist
@@ -1897,28 +1848,204 @@ def _format_qualification(
     if "incumbent" in qualification:
         subjects.append(("Incumbent", qualification["incumbent"]))
     for name, subject in subjects:
-        if subject is None:
-            lines.append(f"  {name}: no matching evidence")
+        if subject is None or not subject["results"]:
+            lines.append(f"  {name}: no matching replay results")
             continue
-        lines.append(f"  {name} (effective config {subject['effective_config_sha256']})")
-        for label, replay in subject["results"].items():
-            scenario = qualification["scenarios"][label]
-            status = replay["status"]
-            description = f"    {label} ({scenario['split']}, {scenario['execution']}): {status}"
-            if "effective_start_date" in replay:
-                description += (
-                    f" {replay['effective_start_date']} to {replay['effective_end_date']}, "
-                    f"liquidated={str(replay['liquidated']).lower()}"
-                )
-            if "reason" in replay:
-                description += f" ({replay['reason']})"
-            if "report" in replay:
-                description += f" · {replay['report']}"
-            lines.append(description)
-            metrics = replay.get("metrics", {})
-            for metric in sorted(metrics.keys() - {"metric_status"}):
-                lines.append(f"      {metric} = {_format_record_metric(metrics, metric)}")
+        for scenario, replay in subject["results"].items():
+            scope = qualification["scenarios"][scenario]
+            result = f"{name} · {scenario} ({scope['split']}, {scope['execution']}) · {replay['status']}"
+            if replay.get("liquidated"):
+                result += " · liquidated"
+            if replay.get("reason"):
+                result += f" · {replay['reason']}"
+            lines.append(f"  {result}")
     return lines
+
+
+def _objective_rows(specs, *value_columns):
+    rows = []
+    for spec in specs:
+        metric = spec.metric
+        direction = "↑" if spec.goal == "max" else "↓"
+        label = _METRIC_LABELS.get(metric, metric)
+        rows.append([f"{direction} {label}", *[column(metric) for column in value_columns]])
+    return rows
+
+
+def _format_saved_value(values, metric):
+    value = values[metric]
+    if value is None:
+        status = values["metric_status"][metric]["status"]
+        return {"positive_infinity": "+inf", "negative_infinity": "-inf"}.get(status, status)
+    return _format_objective_value(metric, value)
+
+
+def format_selection_result(
+    pareto_dir: Path,
+    evaluation: SelectionEvaluation,
+    record: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> str:
+    result = evaluation.result
+    source = _report_source(pareto_dir, args)
+    labels = record["candidate_labels"]
+    lines = _report_header(
+        source,
+        loaded=record["loaded_count"],
+        retained=record["retained_count"],
+        front=record["active_front_count"],
+        ranked=record["selection_count"],
+        limits=evaluation.active_limits,
+        scenario=evaluation.scenario,
+    )
+    selected = result.candidate.filename
+    lines.append(f"Selected file: {labels.get(selected, selected)}")
+
+    settings = record["settings"]
+    method = [result.method]
+    weights = list(settings.get("weights", {}).values())
+    if weights:
+        method.append("equal weights" if len(set(weights)) == 1 else "custom weights")
+    scope = "post-limit pool" if result.method == "reference" else "active front"
+    if result.method != "lexicographic":
+        method.append("fixed raw scales" if settings.get("scales") else f"scaled to {scope}")
+        label, value = _score_label_and_value(result)
+        method.append(f"{label} {value:.4g}")
+    else:
+        method.append("priority in table order")
+    lines.append(f"Method: {' · '.join(method)}")
+
+    shortlist = record["top_candidates"]
+    if getattr(args, "show_top", None) is None:
+        shortlist = shortlist[:2]
+    alternative = shortlist[1] if len(shortlist) > 1 else None
+    headers = ["Objective", "Selected"]
+    columns = [lambda metric: _format_objective_value(metric, result.objective_values[metric])]
+    if alternative:
+        headers.append("#2")
+        columns.append(lambda metric: _format_saved_value(alternative["objectives"], metric))
+    targets = settings.get("targets")
+    if targets:
+        headers.append("Target")
+        columns.append(lambda metric: _format_objective_value(metric, targets[metric]) if metric in targets else "—")
+    best = result.details["ideal_point"]
+    headers.append("Pool best" if result.method == "reference" else "Front best")
+    columns.append(lambda metric: _format_objective_value(metric, best[metric]))
+    lines.append("")
+    rows = _objective_rows(evaluation.active_specs, *columns)
+    lines.extend(_report_table(headers, rows, right_align=range(1, len(headers))))
+    lines.append(f"{headers[-1]} values may come from different files.")
+    if alternative:
+        lines.append("")
+        lines.append("Ranked alternatives")
+        for row in shortlist[1:]:
+            filename = row["file"]
+            lines.append(f"  #{row['rank']}  {labels.get(filename, filename)}")
+            if row is not alternative:
+                values = [
+                    f"{_METRIC_LABELS.get(metric, metric)} {_format_saved_value(row['objectives'], metric)}"
+                    for metric in result.objective_values
+                ]
+                lines.extend(f"      {value}" for value in values)
+    contributions = result.details.get("distance_components")
+    if contributions and sum(contributions.values()) > 0:
+        metric = max(contributions, key=contributions.get)
+        label = _METRIC_LABELS.get(metric, metric)
+        share = contributions[metric] / sum(contributions.values())
+        origin = "ideal" if result.method == "ideal" else "target"
+        lines.extend(["", f"{label} accounts for {share:.0%} of squared distance to {origin}."])
+
+    sensitivity = record["sensitivity"]
+    if sensitivity:
+        lines.extend(_report_sensitivity(sensitivity, labels, selected))
+    lines.extend(_report_qualification(record["qualification"], shortlist, labels))
+
+    replay = ["passivbot", "backtest", _command_path(result.candidate.path)]
+    scenario = evaluation.scenario
+    lines.extend(["", "Backtest"])
+    if scenario is not None and "," in scenario:
+        lines.append("Choose this scenario in the backtest suite config. --scenarios splits labels on commas.")
+    else:
+        if scenario is not None:
+            if scenario.startswith("-"):
+                replay.append(f"--scenarios={scenario}")
+            else:
+                replay.extend(["--scenarios", scenario])
+        lines.append(shlex.join(replay))
+    lines.extend(["", "Explore in browser", _plot_command(source, args)])
+    return "\n".join(lines)
+
+
+def _format_inspection(pareto_dir, candidates, scoring_specs, args):
+    front_view = args.front
+    unsupported = [
+        name for name in (
+            "priority", "weight", "target", "scale", "show_top", "qualification",
+            "sensitivity_weight_fraction", "sensitivity_target_scales", "save_selected", "save_filtered",
+        )
+        if getattr(args, name, None) is not None
+    ]
+    if args.method != "ideal":
+        unsupported.append("method")
+    if not front_view and args.objectives is not None:
+        unsupported.append("objectives")
+    if unsupported:
+        flags = ", ".join(f"--{name.replace('_', '-')}" for name in unsupported)
+        raise ValueError(f"Selection options do not apply to this view: {flags}")
+
+    source = _report_source(pareto_dir, args)
+    _, filtered, limits, scenario = _selection_inputs(candidates, scoring_specs, args)
+    if not front_view:
+        saved_goals = {spec.metric: spec.goal for spec in scoring_specs}
+        rows = []
+        for metric, definition in CORE_METRIC_CATALOG.items():
+            available = 0
+            for candidate in filtered:
+                try:
+                    value = _resolve_candidate_metric_value(candidate, metric)
+                except MetricAggregationError:
+                    continue  # Explicit unavailable facts are excluded from value coverage.
+                available += value is not None
+            if available:
+                goal = saved_goals.get(metric) or default_pareto_goal(metric)
+                rows.append([metric, definition["unit"], goal or "limit only", f"{available}/{len(filtered)}"])
+        lines = [f"Source: {source}"]
+        if scenario is not None:
+            lines.append(f"Scenario: {scenario}")
+        if limits:
+            lines.append(f"Candidates: {len(filtered)} of {len(candidates)} after limits")
+        lines.append("")
+        lines.extend(_report_table(["Saved metric key", "Raw unit", "Goal", "Values"], rows, right_align=(3,)))
+        lines.append("Fraction inputs use raw units (0.05 means 5%).")
+        return "\n".join(lines)
+
+    specs = _resolve_active_objective_metrics(
+        scoring_specs, filtered, objectives_arg=args.objectives, priority_arg=None,
+        target_map=None, method="ideal",
+    )
+    _raw_objective_matrix(filtered, specs)
+    front = build_objective_front(filtered, specs)
+    labels = _candidate_labels(candidates)
+    extrema = {}
+    for spec in specs:
+        values = [_resolve_candidate_metric_value(candidate, spec.metric) for candidate in front]
+        low, high = min(values), max(values)
+        best = low if spec.goal == "min" else high
+        name = front[values.index(best)].filename
+        extrema[spec.metric] = (low, high, labels.get(name, name))
+    lines = _report_header(
+        source, loaded=len(candidates), retained=len(filtered), front=len(front),
+        limits=limits, scenario=scenario,
+    )
+    rows = _objective_rows(
+        specs,
+        lambda metric: _format_objective_value(metric, extrema[metric][0]),
+        lambda metric: _format_objective_value(metric, extrema[metric][1]),
+        lambda metric: extrema[metric][2],
+    )
+    lines.append("")
+    lines.extend(_report_table(["Objective", "Min", "Max", "Best file"], rows, right_align=(1, 2)))
+    return "\n".join(lines)
 
 
 def _is_within(path: Path, directory: Path) -> bool:
@@ -2133,12 +2260,7 @@ class SelectionEvaluation:
     result: SelectionResult
 
 
-def evaluate_selection(
-    candidates: Sequence[ParetoCandidate],
-    scoring_specs: Sequence[ObjectiveSpec],
-    args: argparse.Namespace,
-) -> SelectionEvaluation:
-    method = parse_method_name(args.method)
+def _selection_inputs(candidates, scoring_specs, args):
     raw_scenario = getattr(args, "scenario", None)
     scenario = str(raw_scenario).strip() if raw_scenario is not None else None
     selection_candidates = (
@@ -2153,7 +2275,18 @@ def evaluate_selection(
     )
     if not filtered_candidates:
         raise ValueError("No Pareto candidates remained after applying limits.")
+    return selection_candidates, filtered_candidates, active_limits, scenario
 
+
+def evaluate_selection(
+    candidates: Sequence[ParetoCandidate],
+    scoring_specs: Sequence[ObjectiveSpec],
+    args: argparse.Namespace,
+) -> SelectionEvaluation:
+    method = parse_method_name(args.method)
+    selection_candidates, filtered_candidates, active_limits, scenario = _selection_inputs(
+        candidates, scoring_specs, args
+    )
     option_maps = {
         name: _parse_key_value_pairs(getattr(args, name, None) or [], value_name=name)
         for name in ("weight", "target", "scale")
@@ -2269,7 +2402,8 @@ def build_selection_record(
     result = evaluation.result
     pool = evaluation.selection_pool
     active_metrics = [spec.metric for spec in evaluation.active_specs]
-    show_top = int(getattr(args, "show_top", 5))
+    requested_count = getattr(args, "show_top", None)
+    show_top = 5 if requested_count is None else int(requested_count)
     if show_top < 1:
         raise ValueError("--show-top must be positive.")
     rows = _ranked_rows(
@@ -2356,8 +2490,11 @@ def build_selection_record(
     return _json_ready(payload)
 
 
-def run_from_args(args: argparse.Namespace) -> SelectionResult:
+def run_from_args(args: argparse.Namespace) -> SelectionResult | None:
     pareto_dir, candidates, scoring_specs = load_selection_candidates(getattr(args, "path", None))
+    if getattr(args, "front", False) or getattr(args, "list_metrics", False):
+        print(_format_inspection(pareto_dir, candidates, scoring_specs, args))
+        return None
     evaluation = evaluate_selection(candidates, scoring_specs, args)
     record = build_selection_record(evaluation, args)
     result = evaluation.result
@@ -2422,18 +2559,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             }
         print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
     else:
-        output = format_selection_result(
-            pareto_dir,
-            candidates=evaluation.selection_pool,
-            loaded_count=len(candidates),
-            retained_count=len(filtered_candidates),
-            active_front_count=len(evaluation.active_front),
-            scenario=scenario,
-            scenario_front_count=len(evaluation.active_front) if scenario is not None else None,
-            active_limits=active_limits,
-            result=result,
-            record=record,
-        )
+        output = format_selection_result(pareto_dir, evaluation, record, args)
         saved_lines: List[str] = []
         if selected_output is not None:
             saved_lines.append(
