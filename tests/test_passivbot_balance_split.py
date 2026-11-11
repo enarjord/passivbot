@@ -7599,6 +7599,21 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
 
 
+@pytest.mark.asyncio
+async def test_failed_legacy_minimum_cost_refresh_drops_previous_value():
+    symbol = "SOL/USDT:USDT"
+    bot = _unit_bot()
+    bot.effective_min_cost = {symbol: 1.0}
+
+    async def no_prices(symbols, **kwargs):
+        return {}
+
+    bot._get_live_last_prices = no_prices
+    await bot.update_effective_min_cost(symbol)
+
+    assert symbol not in bot.effective_min_cost
+
+
 def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
     # Rust owns auto-unstuck emission from continuous realized-loss memory. A
     # resting unstuck order must not add a Python-only suppression path; any

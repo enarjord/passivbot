@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Compute the live initial-entry minimum cost from the plan's current quote and exchange rules.
+
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
   40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains
