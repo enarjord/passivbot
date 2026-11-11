@@ -747,7 +747,7 @@ def _multicoin_exposure_eligible_coins(
 
 
 def _require_supported_multicoin_valid_tails(
-    hlcvs, first_valid_indices, last_valid_indices
+    hlcvs, first_valid_indices, last_valid_indices, *, candle_interval_minutes: int = 1
 ) -> None:
     """Validate declared multi-coin coverage and packed candle integrity."""
 
@@ -795,8 +795,9 @@ def _require_supported_multicoin_valid_tails(
     # bars to float32 and replaces non-finite packed values with zero, so a
     # finite-positive float64 value is insufficient if it overflows or
     # underflows during that conversion.
+    one_day_bars = (24 * 60) // candle_interval_minutes
     for coin, last_valid_idx in enumerate(tails):
-        if last_valid_idx + 1400 < candle_count:
+        if candle_count - 1 - last_valid_idx > one_day_bars:
             with np.errstate(over="ignore", under="ignore", invalid="ignore"):
                 packed_hlc = np.asarray(values[last_valid_idx, coin, :3], dtype=np.float32)
             if not np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0)):
@@ -1244,6 +1245,7 @@ class SharedAccountReplay:
             values,
             backtest_params["first_valid_indices"],
             backtest_params["last_valid_indices"],
+            candle_interval_minutes=candle_interval_minutes,
         )
 
         comparable_bot_keys = (
