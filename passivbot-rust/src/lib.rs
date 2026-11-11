@@ -225,6 +225,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;
+    m.add_function(wrap_pyfunction!(panic_limit_price_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pside_adverse_price_change_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(calc_order_price_gap_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_id_to_snake, m)?)?;
