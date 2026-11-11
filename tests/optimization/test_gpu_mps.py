@@ -2571,7 +2571,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
 
     entry_k = 7
     last_valid = 10
-    count = last_valid + 1401
+    count = last_valid + 1442
     hlcvs = np.full((count, 2, 4), np.nan, dtype=np.float64)
     hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
     hlcvs[:, 1] = [200.0, 200.0, 200.0, 1.0]
@@ -2710,7 +2710,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
     [
         (12, (0, 0), (6, 7)),
         (12, (0, 9), (6, 11)),
-        (1408, (0, 0), (6, 7)),
+        (1449, (0, 0), (6, 7)),
     ],
     ids=[
         "all-coins-ended-tail",
@@ -2823,7 +2823,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             "position_held_max_days", "position_held_time_weighted_mean_hours",
         },
     )
-    if count < 1400:
+    if count - 1 - last_valid_indices[0] <= 1440:
         with pytest.raises(ValueError, match="held-position valuation"):
             proxy.evaluate([{}])
         with pytest.raises(ValueError, match="held-position valuation"):
@@ -3084,7 +3084,7 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
     side, forced_delist, collect_counts, signal_mode
 ):
 
-    count = 1509 if forced_delist else 313
+    count = 1539 if forced_delist else 313
     steps = np.arange(count)
     closes = np.column_stack(
         [
@@ -3136,7 +3136,7 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_ema_disabled_hsl_mixed_batch_preserves_each_candidate(side):
-    count = 1509
+    count = 1539
     steps = np.arange(count)
     closes = np.column_stack(
         [base * (1.0 + 0.09 * np.sin(steps / 17.0 + coin))
@@ -3712,7 +3712,7 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
     strategy_kind, topology, forced_delist
 ):
     last_valid = 6
-    count = last_valid + 1401 if forced_delist else 12
+    count = last_valid + 1442 if forced_delist else 12
     closes = np.full((count, 2), 100.0)
     # Keep a positive packed mark after the explicit validity window so this
     # exercises the index boundary rather than relying on NaNs becoming zero.
