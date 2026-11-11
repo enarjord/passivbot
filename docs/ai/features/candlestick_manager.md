@@ -553,6 +553,9 @@ and release are nonblocking operations in the owning task, with no worker-thread
 handoff that can complete acquisition after cancellation. Historical callers keep
 their existing unbounded acquisition policy unless they explicitly install a budget.
 Protective HSL scheduling retains its independent current-fact requirements.
+A contended candle index write lock fails immediately through the existing persistence
+error path. The lock holder retains its atomic write. A later acquisition can retry the
+write without blocking the event loop on the lock.
 
 Trailing reconstruction still requires a completed candle beginning strictly after
 the latest fill minute. Before that first source candle finalizes, a one-to-two

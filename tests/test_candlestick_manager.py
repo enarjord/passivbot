@@ -6203,3 +6203,28 @@ async def test_unrecorded_cache_hole_repairs_from_real_source_and_recovers_ema(t
     assert cm._cache[symbol]["bv"].tolist() == [3.0] * 10
     assert not cm._synthetic_timestamps.get(symbol)
     assert cm._unverified_candle_gap_ranges(symbol, 100 * minute, 109 * minute) == []
+
+
+def test_candle_index_write_fails_promptly_under_contention(tmp_path):
+    import time
+    from pathlib import Path
+
+    import portalocker
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+    index = cm._ensure_symbol_index(symbol)
+    cm._save_index(symbol)
+    path = Path(cm._index_path(symbol))
+    original = path.read_bytes()
+    index["meta"]["last_refresh_ms"] = 1234
+
+    with portalocker.Lock(str(path) + ".lock", timeout=0, fail_when_locked=True):
+        started = time.monotonic()
+        with pytest.raises(portalocker.exceptions.LockException):
+            cm._save_index(symbol)
+        assert time.monotonic() - started < 1.0
+        assert path.read_bytes() == original
+
+    cm._save_index(symbol)
+    assert path.read_bytes() != original
