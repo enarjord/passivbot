@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show disabled sides explicitly in the live startup banner’s position and exposure limits.
+
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
