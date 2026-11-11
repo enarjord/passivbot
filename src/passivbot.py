@@ -90,6 +90,7 @@ from live.diagnostic_safety import (
     exception_text_contains,
     exception_type_name_contains,
 )
+from live.close_replacement_diagnostics import observe_account as observe_close_replacements
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.console_health import (
@@ -10959,6 +10960,11 @@ class Passivbot:
         ):
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}
+            )
+        if getattr(self, "_console_close_replacements", None):
+            run_diagnostic_step(
+                "observe confirmed close replacements",
+                lambda: observe_close_replacements(self, refreshed_surfaces, int(utc_ms())),
             )
 
     def _mark_account_critical_state_dirty(

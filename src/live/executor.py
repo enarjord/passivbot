@@ -8,9 +8,10 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import hsl_live, position_fill_sync
+from live import close_replacement_diagnostics, hsl_live, position_fill_sync
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
+from live.events import run_diagnostic_step
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.order_churn_gate import connector_supports_order_churn_gate
 from pure_funcs import shorten_custom_id
@@ -539,6 +540,14 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
         bot._fresh_entry_eligibility_trace = None
 
 
+def _observe_close_create_defer(bot, orders, reason):
+    if getattr(bot, "_console_close_replacements", None):
+        run_diagnostic_step(
+            "observe close create defer",
+            lambda: close_replacement_diagnostics.observe_create_defer(bot, orders, reason),
+        )
+
+
 async def execute_order_plan(
     bot,
     to_cancel: list[dict],
@@ -553,6 +562,13 @@ async def execute_order_plan(
         getattr(snapshot, "account_invalidation_generation", 0) or 0
     )
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
+    if configure_creations and not bot.debug_mode:
+        run_diagnostic_step(
+            "observe close replacement plan",
+            lambda: close_replacement_diagnostics.observe_plan(
+                bot, order_wave, to_cancel, to_create, _utc_ms()
+            ),
+        )
     cancel_first_barrier = (
         bool(to_cancel)
         and not bot.debug_mode
@@ -687,6 +703,9 @@ async def execute_order_plan(
         if order_wave is not None:
             order_wave["deferred_create"] += len(barrier_deferred)
         if barrier_deferred:
+            _observe_close_create_defer(
+                bot, barrier_deferred, ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
+            )
             logging.debug(
                 "[order] cancel-first barrier deferred %d same-position creates until confirmation and replanning",
                 len(barrier_deferred),
@@ -794,6 +813,9 @@ async def execute_order_plan(
                 ),
             )
             if state_filtered_orders:
+                _observe_close_create_defer(
+                    bot, state_filtered_orders, ReasonCodes.STATE_CHANGE_DETECTED
+                )
                 _record_fresh_entry_orders(
                     bot,
                     "record_blocked_orders",
@@ -964,6 +986,7 @@ async def execute_order_plan(
                 order for order in to_create_mod if id(order) not in blocked_ids
             ]
             if blocked:
+                _observe_close_create_defer(bot, blocked, ReasonCodes.STATE_CHANGE_DETECTED)
                 if order_wave is not None:
                     order_wave["skipped_create"] += len(blocked)
                 _record_fresh_entry_orders(
@@ -1241,6 +1264,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if isinstance(ex, DeferredOrderCreation):
+            _observe_close_create_defer(bot, [order], ReasonCodes.STATE_CHANGE_DETECTED)
             if wave is not None:
                 wave["skipped_create"] = wave.get("skipped_create", 0) + 1
             _record_fresh_entry_orders(
@@ -1509,6 +1533,13 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 result=ex,
             )
         else:
+            if wave and wave.get("close_replacement_candidates"):
+                run_diagnostic_step(
+                    "observe close replacement cancel acknowledgment",
+                    lambda: close_replacement_diagnostics.observe_cancel_ack(
+                        bot, wave, order, _utc_ms()
+                    ),
+                )
             passivbot_cls._emit_execution_order_event(
                 bot,
                 event_type=EventTypes.EXECUTION_CANCEL_SUCCEEDED,
