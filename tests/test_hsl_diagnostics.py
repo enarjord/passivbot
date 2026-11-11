@@ -427,7 +427,7 @@ def test_structured_console_shows_hsl_counts_without_legacy_tiers(observed):
         data=diagnostics.snapshot(bot, now_ms=NOW),
     )
     text = format_console_event(event)
-    assert "[risk] HSL current mode=portfolio" in text
+    assert "[risk] HSL observation=current mode=portfolio" in text
     assert "red=1" in text and "estimated=1" in text
     assert "tier=disabled" not in text
 
@@ -527,7 +527,7 @@ def test_unavailable_scope_fallback_remains_warning_without_event_sink(
     assert any(
         row.levelno == logging.WARNING
         and "HSL" in row.message
-        and "unavailable=1" in row.message
+        and "unavailable_scopes=1" in row.message
         for row in caplog.records
     )
 
@@ -721,7 +721,7 @@ def test_configured_console_sink_failure_keeps_unavailable_warning(observed, cap
     assert pipeline.sink_error_counters["console"] >= 1
     assert any(
         "HSL" in record.message
-        and "unavailable=1" in record.message
+        and "unavailable_scopes=1" in record.message
         and record.levelno == logging.WARNING
         for record in caplog.records
     )
@@ -801,6 +801,66 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(
     assert all(e[1]["data"]["counts"]["green"] == 1 for e in events)
     capture_report(owner)
     assert len(events) == 3
+
+
+@pytest.mark.parametrize(
+    "replacement_case", ["same", "changed_scope", "red", "sink_delay"]
+)
+def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
+    observed, monkeypatch, replacement_case
+):
+    import utils
+    from live.hsl_runtime import Unavailable
+
+    bot, _, wave, events = observed()
+    clock = [NOW]
+    monkeypatch.setattr(utils, "utc_ms", lambda: clock[0])
+    if replacement_case != "red":
+        unavailable = Unavailable(Scope("coin", "long", SYMBOL), "current_mark_unavailable")
+        wave = replace(wave, decisions=(), unavailable=(unavailable,))
+        diagnostics.record(bot, wave)
+    events.clear()
+
+    clock[0] += 20_000
+    bot._account_invalidation_generation = wave.generation + 1
+    for surface in ("balance", "positions", "open_orders"):
+        bot.freshness_ledger.stamp(surface, now_ms=clock[0])
+    replacement = replace(
+        wave,
+        captured_ms=clock[0],
+        position_observed_ms=clock[0],
+        mark_observed_ms=(clock[0],),
+        generation=bot._account_invalidation_generation,
+    )
+    if replacement_case == "changed_scope":
+        replacement = replace(
+            replacement,
+            unavailable=(replace(unavailable, scope=Scope("coin", "short", SYMBOL)),),
+        )
+    if replacement_case == "sink_delay":
+        emit = bot._emit_live_event
+
+        def delay(*args, **kwargs):
+            result = emit(*args, **kwargs)
+            if kwargs["data"].get("console_replaced_observation"):
+                clock[0] += 20_000
+                for surface in ("balance", "positions", "open_orders"):
+                    bot.freshness_ledger.stamp(surface, now_ms=clock[0])
+            return result
+
+        bot._emit_live_event = delay
+
+    diagnostics.record(bot, replacement)
+    prior, latest = (item[1]["data"] for item in events)
+    assert prior["observation_status"] == "stale"
+    assert set(prior["stale_reasons"]) == {"input_expired", "account_generation_changed"}
+    assert bool(prior.get("console_replaced_observation")) == (
+        replacement_case in {"same", "sink_delay"}
+    )
+    assert latest["observation_status"] == (
+        "stale" if replacement_case == "sink_delay" else "current"
+    )
+    assert "console_replaced_observation" not in latest
 
 
 @pytest.mark.asyncio
