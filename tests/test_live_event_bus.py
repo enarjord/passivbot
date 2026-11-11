@@ -3498,9 +3498,8 @@ def test_console_format_summarizes_periodic_health():
     )
 
     assert format_console_event(event) == (
-        "[health] up=2m3s last_loop=1.2s pos=2L/1S open_orders=? account_age=? cycle_completed_age=? last_write=? "
-        "execution_errors_1h=1/10 ws_reconnects_total=2 rate_limits_total=3 "
-        "rss=150.0MiB event_q=4/1000 event_drop=2 sink_err=1"
+        "[health] last_accepted_plan=? last_order_ack=? pos=2L/1S "
+        "execution_errors_1h=1/10 event_drop=2 sink_err=1"
     )
 
 
@@ -3534,8 +3533,7 @@ def test_console_health_keeps_cumulative_activity_in_durable_event():
     )
 
     assert format_console_event(event) == (
-        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? cycle_completed_age=? last_write=? "
-        "execution_errors_1h=0/10 rss=83.6MiB"
+        "[health] last_accepted_plan=? last_order_ack=? pos=0L/0S"
     )
 
 
@@ -3571,9 +3569,8 @@ def test_console_format_periodic_health_compacts_representative_longest_payload(
     rendered = format_console_event(event)
 
     assert rendered == (
-        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? cycle_completed_age=? last_write=? "
-        "execution_errors_1h=0/10 ws_reconnects_total=4 rate_limits_total=5 rss=83.6MiB "
-        "summary_late=2.3s slow=maintenance:5.0s,account:3.0s,market:1.0s"
+        "[health] last_accepted_plan=? last_order_ack=? pos=0L/0S "
+        "slow=maintenance:5.0s,account:3.0s,market:1.0s"
     )
     from live.event_bus import split_health_console
     assert all(len("2026-07-15T12:34:56Z INFO [hyperliquid] " + line) <= 240
