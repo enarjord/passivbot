@@ -1,3 +1,4 @@
+import asyncio
 import errno
 import json
 import logging
@@ -5,6 +6,10 @@ import os
 import stat
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from monitor_publisher import MonitorPublisher
 import monitor_publisher as monitor_publisher_module
@@ -1750,3 +1755,39 @@ def test_monitor_retention_uses_one_recursive_traversal_when_over_byte_cap(tmp_p
     assert len(scanned_directories) == len(expected_directories)
     assert set(entry_stat_counts.values()) == {1}
     assert not candidate.exists()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_disk_write_does_not_block_event_publication(tmp_path, monkeypatch):
+    from passivbot_monitor import _monitor_flush_snapshot
+
+    publisher = _make_publisher(tmp_path, checkpoint_interval_minutes=0.0)
+    bot = SimpleNamespace(
+        monitor_publisher=publisher,
+        _build_monitor_snapshot=AsyncMock(return_value={"account": {"balance_raw": 100.0}}),
+    )
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    original = monitor_publisher_module._atomic_write_json
+
+    def slow_snapshot(path, payload):
+        if path == publisher.state_latest_path:
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(3), "the snapshot write blocked event publication"
+        original(path, payload)
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", slow_snapshot)
+    task = asyncio.create_task(_monitor_flush_snapshot(bot, force=True))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        event = publisher.record_event("bot.start", ("bot",), {"status": "starting"})
+        assert event["seq"] == 1
+    finally:
+        release.set()
+        assert await task
+
+    snapshot = json.loads(publisher.state_latest_path.read_text())
+    manifest = json.loads(publisher.manifest_path.read_text())
+    assert snapshot["meta"]["seq"] == 0
+    assert manifest["last_seq"] == 1

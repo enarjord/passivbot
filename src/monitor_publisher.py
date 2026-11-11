@@ -211,6 +211,7 @@ class MonitorPublisher:
         self._disk_full_last_log_ms = 0
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
+        self._snapshot_write_lock = threading.Lock()
         self._pending_retention_timing = {
             key: 0 for key in _RETENTION_TIMING_KEYS
         }
@@ -1229,41 +1230,46 @@ class MonitorPublisher:
     def write_snapshot(
         self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False
     ) -> bool:
-        with self._lock:
-            now_ms = self._now_ms() if ts is None else int(ts)
-            if not force and self.last_snapshot_ms and (
-                now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
-            ):
-                return False
+        with self._snapshot_write_lock:
             try:
-                payload = dict(snapshot)
-                payload["schema_version"] = self.schema_version
-                meta = dict(payload.get("meta") or {})
-                meta.setdefault("exchange", self.exchange)
-                meta.setdefault("user", self.user)
-                meta.setdefault("runtime", deepcopy(self.runtime_identity))
-                meta["snapshot_ts_ms"] = now_ms
-                meta["seq"] = self.seq
-                payload["meta"] = meta
+                with self._lock:
+                    now_ms = self._now_ms() if ts is None else int(ts)
+                    if not force and self.last_snapshot_ms and (
+                        now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
+                    ):
+                        return False
+                    payload = dict(snapshot)
+                    payload["schema_version"] = self.schema_version
+                    meta = dict(payload.get("meta") or {})
+                    meta.setdefault("exchange", self.exchange)
+                    meta.setdefault("user", self.user)
+                    meta.setdefault("runtime", deepcopy(self.runtime_identity))
+                    meta["snapshot_ts_ms"] = now_ms
+                    meta["seq"] = self.seq
+                    payload["meta"] = meta
+                # This snapshot represents the captured sequence. Event
+                # publication may advance while its file is being written.
                 _atomic_write_json(self.state_latest_path, payload)
-                self.last_snapshot_ms = now_ms
-                self._write_manifest(now_ms=now_ms)
-                if self.checkpoint_interval_ms > 0 and (
-                    force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
-                ):
-                    checkpoint = self._rotated_path(
-                        self.checkpoints_dir,
-                        f"state.{self._segment_label(now_ms)}",
-                        ".json",
-                    )
-                    _atomic_write_json(checkpoint, payload)
-                    if self.compress_rotated_segments:
-                        self._gzip_file(checkpoint)
-                    self.last_checkpoint_ms = now_ms
-                self._prune_retention(now_ms=now_ms)
+                with self._lock:
+                    self.last_snapshot_ms = now_ms
+                    self._write_manifest(now_ms=now_ms)
+                    if self.checkpoint_interval_ms > 0 and (
+                        force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
+                    ):
+                        checkpoint = self._rotated_path(
+                            self.checkpoints_dir,
+                            f"state.{self._segment_label(now_ms)}",
+                            ".json",
+                        )
+                        _atomic_write_json(checkpoint, payload)
+                        if self.compress_rotated_segments:
+                            self._gzip_file(checkpoint)
+                        self.last_checkpoint_ms = now_ms
+                    self._prune_retention(now_ms=now_ms)
                 return True
             except Exception as exc:
-                self._log_write_failure("writing snapshot", exc)
+                with self._lock:
+                    self._log_write_failure("writing snapshot", exc)
                 return False
 
     def close(self) -> None:
