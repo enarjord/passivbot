@@ -3754,6 +3754,17 @@ pub fn calc_entries_short_py(
 }
 
 #[pyfunction]
+pub fn panic_limit_price_py(pside: &str, bid: f64, ask: f64, price_step: f64) -> PyResult<f64> {
+    use crate::orchestrator::PositionSide;
+    let side = match pside {
+        "long" => PositionSide::Long,
+        "short" => PositionSide::Short,
+        _ => return Err(PyValueError::new_err("expected long or short position side")),
+    };
+    Ok(crate::orchestrator::panic_limit_price(side, &OrderBook { bid, ask }, price_step))
+}
+
+#[pyfunction]
 pub fn calc_min_entry_qty_py(
     price: f64,
     c_mult: f64,

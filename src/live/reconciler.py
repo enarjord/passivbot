@@ -1293,28 +1293,6 @@ def _validate_rust_limit_price_exchange_constraints(
         )
 
 
-def _rust_tolerant_touch_step_count(
-    value: float, price_step: float, *, round_up: bool
-) -> int | float:
-    """Return Rust's representation-tolerant directional touch tick."""
-    step_count = value / price_step
-    if not math.isfinite(step_count):
-        return math.inf
-    nearest_step_count = round(step_count)
-    nearest_price = nearest_step_count * price_step
-    representation_tolerance = (
-        sys.float_info.epsilon * max(abs(value), abs(nearest_price)) * 4.0
-    )
-    if math.isclose(
-        value,
-        nearest_price,
-        rel_tol=0.0,
-        abs_tol=representation_tolerance,
-    ):
-        return nearest_step_count
-    return math.ceil(step_count) if round_up else math.floor(step_count)
-
-
 def _validate_rust_panic_limit_price(
     price: float,
     pside: str,
@@ -1329,19 +1307,8 @@ def _validate_rust_panic_limit_price(
 
 def _validate_rust_panic_price(price, pside, order_book, price_step, context):
     bid, ask = order_book
-    if pside == "long":
-        expected_step_count = max(
-            _rust_tolerant_touch_step_count(ask, price_step, round_up=False) - 1,
-            1,
-        )
-    else:
-        expected_step_count = (
-            _rust_tolerant_touch_step_count(bid, price_step, round_up=True) + 1
-        )
-    expected_price = expected_step_count * price_step
-    representation_tolerance = (
-        sys.float_info.epsilon * max(abs(price), abs(expected_price)) * 4.0
-    )
+    expected_price = _pb_attr("pbr").panic_limit_price_py(pside, bid, ask, price_step)
+    representation_tolerance = _rust_representation_tolerance(price, expected_price)
     if not math.isclose(
         price,
         expected_price,
@@ -1356,29 +1323,8 @@ def _validate_rust_panic_price(price, pside, order_book, price_step, context):
 def _rust_effective_min_qty(
     price: float, exchange: tuple[float, float, float, float, float]
 ) -> float:
-    """Mirror Rust's compact effective-minimum calculation for boundary checks."""
     qty_step, _price_step, min_qty, min_cost, c_mult = exchange
-    raw_min = max(min_qty, min_cost / price / c_mult)
-    raw_min_steps = raw_min / qty_step
-    if not math.isfinite(raw_min_steps):
-        return math.inf
-    nearest_step_count = round(raw_min_steps)
-    nearest_step = nearest_step_count * qty_step
-    representation_tolerance = (
-        sys.float_info.epsilon * max(abs(raw_min), abs(nearest_step)) * 4.0
-    )
-    if raw_min == 0.0:
-        return 0.0
-    if (
-        nearest_step_count > 0
-        and abs(raw_min_steps - nearest_step_count) <= 1e-8
-        and (
-            nearest_step >= raw_min
-            or raw_min - nearest_step <= representation_tolerance
-        )
-    ):
-        return max(nearest_step, raw_min)
-    return math.ceil(raw_min_steps) * qty_step
+    return _pb_attr("pbr").calc_min_entry_qty_py(price, c_mult, qty_step, min_qty, min_cost)
 
 
 def _validate_rust_close_exchange_constraints(
@@ -1399,9 +1345,6 @@ def _validate_rust_close_exchange_constraints(
             f"{context} cannot close a submitted position at or below Rust's dust threshold"
         )
     market_price = order_book[1] if qty > 0.0 else order_book[0]
-    effective_min_qty = _rust_effective_min_qty(
-        market_price if minimum_price is None else minimum_price, exchange
-    )
     closes_exact_remaining_position = math.isclose(
         qty_abs,
         position_abs,
@@ -1419,6 +1362,9 @@ def _validate_rust_close_exchange_constraints(
         raise FatalBotException(
             f"{context} quantity is inconsistent with submitted qty_step"
         )
+    effective_min_qty = _rust_effective_min_qty(
+        market_price if minimum_price is None else minimum_price, exchange
+    )
     minimum_qty_tolerance = _rust_representation_tolerance(qty_abs, effective_min_qty)
     if qty_abs + minimum_qty_tolerance < effective_min_qty:
         raise FatalBotException(
