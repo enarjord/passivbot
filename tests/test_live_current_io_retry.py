@@ -37,6 +37,7 @@ async def test_owner_backs_off_transport_and_recovers_after_success(monkeypatch,
     waits = []
     bot = SimpleNamespace(
         _process_failure_state={},
+        _current_io_retry_state=hsl_live.CurrentIoRetry(),
         stop_signal_received=False,
         live_value=lambda key: 2.0,
         _maybe_log_health_summary=lambda: None,
@@ -70,6 +71,25 @@ async def test_owner_backs_off_transport_and_recovers_after_success(monkeypatch,
     assert caplog.text.count("current I/O retry") == 1
     assert caplog.text.count("outage persists") == 1
     assert "current I/O recovered" in caplog.text
-    replacement = hsl_live.Owner(bot)
+    assert owner._current_io_retry.failures == 0
+
+
+def test_ordinary_failure_diagnostic_recovery_preserves_replacement_retry_state():
+    from live.diagnostic_safety import log_process_recovery
+
+    process_diagnostics = {"repeat_signature": "test"}
+    retry = hsl_live.CurrentIoRetry(failures=3, retry_at=120.0)
+    first = SimpleNamespace(
+        _process_failure_state=process_diagnostics, _current_io_retry_state=retry
+    )
+    owner = hsl_live.Owner(first)
+    log_process_recovery(first)
+
+    replacement = hsl_live.Owner(
+        SimpleNamespace(
+            _process_failure_state=process_diagnostics, _current_io_retry_state=retry
+        )
+    )
+    assert process_diagnostics == {}
     assert replacement._current_io_retry is owner._current_io_retry
-    assert replacement._current_io_retry.failures == 0
+    assert replacement._current_io_retry.retry_at == 120.0

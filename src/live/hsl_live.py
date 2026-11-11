@@ -165,7 +165,7 @@ class Wave:
 
 
 @dataclass
-class _CurrentIoRetry:
+class CurrentIoRetry:
     """Transport retry state shared by replacement bots in one live process."""
 
     failures: int = 0
@@ -231,11 +231,9 @@ class Owner:
         self._cycle_running = False
         self._running = False
         self.bot = bot
-        process_state = getattr(bot, "_process_failure_state", None)
-        self._current_io_retry = (
-            process_state.setdefault("current_io_retry", _CurrentIoRetry())
-            if isinstance(process_state, dict) else _CurrentIoRetry()
-        )
+        self._current_io_retry = getattr(bot, "_current_io_retry_state", None)
+        if self._current_io_retry is None:
+            self._current_io_retry = CurrentIoRetry()
         self.sources = {}
         self.quotes = {}
         self._waves = {}

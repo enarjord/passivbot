@@ -20788,6 +20788,7 @@ async def _run_live(startup_context: dict):
     cooldown_secs = 60
     restarts = []
     failure_state = {}
+    current_io_retry = hsl_live.CurrentIoRetry()
     while True:
 
         startup_context["stage"] = "setup_bot"
@@ -20795,9 +20796,13 @@ async def _run_live(startup_context: dict):
         bot = setup_bot(config)
         globals()["bot"] = bot
         bot._process_failure_state = failure_state
+        bot._current_io_retry_state = current_io_retry
         startup_context["stage"] = "bot_lifecycle"
         fatal_error = None
         try:
+            retry_delay = current_io_retry.retry_at - time.monotonic()
+            if retry_delay > 0.0:
+                await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
