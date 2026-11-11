@@ -33,6 +33,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 
+- Summarize sustained ordinary planning delays and their recovery in the live console.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Make live health summaries easier to scan and log the first accepted plan separately from startup checks.
