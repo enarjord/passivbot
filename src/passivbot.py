@@ -129,7 +129,7 @@ from live.market_snapshot import (
 )
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import exchange_params
+from live import exchange_params, planner_inputs
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
@@ -144,7 +144,6 @@ from config.access import (
 from config.coerce import (
     normalize_hsl_signal_mode,
 )
-from config.bot import normalize_twel_enforcer_policy
 from config.strategy import (
     build_runtime_strategy_side,
     get_active_strategy_side,
@@ -14841,156 +14840,7 @@ class Passivbot:
             current = current[part]
         return current
 
-    def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
-        # Values which are configured globally (not per symbol) live under bot_value.
-        global_keys = {
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-        }
-        bool_keys = {
-            "risk_wel_enforcer_enabled",
-            "risk_twel_enforcer_enabled",
-            "unstuck_enabled",
-            "unstuck_ema_gating_enabled",
-        }
-        string_keys = {
-            "risk_twel_enforcer_policy",
-        }
-        strategy_keys = {
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "ema_span_0_minutes",
-            "ema_span_1_minutes",
-        }
-        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
-        fields = [
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "forager_log_range_ema_span_minutes",
-            "forager_volume_ema_span_minutes",
-            "forager_score_weights",
-            "risk_entry_cooldown_minutes",
-            "entry_cooldown_min_duration_minutes",
-            "entry_cooldown_max_duration_minutes",
-            "entry_cooldown_weights_minutes",
-            "rms_directionality_ema_span_minutes",
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "wallet_exposure_limit_ratio",
-            "risk_wel_enforcer_enabled",
-            "risk_wel_enforcer_threshold_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-            "risk_we_excess_allowance_fraction",
-            "unstuck_enabled",
-            "unstuck_close_fraction",
-            "unstuck_ema_gating_enabled",
-            "unstuck_ema_distance_fraction",
-            "unstuck_ema_span_0_minutes",
-            "unstuck_ema_span_1_minutes",
-            "unstuck_loss_allowance_fraction",
-            "unstuck_exposure_trigger_ratio",
-        ]
-        out: dict[str, object] = {}
-        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
-        strategy_cfg = (
-            strategy_getter(pside, symbol) if callable(strategy_getter) else {}
-        )
-        for key in fields:
-            if key in global_keys:
-                val = self.bot_value(pside, key)
-            elif key in strategy_keys:
-                if key in strategy_cfg:
-                    val = strategy_cfg[key]
-                elif callable(strategy_getter):
-                    val = 0.0
-                else:
-                    val = (
-                        self.bp(pside, key, symbol)
-                        if symbol is not None
-                        else self.bp(pside, key)
-                    )
-            else:
-                val = (
-                    self.bp(pside, key, symbol)
-                    if symbol is not None
-                    else self.bp(pside, key)
-                )
-            out_key = key
-            if key == "forager_score_weights":
-                if not isinstance(val, dict):
-                    raise TypeError(
-                        f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
-                    )
-                out[out_key] = {
-                    "volume": float(val["volume"]),
-                    "ema_readiness": float(val["ema_readiness"]),
-                    "log_range": float(val["log_range"]),
-                    "rms_directionality": float(val["rms_directionality"]),
-                }
-            elif key == "entry_cooldown_weights_minutes":
-                out[out_key] = {
-                    name: float(val[name]) for name in ("exposure_ratio", "adverse_directionality")
-                }
-            elif key == "entry_cooldown_max_duration_minutes":
-                out[out_key] = None if val is None else float(val)
-            elif key == "n_positions":
-                out[out_key] = int(round(val or 0.0))
-            elif key in bool_keys:
-                out[out_key] = bool(val)
-            elif key in string_keys:
-                if key == "risk_twel_enforcer_policy":
-                    out[out_key] = normalize_twel_enforcer_policy(
-                        val,
-                        path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
-                    )
-            else:
-                out[out_key] = float(val or 0.0)
-        policy = hsl_live.policy(self, pside, symbol)
-        # The order kernel consumes only execution policy; the shared
-        # hsl evaluator owns the signal and controller.
-        out.update(
-            hsl_enabled=policy["enabled"],
-            hsl_panic_close_order_type=policy["panic_close_order_type"],
-        )
-        return out
+    _bot_params_to_rust_dict = planner_inputs.bot_params_to_rust_dict
 
     def _unstuck_ema_required(
         self, pside: str, symbol: str, mode: Optional[str]
@@ -18154,18 +18004,15 @@ class Passivbot:
             )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
-            msg = str(e)
-            if "MissingEma" in msg:
-                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
-                if match:
-                    idx = int(match.group(1))
-                    symbol = idx_to_symbol.get(idx)
-                    if symbol:
-                        logging.error(
-                            "[ema] Missing EMA for %s (symbol_idx=%d)",
-                            Passivbot._log_symbol(symbol),
-                            idx,
-                        )
+            if isinstance(e, getattr(pbr, "MissingEmaError", ())):
+                idx = e.args[1]
+                symbol = idx_to_symbol.get(idx)
+                if symbol:
+                    logging.error(
+                        "[ema] Missing EMA for %s (symbol_idx=%d)",
+                        Passivbot._log_symbol(symbol),
+                        idx,
+                    )
             self._emit_rust_orchestrator_returned_event(
                 rust_call_id=rust_call_id,
                 status="failed",

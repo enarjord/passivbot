@@ -42,6 +42,8 @@ use serde_json::{self, Value};
 use std::str::FromStr;
 use std::time::Instant;
 
+pyo3::create_exception!(passivbot_rust, MissingEmaError, PyValueError);
+
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, PyObject);
 
 /// Native CPU market execution counts, SELL lane0 and BUY lane1.
@@ -4201,11 +4203,14 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
-    let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!(
-            "orchestrator compute_ideal_orders failed: {:?}",
-            e
-        ))
+    let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|error| {
+        let message = format!("orchestrator compute_ideal_orders failed: {:?}", error);
+        match error {
+            crate::orchestrator::OrchestratorError::MissingEma { symbol_idx } => {
+                MissingEmaError::new_err((message, symbol_idx))
+            }
+            _ => PyValueError::new_err(message),
+        }
     })?;
 
     serde_json::to_string(&out).map_err(|e| {
