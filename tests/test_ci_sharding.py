@@ -42,8 +42,9 @@ def suite(tmp_path):
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\naddopts = -m 'not excluded'\nmarkers =\n    excluded: default exclusion\n"
     )
-    # At least one whole file in every bucket, without hardcoding fitted paths.
-    buckets = {}
+    # Exercise an override through pytest and manifest verification.
+    override = "tests/test_config_authoring_provenance.py"
+    buckets = {6: Path(override).name}
     candidate = 0
     while len(buckets) < 8:
         name = f"test_sample_{candidate}.py"
@@ -125,9 +126,15 @@ def test_empty_shard_is_an_error_and_collection_errors_are_not_hidden(suite):
 
 
 @pytest.mark.parametrize("path", ["tests/test_ci_sharding.py", "tests/optimization/test_native_backend.py"])
-def test_public_algorithm_is_unsalted_sha256_of_relative_posix_file_path(path):
+def test_default_assignment_is_unsalted_sha256_of_relative_posix_file_path(path):
     expected = int.from_bytes(hashlib.sha256(path.encode("utf-8")).digest(), "big") % 8
     assert shard_for_path(path, 8) == expected
+
+
+def test_timing_overrides_only_apply_to_the_eight_shard_matrix():
+    path = "tests/test_config_authoring_provenance.py"
+    assert shard_for_path(path, 8) == 6
+    assert shard_for_path(path, 4) == 1
 
 
 @pytest.mark.parametrize("path", ["", "/tests/test_a.py", "../test_a.py", "tests/../test_a.py",
@@ -251,3 +258,11 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     assert coverage["needs"] == "shards"
     assert coverage["steps"][0]["env"]["RESULT"] == "${{ needs.shards.result }}"
     assert coverage["steps"][0]["run"] == 'test "$RESULT" = success'
+
+
+def test_docker_cancels_only_superseded_runs_for_the_same_pr():
+    docker = yaml.load((ROOT / ".github/workflows/docker.yml").read_text(), Loader=yaml.BaseLoader)
+    assert docker["concurrency"] == {
+        "group": "docker-images-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": "true",
+    }
