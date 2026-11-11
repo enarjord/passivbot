@@ -2785,10 +2785,8 @@ def test_console_format_summarizes_order_wave_payload():
     )
 
     assert format_console_event(event) == (
-        "[execute] deferred wave=ow_7 cancel=1/1 create=2/3 "
-        "deferred_create=1 elapsed=642ms "
-        "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
-        "reason=create_deferred"
+        "[execute] partially executed reason=create_deferred wave=ow_7 cancel=1/1 create=2/3 "
+        "deferred_create=1 elapsed=642ms symbols=BTC/USDT:USDT,ETH/USDT:USDT,+1"
     )
 
 

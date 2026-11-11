@@ -3891,19 +3891,6 @@ class Passivbot:
         if cache_bytes is not None:
             self._mem_log_prev["cm_cache_bytes"] = cache_bytes
 
-    def _order_plan_summary_is_interesting(
-        self,
-        *,
-        total_pre_cancel: int,
-        total_cancel: int,
-        total_pre_create: int,
-        total_create: int,
-        total_skipped: int,
-    ) -> bool:
-        """Return True when an order-plan summary is worth emitting at INFO."""
-        actual_work = total_cancel + total_create
-        return actual_work >= 4 or (actual_work > 0 and total_skipped >= 4)
-
     def _begin_order_wave(
         self, to_cancel: list[dict], to_create: list[dict]
     ) -> dict | None:
@@ -11471,7 +11458,8 @@ class Passivbot:
                 )
                 if _log_key != last_log_key or now - last_log_ts >= 5.0:
                     presentation_echo = ws_presentation_self_echo(self, upd_list)
-                    (logging.debug if presentation_echo else logging.info)(_log_msg)
+                    routine_hint = _cause in {"open_hint", "cancel_hint", "replace_hint"}
+                    (logging.debug if presentation_echo or routine_hint else logging.info)(_log_msg)
                     self._ws_order_update_last_log_key = _log_key
                     self._ws_order_update_last_log_ts = now
                 self._mark_account_critical_state_dirty(
