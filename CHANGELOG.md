@@ -79,6 +79,9 @@ its own version heading. See [release status](docs/releases.md).
 - Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
   development install profiles and the CLI dependency checks.
 
+- Defer live decisions when a CCXT position snapshot lacks valid size, entry price, or position
+  side. Preserve unknown PnL in generic trade history and require explicit fill position sides.
+
 - Validate the CCXT version for installed wheels using Passivbot's package metadata.
 
 - Drop the unused Numba dependency from Python 3.12 installations.
