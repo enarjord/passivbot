@@ -1863,6 +1863,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     int candidate_index,
     int k,
     int timestep_count,
+    float interval_ms,
     int coin_count,
     bool short_side,
     bool collect_coin_fill_counts,
@@ -1872,7 +1873,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     bool any_close = false;
     for (int c = 0; c < coin_count; ++c) {
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
-        if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
+        if (k != last_valid || !multicoin_tail_indicates_delisting(last_valid, timestep_count, interval_ms)) continue;
         const bool closed = force_close_tm_multicoin_delisted_position(
             market_execution_ticks,
             side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
@@ -1898,6 +1899,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     int candidate_index,
     int k,
     int timestep_count,
+    float interval_ms,
     int coin_count,
     bool collect_coin_fill_counts,
     float market_order_slippage_fraction,
@@ -1906,7 +1908,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     bool any_close = false;
     for (int c = 0; c < coin_count; ++c) {
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
-        if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
+        if (k != last_valid || !multicoin_tail_indicates_delisting(last_valid, timestep_count, interval_ms)) continue;
         bool short_has_position = false;
         for (int other_coin = 0; other_coin < coin_count; ++other_coin) {
             short_has_position = short_has_position || short_side.psize[other_coin] > 0.0f;
@@ -5755,7 +5757,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 market_execution_ticks,
                 long_side, short_side, account, fills,
                 bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
-                int(b), k, T, C, collect_coin_fill_counts,
+                int(b), k, T, interval_ms, C, collect_coin_fill_counts,
                 market_order_slippage_fraction, forced_delist_equity
             );
         }
@@ -6454,7 +6456,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             forced_delist_fill = force_close_tm_multicoin_delisted_one_side(
                 market_execution_ticks,
                 side, account, fills, bars, coin_settings ORGANILLO_PASS,
-                coin_fill_counts, int(b), k, T, C, short_side,
+                coin_fill_counts, int(b), k, T, interval_ms, C, short_side,
                 collect_coin_fill_counts, market_order_slippage_fraction,
                 forced_delist_equity
             );

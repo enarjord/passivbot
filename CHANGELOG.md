@@ -1,8 +1,7 @@
 # Changelog
 
-Notable user-facing changes, grouped by tagged release. `Unreleased` means changes on `master`
-since the latest release tag; these features may already be available when installing from
-`master`. Merging a PR does not publish a release. See [release status](docs/releases.md).
+Notable user-facing changes, grouped by tagged release. `Unreleased` records changes on this branch since the latest release tag. A tagged release has
+its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
@@ -11,7 +10,14 @@ since the latest release tag; these features may already be available when insta
   and normalized weights where applicable, plus copyable backtest and browser commands. Use
   `--front` for objective ranges and leaders or `--list-metrics` to find metric keys and units.
 
+- Refit both 2D Pareto plot axes when filters change. Explore filtered candidates with metric
+  profiles, bot parameter correlations, and interactive selectors for the plotted axes. Download
+  the plotted-axis ranking and its settings as JSON.
+
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
+
+- Distinguish HSL observation freshness from unavailable scopes in the console and suppress
+  obsolete freshness changes already replaced by an equivalent current observation.
 
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
@@ -21,20 +27,35 @@ since the latest release tag; these features may already be available when insta
   approval for new entries. The changed native fingerprint requires reevaluation of saved optimizer
   fitness.
 
+- Measure the backtest and GPU replay delisting cutoff in elapsed time. Tails longer than 24
+  hours trigger the existing final-candle close policy across candle intervals.
+
 - Skip the canonical candle index lookup when a websocket update has no finalized candle to process.
+
+- Aggregate repeated Bitunix malformed candle warnings across websocket subscriptions.
 
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 
 - Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
 
+- Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
+
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
+
+- Fail fast on candle index write contention so another cache writer cannot block the live loop.
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 
+- Summarize sustained ordinary planning delays and their recovery in the live console.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
+- Make live health summaries easier to scan and log the first accepted plan separately from startup checks.
+
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
+
+- Clarify partial order-wave outcomes and move routine order-plan and websocket refresh detail to debug logs.
 
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.
   Require a verified source schema, an explicit unified HSL portfolio policy, and
@@ -70,12 +91,19 @@ since the latest release tag; these features may already be available when insta
 - Fix the live Docker wheel build by copying the Rust lockfile, build script, and pinned toolchain
   into the builder stage.
 
+- Handle SIGTERM in live runs and return a failure status for fatal errors and exhausted restart
+  budgets. The shipped Compose configurations allow 60 seconds for shutdown and leave stopped
+  containers for operator review.
+
 - Restrict Docker build inputs to application files. Mount credentials, configs, and runtime
   data after building. The full image uses the locked Python package build and retains its
   source-script entrypoints.
 
 - Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
   development install profiles and the CLI dependency checks.
+
+- Defer live decisions when a CCXT position snapshot lacks valid size, entry price, or position
+  side. Preserve unknown PnL in generic trade history and require explicit fill position sides.
 
 - Validate the CCXT version for installed wheels using Passivbot's package metadata.
 
@@ -89,33 +117,17 @@ since the latest release tag; these features may already be available when insta
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
   and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
 
-- Reduce live HSL CPU use when capturing long histories of observed risk budgets.
-
-- Reuse encoded live HSL budget facts within a bounded memory budget.
-
-- Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
-  a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reduce live HSL replay CPU by reading retained budget facts directly during forward replay.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reduce live HSL replay CPU by decoding native inputs without cloning their JSON payload.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reuse typed price, fill, and budget facts when rebuilding a live HSL initializer.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per
-  capture batch.
-
-- Reuse the exact submitted HSL facts when validating native results to avoid decoding retained
-  history a second time.
+- Reduce live HSL CPU use for long retained histories. Replay reuses typed price, fill, and
+  risk-budget facts, avoids repeated JSON decoding, and keeps the encoded cache bounded.
+  The changed native fingerprint requires reevaluating saved optimizer fitness.
 
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
   portfolios, and saved input fingerprints when scenarios add exchanges or use
   market settings from another venue. Align preload dates, coins, and scenario
   history demand with the selected portfolios.
+
+- Compute the live initial-entry minimum cost from the plan's current quote and exchange rules.
 
 - Defer ordinary planning when its captured quotes expire or required snapshot inputs are absent,
   preserving the failed cohort's diagnostic details and retrying without restarting the bot.
@@ -149,11 +161,16 @@ since the latest release tag; these features may already be available when insta
   clocks for causal replay. The changed native fingerprint requires reevaluation of saved optimizer
   fitness.
 
+- Back off after live exchange transport errors and report prolonged outages without repeatedly
+  rebuilding the bot during a rate limit or maintenance window.
+
 - Report asynchronous background failures separately from the execution restart budget,
   redact callback diagnostics, and label health cycle timestamps as observation ages.
   Preserve immediate mode recovery messages with bounded grouped transitions and HSL
   unavailability reasons, suppress empty forager selection chatter caused only by slot changes,
   and label pre-acknowledgement order messages as submissions.
+- Cap allowance-scaled auto-unstuck closes at the remaining position size on both sides.
+
 - Show live unstuck diagnostics after startup, on meaningful state changes, and every
   20 minutes: native loss allowance, eligibility and waiting reasons, selected closes,
   and open-order state. Keep repeated observations quiet and label stale plans.
@@ -1335,6 +1352,9 @@ since the latest release tag; these features may already be available when insta
   previews expose scoped observations, stale captures and omitted evidence.
   Keep panic-loss reporting separate from trading state, including completed,
   recovered and unfinished panic segments.
+
+- Report when a held position waits over a minute for a planned close replacement after
+  cancellation, and when the wait clears.
 
 - Live console health now distinguishes active trailing input waits, fill freshness, recent cycle/write activity, and pending HSL preparation. Recovery records show observed blocker phases; candle cache notices identify their warmup scope. HSL reasons remain readable, shared candle receive failures are coalesced with durable per-symbol details, and routine KuCoin history re-fetches stay at DEBUG.
 - Command log archives use unique run suffixes so simultaneous starts and long shared command prefixes cannot select the same file. Live log prefixes include the configured user.

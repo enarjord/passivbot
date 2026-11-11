@@ -225,6 +225,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;
+    m.add_function(wrap_pyfunction!(panic_limit_price_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pside_adverse_price_change_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(calc_order_price_gap_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_id_to_snake, m)?)?;
@@ -232,6 +233,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;
     m.add_function(wrap_pyfunction!(get_order_id_type_from_string_alias, m)?)?;
     m.add_function(wrap_pyfunction!(compute_ideal_orders_json, m)?)?;
+    m.add("MissingEmaError", m.py().get_type_bound::<MissingEmaError>())?;
     m.add_function(wrap_pyfunction!(compute_protective_closes_json, m)?)?;
     m.add_function(wrap_pyfunction!(get_strategy_spec, m)?)?;
     m.add_function(wrap_pyfunction!(get_strategy_kinds, m)?)?;

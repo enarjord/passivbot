@@ -36,6 +36,12 @@ the run, but they do not mirror those raw daily files into `caches/ohlcvs/`.
 
 For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
 
+
+If a symbol's final valid candle is more than 24 hours before the dataset ends, the backtest
+treats that tail as a delisting and closes any remaining position on the final valid candle.
+Shorter missing tails still require a valuation candle while a position is held. An internal
+candle gap is an input error.
+
 ## BTC benchmark source
 
 Combined backtests and optimizations try BTC price history from the configured

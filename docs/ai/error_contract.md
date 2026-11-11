@@ -30,7 +30,9 @@ to the caller. It does not mean every failed symbol fetch must crash the whole b
 6. Validate a produced trading decision before downstream policy consumes it. A malformed Rust
    ideal-order batch is fatal before reconciliation; prior ideals, actual orders, and partial output
    are not fallbacks. When submitted inputs deterministically define an output field, validate the
-   exact result against the full input policy rather than checking only a coarse permission flag.
+   exact result against the full input policy. Reuse native arithmetic for exact numeric checks
+   that share order sizing or rounding formulas. Python checks the result against the submitted
+   input and owns fatal batch rejection.
 
 ## Forbidden Patterns
 
@@ -60,6 +62,11 @@ accepts signed size, book, tick size and execution policy. This numerical API do
 not waive live admission requirements. HSL must derive its current decision from
 fresh account facts, including balance, before each protective write. Malformed
 or incomplete close batches are fatal.
+
+The live execution owner backs off transport failures, including exchange backpressure,
+with an interruptible bounded schedule and logs persistent outages. An authoritative
+retry delay can extend that wait. Ordinary readiness deferrals keep their existing cadence.
+An outage does not authorize action on an expired cohort.
 
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not

@@ -47,28 +47,14 @@ Canonical repository-wide invariants; task documents link here instead of restat
 - Closes should observe effective minimum cost. If a position is below effective minimum quantity,
   close quantity may equal the remaining position size.
 
-## Broker Attribution
+## Attribution And Configuration
 
-- Broker codes and broker-agreement attribution are exchange-critical behavior.
-- Do not remove, bypass, rename, or weaken broker-code handling without explicit user approval.
-- Broker-code loading must fail visibly on missing registries, invalid data, or unknown exchanges.
-- Every relevant order request must carry the exchange-required broker field, header, or tag.
-- Attribution changes require tests at the actual CCXT or raw signed-request boundary, not merely
-  tests of local configuration values.
+Preserve broker attribution at the exchange request boundary. Changes require explicit approval
+and signed-request or CCXT boundary tests. See [exchange integrations](features/exchange_integrations.md).
 
-## Configuration Ownership
-
-Place parameters by actual consumers:
-
-- `config.bot`: strategy and trading policy shared by live, backtest, and optimize; account-wide
-  controls belong under `bot.portfolio`, shared directional defaults under `bot.global`, and
-  directional policy under `bot.long` or `bot.short`
-- `config.live`: operational live execution, exchange I/O, account, and process controls
-- `config.backtest`: simulation-only behavior
-- `config.optimize`: optimizer-only behavior
-
-Choose the narrowest consumer-owned surface; uncertainty does not justify `config.live`. Defaults
-belong in canonical loading/formatting; runtime consumers must not reapply them.
+Put shared trading policy in `bot` and operational controls in the consuming `live`, `backtest`,
+or `optimize` section. Resolve defaults in canonical config loading. See
+[configuration ownership](architecture.md#configuration-ownership).
 
 ## Failure Handling
 
@@ -78,16 +64,10 @@ belong in canonical loading/formatting; runtime consumers must not reapply them.
 - Use `error_contract.md` for the precise meanings of propagate, unavailable, defer, fail closed,
   degraded, and fatal.
 
-## Console Readability
+## Readable Output
 
-Keep console logs easy on human eyes and useful to both humans and agents: show meaningful
-changes, actions and concise summaries; suppress repetitive noise. Follow `logging_policy.md`.
-
-Prioritize readability for JSON clearly intended for human reading or editing, such as generated
-configs and dashboard config exports. Prefer `json_utils.dump_json_streamlined` /
-`json_dumps_streamlined` (also exported by `utils`), `passivbot tool streamline-json`, or another
-suitable formatter while preserving serialization semantics. Keep ordinary JSON serialization
-for internal outputs and outputs intended mainly for tools or AI agents.
+Use bounded, actionable logs with repetitive noise suppressed. Follow [logging policy](logging_policy.md).
+Use streamlined JSON for human-authored or human-edited configs and normal JSON for tool outputs.
 
 ## Scope, Testing, And Compatibility
 
@@ -99,10 +79,5 @@ for internal outputs and outputs intended mainly for tools or AI agents.
 
 ## Release Hygiene
 
-- Treat either 50 top-level user-facing entries under `../../CHANGELOG.md` `Unreleased`, or 14 days
-  since the latest stable tag with at least 10 such entries, as an advisory release-review trigger.
-- When a trigger is reached, no release is already in progress, and the accumulated changes form a
-  coherent release, tell the maintainer and recommend the appropriate semantic version. Ask for
-  explicit permission before editing versions, cutting a branch, tagging, or publishing a release.
-- Do not interrupt incident response or live-safety work with a release prompt. Raise it at the
-  handoff instead. Follow `runbooks/release.md` for version selection, validation, and publication.
+Use the advisory [release review triggers](runbooks/release.md). Release actions require explicit
+approval. Raise them at handoff during active incident response or live-safety work.

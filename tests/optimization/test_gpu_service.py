@@ -985,17 +985,24 @@ def test_gpu_multicoin_valid_tail_gate_rejects_out_of_range_last_index():
     "unrepresentable_close",
     [np.nextafter(0.0, 1.0), np.finfo(np.float64).max],
 )
+@pytest.mark.parametrize("interval_minutes", [1, 5])
+@pytest.mark.parametrize("extra_bars", [0, 1])
 def test_gpu_multicoin_forced_delist_requires_representable_final_candle(
-    unrepresentable_close,
+    unrepresentable_close, interval_minutes, extra_bars,
 ):
-    hlcvs = np.ones((1401, 2, 4), dtype=np.float64)
+    tail_bars = 1440 // interval_minutes + extra_bars
+    hlcvs = np.ones((tail_bars + 1, 2, 4), dtype=np.float64)
     hlcvs[0, 0, 2] = unrepresentable_close
 
-    with pytest.raises(ValueError, match="forced-delist final candle"):
+    # At exactly 24 hours, ordinary packed-candle validation rejects the value.
+    # One bar later the final candle has the explicit forced-close requirement.
+    match = "forced-delist final candle" if extra_bars else "packed float32"
+    with pytest.raises(ValueError, match=match):
         _require_supported_multicoin_valid_tails(
             hlcvs,
             [0, 0],
-            [0, 1400],
+            [0, tail_bars],
+            candle_interval_minutes=interval_minutes,
         )
 
 

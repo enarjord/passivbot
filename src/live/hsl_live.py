@@ -7,6 +7,8 @@ must be admitted again from current facts immediately before a connector write.
 from dataclasses import dataclass, replace
 from functools import wraps
 import logging
+import math
+from random import uniform
 import weakref
 from uuid import uuid4
 
@@ -162,6 +164,56 @@ class Wave:
         )
 
 
+@dataclass
+class CurrentIoRetry:
+    """Transport retry state shared by replacement bots in one live process."""
+
+    failures: int = 0
+    category: str | None = None
+    retry_at: float = 0.0
+
+    def record_failure(self, *, now, category, error_type, retry_after, execution_delay):
+        self.failures += 1
+        base = 10.0 if category == "exchange_backpressure" else 2.0
+        delay = min(60.0, base * 2 ** min(self.failures - 1, 5) * uniform(1.0, 1.25))
+        delay = max(delay, retry_after, execution_delay)
+        self.retry_at = now + delay
+        if self.failures == 10:
+            logging.error(
+                "[risk] current I/O outage persists | failures=%d error_type=%s retry_seconds=%.1f",
+                self.failures, error_type, delay,
+            )
+        elif category != self.category:
+            logging.warning(
+                "[risk] current I/O retry | category=%s error_type=%s retry_seconds=%.1f",
+                category, error_type, delay,
+            )
+        self.category = category
+
+    def recover(self):
+        if self.failures:
+            logging.info("[risk] current I/O recovered | failed_cycles=%d", self.failures)
+        self.failures = 0
+        self.category = None
+        self.retry_at = 0.0
+
+
+def _retry_after_seconds(exc):
+    # Use headers attached to this failure only. CCXT's session-wide last
+    # response can belong to another concurrent request.
+    headers = getattr(exc, "response_headers", None)
+    if not hasattr(headers, "items"):
+        return 0.0
+    for key, value in headers.items():
+        if str(key).lower() == "retry-after":
+            try:
+                seconds = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+            return seconds if math.isfinite(seconds) and seconds > 0.0 else 0.0
+    return 0.0
+
+
 class Owner:
     def __init__(self, bot):
         import asyncio
@@ -179,6 +231,9 @@ class Owner:
         self._cycle_running = False
         self._running = False
         self.bot = bot
+        self._current_io_retry = getattr(bot, "_current_io_retry_state", None)
+        if self._current_io_retry is None:
+            self._current_io_retry = CurrentIoRetry()
         self.sources = {}
         self.quotes = {}
         self._waves = {}
@@ -1215,7 +1270,13 @@ class Owner:
         """
         import asyncio
         from live.state_refresh import AuthoritativeSurfaceUnavailable
-        from ccxt.base.errors import NetworkError, InvalidNonce
+        from ccxt.base.errors import (
+            DDoSProtection,
+            InvalidNonce,
+            NetworkError,
+            OnMaintenance,
+            RateLimitExceeded,
+        )
 
         if self._cycle_running:
             raise RuntimeError("HSL execution cycle is already running")
@@ -1416,11 +1477,18 @@ class Owner:
             )
         except InvalidNonce:
             raise
-        except (
-            NetworkError,
-            AuthoritativeSurfaceUnavailable,
-            MarketSnapshotUnavailable,
-        ) as exc:
+        except NetworkError as exc:
+            category = (
+                "exchange_backpressure"
+                if isinstance(exc, (DDoSProtection, OnMaintenance, RateLimitExceeded))
+                else "network"
+            )
+            return dict(
+                updated=False,
+                current_io_unavailable=True,
+                transport_failure=(category, type(exc).__name__, _retry_after_seconds(exc)),
+            )
+        except (AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
             logging.warning(
                 "[risk] hsl current I/O unavailable | error_type=%s", type(exc).__name__
             )
@@ -1477,6 +1545,9 @@ class Owner:
         self._running = True
         try:
             while not self._shutdown_requested():
+                retry_delay = self._current_io_retry.retry_at - self._schedule_clock()
+                if retry_delay > 0.0:
+                    await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
                 started = int(utc_ms())
                 from ccxt.base.errors import ExchangeError, InvalidNonce
 
@@ -1492,6 +1563,18 @@ class Owner:
                     bot._health_errors += 1
                     await bot._sleep_unless_shutdown(0.5, stage="exchange_time_sync")
                     continue
+                if transport_failure := result.get("transport_failure"):
+                    category, error_type, retry_after = transport_failure
+                    self._current_io_retry.record_failure(
+                        now=self._schedule_clock(),
+                        category=category,
+                        error_type=error_type,
+                        retry_after=retry_after,
+                        execution_delay=float(bot.live_value("execution_delay_seconds")),
+                    )
+                    continue
+                if result["updated"]:
+                    self._current_io_retry.recover()
                 if not result["updated"] and not result.get("current_io_unavailable"):
                     await bot._sleep_unless_shutdown(0.5, stage="hsl_current_inputs")
                     continue

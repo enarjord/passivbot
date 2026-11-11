@@ -5,12 +5,14 @@ import logging
 import math
 import os
 import sys
+from threading import Event
 from copy import deepcopy
 from typing import Any, Iterable, Optional
 
 import numpy as np
 import passivbot_rust as pbr
 
+from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.console_health import ordinary_progress_payload
 from live import ordinary_diagnostics
@@ -2066,8 +2068,19 @@ async def _monitor_flush_snapshot(
         self._monitor_snapshot_flush_lock = lock
     async with lock:
         try:
-            snapshot = await self._build_monitor_snapshot(now_ms=ts)
-            return publisher.write_snapshot(snapshot, ts=ts, force=force)
+            snapshot = deepcopy(await self._build_monitor_snapshot(now_ms=ts))
+            cancelled = Event()
+            write = asyncio.create_task(
+                asyncio.to_thread(
+                    publisher.write_snapshot, snapshot, ts=ts, force=force, cancelled=cancelled
+                )
+            )
+            try:
+                return await asyncio.shield(write)
+            except asyncio.CancelledError:
+                cancelled.set()
+                await write
+                raise
         except Exception as exc:
-            logging.error("[monitor] failed building monitor snapshot: %s", exc)
+            logging.error("[monitor] snapshot flush failed | error_type=%s", bounded_exception_type(exc))
             return False

@@ -742,7 +742,7 @@ converting it to zero. Totals may be summed across compatible windows; maxima re
 ## Key Code And Tests
 
 - `src/live/event_bus.py`
-- `src/live/event_producers.py`
+- `src/live/event_emitters.py`
 - `tests/test_live_event_registry_docs.py`
 - event-family tests under `tests/`
 

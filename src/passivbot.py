@@ -90,6 +90,7 @@ from live.diagnostic_safety import (
     exception_text_contains,
     exception_type_name_contains,
 )
+from live.close_replacement_diagnostics import observe_account as observe_close_replacements
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.console_health import (
@@ -129,7 +130,7 @@ from live.market_snapshot import (
 )
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import exchange_params
+from live import exchange_params, planner_inputs
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
@@ -144,7 +145,6 @@ from config.access import (
 from config.coerce import (
     normalize_hsl_signal_mode,
 )
-from config.bot import normalize_twel_enforcer_policy
 from config.strategy import (
     build_runtime_strategy_side,
     get_active_strategy_side,
@@ -240,7 +240,6 @@ from procedures import (
     load_broker_code,
     load_user_info,
     get_first_timestamps_unified,
-    print_async_exception,
 )
 from utils import get_file_mod_ms
 from warmup_utils import (
@@ -523,7 +522,7 @@ def _force_exit_after_repeated_signal(sig):
 
 
 def signal_handler(sig, frame):
-    """Handle SIGINT by signalling the running bot to stop gracefully."""
+    """Request graceful shutdown for a running bot."""
     bot = globals().get("bot")
     if bot is not None and (
         getattr(bot, "stop_signal_received", False)
@@ -550,9 +549,6 @@ def signal_handler(sig, frame):
             loop.call_soon_threadsafe(lambda: None)
     elif loop is not None:
         loop.call_soon_threadsafe(loop.stop)
-
-
-signal.signal(signal.SIGINT, signal_handler)
 
 
 def get_function_name():
@@ -3489,7 +3485,6 @@ class Passivbot:
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         # await self.init_flags()
         self.init_coin_overrides()
-        # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
         self.set_market_specific_settings()
         self._assert_supported_live_state()
@@ -3896,19 +3891,6 @@ class Passivbot:
         self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
         if cache_bytes is not None:
             self._mem_log_prev["cm_cache_bytes"] = cache_bytes
-
-    def _order_plan_summary_is_interesting(
-        self,
-        *,
-        total_pre_cancel: int,
-        total_cancel: int,
-        total_pre_create: int,
-        total_create: int,
-        total_skipped: int,
-    ) -> bool:
-        """Return True when an order-plan summary is worth emitting at INFO."""
-        actual_work = total_cancel + total_create
-        return actual_work >= 4 or (actual_work > 0 and total_skipped >= 4)
 
     def _begin_order_wave(
         self, to_cancel: list[dict], to_create: list[dict]
@@ -9630,33 +9612,6 @@ class Passivbot:
             minimum_coin_age_days(self.config, pside),
         )
 
-    async def update_tickers(self):
-        """Fetch latest ticker data and fill in missing bid/ask/last values."""
-        if not hasattr(self, "tickers"):
-            self.tickers = {}
-        tickers = None
-        try:
-            tickers = await self.cca.fetch_tickers()
-            for symbol in tickers:
-                if tickers[symbol]["last"] is None:
-                    if (
-                        tickers[symbol]["bid"] is not None
-                        and tickers[symbol]["ask"] is not None
-                    ):
-                        tickers[symbol]["last"] = np.mean(
-                            [tickers[symbol]["bid"], tickers[symbol]["ask"]]
-                        )
-                else:
-                    for oside in ["bid", "ask"]:
-                        if (
-                            tickers[symbol][oside] is None
-                            and tickers[symbol]["last"] is not None
-                        ):
-                            tickers[symbol][oside] = tickers[symbol]["last"]
-            self.tickers = tickers
-        except Exception as e:
-            logging.error(f"Error with {get_function_name()} {e}")
-
     async def prepare_planning_universe(self):
         """Build the final symbol universe before refreshing market data."""
         await self.update_effective_min_cost()
@@ -10960,6 +10915,11 @@ class Passivbot:
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}
             )
+        if getattr(self, "_console_close_replacements", None):
+            run_diagnostic_step(
+                "observe confirmed close replacements",
+                lambda: observe_close_replacements(self, refreshed_surfaces, int(utc_ms())),
+            )
 
     def _mark_account_critical_state_dirty(
         self,
@@ -11504,7 +11464,8 @@ class Passivbot:
                 )
                 if _log_key != last_log_key or now - last_log_ts >= 5.0:
                     presentation_echo = ws_presentation_self_echo(self, upd_list)
-                    (logging.debug if presentation_echo else logging.info)(_log_msg)
+                    routine_hint = _cause in {"open_hint", "cancel_hint", "replace_hint"}
+                    (logging.debug if presentation_echo or routine_hint else logging.info)(_log_msg)
                     self._ws_order_update_last_log_key = _log_key
                     self._ws_order_update_last_log_ts = now
                 self._mark_account_critical_state_dirty(
@@ -13891,10 +13852,8 @@ class Passivbot:
             self.open_orders = {}
         if self.stop_signal_received:
             return False
-        res = None
         try:
-            res = await self.fetch_open_orders()
-            return await self._apply_open_orders_snapshot(res)
+            return await self._apply_open_orders_snapshot(await self.fetch_open_orders())
         except RateLimitExceeded:
             self._health_rate_limits = (
                 int(getattr(self, "_health_rate_limits", 0) or 0) + 1
@@ -13903,11 +13862,6 @@ class Passivbot:
                 "[rate] hit rate limit while fetching open orders; retrying next cycle"
             )
             return False
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            print_async_exception(res)
-            traceback.print_exc()
-            raise
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""
@@ -14544,49 +14498,30 @@ class Passivbot:
         c_mult = float(self.c_mults[symbol])
         if min_qty <= 0.0 and qty_step > 0.0:
             min_qty = qty_step
-        calc_min_entry_qty = getattr(pbr, "calc_min_entry_qty_py", None)
-        if calc_min_entry_qty is not None:
-            min_entry_qty = float(
-                calc_min_entry_qty(price, c_mult, qty_step, min_qty, min_cost)
-            )
-        else:
-            if price <= 0.0 or c_mult <= 0.0:
-                min_entry_qty = min_qty
-            else:
-                min_cost_qty = min_cost / price / c_mult
-                if qty_step > 0.0:
-                    min_cost_qty = (
-                        math.ceil(max(0.0, min_cost_qty) / qty_step) * qty_step
-                    )
-                min_entry_qty = max(min_qty, min_cost_qty)
+        min_entry_qty = pbr.calc_min_entry_qty_py(price, c_mult, qty_step, min_qty, min_cost)
         return float(pbr.qty_to_cost(min_entry_qty, price, c_mult))
 
     async def update_effective_min_cost(self, symbol=None):
-        """Update the effective minimum order cost for one or all symbols."""
+        """Refresh the legacy minimum-cost filter from an explicit market snapshot."""
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
-        if symbol is None:
-            symbols = sorted(self.get_symbols_approved_or_has_pos())
-        else:
-            symbols = [symbol]
+        symbols = sorted(self.get_symbols_approved_or_has_pos()) if symbol is None else [symbol]
+        for requested in symbols:
+            self.effective_min_cost.pop(requested, None)
         last_prices = await self._get_live_last_prices(
             symbols, max_age_ms=600_000, context="effective_min_cost"
         )
-        for symbol in symbols:
-            try:
-                self.effective_min_cost[symbol] = (
-                    self._calc_effective_min_cost_at_price(
-                        symbol, float(last_prices[symbol])
-                    )
+        for requested in symbols:
+            price = last_prices.get(requested)
+            if price is None or not math.isfinite(price) or price <= 0.0:
+                logging.warning(
+                    "[entry] effective minimum cost unavailable | symbol=%s reason=market_price",
+                    Passivbot._log_symbol(requested),
                 )
-            except Exception as e:
-                logging.error(
-                    "error with %s for %s: %s",
-                    get_function_name(),
-                    Passivbot._log_symbol(symbol),
-                    e,
-                )
-                traceback.print_exc()
+                continue
+            self.effective_min_cost[requested] = self._calc_effective_min_cost_at_price(
+                requested, price
+            )
 
     async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
@@ -14877,156 +14812,7 @@ class Passivbot:
             current = current[part]
         return current
 
-    def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
-        # Values which are configured globally (not per symbol) live under bot_value.
-        global_keys = {
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-        }
-        bool_keys = {
-            "risk_wel_enforcer_enabled",
-            "risk_twel_enforcer_enabled",
-            "unstuck_enabled",
-            "unstuck_ema_gating_enabled",
-        }
-        string_keys = {
-            "risk_twel_enforcer_policy",
-        }
-        strategy_keys = {
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "ema_span_0_minutes",
-            "ema_span_1_minutes",
-        }
-        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
-        fields = [
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "forager_log_range_ema_span_minutes",
-            "forager_volume_ema_span_minutes",
-            "forager_score_weights",
-            "risk_entry_cooldown_minutes",
-            "entry_cooldown_min_duration_minutes",
-            "entry_cooldown_max_duration_minutes",
-            "entry_cooldown_weights_minutes",
-            "rms_directionality_ema_span_minutes",
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "wallet_exposure_limit_ratio",
-            "risk_wel_enforcer_enabled",
-            "risk_wel_enforcer_threshold_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-            "risk_we_excess_allowance_fraction",
-            "unstuck_enabled",
-            "unstuck_close_fraction",
-            "unstuck_ema_gating_enabled",
-            "unstuck_ema_distance_fraction",
-            "unstuck_ema_span_0_minutes",
-            "unstuck_ema_span_1_minutes",
-            "unstuck_loss_allowance_fraction",
-            "unstuck_exposure_trigger_ratio",
-        ]
-        out: dict[str, object] = {}
-        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
-        strategy_cfg = (
-            strategy_getter(pside, symbol) if callable(strategy_getter) else {}
-        )
-        for key in fields:
-            if key in global_keys:
-                val = self.bot_value(pside, key)
-            elif key in strategy_keys:
-                if key in strategy_cfg:
-                    val = strategy_cfg[key]
-                elif callable(strategy_getter):
-                    val = 0.0
-                else:
-                    val = (
-                        self.bp(pside, key, symbol)
-                        if symbol is not None
-                        else self.bp(pside, key)
-                    )
-            else:
-                val = (
-                    self.bp(pside, key, symbol)
-                    if symbol is not None
-                    else self.bp(pside, key)
-                )
-            out_key = key
-            if key == "forager_score_weights":
-                if not isinstance(val, dict):
-                    raise TypeError(
-                        f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
-                    )
-                out[out_key] = {
-                    "volume": float(val["volume"]),
-                    "ema_readiness": float(val["ema_readiness"]),
-                    "log_range": float(val["log_range"]),
-                    "rms_directionality": float(val["rms_directionality"]),
-                }
-            elif key == "entry_cooldown_weights_minutes":
-                out[out_key] = {
-                    name: float(val[name]) for name in ("exposure_ratio", "adverse_directionality")
-                }
-            elif key == "entry_cooldown_max_duration_minutes":
-                out[out_key] = None if val is None else float(val)
-            elif key == "n_positions":
-                out[out_key] = int(round(val or 0.0))
-            elif key in bool_keys:
-                out[out_key] = bool(val)
-            elif key in string_keys:
-                if key == "risk_twel_enforcer_policy":
-                    out[out_key] = normalize_twel_enforcer_policy(
-                        val,
-                        path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
-                    )
-            else:
-                out[out_key] = float(val or 0.0)
-        policy = hsl_live.policy(self, pside, symbol)
-        # The order kernel consumes only execution policy; the shared
-        # hsl evaluator owns the signal and controller.
-        out.update(
-            hsl_enabled=policy["enabled"],
-            hsl_panic_close_order_type=policy["panic_close_order_type"],
-        )
-        return out
+    _bot_params_to_rust_dict = planner_inputs.bot_params_to_rust_dict
 
     def _unstuck_ema_required(
         self, pside: str, symbol: str, mode: Optional[str]
@@ -17859,8 +17645,6 @@ class Passivbot:
         # Complete slow preparatory work before capturing the ticker snapshot
         # used for Rust planning. This keeps the planning snapshot fresh through
         # the create-side safety guard instead of aging it during EMA loading.
-        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
-            await self.update_effective_min_cost()
         warmed_forager_normal_symbols = await self._warmup_new_forager_normal_symbols(
             symbols
         )
@@ -18058,11 +17842,7 @@ class Passivbot:
                 and symbol not in ema_unavailable_symbols
                 and not exchange_cooldown_blocks_symbol
             )
-            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
-            if effective_min_cost <= 0.0:
-                effective_min_cost = self._calc_effective_min_cost_at_price(
-                    symbol, mprice
-                )
+            effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
 
             def side_input(pside: str) -> dict:
                 mode = self._mode_override_to_orchestrator_mode(
@@ -18190,18 +17970,15 @@ class Passivbot:
             )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
-            msg = str(e)
-            if "MissingEma" in msg:
-                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
-                if match:
-                    idx = int(match.group(1))
-                    symbol = idx_to_symbol.get(idx)
-                    if symbol:
-                        logging.error(
-                            "[ema] Missing EMA for %s (symbol_idx=%d)",
-                            Passivbot._log_symbol(symbol),
-                            idx,
-                        )
+            if isinstance(e, getattr(pbr, "MissingEmaError", ())):
+                idx = e.args[1]
+                symbol = idx_to_symbol.get(idx)
+                if symbol:
+                    logging.error(
+                        "[ema] Missing EMA for %s (symbol_idx=%d)",
+                        Passivbot._log_symbol(symbol),
+                        idx,
+                    )
             self._emit_rust_orchestrator_returned_event(
                 rust_call_id=rust_call_id,
                 status="failed",
@@ -20571,15 +20348,41 @@ async def main():
     global bot
     bot = None
     context = {"stage": "cli", "incident_id": f"process-{int(utc_ms())}"}
+    loop = asyncio.get_running_loop()
+    live_task = asyncio.current_task()
+    shutdown_requested = False
+
+    def request_shutdown(sig):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            _force_exit_after_repeated_signal(sig)
+        shutdown_requested = True
+        if bot is None:
+            live_task.cancel()
+        else:
+            signal_handler(sig, None)
+
+    def schedule_shutdown(sig, frame):
+        loop.call_soon_threadsafe(request_shutdown, sig)
+
+    previous_handlers = {}
     try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[sig] = signal.signal(sig, schedule_shutdown)
         await _run_live(context)
+    except asyncio.CancelledError:
+        if not shutdown_requested:
+            raise
+        logging.info("[shutdown] stopped during %s", context["stage"])
     except Exception as exc:
-        # Pre-loop failures remain terminal. SystemExit prevents a second, raw
-        # interpreter traceback without changing the unsuccessful exit status.
+        # Avoid a second, raw interpreter traceback for startup failures.
         _log_process_failure(
             "passivbot startup error", exc, action="stop", context=context
         )
         raise SystemExit(1) from None
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 async def _run_live(startup_context: dict):
@@ -20788,6 +20591,7 @@ async def _run_live(startup_context: dict):
     cooldown_secs = 60
     restarts = []
     failure_state = {}
+    current_io_retry = hsl_live.CurrentIoRetry()
     while True:
 
         startup_context["stage"] = "setup_bot"
@@ -20795,9 +20599,13 @@ async def _run_live(startup_context: dict):
         bot = setup_bot(config)
         globals()["bot"] = bot
         bot._process_failure_state = failure_state
+        bot._current_io_retry_state = current_io_retry
         startup_context["stage"] = "bot_lifecycle"
         fatal_error = None
         try:
+            retry_delay = current_io_retry.retry_at - time.monotonic()
+            if retry_delay > 0.0:
+                await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
@@ -20835,30 +20643,23 @@ async def _run_live(startup_context: dict):
             logging.info("Bot stopped via signal; exiting main loop.")
             break
         if fatal_error is not None:
-            break
-
-        logging.info(f"restarting bot...")
-        startup_context["stage"] = "restart_cooldown"
-        print()
-        for z in range(cooldown_secs, -1, -1):
-            if bot is not None and getattr(bot, "stop_signal_received", False):
-                break
-            print(f"\rcountdown {z}...  ")
-            await asyncio.sleep(1)
-        print()
-        if bot is not None and getattr(bot, "stop_signal_received", False):
-            logging.info(
-                "Bot stopped via signal during restart cooldown; exiting main loop."
-            )
-            break
+            raise SystemExit(1)
 
         startup_context["stage"] = "restart_budget"
-        restarts.append(utc_ms())
-        restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
+        now_ms = utc_ms()
+        restarts = [x for x in restarts if x > now_ms - 1000 * 60 * 60 * 24]
         max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))
-        if len(restarts) > max_restarts:
-            _log_restart_budget_exhausted(restarts, max_restarts, failure_state)
-            break
+        if len(restarts) >= max_restarts:
+            _log_restart_budget_exhausted([*restarts, now_ms], max_restarts, failure_state)
+            raise SystemExit(1)
+
+        startup_context["stage"] = "restart_cooldown"
+        # The old bot is already closed. A stop during this wait cancels the
+        # lifecycle task without starting a second shutdown on that instance.
+        bot = None
+        logging.info("[restart] waiting %ds before constructing a replacement", cooldown_secs)
+        await asyncio.sleep(cooldown_secs)
+        restarts.append(utc_ms())
 
 
 if __name__ == "__main__":

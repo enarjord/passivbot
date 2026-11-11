@@ -22,6 +22,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import time
 from collections import defaultdict, deque
 from copy import deepcopy
@@ -2090,34 +2091,59 @@ class FillEventCache:
         self.save_metadata(metadata)
 
     def save_days(self, day_events: Dict[str, Sequence[FillEvent]]) -> None:
-        for day, events in day_events.items():
-            path = self.root / f"{day}.json"
-            payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
-            if path.exists():
-                try:
-                    with path.open("r", encoding="utf-8") as fh:
-                        current = json.load(fh)
-                except Exception:
-                    current = None
-                if current == payload:
-                    logger.debug("FillEventCache.save_days: %s unchanged", path.name)
-                    continue
-            tmp_path = path.with_suffix(".tmp")
-            try:
-                with tmp_path.open("w", encoding="utf-8") as fh:
+        self._publish_day_writes(self._stage_day_writes(day_events))
+
+    def _stage_day_writes(
+        self, day_events: Dict[str, Sequence[FillEvent]]
+    ) -> list[tuple[Path, Path, int]]:
+        """Write private staging files. Only the refresh owner may publish them."""
+        staged = []
+        try:
+            for day, events in day_events.items():
+                path = self.root / f"{day}.json"
+                payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
+                if path.exists():
+                    try:
+                        with path.open("r", encoding="utf-8") as fh:
+                            current = json.load(fh)
+                    except Exception:
+                        current = None
+                    if current == payload:
+                        logger.debug("FillEventCache.save_days: %s unchanged", path.name)
+                        continue
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.root,
+                    prefix=f".{path.stem}.", suffix=".tmp", delete=False,
+                ) as fh:
+                    staged.append((Path(fh.name), path, len(payload)))
                     json.dump(payload, fh)
-                os.replace(tmp_path, path)
-            except Exception as exc:
-                if _is_disk_full_error(exc):
-                    raise FillEventCacheDiskFullError(
-                        f"fill event cache write failed: disk full while writing {path}"
-                    ) from exc
-                raise
-            logger.debug(
-                "[fills] cache wrote %d events to %s",
-                len(payload),
-                path.name,
-            )
+        except BaseException as exc:
+            self._discard_day_writes(staged)
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        return staged
+
+    @staticmethod
+    def _discard_day_writes(staged: list[tuple[Path, Path, int]]) -> None:
+        for temporary, _path, _count in staged:
+            temporary.unlink(missing_ok=True)
+
+    def _publish_day_writes(self, staged: list[tuple[Path, Path, int]]) -> None:
+        try:
+            for temporary, path, count in staged:
+                os.replace(temporary, path)
+                logger.debug("[fills] cache wrote %d events to %s", count, path.name)
+        except Exception as exc:
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        finally:
+            self._discard_day_writes(staged)
 
     @property
     def metadata_path(self) -> Path:
@@ -3671,6 +3697,7 @@ class FillEventsManager:
         self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
         self._degraded_pnl_repair_attempted_keys: set[str] = set()
         self._degraded_pnl_repair_aux_cursor_ms: dict[str, int] = {}
         self._degraded_pnl_repair_aux_completed_keys: set[str] = set()
@@ -4967,7 +4994,39 @@ class FillEventsManager:
             logger.info("[fills-doctor] KuCoin repair complete; cache backed up at %s", backup_path)
         return report
 
+    async def _save_refresh_days(self, day_payload):
+        """Drain staging even on repeated cancellation. Only this task can publish."""
+        write = asyncio.create_task(asyncio.to_thread(self.cache._stage_day_writes, day_payload))
+        try:
+            staged = await asyncio.shield(write)
+        except asyncio.CancelledError:
+            while not write.done():
+                try:
+                    await asyncio.shield(write)
+                except asyncio.CancelledError:
+                    continue
+            self.cache._discard_day_writes(write.result())
+            raise
+        self.cache._publish_day_writes(staged)
+
+
     async def refresh(
+        self,
+        *,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+        mark_refreshed: bool = True,
+        degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        async with self._refresh_lock:
+            await self._refresh(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                mark_refreshed=mark_refreshed,
+                degraded_pnl_aux_range=degraded_pnl_aux_range,
+            )
+
+    async def _refresh(
         self,
         *,
         start_ms: Optional[int] = None,
@@ -5006,7 +5065,7 @@ class FillEventsManager:
                         source_id_index.pop(str(source_id), None)
             return existing
 
-        def handle_batch(batch: List[Dict[str, object]]) -> None:
+        async def handle_batch(batch: List[Dict[str, object]]) -> None:
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
             parsed_events: List[Tuple[Dict[str, object], FillEvent]] = []
@@ -5112,7 +5171,7 @@ class FillEventsManager:
             if not days_touched:
                 return
             day_payload = self._events_for_days(updated_map.values(), days_touched)
-            self.cache.save_days(day_payload)
+            await self._save_refresh_days(day_payload)
             all_days_persisted.update(days_touched)
 
         fetch_started = time.monotonic()
@@ -5199,13 +5258,13 @@ class FillEventsManager:
         if fetched_batches:
             for batch in fetched_batches:
                 await self._apply_fee_policy_to_batch(batch)
-                handle_batch(batch)
+                await handle_batch(batch)
         elif fetched_events:
             batch = [dict(ev) for ev in fetched_events if in_requested_range(ev)]
             await self._apply_fee_policy_to_batch(batch)
-            handle_batch(batch)
+            await handle_batch(batch)
 
-        self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+        new_events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
 
         # Empty successful fetches need not replay history once a full replay
@@ -5219,15 +5278,15 @@ class FillEventsManager:
             empty_refresh
             and proof is not None
             and fee_policy == proof[0]
-            and self._events == proof[1]
+            and new_events == proof[1]
         )
         before_replay = (
-            deepcopy(self._events) if empty_refresh and self._events and not unchanged else None
+            deepcopy(new_events) if empty_refresh and new_events and not unchanged else None
         )
 
         # Annotate psize/pprice for all events unless replay is proven redundant.
-        if self._events and not unchanged:
-            payload = [ev.to_dict() for ev in self._events]
+        if new_events and not unchanged:
+            payload = [ev.to_dict() for ev in new_events]
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
@@ -5236,36 +5295,44 @@ class FillEventsManager:
             apply_exchange_raw_position_overrides(payload)
             synthesized_days = (
                 self._synthesize_missing_pnls(payload)
-                if any(ev.pnl_pending for ev in self._events)
+                if any(ev.pnl_pending for ev in new_events)
                 else set()
             )
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
-            self._events = [FillEvent.from_dict(ev) for ev in payload]
+            new_events = [FillEvent.from_dict(ev) for ev in payload]
             all_days_persisted.update(synthesized_days)
             all_days_persisted.update(cycle_reconciled_days)
 
             # Re-persist touched days with annotated psize/pprice values
             if all_days_persisted:
-                day_payload = self._events_for_days(self._events, all_days_persisted)
-                self.cache.save_days(day_payload)
+                day_payload = self._events_for_days(new_events, all_days_persisted)
+                await self._save_refresh_days(day_payload)
 
         fetched_bounded_range = start_ms is not None and end_ms is not None
 
-        # Update cache metadata with timestamps
-        if self._events:
-            self.cache.update_metadata_from_events(
-                self._events, mark_refreshed=mark_refreshed
-            )
-        elif mark_refreshed:
-            # A successful empty fetch proves that metadata-only event bounds
-            # are stale. Keeping them would leave coverage permanently blocked
-            # by a cache_metadata_event_mismatch verdict.
-            self.cache.mark_refreshed(reset_event_bounds=True)
-        if fetched_bounded_range:
-            # A successful bounded fetch proves the retried range even when the
-            # exchange returns no new fills or only duplicates.
-            self.cache.clear_gap(start_ms, end_ms)
+        # Failed metadata persistence must not advance the in-memory
+        # checkpoint past fills that are still unpublished in this manager.
+        previous_metadata = deepcopy(self.cache.load_metadata())
+        try:
+            if new_events:
+                self.cache.update_metadata_from_events(
+                    new_events, mark_refreshed=mark_refreshed
+                )
+            elif mark_refreshed:
+                # A successful empty fetch proves that metadata-only event bounds
+                # are stale. Keeping them would leave coverage permanently blocked
+                # by a cache_metadata_event_mismatch verdict.
+                self.cache.mark_refreshed(reset_event_bounds=True)
+            if fetched_bounded_range:
+                # A successful bounded fetch proves the retried range even when the
+                # exchange returns no new fills or only duplicates.
+                self.cache.clear_gap(start_ms, end_ms)
 
+        except Exception:
+            self.cache._metadata = previous_metadata
+            raise
+
+        self._events = new_events
         # Retain proof only after all ordinary persistence/checkpoint work succeeds.
         # Losing this cache (including restart) merely performs another full replay.
         if unchanged:

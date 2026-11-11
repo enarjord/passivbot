@@ -46,6 +46,7 @@ import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 from procedures import assert_correct_ccxt_version
 from config.access import get_optional_live_value, require_live_value
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -339,35 +340,25 @@ class CCXTBot(Passivbot):
 
     # ═══════════════════ PNL FETCHING HOOKS ═══════════════════
 
-    def _get_pnl_from_trade(self, trade: dict) -> float:
-        """Hook: Extract realized PnL from trade.
-
-        Default: Look for common CCXT info fields
-        Override: Exchange-specific field names
-        """
-        info = trade.get("info", {})
-        for field in ["realized_pnl", "realizedPnl", "pnl", "profit"]:
-            if field in info:
-                return float(info[field])
-        return 0.0
+    def _get_pnl_from_trade(self, trade: dict) -> float | None:
+        """Extract explicit realized PnL, preserving unknown PnL as unavailable."""
+        info = trade.get("info") or {}
+        for field in ("realized_pnl", "realizedPnl", "pnl", "profit"):
+            value = info.get(field)
+            if value is not None:
+                pnl = float(value)
+                if isinstance(value, bool) or not math.isfinite(pnl):
+                    raise ValueError("trade has invalid realized PnL")
+                return pnl
+        return None
 
     def _get_position_side_from_trade(self, trade: dict) -> str:
-        """Hook: Determine position side from trade.
-
-        Default: Infer from side + PnL (entry vs exit)
-        Override: Exchange-specific logic
-
-        Logic: PnL=0 means entry, PnL!=0 means exit
-        - buy + entry = long
-        - buy + exit = short (closing short)
-        - sell + entry = short
-        - sell + exit = long (closing long)
-        """
-        pnl = self._get_pnl_from_trade(trade)
-        if trade["side"] == "buy":
-            return "long" if pnl == 0.0 else "short"
-        else:
-            return "short" if pnl == 0.0 else "long"
+        """Require explicit position side. Realized PnL does not encode fill intent."""
+        info = trade.get("info") or {}
+        side = str(trade.get("position_side") or info.get("positionSide") or "").lower()
+        if side not in {"long", "short"}:
+            raise ValueError("trade lacks an explicit LONG/SHORT position side")
+        return side
 
     def _build_ccxt_config(self) -> dict:
         """Build CCXT config by passing through all user_info fields.
@@ -562,22 +553,44 @@ class CCXTBot(Passivbot):
         Override: Exchange-specific field mappings
         """
         positions = []
-        for elm in fetched:
-            contracts = float(elm.get("contracts", 0))
-            if contracts != 0:
-                normalized = {
-                    "symbol": elm["symbol"],
-                    "position_side": self._get_position_side(elm),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                }
-                self._preserve_position_timing(elm, normalized)
-                margin_mode = self._extract_live_margin_mode(elm)
-                if margin_mode is not None:
-                    normalized["margin_mode"] = margin_mode
-                    self._record_live_margin_mode(normalized["symbol"], margin_mode)
-                positions.append(normalized)
+        for row in fetched:
+            contracts = self._authoritative_position_number(row.get("contracts"), "contracts")
+            if contracts == 0.0:
+                continue
+            entry_price = self._authoritative_position_number(row.get("entryPrice"), "entry_price")
+            if entry_price <= 0.0:
+                raise AuthoritativeSurfaceUnavailable("positions", "invalid_entry_price")
+            symbol = row.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise AuthoritativeSurfaceUnavailable("positions", "invalid_symbol")
+            side = self._get_position_side(row)
+            if side not in {"long", "short"}:
+                raise AuthoritativeSurfaceUnavailable("positions", "invalid_position_side")
+            normalized = {
+                "symbol": symbol,
+                "position_side": side,
+                "size": contracts,
+                "price": entry_price,
+            }
+            self._preserve_position_timing(row, normalized)
+            margin_mode = self._extract_live_margin_mode(row)
+            if margin_mode is not None:
+                normalized["margin_mode"] = margin_mode
+            positions.append(normalized)
+        for position in positions:
+            if "margin_mode" in position:
+                self._record_live_margin_mode(position["symbol"], position["margin_mode"])
         return positions
+
+    @staticmethod
+    def _authoritative_position_number(value, field: str) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            raise AuthoritativeSurfaceUnavailable("positions", f"invalid_{field}") from None
+        if isinstance(value, bool) or not math.isfinite(number):
+            raise AuthoritativeSurfaceUnavailable("positions", f"invalid_{field}")
+        return number
 
     @staticmethod
     def _preserve_position_timing(source: dict, normalized: dict) -> None:
@@ -613,7 +626,8 @@ class CCXTBot(Passivbot):
         Default: CCXT unified 'side' field
         Override: Exchange-specific logic (e.g., info.positionSide)
         """
-        return elm.get("side", "long").lower()
+        side = elm.get("side")
+        return side.lower() if isinstance(side, str) else ""
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """Hook: Call exchange API for open orders."""

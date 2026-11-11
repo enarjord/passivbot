@@ -2446,7 +2446,10 @@ class CandlestickManager:
         os.makedirs(os.path.dirname(idx_path), exist_ok=True)
         # Use portalocker with a filename, not a file handle, so it creates the file if missing
         lock_path = idx_path + ".lock"
-        with portalocker.Lock(lock_path, timeout=5):
+        # Live callers can reach this synchronous write while the protection
+        # loop is runnable. Contention is a retryable write failure, so the
+        # event-loop thread must never wait on another process's index lock.
+        with portalocker.Lock(lock_path, timeout=0, fail_when_locked=True):
             self._atomic_write_bytes(idx_path, payload)
         try:
             stat = os.stat(idx_path)

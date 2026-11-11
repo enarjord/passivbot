@@ -132,6 +132,7 @@ def _make_mock_pbr():
     )
     module.calc_min_entry_qty = lambda *args, **kwargs: 0.0
     module.calc_min_entry_qty_py = lambda *args, **kwargs: 0.0
+    module.qty_to_cost = lambda qty, price, c_mult: abs(qty) * price * c_mult
     module.cost_to_qty = lambda *args, **kwargs: 0.0
     module.round_dn = lambda value, step: value
     module.round_up = lambda value, step: value
@@ -3385,6 +3386,13 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
 
     bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
+    bot.qty_steps[symbol] = 1.0
+    bot.min_qtys[symbol] = 1.0
+    bot.min_costs[symbol] = 120.0
+    monkeypatch.setattr(
+        __import__("passivbot").pbr, "calc_min_entry_qty_py",
+        lambda price, c_mult, qty_step, min_qty, min_cost: math.ceil(min_cost / price),
+    )
     bot.trailing_prices = {
         symbol: {
             "long": {
@@ -3470,6 +3478,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["order_book"]["bid"] == pytest.approx(100.5)
     assert rust_symbol["order_book"]["ask"] == pytest.approx(101.5)
+    assert rust_symbol["effective_min_cost"] == pytest.approx(202.0)
 
 
 @pytest.mark.asyncio

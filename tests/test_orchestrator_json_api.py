@@ -618,8 +618,9 @@ def test_json_rejects_missing_ema():
         balance=1_000.0,
         symbols=[make_symbol(0, bid=100.0, ask=100.0, emas=ema_bundle(m1_close=[]))],
     )
-    with pytest.raises(ValueError, match="MissingEma"):
+    with pytest.raises(pbr.MissingEmaError, match="MissingEma") as exc:
         compute(pbr, inp)
+    assert exc.value.args[1] == 0
 
 
 def test_trailing_unavailable_does_not_hide_malformed_bundle():

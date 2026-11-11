@@ -3,6 +3,14 @@
 Only task-specific, high-impact contracts and quirks are listed here. Authenticated verification
 requires explicit user approval; prefer offline request-construction tests.
 
+
+## Broker Attribution
+
+Changes to broker-code or broker-agreement attribution require explicit approval. Registry
+loading must fail visibly on missing registries, invalid data, or unknown exchanges. Every
+relevant order request must carry the required field, header, or tag. Test changes at the CCXT
+or raw signed-request boundary.
+
 ## Supported Live-Exchange Boundary
 
 The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OKX, Gate.io,

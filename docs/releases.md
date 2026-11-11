@@ -24,6 +24,21 @@ retune and re-backtest migrated configurations, and discard old optimizer fitnes
 The declared development package number does not imply compatibility with v8 HSL or
 auto-unstuck memory, and a schema change does not itself publish a package release.
 
+## v9 release review
+
+The proposed major release changes authored configuration and trading behavior. The main
+upgrade work is migration and replay validation:
+
+- Convert supported v8 configs to the canonical v9 layout and explicitly review which sides
+  may open positions. [Migration guide](v8_to_v9_migration.md)
+- Retune the forward-decay risk memory for HSL, auto-unstuck, and the realized-loss gate.
+  Re-backtest the migrated policy and reevaluate saved optimizer candidates.
+  [Equity Hard Stop Loss](equity_hard_stop_loss.md)
+- Review the new scenario and metric definitions before comparing optimizer runs across
+  versions. [Optimizer guide](optimizing.md)
+- Review live startup, logging, and monitor configuration before moving an account to the
+  new runtime. [Container deployment](container_deployment.md) and [monitoring](monitor.md)
+
 ## Choose an installation revision
 
 A fresh clone selects the default branch. To evaluate the v9 development branch explicitly, use

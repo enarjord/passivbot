@@ -31,6 +31,8 @@ without turning diagnostic persistence into a high-frequency trading dependency.
 Trailing diagnostics resolve strategy settings once per symbol and position side within
 one synchronous section build. Those resolved settings are discarded afterward; configuration
 and coin-override changes must be observed by the next snapshot.
+The maintainer writes snapshots off the event loop. It captures the event sequence before
+writing `state.latest.json` so event publication can advance during that file write.
 
 Market `strategy_inputs` reports canonical per-side 1m/1h log-range spans (including fractional
 spans and symbol overrides), units, nullable prepared values, availability reasons and the last
