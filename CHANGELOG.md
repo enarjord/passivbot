@@ -6,9 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Defer live decisions when a CCXT position snapshot lacks valid size, entry price, or position
-  side. Preserve unknown PnL in generic trade history and require explicit fill position sides.
-
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
   40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains
@@ -72,6 +69,9 @@ since the latest release tag; these features may already be available when insta
 
 - Remove unused `colorama`, `dictdiffer`, and `websockets` requirements from the full and
   development install profiles and the CLI dependency checks.
+
+- Defer live decisions when a CCXT position snapshot lacks valid size, entry price, or position
+  side. Preserve unknown PnL in generic trade history and require explicit fill position sides.
 
 - Validate the CCXT version for installed wheels using Passivbot's package metadata.
 
