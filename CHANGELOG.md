@@ -1,8 +1,7 @@
 # Changelog
 
-Notable user-facing changes, grouped by tagged release. `Unreleased` means changes on `master`
-since the latest release tag; these features may already be available when installing from
-`master`. Merging a PR does not publish a release. See [release status](docs/releases.md).
+Notable user-facing changes, grouped by tagged release. `Unreleased` records changes on this branch since the latest release tag. A tagged release has
+its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 

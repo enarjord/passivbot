@@ -85,3 +85,17 @@ should establish the outcome before a retry could duplicate or reverse an exchan
 
 Shutdown and task cancellation must not strand partially classified exchange writes. Exact
 exchange-specific behavior belongs in `features/exchange_integrations.md` and focused tests.
+
+
+## Configuration Ownership
+
+Use the narrowest consumer-owned section. Shared strategy and trading policy lives in
+`config.bot`, including account-wide controls under `bot.portfolio`, shared directional defaults
+under `bot.global`, and side-specific policy under `bot.long` or `bot.short`. Live execution,
+exchange I/O, account and process controls live under `config.live`. Simulation-only behavior
+lives under `config.backtest` and optimizer-only behavior under `config.optimize`. Resolve
+defaults during canonical loading and formatting. Runtime consumers must not reapply them.
+
+The checked-in `schemas/config-v9.schema.json` supports offline schema consumers without a
+native build. Regeneration and runtime config preparation use the Rust strategy and metric
+registries so their defaults and identifiers share the runtime source of truth.
