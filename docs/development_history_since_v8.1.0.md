@@ -251,7 +251,8 @@ Historical HSL implementation details are omitted; see the [current HSL guide](e
   candidate-bars, topology, optional metric features, and cold/warm state. A deterministic offline
   `passivbot tool gpu-proxy-benchmark` harness covers long-history EMA Anchor and Trailing
   Martingale, short-history multicoin, and coin-override workloads with fixed seeds, cold timing,
-  and warm p50 throughput. Profiling remains opt-in and exact Rust results remain authoritative.
+  and warm p50 throughput. That benchmark command was later retired. Profiling remains opt-in
+  and exact Rust results remain authoritative.
 
 - GPU optimization now runs an Apple MPS capability preflight before loading historical data.
   Missing MPS support, unsupported strategies, positive `backtest.btc_collateral_cap`, and

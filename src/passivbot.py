@@ -240,7 +240,6 @@ from procedures import (
     load_broker_code,
     load_user_info,
     get_first_timestamps_unified,
-    print_async_exception,
 )
 from utils import get_file_mod_ms
 from warmup_utils import (
@@ -3489,7 +3488,6 @@ class Passivbot:
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         # await self.init_flags()
         self.init_coin_overrides()
-        # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
         self.set_market_specific_settings()
         self._assert_supported_live_state()
@@ -9630,33 +9628,6 @@ class Passivbot:
             minimum_coin_age_days(self.config, pside),
         )
 
-    async def update_tickers(self):
-        """Fetch latest ticker data and fill in missing bid/ask/last values."""
-        if not hasattr(self, "tickers"):
-            self.tickers = {}
-        tickers = None
-        try:
-            tickers = await self.cca.fetch_tickers()
-            for symbol in tickers:
-                if tickers[symbol]["last"] is None:
-                    if (
-                        tickers[symbol]["bid"] is not None
-                        and tickers[symbol]["ask"] is not None
-                    ):
-                        tickers[symbol]["last"] = np.mean(
-                            [tickers[symbol]["bid"], tickers[symbol]["ask"]]
-                        )
-                else:
-                    for oside in ["bid", "ask"]:
-                        if (
-                            tickers[symbol][oside] is None
-                            and tickers[symbol]["last"] is not None
-                        ):
-                            tickers[symbol][oside] = tickers[symbol]["last"]
-            self.tickers = tickers
-        except Exception as e:
-            logging.error(f"Error with {get_function_name()} {e}")
-
     async def prepare_planning_universe(self):
         """Build the final symbol universe before refreshing market data."""
         await self.update_effective_min_cost()
@@ -13891,10 +13862,8 @@ class Passivbot:
             self.open_orders = {}
         if self.stop_signal_received:
             return False
-        res = None
         try:
-            res = await self.fetch_open_orders()
-            return await self._apply_open_orders_snapshot(res)
+            return await self._apply_open_orders_snapshot(await self.fetch_open_orders())
         except RateLimitExceeded:
             self._health_rate_limits = (
                 int(getattr(self, "_health_rate_limits", 0) or 0) + 1
@@ -13903,11 +13872,6 @@ class Passivbot:
                 "[rate] hit rate limit while fetching open orders; retrying next cycle"
             )
             return False
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            print_async_exception(res)
-            traceback.print_exc()
-            raise
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""

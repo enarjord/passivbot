@@ -7649,7 +7649,7 @@ async def test_update_pos_oos_pnls_ohlcvs_propagates_open_order_failure():
 
 
 @pytest.mark.asyncio
-async def test_update_open_orders_propagates_unexpected_fetch_errors():
+async def test_update_open_orders_propagates_unexpected_fetch_errors(caplog, capsys):
     import passivbot as pb_mod
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
@@ -7663,6 +7663,8 @@ async def test_update_open_orders_propagates_unexpected_fetch_errors():
 
     with pytest.raises(RuntimeError, match="exchange fetch broke"):
         await bot.update_open_orders()
+    assert "exchange fetch broke" not in caplog.text
+    assert "exchange fetch broke" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("missing_family", ["strategy", "unstuck"])
