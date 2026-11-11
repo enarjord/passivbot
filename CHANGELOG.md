@@ -81,27 +81,9 @@ its own version heading. See [release status](docs/releases.md).
   non-finite snapshot, event and history writes visibly while preserving the previous valid data
   and allowing subsequent writes to recover. Preserve native trading inputs and order behavior.
 
-- Reduce live HSL CPU use when capturing long histories of observed risk budgets.
-
-- Reuse encoded live HSL budget facts within a bounded memory budget.
-
-- Reduce live HSL replay CPU for long budget histories by looking up each causal budget with
-  a binary search. The new native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reduce live HSL replay CPU by reading retained budget facts directly during forward replay.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reduce live HSL replay CPU by decoding native inputs without cloning their JSON payload.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Reuse typed price, fill, and budget facts when rebuilding a live HSL initializer.
-  The changed native fingerprint requires reevaluation of saved optimizer fitness.
-
-- Avoid re-decoding live HSL inputs to register replay owners and prune dormant owners once per
-  capture batch.
-
-- Reuse the exact submitted HSL facts when validating native results to avoid decoding retained
-  history a second time.
+- Reduce live HSL CPU use for long retained histories. Replay reuses typed price, fill, and
+  risk-budget facts, avoids repeated JSON decoding, and keeps the encoded cache bounded.
+  The changed native fingerprint requires reevaluating saved optimizer fitness.
 
 - Select suite datasets using executable exchange identities and each combined
   dataset's configured source pool. Preserve single-exchange history, combined
