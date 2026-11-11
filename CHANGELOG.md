@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Refit both 2D Pareto plot axes when filters change. Explore filtered candidates with metric
+  profiles, bot parameter correlations, and interactive selectors for the plotted axes. Download
+  the plotted-axis ranking and its settings as JSON.
+
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
