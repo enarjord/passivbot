@@ -133,7 +133,7 @@ For containerized deployments, set `PB_LOG_DIR` to point `logging.dir` at a moun
 Using a mounted config and mounted API keys:
 
 ```bash
-docker run --rm \
+docker run --rm --stop-timeout 60 \
   -e PB_USER=bitget_01 \
   -e PB_CONFIG_PATH=/data/configs/live.json \
   -e PB_API_KEYS_PATH=/data/api-keys.json \
@@ -153,6 +153,16 @@ shared build logs free of credential values.
 ## Docker Compose Example
 
 See `container/examples/docker-compose.live.yml`.
+
+## Shutdown and restart policy
+
+The live process handles SIGINT and SIGTERM through its graceful shutdown path. The Compose
+examples give cleanup up to 60 seconds before Docker forcibly stops the process.
+
+A fatal bot error or exhaustion of `live.recovery.max_n_restarts_per_day` exits with status 1.
+Compose leaves the container stopped so an operator can inspect the failure. Restart policies
+such as `always`, `unless-stopped`, and `on-failure` can relaunch a terminal exit. A new
+process starts with an empty restart history.
 
 ## Notes
 
