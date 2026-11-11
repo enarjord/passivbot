@@ -9410,14 +9410,14 @@ async def test_fill_refresh_waits_for_disk_without_blocking_loop(tmp_path, monke
     loop = asyncio.get_running_loop()
     entered = asyncio.Event()
     release = Event()
-    original = manager.cache.save_days
+    original = manager.cache._stage_day_writes
 
     def blocked_save(days):
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(3), "refresh blocked the event loop"
-        original(days)
+        return original(days)
 
-    monkeypatch.setattr(manager.cache, "save_days", blocked_save)
+    monkeypatch.setattr(manager.cache, "_stage_day_writes", blocked_save)
     first = asyncio.create_task(manager.refresh())
     second = None
     try:
@@ -9425,6 +9425,8 @@ async def test_fill_refresh_waits_for_disk_without_blocking_loop(tmp_path, monke
         assert manager._events == []
         assert manager.cache.load_metadata()["last_refresh_ms"] == 0
 
+        first.cancel()
+        await asyncio.sleep(0)
         first.cancel()
         second = asyncio.create_task(manager.refresh())
         await asyncio.sleep(0)
@@ -9441,3 +9443,40 @@ async def test_fill_refresh_waits_for_disk_without_blocking_loop(tmp_path, monke
 
     assert [fill.id for fill in manager._events] == ["fill-1"]
     assert [fill.id for fill in manager.cache.load()] == ["fill-1"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_failure_does_not_skip_unpublished_fills_on_incremental_retry(
+    tmp_path, monkeypatch, sample_events
+):
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    seed = dict(sample_events[0], id="prior", timestamp=now_ms - 600_000)
+    missed = dict(seed, id="missed", timestamp=now_ms - 480_000)
+    recent = dict(seed, id="recent", timestamp=now_ms - 10_000)
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(seed)])
+    cache.save_metadata({"last_refresh_ms": seed["timestamp"]})
+    fetcher = _SequencedFetcher([[missed], [missed, recent]])
+    manager = FillEventsManager(
+        exchange="bybit", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+    await manager.ensure_loaded()
+    metadata_path = manager.cache.metadata_path
+    replace = fem.os.replace
+
+    def fail_metadata_write(source, target):
+        if target == metadata_path:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return replace(source, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fem.os, "replace", fail_metadata_write)
+        with pytest.raises(FillEventCacheDiskFullError):
+            await manager.refresh_latest(last_refresh_overlap_ms=60_000)
+
+    assert [event.id for event in manager._events] == ["prior"]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == seed["timestamp"]
+    await manager.refresh_latest(last_refresh_overlap_ms=60_000)
+
+    assert fetcher.calls[-1][0] <= missed["timestamp"]
+    assert [event.id for event in manager.cache.load()] == ["prior", "missed", "recent"]

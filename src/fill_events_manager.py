@@ -22,6 +22,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import time
 from collections import defaultdict, deque
 from copy import deepcopy
@@ -2090,34 +2091,59 @@ class FillEventCache:
         self.save_metadata(metadata)
 
     def save_days(self, day_events: Dict[str, Sequence[FillEvent]]) -> None:
-        for day, events in day_events.items():
-            path = self.root / f"{day}.json"
-            payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
-            if path.exists():
-                try:
-                    with path.open("r", encoding="utf-8") as fh:
-                        current = json.load(fh)
-                except Exception:
-                    current = None
-                if current == payload:
-                    logger.debug("FillEventCache.save_days: %s unchanged", path.name)
-                    continue
-            tmp_path = path.with_suffix(".tmp")
-            try:
-                with tmp_path.open("w", encoding="utf-8") as fh:
+        self._publish_day_writes(self._stage_day_writes(day_events))
+
+    def _stage_day_writes(
+        self, day_events: Dict[str, Sequence[FillEvent]]
+    ) -> list[tuple[Path, Path, int]]:
+        """Write private staging files. Only the refresh owner may publish them."""
+        staged = []
+        try:
+            for day, events in day_events.items():
+                path = self.root / f"{day}.json"
+                payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
+                if path.exists():
+                    try:
+                        with path.open("r", encoding="utf-8") as fh:
+                            current = json.load(fh)
+                    except Exception:
+                        current = None
+                    if current == payload:
+                        logger.debug("FillEventCache.save_days: %s unchanged", path.name)
+                        continue
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.root,
+                    prefix=f".{path.stem}.", suffix=".tmp", delete=False,
+                ) as fh:
+                    staged.append((Path(fh.name), path, len(payload)))
                     json.dump(payload, fh)
-                os.replace(tmp_path, path)
-            except Exception as exc:
-                if _is_disk_full_error(exc):
-                    raise FillEventCacheDiskFullError(
-                        f"fill event cache write failed: disk full while writing {path}"
-                    ) from exc
-                raise
-            logger.debug(
-                "[fills] cache wrote %d events to %s",
-                len(payload),
-                path.name,
-            )
+        except BaseException as exc:
+            self._discard_day_writes(staged)
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        return staged
+
+    @staticmethod
+    def _discard_day_writes(staged: list[tuple[Path, Path, int]]) -> None:
+        for temporary, _path, _count in staged:
+            temporary.unlink(missing_ok=True)
+
+    def _publish_day_writes(self, staged: list[tuple[Path, Path, int]]) -> None:
+        try:
+            for temporary, path, count in staged:
+                os.replace(temporary, path)
+                logger.debug("[fills] cache wrote %d events to %s", count, path.name)
+        except Exception as exc:
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        finally:
+            self._discard_day_writes(staged)
 
     @property
     def metadata_path(self) -> Path:
@@ -4969,13 +4995,20 @@ class FillEventsManager:
         return report
 
     async def _save_refresh_days(self, day_payload):
-        """Wait for an atomic day write to finish before releasing refresh ownership."""
-        write = asyncio.create_task(asyncio.to_thread(self.cache.save_days, day_payload))
+        """Drain staging even on repeated cancellation. Only this task can publish."""
+        write = asyncio.create_task(asyncio.to_thread(self.cache._stage_day_writes, day_payload))
         try:
-            await asyncio.shield(write)
+            staged = await asyncio.shield(write)
         except asyncio.CancelledError:
-            await write
+            while not write.done():
+                try:
+                    await asyncio.shield(write)
+                except asyncio.CancelledError:
+                    continue
+            self.cache._discard_day_writes(write.result())
             raise
+        self.cache._publish_day_writes(staged)
+
 
     async def refresh(
         self,
@@ -5277,20 +5310,27 @@ class FillEventsManager:
 
         fetched_bounded_range = start_ms is not None and end_ms is not None
 
-        # Update cache metadata with timestamps
-        if new_events:
-            self.cache.update_metadata_from_events(
-                new_events, mark_refreshed=mark_refreshed
-            )
-        elif mark_refreshed:
-            # A successful empty fetch proves that metadata-only event bounds
-            # are stale. Keeping them would leave coverage permanently blocked
-            # by a cache_metadata_event_mismatch verdict.
-            self.cache.mark_refreshed(reset_event_bounds=True)
-        if fetched_bounded_range:
-            # A successful bounded fetch proves the retried range even when the
-            # exchange returns no new fills or only duplicates.
-            self.cache.clear_gap(start_ms, end_ms)
+        # Failed metadata persistence must not advance the in-memory
+        # checkpoint past fills that are still unpublished in this manager.
+        previous_metadata = deepcopy(self.cache.load_metadata())
+        try:
+            if new_events:
+                self.cache.update_metadata_from_events(
+                    new_events, mark_refreshed=mark_refreshed
+                )
+            elif mark_refreshed:
+                # A successful empty fetch proves that metadata-only event bounds
+                # are stale. Keeping them would leave coverage permanently blocked
+                # by a cache_metadata_event_mismatch verdict.
+                self.cache.mark_refreshed(reset_event_bounds=True)
+            if fetched_bounded_range:
+                # A successful bounded fetch proves the retried range even when the
+                # exchange returns no new fills or only duplicates.
+                self.cache.clear_gap(start_ms, end_ms)
+
+        except Exception:
+            self.cache._metadata = previous_metadata
+            raise
 
         self._events = new_events
         # Retain proof only after all ordinary persistence/checkpoint work succeeds.
