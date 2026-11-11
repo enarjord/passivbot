@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -835,48 +837,157 @@ def test_run_from_args_scenario_text_documents_incomplete_front(
     run_from_args(args)
     output = capsys.readouterr().out
 
-    assert "| Scenario              | bull" in output
-    assert "| Scenario front        | 3" in output
+    assert "Scenario: bull" in output
+    assert "3 ranked" in output
     assert "saved aggregate Pareto members" in output
-    assert "candidates discarded by the suite optimizer are not recoverable" in output
+    backtest = next(line for line in output.splitlines() if line.startswith("passivbot backtest"))
+    assert shlex.split(backtest)[-2:] == ["--scenarios", "bull"]
 
 
-def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
-    args = argparse.Namespace(
-        path=str(sample_pareto_dir),
-        method="ideal",
-        limit_entries=[],
-        limits_payload=None,
-        objectives=None,
-        weight=None,
-        target=None,
-        priority=None,
-        show_top=3,
-        json_output=False,
-    )
+def test_front_view_reports_filtered_scenario_extrema_without_ranking(
+    scenario_pareto_dir: Path, capsys, monkeypatch,
+):
+    monkeypatch.setenv("COLUMNS", "100")
+    args = build_parser().parse_args([
+        str(scenario_pareto_dir), "--front", "--scenario", "bull",
+        "-l", "cagr_fraction_strategy_equity>=0.7",
+    ])
+    assert run_from_args(args) is None
+    output = capsys.readouterr().out
+    assert "3 after limits" in output
+    assert "2 on active front" in output
+    assert "Scenario: bull" in output
+    assert "Exclude if cagr_fraction_strategy_equity < 0.7" in output
+    cagr = next(line for line in output.splitlines() if "↑ cagr_fraction_strategy_equity" in line)
+    omega = next(line for line in output.splitlines() if "↓ omega_ratio_strategy_equity" in line)
+    assert [cell.strip() for cell in cagr.split("|")[2:-1]] == ["0.8", "0.9", "a.json"]
+    assert [cell.strip() for cell in omega.split("|")[2:-1]] == ["0.3", "0.4", "b.json"]
+    assert "Selected file:" not in output
+    assert "c_dominated.json" not in output
+
+
+def test_selection_extrema_use_filtered_active_front(scenario_pareto_dir, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "160")
+    args = build_parser().parse_args([
+        str(scenario_pareto_dir), "--scenario", "bull",
+        "-l", "cagr_fraction_strategy_equity>=0.7",
+    ])
+    run_from_args(args)
+    lines = capsys.readouterr().out.splitlines()
+    cagr = next(line for line in lines if line.startswith("| ↑ cagr_fraction_strategy_equity"))
+    omega = next(line for line in lines if line.startswith("| ↓ omega_ratio_strategy_equity"))
+    assert [float(cell) for cell in cagr.split("|")[4:6]] == [0.9, 0.8]
+    assert [float(cell) for cell in omega.split("|")[4:6]] == [0.3, 0.4]
+
+
+def test_metric_list_reports_raw_units_saved_goals_and_filtered_coverage(
+    scenario_pareto_dir: Path, capsys, monkeypatch,
+):
+    monkeypatch.setenv("COLUMNS", "100")
+    metric = "sharpe_ratio_strategy_equity"
+    path = scenario_pareto_dir / "b.json"
+    candidate = json.loads(path.read_text())
+    candidate["suite_metrics"]["metrics"][metric]["scenarios"].pop("bull")
+    path.write_text(json.dumps(candidate))
+
+    args = build_parser().parse_args([
+        str(scenario_pareto_dir), "--list-metrics", "--scenario", "bull",
+        "-l", "cagr_fraction_strategy_equity>=0.7",
+    ])
+    assert run_from_args(args) is None
+    output = capsys.readouterr().out
+    assert "Scenario: bull" in output
+    assert re.search(r"^\| cagr_fraction_strategy_equity\s*\| fraction\s*\| max\s*\|\s*3/3 \|$", output, re.MULTILINE)
+    assert re.search(r"^\| omega_ratio_strategy_equity\s*\| ratio\s*\| min\s*\|\s*3/3 \|$", output, re.MULTILINE)
+    assert re.search(rf"^\| {metric}\s*\| ratio\s*\| max\s*\|\s*2/3 \|$", output, re.MULTILINE)
+    assert "0.05 means 5%" in output
+    assert "Selected file:" not in output
+
+
+def test_run_from_args_prints_bordered_raw_values(sample_pareto_dir: Path, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "160")
+    args = build_parser().parse_args([str(sample_pareto_dir)])
     result = run_from_args(args)
     captured = capsys.readouterr().out
-    assert "| Loaded candidates" in captured
-    assert "| Retained after limits" in captured
-    assert "| Applied limits" in captured
-    assert "| Method                | ideal" in captured
-    assert "| Distance              |" in captured
-    assert "Method summary:" in captured
-    assert "| Selected file" in captured
-    assert "| Selected path" in captured
-    assert "| Selected hash" not in captured
-    assert "Backtest command: passivbot backtest" in captured
-    assert "Active objectives:" in captured
-    assert "| metric" in captured
-    assert "| goal" in captured
-    assert "Why this winner:" in captured
-    assert "Objective table:" in captured
-    assert "metric" in captured
-    assert "utility" in captured
-    assert "ideal" in captured
-    assert "Target utilities:" not in captured
-    assert "Top candidates:" in captured
+
     assert result.candidate.path.stem == "balanced"
+    assert f"Source: {sample_pareto_dir}" in captured
+    assert "4 ranked" in captured
+    assert "no CLI limits" in captured
+    assert "Method: ideal" in captured
+    assert "Selected file: balanced.json" in captured
+    lines = captured.splitlines()
+    heading = next(i for i, line in enumerate(lines) if line.startswith("| Objective"))
+    assert [cell.strip() for cell in lines[heading].split("|")[1:-1]] == [
+        "Objective", "Selected", "#2", "Front best", "Front worst", "Utility", "Weight",
+    ]
+    assert lines[heading - 1] == lines[heading + 1]
+    assert lines[heading - 1].startswith("+-")
+    metric = "cagr_fraction_strategy_equity"
+    cagr_row = next(line for line in lines if line.startswith(f"| ↑ {metric}"))
+    values = [float(cell) for cell in cagr_row.split("|")[2:-1]]
+    assert values == pytest.approx([0.65, 1.0, 1.0, 0.0, result.details["selected_utilities"][metric], 1 / 3], abs=1e-6)
+    assert "a_extreme.json" in captured
+    assert "b_extreme.json" not in captured
+    assert "Top candidates:" not in captured
+    assert "Metric columns show raw changes" not in captured
+    assert "passivbot backtest " in captured
+    assert "passivbot tool pareto-plot " in captured
+
+
+def test_narrow_report_keeps_objective_values_visible(sample_pareto_dir: Path, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "40")
+    metric = "cagr_fraction_strategy_equity"
+    value = 0.650001234567
+    _write_candidate(
+        sample_pareto_dir,
+        "balanced",
+        {metric: value, "omega_ratio_strategy_equity": 0.65, "sortino_ratio_strategy_equity": 0.65},
+    )
+    result = run_from_args(build_parser().parse_args([str(sample_pareto_dir)]))
+    assert result.objective_values[metric] == value
+    lines = capsys.readouterr().out.splitlines()
+
+    index = next(i for i, line in enumerate(lines) if line.startswith(f"| ↑ {metric} "))
+    assert lines[index - 1].startswith("+-")
+    assert [
+        tuple(cell.strip() for cell in row.split("|")[1:-1])
+        for row in lines[index + 2 : index + 5]
+    ] == [("Selected", "0.650001"), ("#2", "1"), ("Front best", "1")]
+
+
+@pytest.mark.parametrize(("target", "display"), [("inf", "+inf"), ("-inf", "-inf")])
+def test_reference_text_shows_infinite_target(sample_pareto_dir, capsys, monkeypatch, target, display):
+    monkeypatch.setenv("COLUMNS", "160")
+    metric = "omega_ratio_strategy_equity"
+    args = build_parser().parse_args([
+        str(sample_pareto_dir), "--method", "reference", "--target", f"{metric}={target}",
+        "--show-top", "1",
+    ])
+    run_from_args(args)
+    output = capsys.readouterr().out
+    row = next(line for line in output.splitlines() if line.startswith(f"| ↑ {metric} "))
+    assert row.split("|")[3].strip() == display
+
+
+def test_default_json_keeps_five_ranked_members(sample_pareto_dir: Path, capsys):
+    _write_candidate(
+        sample_pareto_dir,
+        "cagr_omega",
+        {"cagr_fraction_strategy_equity": 0.8, "omega_ratio_strategy_equity": 0.8, "sortino_ratio_strategy_equity": 0.1},
+    )
+    _write_candidate(
+        sample_pareto_dir,
+        "cagr_sortino",
+        {"cagr_fraction_strategy_equity": 0.8, "omega_ratio_strategy_equity": 0.1, "sortino_ratio_strategy_equity": 0.8},
+    )
+    run_from_args(build_parser().parse_args([str(sample_pareto_dir), "--json"]))
+    record = json.loads(capsys.readouterr().out)
+
+    assert record["active_front_count"] == 6
+    assert len(record["top_candidates"]) == 5
+    assert record["top_candidates"][0]["file"] == record["selected"]["file"]
+    assert "objective_deltas" in record["top_candidates"][1]
 
 
 def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, monkeypatch, capsys):
@@ -910,7 +1021,7 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
     assert str(newer.resolve()) not in captured
     assert f"optimize_results/{newer_run}/pareto" in captured
     assert (
-        f"Backtest command: passivbot backtest "
+        f"passivbot backtest "
         f"optimize_results/{newer_run}/pareto/newer_balanced.json"
     ) in captured
     assert result.candidate.path.stem == "newer_balanced"
@@ -1246,31 +1357,25 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
         show_top=1,
         json_output=False,
     )
-    run_from_args(args)
+    result = run_from_args(args)
     captured = capsys.readouterr().out
-    assert "sharpe_ratio_strategy_equity" in captured
-    assert "| max  | 1.400" in captured
+    metric = "sharpe_ratio_strategy_equity"
+    row = next(line for line in captured.splitlines() if line.startswith(f"| ↑ {metric} "))
+    selected, best, worst, utility, weight = [float(cell) for cell in row.split("|")[2:-1]]
+    assert selected == best == 1.4
+    assert worst < best
+    assert utility == result.details["selected_utilities"][metric] == 1.0
+    assert weight == pytest.approx(5 / 7, abs=1e-6)
 
 
-def test_run_from_args_ideal_uses_distance_label_and_omits_hash(sample_pareto_dir: Path, capsys):
-    args = argparse.Namespace(
-        path=str(sample_pareto_dir),
-        method="ideal",
-        limit_entries=[],
-        limits_payload=None,
-        objectives=None,
-        weight=None,
-        target=None,
-        priority=None,
-        show_top=1,
-        json_output=False,
-    )
+def test_run_from_args_show_top_one_omits_alternatives(sample_pareto_dir: Path, capsys):
+    args = build_parser().parse_args([str(sample_pareto_dir), "--show-top", "1"])
     run_from_args(args)
     captured = capsys.readouterr().out
-    assert "| Distance" in captured
-    assert "| Score" not in captured
-    assert "| Selected hash" not in captured
-    assert "Backtest command: passivbot backtest" in captured
+
+    assert "Front best" in captured
+    assert "#2" not in captured
+    assert "a_extreme.json" not in captured
 
 
 def test_build_parser_accepts_short_objectives_alias():

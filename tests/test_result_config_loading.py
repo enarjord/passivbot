@@ -219,8 +219,7 @@ def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, caps
     )
     output = capsys.readouterr().out
     command = next(
-        line.removeprefix("Backtest command: ")
-        for line in output.splitlines() if line.startswith("Backtest command: ")
+        line for line in output.splitlines() if line.startswith("passivbot backtest ")
     )
     executable, subcommand, selected_path = shlex.split(command)
 

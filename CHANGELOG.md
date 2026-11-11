@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
+  next-ranked alternative, and the observed best and worst values. The report includes utility
+  and normalized weights where applicable, plus copyable backtest and browser commands. Use
+  `--front` for objective ranges and leaders or `--list-metrics` to find metric keys and units.
+
 - Refit both 2D Pareto plot axes when filters change. Explore filtered candidates with metric
   profiles, bot parameter correlations, and interactive selectors for the plotted axes. Download
   the plotted-axis ranking and its settings as JSON.

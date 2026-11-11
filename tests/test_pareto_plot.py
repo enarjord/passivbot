@@ -1,5 +1,6 @@
 import json
 import math
+import shlex
 from pathlib import Path
 
 import pytest
@@ -635,9 +636,9 @@ def test_cli_and_plot_share_distinct_labels_without_changing_filenames(tmp_path,
     selected_line = next(line for line in output.splitlines() if "Selected file" in line)
     assert selected_label in selected_line
     assert selected_file not in selected_line
-    assert f"Backtest command: passivbot backtest {front / selected_file}" in output
-    shortlist = output.split("Top candidates:")[1]
-    for filename in filenames:
+    assert f"passivbot backtest {front / selected_file}" in output
+    shortlist = output.split("Ranked alternatives")[1]
+    for filename in filenames[:-1]:
         assert record["candidate_labels"].get(filename, filename) in shortlist
     assert first_legacy not in shortlist
 
@@ -648,6 +649,69 @@ def test_cli_and_plot_share_distinct_labels_without_changing_filenames(tmp_path,
     assert data["selection"]["selected"]["file"] == selected_file
     assert data["selection"]["candidate_labels"] == record["candidate_labels"]
     assert data["selection"]["candidate_set_sha256"] == record["candidate_set_sha256"]
+
+
+def test_cli_browser_command_preserves_selection_and_quotes_single_file(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    front_dir = tmp_path / "-front's results"
+    front_dir.mkdir()
+    candidate = front_dir / "candidate.json"
+    write_candidate(candidate, layout="suite")
+    source = front_dir / "selected candidate.json"
+    source.symlink_to(candidate)
+    write_candidate(front_dir / "unrelated.json", layout="suite")
+    cagr, pain = METRICS[:2]
+    limit = f"{cagr}>0"
+    options = [
+        "-m", "aspiration",
+        "-o", f"{cagr},{pain}",
+        "-l", limit,
+        "--scenario", "example",
+        "--weight", f"{cagr}=2",
+        "--target", f"{cagr}=21",
+        "--target", f"{pain}=19",
+        "--scale", f"{cagr}=1",
+        "--scale", f"{pain}=1",
+        "--sensitivity-weight-fraction", "0.1",
+        "--sensitivity-target-scales", "0.25",
+    ]
+    assert cli_main(["tool", "pareto", str(source), *options, "--json"]) == 0
+    expected = json.loads(capsys.readouterr().out)
+
+    saved = tmp_path / "saved.json"
+    assert cli_main(["tool", "pareto", str(source), *options, "-s", str(saved)]) == 0
+    assert saved.read_bytes() == source.read_bytes()
+    output = capsys.readouterr().out
+    backtest = shlex.split(next(
+        line for line in output.splitlines() if line.startswith("passivbot backtest ")
+    ))
+    assert backtest[:2] == ["passivbot", "backtest"]
+    assert Path(backtest[2]).resolve() == candidate.resolve()
+    assert not backtest[2].startswith("-")
+    assert backtest[3:] == ["--scenarios", "example"]
+    browser = shlex.split(next(
+        line for line in output.splitlines() if line.startswith("passivbot tool pareto-plot ")
+    ))
+    assert browser[:3] == ["passivbot", "tool", "pareto-plot"]
+    assert Path(browser[3]).absolute() == source
+    assert browser[browser.index("--objectives") + 1] == f"{cagr},{pain}"
+    assert "-o" not in browser and "--save-selected" not in browser and "-s" not in browser
+    assert "--open" in browser
+
+    monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda _: True)
+    page = tmp_path / "view.html"
+    assert cli_main([*browser[1:], "--output", str(page)]) == 0
+    record = read_payload(page.read_text())["selection"]
+    expected["selected"].pop("path")
+    for row in expected["top_candidates"]:
+        row.pop("path")
+    selection_keys = (
+        "selected", "top_candidates", "settings", "sensitivity",
+        "scenario", "applied_limits", "candidate_set_sha256",
+    )
+    for key in selection_keys:
+        assert record[key] == expected[key]
+    assert record["loaded_count"] == 1
 
 
 def test_scenario_export_uses_values_from_the_selected_scenario(tmp_path):
