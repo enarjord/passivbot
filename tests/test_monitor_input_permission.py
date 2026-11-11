@@ -678,6 +678,47 @@ def test_ordinary_progress_alert_requires_continued_cycles_and_reports_recovery(
     assert "ordinary_accepted_age=1.0s" in format_periodic_health_summary(progress)
 
 
+def test_ordinary_defer_console_episode_preserves_structured_diagnostics(caplog, monkeypatch):
+    from live import planning_gates
+
+    now = 1_000
+    monkeypatch.setattr(planning_gates, "_utc_ms", lambda: now)
+    diagnostics = []
+    bot = SimpleNamespace(
+        _emit_planning_unavailable_diagnostic=diagnostics.append,
+        _format_staged_execution_defer_message=lambda details: "internal detail",
+    )
+    details = {
+        "context": "ordinary preparation: staged_inputs_unavailable",
+        "defer_reason": "staged_inputs_unavailable",
+        "missing": ["fills"],
+    }
+    caplog.set_level("INFO")
+    for now in (1_000, 16_000, 30_999):
+        planning_gates.log_staged_execution_defer(bot, details)
+    assert "ordinary planning delayed" not in caplog.text
+
+    now = 31_000
+    planning_gates.log_staged_execution_defer(bot, details)
+    assert "waiting for fill data | wait=30.0s" in caplog.text
+
+    for now in (46_000, 61_000, 330_999):
+        planning_gates.log_staged_execution_defer(bot, details)
+    assert caplog.text.count("ordinary planning delayed") == 1
+    assert diagnostics == [details] * 6
+
+    now = 331_000
+    planning_gates.log_staged_execution_defer(bot, details)
+    assert caplog.text.count("ordinary planning delayed") == 2
+    assert len(diagnostics) == 6  # The console reminder leaves the existing event cadence intact.
+    observe_ordinary_acceptance(bot, 332_000)
+    assert "ordinary plan accepted after 331.0s" in caplog.text
+    now = 333_000
+    planning_gates.log_staged_execution_defer(bot, details)
+    observe_ordinary_acceptance(bot, 334_000)
+    assert caplog.text.count("ordinary plan accepted after") == 1
+
+
 def test_other_execution_owner_omits_optional_ordinary_path_flag():
     from live.event_emitters import emit_live_cycle_completed
     events = []

@@ -4,6 +4,8 @@ import re
 
 
 _ORDINARY_STALL_MS = 300_000
+_ORDINARY_DEFER_NOTICE_MS = 30_000
+_ORDINARY_DEFER_REMINDER_MS = 300_000
 _ORDINARY_DEFER_PHASES = {
     "ordinary preparation": "preparation",
     "ordinary consumption": "consumption",
@@ -23,6 +25,8 @@ _ORDINARY_DEFER_REASONS = {
     "hsl_fill_receipt_replaced",
     "market_inputs_unavailable",
     "ordinary_plan_retired",
+    "prepared_market_inputs_unavailable",
+    "prepared_strategy_inputs_expired",
     "raw_balance_changed",
     "required_fill_facts_changed",
     "shutdown",
@@ -31,11 +35,11 @@ _ORDINARY_DEFER_REASONS = {
 }
 
 
-def observe_ordinary_defer(bot, details):
+def observe_ordinary_defer(bot, details, now_ms):
     """Retain only code-owned classifications from an ordinary planner defer."""
     phase = _ORDINARY_DEFER_PHASES.get(details.get("context", "").partition(": ")[0])
     if phase is None:
-        return
+        return False
     reason = details.get("defer_reason")
     missing = details.get("missing") or ()
     bot._console_ordinary_last_defer = dict(
@@ -48,15 +52,52 @@ def observe_ordinary_defer(bot, details):
         ],
     )
 
+    started, last_notice = getattr(bot, "_console_ordinary_defer_episode", None) or (now_ms, None)
+    if now_ms < started or (last_notice is not None and now_ms < last_notice):
+        started, last_notice = now_ms, None
+    elapsed = now_ms - started
+    if elapsed >= _ORDINARY_DEFER_NOTICE_MS and (
+        last_notice is None or now_ms - last_notice >= _ORDINARY_DEFER_REMINDER_MS
+    ):
+        defer = bot._console_ordinary_last_defer
+        descriptions = {
+            "account_facts_changed": "account state changed",
+            "account_facts_changed_during_preparation": "account state changed during preparation",
+            "account_refresh_in_progress": "account refresh in progress",
+            "current_account_inputs_unavailable": "account data not ready",
+            "prepared_market_inputs_unavailable": "quotes unavailable for calculation",
+            "prepared_strategy_inputs_expired": "prepared strategy inputs expired",
+        }
+        missing = defer["missing_surfaces"]
+        cause = (
+            "waiting for " + ", ".join(
+                {"fills": "fill data", "market_snapshot": "quotes", "open_orders": "open orders"}.get(name, name)
+                for name in missing
+            )
+            if missing
+            else descriptions.get(defer["reason"], defer["reason"].replace("_", " "))
+        )
+        logging.info("[state] ordinary planning delayed | %s | wait=%.1fs", cause, elapsed / 1000.0)
+        last_notice = now_ms
+    bot._console_ordinary_defer_episode = (started, last_notice)
+    return True
+
 
 def observe_ordinary_acceptance(bot, now_ms):
     """An accepted ordinary plan returned from reconciliation, possibly as a no-op."""
     bot._console_ordinary_accepted_ms = now_ms
     bot._console_ordinary_wait_started_ms = None
     bot._console_ordinary_last_defer = None
+    episode = getattr(bot, "_console_ordinary_defer_episode", None)
+    bot._console_ordinary_defer_episode = None
     if getattr(bot, "_console_ordinary_stalled", False):
         bot._console_ordinary_stalled = False
         logging.info("[health] ordinary planning recovered | accepted_plan_returned=yes")
+    elif episode is not None and episode[1] is not None:
+        logging.info(
+            "[state] ordinary plan accepted after %.1fs",
+            max(0, now_ms - episode[0]) / 1000.0,
+        )
 
 
 def observe_ordinary_outer_cycle(bot, now_ms, *, accepted):

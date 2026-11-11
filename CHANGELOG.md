@@ -27,6 +27,8 @@ since the latest release tag; these features may already be available when insta
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 
+- Summarize sustained ordinary planning delays and their recovery in the live console.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
