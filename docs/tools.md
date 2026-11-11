@@ -101,8 +101,17 @@ use that scenario's scalar value; set `scenario=null` on a limit to reduce the f
 `passivbot tool pareto-explorer` is a CLI alias for the same tool.
 
 The terminal report shows the selected candidate and the next-ranked alternative by default.
-Objective arrows show the direction used for ranking. Values are absolute and use readable units,
-including percentages for fractions. The best observed values can come from different files.
+Objective arrows show the direction used for ranking. The default table shows exact metric
+keys and raw values, so you can copy them into filters such as
+`-l 'cagr_fraction_strategy_equity_ew>0.5'`. Use `-H` / `--human-readable` for short labels and
+display units, including percentages for fractions. `-h` opens help.
+
+The table shows the best and worst observed value for each objective in the ranked pool. These
+extrema can come from different files. When the method provides them, it also shows the selected
+member's utility and the effective objective weights normalized to sum to one. With default
+scaling, utility runs from zero at the worst value to one at the best value. A constant
+objective has utility one. With fixed scales, the report labels the signed coordinates
+`Scaled utility`.
 `--show-top N` includes the selected member in the count. Use `--show-top 1` for just the selected
 candidate. JSON and plots continue to include five ranked candidates by default. Their raw
 objective deltas are alternative minus selected, in the metric's original units.

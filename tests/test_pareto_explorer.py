@@ -858,12 +858,26 @@ def test_front_view_reports_filtered_scenario_extrema_without_ranking(
     assert "2 on active front" in output
     assert "Scenario: bull" in output
     assert "Exclude if cagr_fraction_strategy_equity < 0.7" in output
-    cagr = next(line for line in output.splitlines() if "CAGR" in line)
-    omega = next(line for line in output.splitlines() if "Omega ratio" in line)
-    assert cagr.split()[-3:] == ["80.00%", "90.00%", "a.json"]
-    assert omega.split()[-3:] == ["0.3", "0.4", "b.json"]
+    cagr = next(line for line in output.splitlines() if "↑ cagr_fraction_strategy_equity" in line)
+    omega = next(line for line in output.splitlines() if "↓ omega_ratio_strategy_equity" in line)
+    assert [cell.strip() for cell in cagr.split("|")[2:-1]] == ["0.8", "0.9", "a.json"]
+    assert [cell.strip() for cell in omega.split("|")[2:-1]] == ["0.3", "0.4", "b.json"]
     assert "Selected file:" not in output
     assert "c_dominated.json" not in output
+
+
+def test_selection_extrema_use_filtered_active_front(scenario_pareto_dir, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "160")
+    args = build_parser().parse_args([
+        str(scenario_pareto_dir), "--scenario", "bull",
+        "-l", "cagr_fraction_strategy_equity>=0.7",
+    ])
+    run_from_args(args)
+    lines = capsys.readouterr().out.splitlines()
+    cagr = next(line for line in lines if line.startswith("| ↑ cagr_fraction_strategy_equity"))
+    omega = next(line for line in lines if line.startswith("| ↓ omega_ratio_strategy_equity"))
+    assert [float(cell) for cell in cagr.split("|")[4:6]] == [0.9, 0.8]
+    assert [float(cell) for cell in omega.split("|")[4:6]] == [0.3, 0.4]
 
 
 def test_metric_list_reports_raw_units_saved_goals_and_filtered_coverage(
@@ -883,15 +897,15 @@ def test_metric_list_reports_raw_units_saved_goals_and_filtered_coverage(
     assert run_from_args(args) is None
     output = capsys.readouterr().out
     assert "Scenario: bull" in output
-    assert re.search(r"^cagr_fraction_strategy_equity\s+fraction\s+max\s+3/3$", output, re.MULTILINE)
-    assert re.search(r"^omega_ratio_strategy_equity\s+ratio\s+min\s+3/3$", output, re.MULTILINE)
-    assert re.search(rf"^{metric}\s+ratio\s+max\s+2/3$", output, re.MULTILINE)
+    assert re.search(r"^\| cagr_fraction_strategy_equity\s*\| fraction\s*\| max\s*\|\s*3/3 \|$", output, re.MULTILINE)
+    assert re.search(r"^\| omega_ratio_strategy_equity\s*\| ratio\s*\| min\s*\|\s*3/3 \|$", output, re.MULTILINE)
+    assert re.search(rf"^\| {metric}\s*\| ratio\s*\| max\s*\|\s*2/3 \|$", output, re.MULTILINE)
     assert "0.05 means 5%" in output
     assert "Selected file:" not in output
 
 
-def test_run_from_args_prints_compact_absolute_values(sample_pareto_dir: Path, capsys, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "100")
+def test_run_from_args_prints_bordered_raw_values(sample_pareto_dir: Path, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "160")
     args = build_parser().parse_args([str(sample_pareto_dir)])
     result = run_from_args(args)
     captured = capsys.readouterr().out
@@ -902,10 +916,17 @@ def test_run_from_args_prints_compact_absolute_values(sample_pareto_dir: Path, c
     assert "no CLI limits" in captured
     assert "Method: ideal" in captured
     assert "Selected file: balanced.json" in captured
-    assert re.search(r"^Objective[^\n]*Selected[^\n]*#2[^\n]*Front best$", captured, re.MULTILINE)
-    cagr_row = next(line for line in captured.splitlines() if "CAGR" in line)
-    percentages = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)%", cagr_row)]
-    assert percentages == [65.0, 100.0, 100.0]
+    lines = captured.splitlines()
+    heading = next(i for i, line in enumerate(lines) if line.startswith("| Objective"))
+    assert [cell.strip() for cell in lines[heading].split("|")[1:-1]] == [
+        "Objective", "Selected", "#2", "Front best", "Front worst", "Utility", "Weight",
+    ]
+    assert lines[heading - 1] == lines[heading + 1]
+    assert lines[heading - 1].startswith("+-")
+    metric = "cagr_fraction_strategy_equity"
+    cagr_row = next(line for line in lines if line.startswith(f"| ↑ {metric}"))
+    values = [float(cell) for cell in cagr_row.split("|")[2:-1]]
+    assert values == pytest.approx([0.65, 1.0, 1.0, 0.0, result.details["selected_utilities"][metric], 1 / 3], abs=1e-6)
     assert "a_extreme.json" in captured
     assert "b_extreme.json" not in captured
     assert "Top candidates:" not in captured
@@ -914,17 +935,26 @@ def test_run_from_args_prints_compact_absolute_values(sample_pareto_dir: Path, c
     assert "passivbot tool pareto-plot " in captured
 
 
-def test_narrow_report_keeps_objective_values_visible(sample_pareto_dir: Path, capsys, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "32")
-    run_from_args(build_parser().parse_args([str(sample_pareto_dir)]))
+@pytest.mark.parametrize(
+    "flags,label,selected,alternative",
+    [
+        ([], "cagr_fraction_strategy_equity", "0.65", "1.0"),
+        (["-H"], "CAGR", "65.00%", "100.00%"),
+    ],
+)
+def test_narrow_report_keeps_objective_values_visible(
+    sample_pareto_dir: Path, capsys, monkeypatch, flags, label, selected, alternative,
+):
+    monkeypatch.setenv("COLUMNS", "40")
+    run_from_args(build_parser().parse_args([str(sample_pareto_dir), *flags]))
     lines = capsys.readouterr().out.splitlines()
 
-    cagr_index = lines.index("↑ CAGR")
-    assert lines[cagr_index + 1 : cagr_index + 4] == [
-        "  Selected: 65.00%",
-        "  #2: 100.00%",
-        "  Front best: 100.00%",
-    ]
+    index = next(i for i, line in enumerate(lines) if line.startswith(f"| ↑ {label} "))
+    assert lines[index - 1].startswith("+-")
+    assert [
+        tuple(cell.strip() for cell in row.split("|")[1:-1])
+        for row in lines[index + 2 : index + 5]
+    ] == [("Selected", selected), ("#2", alternative), ("Front best", alternative)]
 
 
 def test_default_json_keeps_five_ranked_members(sample_pareto_dir: Path, capsys):
@@ -1314,11 +1344,15 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
         show_top=1,
         json_output=False,
     )
-    run_from_args(args)
+    result = run_from_args(args)
     captured = capsys.readouterr().out
-    row = next(line for line in captured.splitlines() if "Sharpe" in line)
-    assert "↑" in row
-    assert [float(value) for value in re.findall(r"\d+(?:\.\d+)?", row)] == [1.4, 1.4]
+    metric = "sharpe_ratio_strategy_equity"
+    row = next(line for line in captured.splitlines() if line.startswith(f"| ↑ {metric} "))
+    selected, best, worst, utility, weight = [float(cell) for cell in row.split("|")[2:-1]]
+    assert selected == best == 1.4
+    assert worst < best
+    assert utility == result.details["selected_utilities"][metric] == 1.0
+    assert weight == pytest.approx(5 / 7, abs=1e-6)
 
 
 def test_run_from_args_show_top_one_omits_alternatives(sample_pareto_dir: Path, capsys):

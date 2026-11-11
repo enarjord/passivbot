@@ -113,7 +113,8 @@ def test_reference_preserves_exact_target_for_min_objective(front, capsys):
     assert output["selection_count"] == 4
 
 
-def test_reference_text_distinguishes_front_and_ranked_pool(front, capsys):
+def test_reference_text_distinguishes_front_and_ranked_pool(front, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "180")
     run_from_args(build_parser().parse_args([
         str(front), "-m", "reference", "--target", "cagr_fraction_strategy_equity=0.5", "--target", "omega_ratio_strategy_equity=0.5",
     ]))
@@ -121,6 +122,9 @@ def test_reference_text_distinguishes_front_and_ranked_pool(front, capsys):
     assert "2 on active front" in output
     assert "4 ranked" in output
     assert "Pool best" in output
+    assert "Pool worst" in output
+    row = next(line for line in output.splitlines() if line.startswith("| ↑ cagr_fraction_strategy_equity"))
+    assert row.split("|")[-4].strip() == "-100.0"
 
 
 def test_lexicographic_priority_defines_active_objectives(front, capsys):

@@ -458,6 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Without limits, copy the full loaded set."
         ),
     )
+    parser.add_argument(
+        "-H",
+        "--human-readable",
+        action="store_true",
+        help="Show short objective labels and display units. Default: exact metric keys and raw values.",
+    )
     view_group = parser.add_mutually_exclusive_group()
     view_group.add_argument(
         "--front",
@@ -1703,9 +1709,15 @@ _METRIC_LABELS = {
 _METRIC_UNIT_SUFFIXES = {"hours": " h", "days": " d", "per_year": "/yr", "per_day": "/d"}
 
 
-def _format_objective_value(metric: str, value: float) -> str:
+def _metric_label(metric: str, human_readable: bool) -> str:
+    return _METRIC_LABELS.get(metric, metric) if human_readable else metric
+
+
+def _format_objective_value(metric: str, value: float, human_readable: bool) -> str:
     if not math.isfinite(value):
         return "+inf" if value > 0 else "-inf"
+    if not human_readable:
+        return repr(value)
     unit = CORE_METRIC_CATALOG.get(metric, {}).get("unit")
     if unit == "fraction":
         if abs(value) > 1e306:
@@ -1723,21 +1735,36 @@ def _report_table(
     right_align: Sequence[int] = (),
 ) -> list[str]:
     widths = [max(map(len, column)) for column in zip(headers, *rows)]
-    terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
-    if sum(widths) + 2 * (len(widths) - 1) > terminal_width:
-        lines = []
+    terminal_width = shutil.get_terminal_size(fallback=(240, 24)).columns
+    table_width = sum(widths) + 3 * len(widths) + 1
+    if rows and table_width > terminal_width:
+        # Stack the columns while keeping each exact metric key intact for copying.
+        key_width = max(map(len, headers[1:]))
+        value_width = max(len(value) for row in rows for value in row[1:])
+        inner_width = max(key_width + value_width + 3, max(len(row[0]) for row in rows))
+        value_width = inner_width - key_width - 3
+        border = f"+{'-' * (inner_width + 2)}+"
+        divider = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+        lines = [border]
         for name, *values in rows:
-            lines.append(name)
-            lines.extend(f"  {key}: {value}" for key, value in zip(headers[1:], values))
+            lines.extend([f"| {name:<{inner_width}} |", divider])
+            lines.extend(
+                f"| {key:<{key_width}} | {value:>{value_width}} |"
+                for key, value in zip(headers[1:], values)
+            )
+            lines.append(border)
         return lines
 
+    border = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+
     def align(row):
-        return "  ".join(
+        cells = [
             value.rjust(width) if idx in right_align else value.ljust(width)
             for idx, (value, width) in enumerate(zip(row, widths))
-        ).rstrip()
+        ]
+        return "| " + " | ".join(cells) + " |"
 
-    return [align(headers), *(align(row) for row in rows)]
+    return [border, align(headers), border, *(align(row) for row in rows), border]
 
 
 def _command_path(path: Path) -> str:
@@ -1806,7 +1833,7 @@ def _report_header(source, *, loaded, retained, front, ranked=None, limits, scen
     return lines
 
 
-def _report_sensitivity(sensitivity, labels, selected):
+def _report_sensitivity(sensitivity, labels, selected, human_readable):
     if not sensitivity or not sensitivity["check_count"]:
         return []
     checked = sensitivity["check_count"]
@@ -1824,14 +1851,16 @@ def _report_sensitivity(sensitivity, labels, selected):
             check for check in sensitivity["checks"] if check["winner"] != selected
         )
         if check["kind"] == "weight_transfer":
-            src = _METRIC_LABELS.get(check["from_metric"], check["from_metric"])
-            dest = _METRIC_LABELS.get(check["to_metric"], check["to_metric"])
+            src = _metric_label(check["from_metric"], human_readable)
+            dest = _metric_label(check["to_metric"], human_readable)
             step = 100 * weight_fraction
             unit = "percentage point" if step == 1 else "percentage points"
             change = f"move {step:g} {unit} of weight from {src} to {dest}"
         else:
             key = check["metric"]
-            change = f"set {_METRIC_LABELS.get(key, key)} target to {_format_objective_value(key, check['target'])}"
+            label = _metric_label(key, human_readable)
+            value = _format_objective_value(key, check["target"], human_readable)
+            change = f"set {label} target to {value}"
         winner = labels.get(check["winner"], check["winner"])
         lines.append(f"  {winner} ranks first if you {change}.")
     return lines
@@ -1862,22 +1891,22 @@ def _report_qualification(qualification, shortlist, labels):
     return lines
 
 
-def _objective_rows(specs, *value_columns):
+def _objective_rows(specs, human_readable, *value_columns):
     rows = []
     for spec in specs:
         metric = spec.metric
         direction = "↑" if spec.goal == "max" else "↓"
-        label = _METRIC_LABELS.get(metric, metric)
+        label = _metric_label(metric, human_readable)
         rows.append([f"{direction} {label}", *[column(metric) for column in value_columns]])
     return rows
 
 
-def _format_saved_value(values, metric):
+def _format_saved_value(values, metric, human_readable):
     value = values[metric]
     if value is None:
         status = values["metric_status"][metric]["status"]
         return {"positive_infinity": "+inf", "negative_infinity": "-inf"}.get(status, status)
-    return _format_objective_value(metric, value)
+    return _format_objective_value(metric, value, human_readable)
 
 
 def format_selection_result(
@@ -1887,6 +1916,11 @@ def format_selection_result(
     args: argparse.Namespace,
 ) -> str:
     result = evaluation.result
+    human_readable = getattr(args, "human_readable", False)
+
+    def display(metric, value):
+        return _format_objective_value(metric, value, human_readable)
+
     source = _report_source(pareto_dir, args)
     labels = record["candidate_labels"]
     lines = _report_header(
@@ -1903,9 +1937,6 @@ def format_selection_result(
 
     settings = record["settings"]
     method = [result.method]
-    weights = list(settings.get("weights", {}).values())
-    if weights:
-        method.append("equal weights" if len(set(weights)) == 1 else "custom weights")
     scope = "post-limit pool" if result.method == "reference" else "active front"
     if result.method != "lexicographic":
         method.append("fixed raw scales" if settings.get("scales") else f"scaled to {scope}")
@@ -1920,21 +1951,42 @@ def format_selection_result(
         shortlist = shortlist[:2]
     alternative = shortlist[1] if len(shortlist) > 1 else None
     headers = ["Objective", "Selected"]
-    columns = [lambda metric: _format_objective_value(metric, result.objective_values[metric])]
+    columns = [lambda metric: display(metric, result.objective_values[metric])]
     if alternative:
         headers.append("#2")
-        columns.append(lambda metric: _format_saved_value(alternative["objectives"], metric))
+        columns.append(lambda metric: _format_saved_value(alternative["objectives"], metric, human_readable))
     targets = settings.get("targets")
     if targets:
         headers.append("Target")
-        columns.append(lambda metric: _format_objective_value(metric, targets[metric]) if metric in targets else "—")
+        columns.append(lambda metric: display(metric, targets[metric]) if metric in targets else "—")
     best = result.details["ideal_point"]
-    headers.append("Pool best" if result.method == "reference" else "Front best")
-    columns.append(lambda metric: _format_objective_value(metric, best[metric]))
+    worst = {}
+    for spec in evaluation.active_specs:
+        least_favorable = max if spec.goal == "min" else min
+        worst[spec.metric] = least_favorable(
+            _resolve_candidate_metric_value(candidate, spec.metric)
+            for candidate in evaluation.selection_pool
+        )
+    extrema_scope = "Pool" if result.method == "reference" else "Front"
+    headers.extend([f"{extrema_scope} best", f"{extrema_scope} worst"])
+    columns.extend([
+        lambda metric: display(metric, best[metric]),
+        lambda metric: display(metric, worst[metric]),
+    ])
+    utilities = result.details.get("selected_utilities")
+    if utilities:
+        headers.append("Scaled utility" if settings.get("scales") else "Utility")
+        columns.append(lambda metric: f"{utilities[metric]:.6g}")
+    weights = settings.get("weights")
+    if weights:
+        headers.append("Weight")
+        columns.append(lambda metric: f"{weights[metric]:.6g}")
     lines.append("")
-    rows = _objective_rows(evaluation.active_specs, *columns)
+    rows = _objective_rows(evaluation.active_specs, human_readable, *columns)
     lines.extend(_report_table(headers, rows, right_align=range(1, len(headers))))
-    lines.append(f"{headers[-1]} values may come from different files.")
+    lines.append(f"{extrema_scope} extrema may come from different files.")
+    if weights:
+        lines.append("Weights are normalized across active objectives.")
     if alternative:
         lines.append("")
         lines.append("Ranked alternatives")
@@ -1943,21 +1995,22 @@ def format_selection_result(
             lines.append(f"  #{row['rank']}  {labels.get(filename, filename)}")
             if row is not alternative:
                 values = [
-                    f"{_METRIC_LABELS.get(metric, metric)} {_format_saved_value(row['objectives'], metric)}"
+                    f"{_metric_label(metric, human_readable)} "
+                    f"{_format_saved_value(row['objectives'], metric, human_readable)}"
                     for metric in result.objective_values
                 ]
                 lines.extend(f"      {value}" for value in values)
     contributions = result.details.get("distance_components")
     if contributions and sum(contributions.values()) > 0:
         metric = max(contributions, key=contributions.get)
-        label = _METRIC_LABELS.get(metric, metric)
+        label = _metric_label(metric, human_readable)
         share = contributions[metric] / sum(contributions.values())
         origin = "ideal" if result.method == "ideal" else "target"
         lines.extend(["", f"{label} accounts for {share:.0%} of squared distance to {origin}."])
 
     sensitivity = record["sensitivity"]
     if sensitivity:
-        lines.extend(_report_sensitivity(sensitivity, labels, selected))
+        lines.extend(_report_sensitivity(sensitivity, labels, selected, human_readable))
     lines.extend(_report_qualification(record["qualification"], shortlist, labels))
 
     replay = ["passivbot", "backtest", _command_path(result.candidate.path)]
@@ -2037,10 +2090,12 @@ def _format_inspection(pareto_dir, candidates, scoring_specs, args):
         source, loaded=len(candidates), retained=len(filtered), front=len(front),
         limits=limits, scenario=scenario,
     )
+    human_readable = getattr(args, "human_readable", False)
     rows = _objective_rows(
         specs,
-        lambda metric: _format_objective_value(metric, extrema[metric][0]),
-        lambda metric: _format_objective_value(metric, extrema[metric][1]),
+        human_readable,
+        lambda metric: _format_objective_value(metric, extrema[metric][0], human_readable),
+        lambda metric: _format_objective_value(metric, extrema[metric][1], human_readable),
         lambda metric: extrema[metric][2],
     )
     lines.append("")
