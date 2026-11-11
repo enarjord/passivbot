@@ -721,7 +721,9 @@ validation workflow.
 ## Fill Events Tooling
 
 `passivbot tool fill-events-dash` launches a Dash UI for inspecting cached fill-event history,
-PnL, symbol-level details, cache health, and CSV export.
+PnL, symbol-level details, cache health, and CSV export. It listens on `127.0.0.1` by default.
+Use `--host` to change the bind address. The dashboard serves account data and has no built-in
+authentication. For remote access, keep the loopback bind and use a tunnel or an authenticated proxy.
 
 ```shell
 passivbot tool fill-events-dash --users bybit_01
