@@ -63,6 +63,11 @@ not waive live admission requirements. HSL must derive its current decision from
 fresh account facts, including balance, before each protective write. Malformed
 or incomplete close batches are fatal.
 
+The live execution owner backs off transport failures, including exchange backpressure,
+with an interruptible bounded schedule and logs persistent outages. An authoritative
+retry delay can extend that wait. Ordinary readiness deferrals keep their existing cadence.
+An outage does not authorize action on an expired cohort.
+
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
 block protective management of held symbols.

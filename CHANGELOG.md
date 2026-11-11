@@ -135,6 +135,9 @@ its own version heading. See [release status](docs/releases.md).
   clocks for causal replay. The changed native fingerprint requires reevaluation of saved optimizer
   fitness.
 
+- Back off after live exchange transport errors and report prolonged outages without repeatedly
+  rebuilding the bot during a rate limit or maintenance window.
+
 - Report asynchronous background failures separately from the execution restart budget,
   redact callback diagnostics, and label health cycle timestamps as observation ages.
   Preserve immediate mode recovery messages with bounded grouped transitions and HSL
