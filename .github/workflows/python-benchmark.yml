@@ -1,0 +1,164 @@
+name: Python benchmark
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shards:
+    name: Python ${{ inputs.python-version }} shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      RAYON_NUM_THREADS: "1"
+      MPLBACKEND: Agg
+      PYTHONPATH: .github/ci:src
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-live.txt
+            requirements-full.txt
+            requirements-dev.txt
+            requirements-rust.txt
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt pytest-xdist==3.8.0
+
+      - name: Build and verify the Python Rust extension
+        run: |
+          .venv/bin/python -c "from rust_utils import check_and_maybe_compile; check_and_maybe_compile(force=True)"
+          .venv/bin/python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; print(verify_loaded_runtime_extension())"
+
+      - name: Validate documentation
+        if: matrix.shard == 0
+        run: |
+          .venv/bin/python src/tools/check_ai_docs.py
+          .venv/bin/python src/tools/generate_live_event_registry.py --check
+          .venv/bin/python -m pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+          .venv/bin/python -m mkdocs build --strict --site-dir "${{ runner.temp }}/docs-site"
+
+      - name: Run Python test shard
+        env:
+          CI_BENCH_EXECUTED: ${{ runner.temp }}/shard-${{ matrix.shard }}.executed
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: >-
+          .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
+          -p ci_pytest_shard -p ci_pytest_timings -p ci_benchmark_capture --ci-shard-index=${{ matrix.shard }} --ci-shard-count=4 -n 2 --dist=loadfile --max-worker-restart=0
+          --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
+
+      - name: Run original tagged v8 migration regressions
+        if: matrix.shard == 0
+        env:
+          PYTHONPATH: src
+          PASSIVBOT_V8_FIXTURE_GIT_REPO: ${{ github.workspace }}
+        run: |
+          git fetch --depth=1 origin tag v8.0.0 tag v8.1.0
+          .venv/bin/python -m pytest -q tests/test_tagged_v8_migration.py::test_original_tagged_example_disposition
+
+      - name: Run release CLI smokes
+        if: matrix.shard == 0
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: |
+          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v9', '--help']))"
+          .venv/bin/python src/tools/run_fake_live.py \
+            tests/fixtures/fake_live_hsl.json \
+            scenarios/fake_live/hsl_long_red_restart.hjson \
+            --user ci_fake_hsl_restart \
+            --output-dir "${{ runner.temp }}/fake-live"
+
+      # The real console script, package resources and native artifact must work
+      # without an editable installation, Rust source tree or market connection.
+      - name: Run offline research commands from an installed wheel
+        if: matrix.shard == 0
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: |
+          wheel_work="${{ runner.temp }}/research-wheel"
+          mkdir -p "$wheel_work/run" "$wheel_work/wheels"
+          expected_source=$(.venv/bin/python -c "from rust_utils import source_fingerprint; print(source_fingerprint())")
+          .venv/bin/python -m pip wheel . --no-deps -w "$wheel_work/wheels"
+          wheels=("$wheel_work/wheels/"*.whl)
+          python -m venv "$wheel_work/venv"
+          cp .github/ci/smoke_installed_research.py "$wheel_work/smoke.py"
+          cd "$wheel_work/run"
+          # The build leaves checkout egg-info, which pip can see on PYTHONPATH.
+          env -u PYTHONPATH "$wheel_work/venv/bin/python" -m pip install "${wheels[0]}[full]"
+          env -u PYTHONPATH "$wheel_work/venv/bin/python" "$wheel_work/smoke.py" "$expected_source"
+
+      - name: Upload collection manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-python-${{ inputs.python-version }}-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+            ${{ runner.temp }}/shard-${{ matrix.shard }}.executed
+          if-no-files-found: error
+          retention-days: 7
+
+  coverage:
+    name: Verify Python ${{ inputs.python-version }} coverage
+    if: ${{ always() }}
+    needs: shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every shard and its extra checks
+        env:
+          RESULT: ${{ needs.shards.result }}
+        run: test "$RESULT" = success
+
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Download this version's collection manifests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: benchmark-python-${{ inputs.python-version }}-shard-*
+          path: ${{ runner.temp }}/collection
+          merge-multiple: true
+
+      - name: Verify complete disjoint collection
+        run: >-
+          python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
+          --shard-count=4 --python-version=${{ inputs.python-version }}
+
+      - name: Verify each selected test completed exactly once
+        run: python .github/ci/ci_benchmark_capture.py "${{ runner.temp }}/collection"

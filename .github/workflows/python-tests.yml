@@ -70,10 +70,11 @@ jobs:
 
       - name: Run Python test shard
         env:
+          CI_BENCH_EXECUTED: ${{ runner.temp }}/shard-${{ matrix.shard }}.executed
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
         run: >-
           .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
-          -p ci_pytest_shard -p ci_pytest_timings --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
+          -p ci_pytest_shard -p ci_pytest_timings -p ci_benchmark_capture --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
           --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
 
       - name: Run original tagged v8 migration regressions
@@ -121,7 +122,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-${{ inputs.python-version }}-shard-${{ matrix.shard }}
-          path: ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+          path: |
+            ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+            ${{ runner.temp }}/shard-${{ matrix.shard }}.executed
           if-no-files-found: error
           retention-days: 7
 
@@ -156,3 +159,6 @@ jobs:
         run: >-
           python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
           --shard-count=8 --python-version=${{ inputs.python-version }}
+
+      - name: Verify each selected test completed exactly once
+        run: python .github/ci/ci_benchmark_capture.py "${{ runner.temp }}/collection"

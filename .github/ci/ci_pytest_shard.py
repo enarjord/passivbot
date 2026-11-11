@@ -46,7 +46,8 @@ def pytest_collection_modifyitems(config, items):
     if not selected:
         raise pytest.UsageError(f"CI shard {index}/{count} selected no tests")
     manifest_path = config.getoption("ci_shard_manifest")
-    if manifest_path is not None:
+    worker = getattr(config, "workerinput", {}).get("workerid")
+    if manifest_path is not None and worker in (None, "gw0"):
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps({
             "format_version": FORMAT_VERSION,

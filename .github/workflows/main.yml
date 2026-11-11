@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Run both Python test layouts
+        type: boolean
+        default: false
   push:
     branches:
       - master
@@ -107,3 +112,17 @@ jobs:
         continue-on-error: true
         working-directory: passivbot-rust
         run: cargo clippy --locked --all-targets
+
+  benchmark312:
+    if: github.event_name == 'workflow_dispatch' && inputs.benchmark
+    name: Benchmark Python 3.12
+    uses: ./.github/workflows/python-benchmark.yml
+    with:
+      python-version: "3.12"
+
+  benchmark314:
+    if: github.event_name == 'workflow_dispatch' && inputs.benchmark
+    name: Benchmark Python 3.14
+    uses: ./.github/workflows/python-benchmark.yml
+    with:
+      python-version: "3.14"
