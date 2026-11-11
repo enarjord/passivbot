@@ -1771,11 +1771,11 @@ async def test_live_snapshot_disk_write_does_not_block_event_publication(tmp_pat
     release = threading.Event()
     original = monitor_publisher_module._atomic_write_json
 
-    def slow_snapshot(path, payload):
+    def slow_snapshot(path, payload, **kwargs):
         if path == publisher.state_latest_path:
             loop.call_soon_threadsafe(started.set)
             assert release.wait(3), "the snapshot write blocked event publication"
-        original(path, payload)
+        original(path, payload, **kwargs)
 
     monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", slow_snapshot)
     task = asyncio.create_task(_monitor_flush_snapshot(bot, force=True))
@@ -1791,3 +1791,52 @@ async def test_live_snapshot_disk_write_does_not_block_event_publication(tmp_pat
     manifest = json.loads(publisher.manifest_path.read_text())
     assert snapshot["meta"]["seq"] == 0
     assert manifest["last_seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_snapshot_worker_cannot_publish_into_replacement_root(
+    tmp_path, monkeypatch
+):
+    from passivbot_monitor import _monitor_flush_snapshot
+
+    old = _make_publisher(tmp_path, checkpoint_interval_minutes=0.0)
+    bot = SimpleNamespace(
+        monitor_publisher=old,
+        _build_monitor_snapshot=AsyncMock(return_value={"account": {"balance_raw": 10.0}}),
+    )
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    finished = asyncio.Event()
+    release = threading.Event()
+    original = monitor_publisher_module._atomic_write_json
+
+    def slow_snapshot(path, payload, **kwargs):
+        if path == old.state_latest_path and payload["account"]["balance_raw"] == 10.0:
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(3)
+            original(path, payload, **kwargs)
+            loop.call_soon_threadsafe(finished.set)
+        else:
+            original(path, payload, **kwargs)
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", slow_snapshot)
+    flush = asyncio.create_task(_monitor_flush_snapshot(bot, force=True))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        flush.cancel()
+        await asyncio.sleep(0)
+        flush.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await flush
+        old.close()
+        new = _make_publisher(tmp_path, checkpoint_interval_minutes=0.0)
+        assert new.record_event("bot.start", ("bot",), {"status": "starting"})["seq"] == 1
+        assert new.write_snapshot({"account": {"balance_raw": 20.0}}, force=True)
+    finally:
+        release.set()
+    await asyncio.wait_for(finished.wait(), 2)
+
+    snapshot = json.loads(new.state_latest_path.read_text())
+    manifest = json.loads(new.manifest_path.read_text())
+    assert snapshot["account"]["balance_raw"] == 20.0
+    assert snapshot["meta"]["seq"] == manifest["last_seq"] == 1

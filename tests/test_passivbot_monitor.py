@@ -7316,7 +7316,7 @@ async def test_ema_anchor_monitor_snapshot_flush_skips_legacy_trailing_params():
         def __init__(self):
             self.snapshot = None
 
-        def write_snapshot(self, snapshot, *, ts=None, force=False):
+        def write_snapshot(self, snapshot, *, ts=None, force=False, cancelled=None):
             self.snapshot = snapshot
             return True
 
@@ -7405,7 +7405,7 @@ async def test_monitor_snapshot_flushes_are_serialized():
     import passivbot as pb_mod
 
     class FakePublisher:
-        def write_snapshot(self, snapshot, *, ts=None, force=False):
+        def write_snapshot(self, snapshot, *, ts=None, force=False, cancelled=None):
             return True
 
     class FakeBot:

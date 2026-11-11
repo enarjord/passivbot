@@ -117,7 +117,9 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
+def _atomic_write_json(
+    path: Path, payload: dict, *, publish: Callable[[Path, Path], None] | None = None
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(
         f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
@@ -135,7 +137,10 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        if publish is None:
+            os.replace(tmp_path, path)
+        else:
+            publish(tmp_path, path)
     finally:
         try:
             if tmp_path.exists():
@@ -1228,7 +1233,8 @@ class MonitorPublisher:
         )
 
     def write_snapshot(
-        self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False
+        self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False,
+        cancelled: threading.Event | None = None,
     ) -> bool:
         with self._snapshot_write_lock:
             try:
@@ -1249,8 +1255,21 @@ class MonitorPublisher:
                     payload["meta"] = meta
                 # This snapshot represents the captured sequence. Event
                 # publication may advance while its file is being written.
-                _atomic_write_json(self.state_latest_path, payload)
+                if cancelled is None:
+                    _atomic_write_json(self.state_latest_path, payload)
+                else:
+                    def publish(temp_path: Path, final_path: Path) -> None:
+                        # Teardown takes the same lock to flush the old manifest.
+                        # A cancelled worker can finish its private temporary file
+                        # without publishing into a replacement publisher's root.
+                        with self._lock:
+                            if not cancelled.is_set():
+                                os.replace(temp_path, final_path)
+
+                    _atomic_write_json(self.state_latest_path, payload, publish=publish)
                 with self._lock:
+                    if cancelled is not None and cancelled.is_set():
+                        return False
                     self.last_snapshot_ms = now_ms
                     self._write_manifest(now_ms=now_ms)
                     if self.checkpoint_interval_ms > 0 and (

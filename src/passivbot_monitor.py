@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import sys
+from threading import Event
 from copy import deepcopy
 from typing import Any, Iterable, Optional
 
@@ -2068,12 +2069,16 @@ async def _monitor_flush_snapshot(
     async with lock:
         try:
             snapshot = deepcopy(await self._build_monitor_snapshot(now_ms=ts))
+            cancelled = Event()
             write = asyncio.create_task(
-                asyncio.to_thread(publisher.write_snapshot, snapshot, ts=ts, force=force)
+                asyncio.to_thread(
+                    publisher.write_snapshot, snapshot, ts=ts, force=force, cancelled=cancelled
+                )
             )
             try:
                 return await asyncio.shield(write)
             except asyncio.CancelledError:
+                cancelled.set()
                 await write
                 raise
         except Exception as exc:
