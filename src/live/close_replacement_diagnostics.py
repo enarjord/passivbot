@@ -170,17 +170,17 @@ def observe_account(bot, refreshed_surfaces, now_ms):
         if replacement.warned or elapsed_ms < _CLOSE_DELAY_MS:
             continue
         defer = getattr(bot, "_console_ordinary_last_defer", None)
-        last_defer = "unreported"
+        blockers = []
         if defer and defer is not replacement.previous_defer:
             missing = defer.get("missing_surfaces", ())
             last_defer = token(",".join(missing) or defer.get("reason"), 32)
+            blockers.append(f"last_planning_defer={last_defer}")
         if replacement.last_create_defer:
-            blocker = f"last_create_defer={replacement.last_create_defer}"
-        else:
-            blocker = f"last_planning_defer={last_defer}"
+            blockers.append(f"last_create_defer={replacement.last_create_defer}")
         logging.warning(
             "[order] close replacement delayed | %s %s | elapsed=%.1fs | "
             "resting_close_qty=0/%g | %s",
-            token(symbol, 48), pside, elapsed_ms / 1000, position_qty, blocker,
+            token(symbol, 32), pside, elapsed_ms / 1000, position_qty,
+            " ".join(blockers) or "blocker=unreported",
         )
         replacement.warned = True

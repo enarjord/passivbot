@@ -153,6 +153,7 @@ async def test_flat_or_changed_intent_clears_warning_without_claiming_coverage(
     executor._observe_close_create_defer(bot, [new], "state_change_detected")
     other_scope = {**new, "position_side": "short", "side": "buy"}
     executor._observe_close_create_defer(bot, [other_scope], "account_cancel_first_barrier")
+    bot._console_ordinary_last_defer = {"missing_surfaces": ["fills"]}
     with caplog.at_level(logging.INFO):
         _observe(bot, monkeypatch, now_ms=61_000)
         if resolution == "position closed":
@@ -164,6 +165,7 @@ async def test_flat_or_changed_intent_clears_warning_without_claiming_coverage(
 
     assert "close replacement delayed" in caplog.messages[0]
     assert "last_create_defer=state_change_detected" in caplog.messages[0]
+    assert "last_planning_defer=fills" in caplog.messages[0]
     assert resolution in caplog.messages[1]
     assert len(caplog.records) == 2
     assert not bot._console_close_replacements
