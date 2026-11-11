@@ -129,6 +129,13 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
+## Refresh day persistence
+
+Refreshes serialize per manager. Bulk day-file reads and atomic writes run off the event loop.
+A refresh awaits those writes before publishing new in-memory events or advancing coverage and
+refresh metadata. A cancelled refresh drains its current disk write before another refresh can
+start. Failed writes propagate to the existing caller policy.
+
 ## Empty-refresh replay reuse
 
 A successful empty fetch may skip reconstruction only after a full replay proved the same history
