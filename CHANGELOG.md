@@ -23,6 +23,8 @@ since the latest release tag; these features may already be available when insta
 
 - Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
 
+- Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
+
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Skip an unused gap scan when preparing provisional candle continuity.

@@ -199,7 +199,7 @@ class NativeBacktestService:
                         return results
                     yield SimpleNamespace(evaluate=evaluate)
                 finally:
-                    del replay
+                    replay = None
 
         self._executor.register_dataset_factory(dataset_id, factory)
         self._factual_capacities[dataset_id] = capacity_hints

@@ -17,11 +17,12 @@ from live.balance_composition import (
 )
 from passivbot import logging
 from live import hsl_live
+from live.diagnostic_safety import bounded_exception_type
 from passivbot_exceptions import FatalBotException
 from utils import MarketIdentifierResolutionError, symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
-from procedures import print_async_exception, assert_correct_ccxt_version
+from procedures import assert_correct_ccxt_version
 
 round_ = pbr.round_
 round_dynamic = pbr.round_dynamic
@@ -1917,14 +1918,9 @@ class HyperliquidBot(CCXTBot):
             # Try to recover from Hyperliquid's "$10 minimum" errors by adjusting min_cost
             try:
                 if self.adjust_min_cost_on_error(e, order):
-                    logging.info(
-                        "Adjusted min_cost for order, will retry: %s",
-                        symbol_to_coin(order["symbol"], verbose=False)
-                        or order["symbol"],
-                    )
                     return {}
             except Exception as e0:
-                logging.error(f"error with adjust_min_cost_on_error {e0}")
+                logging.error("[order] minimum-cost adjustment failed | error_type=%s", bounded_exception_type(e0))
             # Could not recover - re-raise to trigger restart_bot_on_too_many_errors
             raise
 
@@ -1983,7 +1979,10 @@ class HyperliquidBot(CCXTBot):
                             raise Exception(f"No symbol match for asset_id={asset_id}")
                         new_min_cost = pbr.round_(self.min_costs[symbol] * 1.1, 0.1)
                         logging.info(
-                            f"caught {elm['error']} {symbol}. Upping min_cost from {self.min_costs[symbol]} to {new_min_cost}. Order: {order}"
+                            "[order] increased exchange minimum cost | symbol=%s old=%g new=%g",
+                            self._log_symbol(symbol),
+                            self.min_costs[symbol],
+                            new_min_cost,
                         )
                         self.min_costs[symbol] = new_min_cost
                         any_adjusted = True

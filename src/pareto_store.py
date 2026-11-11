@@ -749,7 +749,7 @@ def main():
                 return LimitSpec(metric, field, OPERATORS[op_str], float(val.strip()))
         raise ValueError(f"Invalid limit expression: {expr}")
 
-    limit_specs: List[LimitSpec] = []
+    limit_specs: list[LimitSpec] = []
     if args.limits:
         for expr in args.limits:
             try:

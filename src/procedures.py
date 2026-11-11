@@ -23,7 +23,6 @@ from utils import (
     symbol_to_coin,
     make_get_filepath,
     load_markets,
-    get_file_mod_ms,
     get_quote,
     date_to_ts,
     get_first_ohlcv_iteratively,
@@ -51,57 +50,12 @@ except:
 
 from pure_funcs import (
     numpyize,
-    ts_to_date,
     config_pretty_str,
     sort_dict_keys,
     flatten,
 )
 
 _EXCHANGE_ALIAS_MIGRATIONS_LOGGED: set[tuple[str, str, str]] = set()
-
-
-def get_all_eligible_symbols(exchange="binance"):
-    exchange_map = {
-        "bybit": "bybit",
-        "binance": "binanceusdm",
-        "gateio": "gateio",
-        # "bitget": "bitget", TODO
-        # "hyperliquid": "hyperliquid", TODO
-    }
-    quote_map = {k: "USDT" for k in exchange_map}
-    quote_map["hyperliquid"] = "USDC"
-    if exchange not in exchange_map:
-        raise Exception(f"only exchanges {list(exchange_map.values())} are supported for backtesting")
-    filepath = make_get_filepath(f"caches/{exchange}/eligible_symbols.json")
-    loaded_json = None
-    try:
-        loaded_json = json.load(open(filepath))
-        if utc_ms() - get_file_mod_ms(filepath) > 1000 * 60 * 60 * 24:
-            print(f"Eligible_symbols cache more than 24h old. Fetching new.")
-        else:
-            return loaded_json
-    except Exception as e:
-        print(f"failed to load {filepath}. Fetching from {exchange}")
-        pass
-    try:
-        quote = quote_map[exchange]
-        import ccxt
-
-        cc = getattr(ccxt, exchange_map[exchange])()
-        markets = cc.fetch_markets()
-        symbols = [
-            x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")
-        ]
-        eligible_symbols = sorted(set([x.replace(f"/{quote}:", "") for x in symbols]))
-        eligible_symbols = [x for x in eligible_symbols if x]
-        json.dump(eligible_symbols, open(filepath, "w"))
-        return eligible_symbols
-    except Exception as e:
-        print(f"error fetching eligible symbols {e}")
-        if loaded_json:
-            print(f"using cached data")
-            return loaded_json
-        raise Exception("unable to fetch or load from cache")
 
 
 def dump_pretty_json(data: dict, filepath: str):
@@ -280,40 +234,8 @@ def load_broker_code(exchange: str) -> Any:
     return code
 
 
-def print_(args, r=False, n=False):
-    line = ts_to_date(utc_ms())[:19] + "  "
-    # line = ts_to_date(local_time())[:19] + '  '
-    str_args = "{} " * len(args)
-    line += str_args.format(*args)
-    if n:
-        print("\n" + line, end=" ")
-    elif r:
-        print("\r" + line, end=" ")
-    else:
-        print(line)
-    return line
-
-
 def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
-
-
-def print_async_exception(coro):
-    if isinstance(coro, list):
-        for elm in coro:
-            print_async_exception(elm)
-    try:
-        print(f"result: {coro.result()}")
-    except:
-        pass
-    try:
-        print(f"exception: {coro.exception()}")
-    except:
-        pass
-    try:
-        print(f"returned: {coro}")
-    except:
-        pass
 
 
 async def get_first_timestamps_unified(
