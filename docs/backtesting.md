@@ -588,7 +588,9 @@ When multiple exchanges are configured (`backtest.exchanges` has >1 entry), the 
 }
 ```
 
-Suite scenarios can add more overrides under `coin_sources`; conflicts between scenarios are rejected so every run uses a single consistent exchange assignment.
+Suite scenarios can add more overrides under `coin_sources`. Conflicts between scenarios are
+rejected so every run uses a single consistent exchange assignment. Source overrides apply to
+coins already in the suite's universe.
 
 ## Supported Exchanges
 

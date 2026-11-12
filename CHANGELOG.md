@@ -5,8 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Batch one-minute REST candle index updates, keep unchanged shards, and reuse
-  the index during each candle health read.
+- Restrict suite candle preparation to the configured coin universe when a source override
+  names an unapproved coin.
 
 - Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
   next-ranked alternative, and the observed best and worst values. The report includes utility
@@ -47,6 +47,9 @@ its own version heading. See [release status](docs/releases.md).
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
+
+- Batch one-minute REST candle index updates, keep unchanged shards, and reuse
+  the index during each candle health read.
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 
