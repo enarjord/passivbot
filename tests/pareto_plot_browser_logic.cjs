@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {computeView, axisRange, plotSpec, preserveCamera, buildViewRecord} = require(process.argv[2]);
+const {computeView, axisRange, plotSpec, preserveCamera, buildViewRecord, plotGoal} = require(process.argv[2]);
 const metric = (key,values,goal) => ({key,label:key,values,goal,min:Math.min(...values.filter(v=>v!==null)),max:Math.max(...values.filter(v=>v!==null))});
 const data = {names:['a','b','c','d'],metrics:[metric('adg',[0.01,0.02,0.03,0.04],'max'),metric('risk',[0.1,0.4,0.2,null],'min'),metric('third',[3,2,1,9],'max'),metric('extra',[10,null,30,40],null)]};
 const bound = (key,mode,value) => ({key,mode,value,enabled:true});
@@ -157,3 +157,19 @@ const cliProjection3D = plotSpec(ranked, ['adg','risk','third'], ['max','min','m
 assert.deepEqual(cliProjection3D.traces.find(trace => trace.name === 'All-objective pick after limits').z, [2]);
 const missingCliPick = plotSpec(ranked, ['adg','risk'], ['max','min'], browserLimits, 'ideal', null, null, {...cliFilter, selected:'d'});
 assert.equal(missingCliPick.filteredPickVisibility, 'missing coordinates');
+
+// A floor provides direction for a plotted metric with no known goal. The
+// all-objective pick stays visible even when no plotted goal can be inferred.
+const extraFloor = bound('extra', 'floor', 20);
+assert.equal(plotGoal(null, extraFloor), 'max');
+assert.equal(plotGoal(null, bound('extra', 'ceiling', 20)), 'min');
+assert.equal(plotGoal('min', extraFloor), 'min');
+assert.equal(plotGoal(null, {...extraFloor, enabled:false}), null);
+const cliExtra = {retained:[2,3], selected:'c'};
+const withDirection = plotSpec(data, ['adg','extra'], ['max',plotGoal(null, extraFloor)], [extraFloor], 'ideal', null, null, cliExtra);
+assert.deepEqual(withDirection.view.ideal, [0.04,40]);
+assert.equal(withDirection.view.selected, 3);
+const withoutDirection = plotSpec(data, ['adg','extra'], ['max',null], [], 'ideal', null, null, cliExtra);
+assert.equal(withoutDirection.view.ideal, null);
+assert.equal(withoutDirection.view.selected, null);
+assert.equal(withoutDirection.filteredPickVisibility, 'visible');

@@ -63,11 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="HTML output (default: pareto_plots/<input-name>.html)",
     )
     parser.add_argument(
-        "--open", action="store_true", help="Open the viewer in the default browser"
+        "--open", action="store_true", help="Open the loopback viewer in the default browser"
     )
-    parser.add_argument(
+    launch = parser.add_mutually_exclusive_group()
+    launch.add_argument(
         "--serve", action="store_true",
         help="Serve a loopback viewer with exact CLI ranking after plot limits and seed export",
+    )
+    launch.add_argument(
+        "--offline", action="store_true",
+        help="With --open, open the standalone HTML file instead of starting the loopback viewer",
     )
     parser.add_argument(
         "--force", action="store_true", help="Replace an existing HTML output file"
@@ -260,7 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"Exported {len(candidates)} candidates and {len(dataset['metrics'])} metrics from {pareto_dir}"
     )
     print(f"HTML: {output}")
-    if args.serve:
+    if args.serve or (args.open and not args.offline):
         from tools.pareto_plot_session import PlotSelection, selection_server
 
         selection = PlotSelection(pareto_dir, candidates, scoring_specs, args, evaluation, dataset["metrics"], output)
@@ -272,8 +277,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(exc))
         with server:
             print(f"Viewer: {url} (Ctrl+C to stop)", flush=True)
-            if args.open:
-                webbrowser.open(url)
+            if args.open and not webbrowser.open(url):
+                print("Could not open a browser automatically. Open the viewer URL above.")
             try:
                 server.serve_forever()
             except KeyboardInterrupt:

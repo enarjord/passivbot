@@ -2,9 +2,11 @@ import json
 import math
 import shlex
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from config.limits import normalize_limit_entries
 from config.scoring import ObjectiveSpec
 from metrics_schema import encode_metric_values
 from pareto_explorer import evaluate_selection, load_candidates
@@ -137,14 +139,17 @@ def test_session_uses_suite_reducer_and_scenario_for_commands(tmp_path, capsys):
     write_candidate(front / "b.json", (0.03, 0.12, 2), layout="suite")
     _, candidates, specs = load_candidates(front)
     for scenario in (None, "example"):
-        args = pareto_plot.build_parser().parse_args(
-            [str(front), *(["--scenario", scenario] if scenario else [])]
-        )
+        explicit_suite_limit = {
+            "metric": METRICS[1], "penalize_if": "greater_than", "value": 11,
+            "reducer": "max", "scenario": None,
+        }
+        options = ["--scenario", scenario, "--limit", json.dumps(explicit_suite_limit)] if scenario else []
+        args = pareto_plot.build_parser().parse_args([str(front), *options])
         initial = evaluate_selection(candidates, specs, args)
         data = pareto_plot.build_dataset(initial.selection_candidates, specs)
         session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "view.html")
         limit = {
-            "key": METRICS[0] if scenario else f"stats.{METRICS[0]}.max",
+            "key": f"stats.{METRICS[0]}.{'mean' if scenario else 'max'}",
             "mode": "floor",
             "value": 20.025 if scenario else 10.025,
         }
@@ -155,8 +160,14 @@ def test_session_uses_suite_reducer_and_scenario_for_commands(tmp_path, capsys):
         applied = json.loads(capsys.readouterr().out)["applied_limits"]
         optimizer = shlex.split(result["optimize_command"])
         optimizer_limits = json.loads(optimizer[optimizer.index("--limits") + 1])
+        assert normalize_limit_entries(optimizer_limits) == optimizer_limits
         if scenario:
-            assert optimizer_limits == [{**applied[0], "scenario": scenario}]
+            assert optimizer_limits[0] == explicit_suite_limit
+            assert applied[1]["reducer"] == "mean"
+            assert optimizer_limits[1] == {
+                **{key: value for key, value in applied[1].items() if key != "reducer"},
+                "scenario": scenario,
+            }
             assert shlex.split(result["backtest_command"])[-2:] == ["--scenarios", scenario]
         else:
             assert applied[0]["reducer"] == "max"
@@ -312,8 +323,29 @@ def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     args = [str(front), *METRICS[:2]]
     assert pareto_plot.main(args) == 0
     assert not calls
-    assert pareto_plot.main(args + ["--force", "--open"]) == 0
+    assert pareto_plot.main(args + ["--force", "--open", "--offline"]) == 0
     assert calls == [(tmp_path / "pareto_plots" / "run.html").as_uri()]
+
+
+def test_open_launches_filtered_cli_viewer_by_default(front, tmp_path, monkeypatch):
+    from tools import pareto_plot_session
+
+    calls = []
+    url = "http://127.0.0.1:12345/session"
+
+    def serve(selection, render):
+        session = {"endpoint": "/session/selection", "initial": selection.result()}
+        assert read_payload(render(session))["session"] == session
+        server = MagicMock()
+        server.serve_forever.side_effect = lambda: calls.append("serving")
+        return server, url
+
+    monkeypatch.setattr(pareto_plot_session, "selection_server", serve)
+    monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda uri: calls.append(uri) or True)
+    output = tmp_path / "plot.html"
+    assert pareto_plot.main([str(front), "--open", "-o", str(output)]) == 0
+    assert calls == [url, "serving"]
+    assert "session" not in read_payload(output.read_text())
 
 
 def read_payload(page):
@@ -781,7 +813,7 @@ def test_cli_browser_command_preserves_selection_and_quotes_single_file(tmp_path
 
     monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda _: True)
     page = tmp_path / "view.html"
-    assert cli_main([*browser[1:], "--output", str(page)]) == 0
+    assert cli_main([*browser[1:], "--offline", "--output", str(page)]) == 0
     record = read_payload(page.read_text())["selection"]
     expected["selected"].pop("path")
     for row in expected["top_candidates"]:

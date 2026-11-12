@@ -59,7 +59,7 @@ __PANEL_STYLES__
 <div id="projection-weights" class="weights"></div>
 <button id="download-view" type="button">Download view JSON</button>
 </div><p id="projection-help" class="muted"></p></div>
-<div class="summary" id="summary" role="status"></div><div id="plot"></div><div id="ideal"></div>
+<div class="summary" id="summary" role="status"></div><div id="ideal"></div><div id="plot"></div>
 <div id="inspected" role="status" hidden></div>
 <p class="note">Click a candidate to inspect it. The diamond combines the best visible value on each axis. Use the plot toolbar to zoom, reset or export PNG.</p>
 <div class="shortlist"><details id="projection-shortlist"><summary>Plotted-axis shortlist</summary><div id="projection-ranking"></div></details></div>
@@ -78,6 +78,10 @@ __FILTERED_PANEL__
 
 EXPLORER_SCRIPT = r'''
 const finite = value => typeof value === "number" && Number.isFinite(value);
+function plotGoal(goal, limit) {
+    if (goal || !limit?.enabled) return goal;
+    return limit.mode === "floor" ? "max" : "min";
+}
 function computeView(dataset, axes, goals, limits, method = "ideal", weights = null, cliRows = null) {
     const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
     const columns = axes.map(key => metrics.get(key).values);
@@ -454,6 +458,7 @@ function mountExplorer(dataset) {
     if (selected.length === 2) selected.push(available.find(metric => !selected.includes(metric.key))?.key);
     const directions = new Map(dataset.metrics.map(metric => [metric.key,metric.goal]));
     const limits = new Map(), extras = new Set();
+    const effectiveGoal = key => plotGoal(directions.get(key), limits.get(key));
     const dimension = document.getElementById("dimension"), axes = ["x","y","z"];
     dimension.value = String(dataset.selected.length);
     dimension.options[1].disabled = available.length < 3;
@@ -573,6 +578,11 @@ function mountExplorer(dataset) {
     function schedulePlot() {
         filteredSelection?.update([...limits.values()]);
         downloadButton.disabled = filteredSelection !== null && !filteredSelection.ready;
+        for (const [index, key] of activeAxes().entries()) {
+            const inferred = !directions.get(key) && effectiveGoal(key);
+            goalSelects[index].options[0].textContent = inferred === "max" ? "Use floor direction (higher)"
+                : inferred === "min" ? "Use ceiling direction (lower)" : "Choose ideal direction…";
+        }
         if (pending) return;
         pending = true;
         if (!rendering) requestAnimationFrame(renderPlot);
@@ -583,7 +593,7 @@ function mountExplorer(dataset) {
         try {
             while (pending) {
                 pending = false;
-                const keys = activeAxes(), goals = keys.map(key => directions.get(key));
+                const keys = activeAxes(), goals = keys.map(effectiveGoal);
                 const limitValues = [...limits.values()], method = methodSelect.value;
                 const axisWeights = viewWeights(keys, method);
                 const currentTab = activeTab;
@@ -595,7 +605,8 @@ function mountExplorer(dataset) {
                     : cliFilter?.error || `${view.retained.length.toLocaleString()} of ${dataset.names.length.toLocaleString()} candidates pass plot limits`;
                 document.getElementById("pool-summary").textContent = poolStatus;
                 if (currentTab.id === "tab-tradeoffs") {
-                    tradeoffs.update({indices: view.retained, directions, selected: view.selected, inspected});
+                    const profileDirections = new Map([...directions.keys()].map(key => [key, effectiveGoal(key)]));
+                    tradeoffs.update({indices: view.retained, directions: profileDirections, selected: view.selected, inspected});
                     continue;
                 }
                 if (currentTab.id === "tab-correlations") {
@@ -617,11 +628,14 @@ function mountExplorer(dataset) {
                     lines.push(`○ CLI selection: ${candidateLabel(dataset.selection, dataset.selection.selected.file)} · ${result.pickVisibility}`);
                 }
                 if (result.filteredPickVisibility) {
-                    lines.push(`□ All-objective pick after limits: ${candidateLabel(dataset.selection, cliFilter.selected)} · ${result.filteredPickVisibility}`);
+                    const method = cliFilter.method === "ideal" ? "Euclidean ideal" : cliFilter.method;
+                    lines.push(`□ All-objective pick after limits (${method}, ${cliFilter.objective_count} objectives): ${candidateLabel(dataset.selection, cliFilter.selected)} · ${result.filteredPickVisibility}`);
+                } else if (!filteredSelection) {
+                    lines.push("□ All-objective pick after limits is available when launched with --open.");
                 }
                 if (view.selected !== null) {
                     const fallback = view.mode !== method ? ` (using ${PROJECTION_METHODS[view.mode].label})` : "";
-                    lines.push(`★ ${PROJECTION_METHODS[method].label}${fallback}: ${candidateLabel(dataset.selection, dataset.names[view.selected])}`);
+                    lines.push(`★ ${PROJECTION_METHODS[method].label} on plotted axes${fallback}: ${candidateLabel(dataset.selection, dataset.names[view.selected])}`);
                 }
                 if (view.ideal) {
                     lines.push("◇ Theoretical ideal: " + coordinates(view.ideal));
@@ -666,7 +680,7 @@ function mountExplorer(dataset) {
     shortlist.addEventListener("toggle", () => { if (shortlist.open) renderRanking(); });
     methodSelect.addEventListener("change", () => { renderProjectionControls(); schedulePlot(); });
     downloadButton.addEventListener("click", () => {
-        const keys = activeAxes(), goals = keys.map(key => directions.get(key));
+        const keys = activeAxes(), goals = keys.map(effectiveGoal);
         const method = methodSelect.value, axisWeights = viewWeights(keys, method), limitValues = [...limits.values()];
         const cliFilter = filteredSelection?.current ?? null;
         const view = computeView(dataset, keys, goals, limitValues, method, axisWeights, cliFilter?.retained);
@@ -711,7 +725,7 @@ function mountExplorer(dataset) {
     document.getElementById("reset-limits").addEventListener("click",() => {limits.clear();extras.clear();renderLimits();schedulePlot();});
     syncAxes();
 }
-if (typeof module !== "undefined") module.exports = {computeView,axisRange,plotSpec,preserveCamera,buildViewRecord};
+if (typeof module !== "undefined") module.exports = {computeView,axisRange,plotSpec,preserveCamera,buildViewRecord,plotGoal};
 if (typeof document !== "undefined") mountExplorer(JSON.parse(document.getElementById("pareto-data").textContent));
 '''
 

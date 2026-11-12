@@ -3,7 +3,7 @@
 FILTERED_PANEL = r'''
 <section class="selection" aria-labelledby="filtered-title">
 <h2 id="filtered-title">All-objective selection after limits</h2>
-<p class="muted" id="filtered-offline">Run the plot with <code>--serve --open</code> to rank all CLI objectives after slider limits and export seeds.</p>
+<p class="muted" id="filtered-offline">This is the standalone HTML. Run <code>passivbot tool pareto-plot PATH --open --force</code> for the all-objective pick after slider limits and seed export.</p>
 <div id="filtered-controls" hidden>
 <p id="filtered-status" role="status"></p>
 <p class="muted">Uses the CLI selection method and objectives from launch. Plot limits are added to the launch limits.</p>
@@ -70,7 +70,8 @@ function mountFilteredSelection(dataset, onChange) {
         details.hidden = !ready || !current.selected;
         if (ready && current.selected) {
             const label = candidateLabel(dataset.selection, current.selected);
-            status.textContent = `${label} · ${current.method} · ${current.objective_count} objectives · ${current.retained.length.toLocaleString()} retained`;
+            const method = current.method === "ideal" ? "Euclidean ideal" : current.method;
+            status.textContent = `${label} · ${method} · ${current.objective_count} objectives · ${current.retained.length.toLocaleString()} retained`;
         } else {
             status.textContent = ready ? current.error : "Applying CLI limits…";
         }

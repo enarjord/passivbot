@@ -101,10 +101,15 @@ class PlotSelection:
         if export:
             output = self.output.parent / f"{self.output.stem}-seeds-{uuid4().hex[:12]}"
             directory = export_selection_seeds(output, self.pareto_dir, evaluation)
-            limits_for_optimizer = [
-                ({"scenario": evaluation.scenario, **entry} if evaluation.scenario else entry)
-                for entry in evaluation.active_limits
-            ]
+            limits_for_optimizer = []
+            for entry in evaluation.active_limits:
+                limit = dict(entry)
+                if evaluation.scenario is not None and "scenario" not in limit:
+                    # A projected scenario has one observation. Its mean is the
+                    # scenario value, which the optimizer accepts without a reducer.
+                    limit.pop("reducer", None)
+                    limit["scenario"] = evaluation.scenario
+                limits_for_optimizer.append(limit)
             result.update(
                 seed_directory=str(directory),
                 optimize_command=shlex.join([
