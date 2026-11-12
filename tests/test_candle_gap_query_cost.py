@@ -88,7 +88,7 @@ def test_gap_query_mutation_alias_and_external_replacement_stay_visible(tmp_path
 
 def test_trim_rewrite_and_health_match_full_scan_with_proof_epochs(tmp_path, monkeypatch):
     optimized, reference = manager(tmp_path / 'optimized'), manager(tmp_path / 'reference')
-    monkeypatch.setattr(reference, '_get_known_gaps_in_range', lambda symbol, *args: reference._get_known_gaps_enhanced(symbol))
+    monkeypatch.setattr(reference, '_gap_records_in_range', lambda index, *args: index['meta']['known_gaps'])
     rows = np.zeros(2, dtype=CANDLE_DTYPE)
     rows['ts'] = [NOW - 4 * ONE_MIN_MS, NOW - 3 * ONE_MIN_MS]
     rows['o'] = rows['h'] = rows['l'] = rows['c'] = 10

@@ -2435,6 +2435,13 @@ class CandlestickManager:
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
 
+    def _index_write_lock(self, index_path: str):
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+        # The live loop must not wait on another process's index lock.
+        return portalocker.Lock(
+            index_path + ".lock", timeout=0, fail_when_locked=True
+        )
+
     def _save_index(
         self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
     ) -> None:
@@ -2442,14 +2449,7 @@ class CandlestickManager:
         key = f"{symbol}::{tf_norm}"
         idx_path = self._index_path(symbol, timeframe=timeframe, tf=tf_norm)
         payload = json.dumps(self._index[key], sort_keys=True).encode("utf-8")
-        # Lock the final target index.json to serialize writers
-        os.makedirs(os.path.dirname(idx_path), exist_ok=True)
-        # Use portalocker with a filename, not a file handle, so it creates the file if missing
-        lock_path = idx_path + ".lock"
-        # Live callers can reach this synchronous write while the protection
-        # loop is runnable. Contention is a retryable write failure, so the
-        # event-loop thread must never wait on another process's index lock.
-        with portalocker.Lock(lock_path, timeout=0, fail_when_locked=True):
+        with self._index_write_lock(idx_path):
             self._atomic_write_bytes(idx_path, payload)
         try:
             stat = os.stat(idx_path)
@@ -3159,15 +3159,15 @@ class CandlestickManager:
         tf: Optional[str] = None,
         defer_index: bool = False,
         strict: bool = False,
-    ) -> None:
-        """Persist candles by merging with existing shards on disk.
+    ) -> bool:
+        """Persist candles by merging with existing shards on disk and report whether any changed.
 
         Args:
             defer_index: If True, defer index.json write until flush_deferred_index is called.
             strict: Propagate existing-shard read failures before overwriting any shard.
         """
         if arr.size == 0:
-            return
+            return False
         arr = np.sort(_ensure_dtype(arr), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
         shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
@@ -3194,9 +3194,9 @@ class CandlestickManager:
             merged = self._merge_overwrite(existing, chunk)
             # Defer index write for all but the last shard (or all if defer_index=True)
             should_defer = defer_index or not is_last
-            self._save_shard(symbol, key, merged, tf=tf_norm, defer_index=should_defer)
-            shard_paths[key] = self._shard_path(symbol, key, tf=tf_norm)
-            shards_saved.append(key)
+            if self._save_shard(symbol, key, merged, tf=tf_norm, defer_index=should_defer):
+                shard_paths[key] = self._shard_path(symbol, key, tf=tf_norm)
+                shards_saved.append(key)
 
         current_key: Optional[str] = None
         bucket: List[Tuple] = []
@@ -3223,6 +3223,56 @@ class CandlestickManager:
         # Invalidate shard paths cache so subsequent lookups see newly saved files
         if shards_saved:
             self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+        return bool(shards_saved)
+
+    def _persist_rest_minute_batch(
+        self,
+        symbol: str,
+        rows: np.ndarray,
+        merged_cache: np.ndarray,
+        *,
+        last_refresh_ms: Optional[int],
+        defer_index: bool,
+    ) -> None:
+        """Commit the REST shards and their metadata before publishing the runtime batch."""
+        if not defer_index:
+            observed_start = (
+                self._get_inception_ts(symbol) if last_refresh_ms is None else None
+            )
+            if observed_start is None or int(rows[0]["ts"]) < observed_start:
+                # Preserve the early contention check formerly made by the
+                # refresh or inception metadata save before touching shards.
+                with self._index_write_lock(self._index_path(symbol, tf="1m")):
+                    pass
+
+        try:
+            shards_saved = self._save_range_incremental(
+                symbol, rows, timeframe="1m", defer_index=True
+            )
+            inception_changed = self._maybe_update_inception_ts(symbol, rows, save=False)
+            refresh_changed = last_refresh_ms is not None and merged_cache.size > 0
+            if refresh_changed:
+                meta = self._ensure_symbol_index(symbol)["meta"]
+                meta["last_refresh_ms"] = int(last_refresh_ms)
+                meta["last_final_ts"] = max(
+                    int(meta.get("last_final_ts", 0) or 0),
+                    int(merged_cache[-1]["ts"]),
+                )
+            gaps_changed = self._trim_known_gaps_covered_by_rows(
+                symbol, rows, defer_index=True
+            )
+            if gaps_changed:
+                self._projected_open_tail_ema_cache.pop(symbol, None)
+            if not defer_index and (
+                inception_changed or shards_saved or refresh_changed or gaps_changed
+            ):
+                self.flush_deferred_index(symbol, tf="1m")
+        except Exception:
+            if not defer_index:
+                # Shards are independently durable. Reload the last committed index
+                # on the next read so this failed batch cannot advance its metadata.
+                self._index.pop(f"{symbol}::1m", None)
+            raise
 
     def _persist_batch(
         self,
@@ -3253,6 +3303,7 @@ class CandlestickManager:
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
         source_norm = str(source or "").lower()
         persist_before_cache = tf_norm == "1m" and source_norm == "ws"
+        rest_minute_batch = tf_norm == "1m" and not persist_before_cache
         candle_content_changed = True
         changed_from_ts = int(arr[0]["ts"])
         replaces_synthetic = False
@@ -3306,19 +3357,26 @@ class CandlestickManager:
             self._projected_open_tail_ema_cache.pop(symbol, None)
             self._invalidate_ema_cache(symbol, timeframe="1m", changed_from_ts=changed_from_ts)
 
-        # Update inception_ts if this is new earliest data for 1m (defer save until end)
-        if tf_norm == "1m":
+        if persist_before_cache:
             self._maybe_update_inception_ts(symbol, arr, save=not defer_index)
 
         if merge_cache or tf_norm == "1m":
             merged_cache = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
+            if rest_minute_batch:
+                self._persist_rest_minute_batch(
+                    symbol,
+                    arr,
+                    merged_cache,
+                    last_refresh_ms=last_refresh_ms,
+                    defer_index=defer_index,
+                )
             self._cache[symbol] = merged_cache
             if not skip_memory_retention:
                 try:
                     self._enforce_memory_retention(symbol)
                 except Exception:
                     pass
-            if last_refresh_ms is not None and merged_cache.size:
+            if not rest_minute_batch and last_refresh_ms is not None and merged_cache.size:
                 self._set_last_refresh_meta(
                     symbol,
                     last_refresh_ms=last_refresh_ms,
@@ -3328,25 +3386,24 @@ class CandlestickManager:
             # If so, mark that EMAs should be recomputed for this symbol
             self._check_synthetic_replacement(symbol, arr)
 
-        if not persist_before_cache:
+        if tf_norm != "1m":
             self._save_range_incremental(
                 symbol,
                 arr,
                 timeframe=tf_norm,
                 defer_index=defer_index,
             )
-        if tf_norm == "1m":
-            if source_norm == "ws":
-                idx = self._ensure_symbol_index(symbol, tf="1m")
-                meta = idx.setdefault("meta", {})
-                meta["last_ws_final_ts"] = max(
-                    int(meta.get("last_ws_final_ts", 0) or 0),
-                    int(arr[-1]["ts"]),
-                )
-                meta["last_ws_persist_ms"] = int(self._now_ms())
-                self._index[f"{symbol}::1m"] = idx
-                if not defer_index:
-                    self._save_index(symbol, tf="1m")
+        if persist_before_cache:
+            idx = self._ensure_symbol_index(symbol, tf="1m")
+            meta = idx.setdefault("meta", {})
+            meta["last_ws_final_ts"] = max(
+                int(meta.get("last_ws_final_ts", 0) or 0),
+                int(arr[-1]["ts"]),
+            )
+            meta["last_ws_persist_ms"] = int(self._now_ms())
+            self._index[f"{symbol}::1m"] = idx
+            if not defer_index:
+                self._save_index(symbol, tf="1m")
             gaps_changed = self._trim_known_gaps_covered_by_rows(
                 symbol,
                 arr,
@@ -3537,7 +3594,7 @@ class CandlestickManager:
         return merged
 
     def _latest_cached_ts_before(
-        self, symbol: str, before_ts: int, *, timeframe: str
+        self, symbol: str, before_ts: int, *, timeframe: str, index: Optional[dict] = None
     ) -> Optional[int]:
         """Return latest known cached candle timestamp before `before_ts` without remote fetch."""
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
@@ -3555,7 +3612,9 @@ class CandlestickManager:
             except Exception:
                 pass
         try:
-            idx = self._ensure_symbol_index(symbol, timeframe=tf_norm)
+            idx = (
+                self._ensure_symbol_index(symbol, timeframe=tf_norm) if index is None else index
+            )
             meta_last = idx.get("meta", {}).get("last_final_ts")
             if meta_last is not None:
                 meta_i = int(meta_last)
@@ -4760,8 +4819,13 @@ class CandlestickManager:
             verified_no_trade_spans: List[Tuple[int, int]] = []
             deferred_missing_spans: List[Tuple[int, int]] = []
             refreshable_missing_spans: List[Tuple[int, int]] = list(missing)
-            if step_ms == ONE_MIN_MS and missing:
-                known_gaps = self._get_known_gaps_in_range(symbol, start_ts, end_ts)
+            # Read refresh, gap and predecessor metadata from one validated index.
+            # The next health read still checks the disk and prunes deleted shards.
+            index = self._ensure_symbol_index(symbol) if step_ms == ONE_MIN_MS else None
+            if index is not None and missing:
+                known_gaps = self._normalize_gap_entries(
+                    self._gap_records_in_range(index, start_ts, end_ts)
+                )
 
                 def merge_spans(
                     spans: Iterable[Tuple[int, int]],
@@ -4861,7 +4925,7 @@ class CandlestickManager:
                         )
                         if prior_index == 0:
                             prior_ts = self._latest_cached_ts_before(
-                                symbol, gap_start, timeframe=tf_norm
+                                symbol, gap_start, timeframe=tf_norm, index=index
                             )
                             if prior_ts is None:
                                 continue
@@ -4911,14 +4975,10 @@ class CandlestickManager:
             if runtime_arr.size:
                 last_runtime_ts = int(np.max(runtime_arr["ts"].astype(np.int64)))
             last_ws_final_ts = (
-                self.get_last_live_ws_ohlcv_ts(symbol)
-                if step_ms == ONE_MIN_MS
-                else 0
+                self._index_timestamp(index, "last_ws_final_ts") if index is not None else 0
             )
             last_ws_persist_ms = (
-                self.get_last_live_ws_persist_ms(symbol)
-                if step_ms == ONE_MIN_MS
-                else 0
+                self._index_timestamp(index, "last_ws_persist_ms") if index is not None else 0
             )
 
             synthetic_count = 0
@@ -4944,10 +5004,14 @@ class CandlestickManager:
                 }
                 for s, e in missing[: max(1, int(max_span_log))]
             ]
-            last_refresh_ms = self.get_last_refresh_ms(symbol) if step_ms == ONE_MIN_MS else 0
+            last_refresh_ms = (
+                self._index_timestamp(index, "last_refresh_ms") if index is not None else 0
+            )
             gap_summary = (
-                self._summarize_known_gap_counts(self._get_known_gaps_enhanced(symbol))
-                if step_ms == ONE_MIN_MS
+                self._summarize_known_gap_counts(
+                    self._normalize_gap_entries(index.get("meta", {}).get("known_gaps", []))
+                )
+                if index is not None
                 else {
                     "total_gaps": 0,
                     "total_minutes": 0,
@@ -4963,7 +5027,7 @@ class CandlestickManager:
             )
             if open_tail_gap and last_cached_ts is None and end_ts >= start_ts:
                 prior_cached_ts = self._latest_cached_ts_before(
-                    symbol, start_ts, timeframe=tf_norm
+                    symbol, start_ts, timeframe=tf_norm, index=index
                 )
                 if prior_cached_ts is not None:
                     last_cached_ts = int(prior_cached_ts)
@@ -5166,12 +5230,15 @@ class CandlestickManager:
 
     # ----- Refresh metadata helpers -----
 
-    def _get_last_refresh_ms(self, symbol: str) -> int:
-        idx = self._ensure_symbol_index(symbol)
+    @staticmethod
+    def _index_timestamp(index: dict, name: str) -> int:
         try:
-            return int(idx.get("meta", {}).get("last_refresh_ms", 0))
+            return int(index.get("meta", {}).get(name, 0) or 0)
         except Exception:
             return 0
+
+    def _get_last_refresh_ms(self, symbol: str) -> int:
+        return self._index_timestamp(self._ensure_symbol_index(symbol), "last_refresh_ms")
 
     def get_last_refresh_ms(self, symbol: str) -> int:
         """Public helper to read last refresh timestamp (ms) from index metadata."""
@@ -5261,44 +5328,45 @@ class CandlestickManager:
         except Exception:
             return None
 
-    def _set_inception_ts(self, symbol: str, ts: int, *, save: bool = True) -> None:
+    def _set_inception_ts(self, symbol: str, ts: int, *, save: bool = True) -> bool:
         """Set earliest observed candle timestamp for this symbol."""
         idx = self._ensure_symbol_index(symbol)
         meta = idx.setdefault("meta", {})
         current = meta.get("observed_start_ts", meta.get("inception_ts"))
-        # Only update if unset or if new ts is earlier
-        if current is None or int(ts) < int(current):
-            observed_ts = int(ts)
-            meta["observed_start_ts"] = observed_ts
-            meta["inception_ts"] = observed_ts  # legacy alias
-            auth_current = meta.get("authoritative_start_ts")
-            auth_updated = False
-            if auth_current is not None and observed_ts < int(auth_current):
-                meta["authoritative_start_ts"] = observed_ts
-                meta["authoritative_start_source"] = "observed_data"
-                auth_updated = True
-            self._index[f"{symbol}::1m"] = idx
-            if save:
-                self._save_index(symbol)
-            if auth_updated:
-                # If we previously marked ranges as pre-inception but later observed earlier
-                # real data, that authoritative lower bound became stale.
-                try:
-                    self._prune_pre_inception_gaps(symbol, observed_ts, save=save)
-                except Exception as exc:
-                    self._log(
-                        "warning",
-                        "prune_pre_inception_gaps_failed",
-                        symbol=symbol,
-                        error_type=bounded_exception_type(exc),
-                    )
-            self._log(
-                "debug",
-                "inception_ts_updated",
-                symbol=symbol,
-                old_ts=current,
-                new_ts=observed_ts,
-            )
+        observed_ts = int(ts) if current is None else min(int(current), int(ts))
+        auth_current = meta.get("authoritative_start_ts")
+        auth_updated = auth_current is not None and observed_ts < int(auth_current)
+        # A shard can already have recorded the observed start in this batch.
+        # The authoritative boundary and its gaps still need to agree with it.
+        if current is not None and observed_ts == int(current) and not auth_updated:
+            return False
+
+        meta["observed_start_ts"] = observed_ts
+        meta["inception_ts"] = observed_ts  # legacy alias
+        if auth_updated:
+            meta["authoritative_start_ts"] = observed_ts
+            meta["authoritative_start_source"] = "observed_data"
+        self._index[f"{symbol}::1m"] = idx
+        if save:
+            self._save_index(symbol)
+        if auth_updated:
+            try:
+                self._prune_pre_inception_gaps(symbol, observed_ts, save=save)
+            except Exception as exc:
+                self._log(
+                    "warning",
+                    "prune_pre_inception_gaps_failed",
+                    symbol=symbol,
+                    error_type=bounded_exception_type(exc),
+                )
+        self._log(
+            "debug",
+            "inception_ts_updated",
+            symbol=symbol,
+            old_ts=current,
+            new_ts=observed_ts,
+        )
+        return True
 
     def _first_ohlcv_cache_path(self) -> Path:
         return Path(self.cache_dir) / "first_ohlcv_timestamps_unified_exchange_specific.json"
@@ -5466,17 +5534,15 @@ class CandlestickManager:
             except Exception:
                 new_gaps.append(g)
 
-        if changed and save:
-            self._save_known_gaps_enhanced(symbol, new_gaps)
+        if changed:
+            self._save_known_gaps_enhanced(symbol, new_gaps, defer_index=not save)
 
-    def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> None:
+    def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> bool:
         """Update inception_ts if arr contains an earlier timestamp than known."""
         if arr.size == 0:
-            return
+            return False
         first_ts = int(arr[0]["ts"]) if arr.ndim else int(arr["ts"])
-        current = self._get_inception_ts(symbol)
-        if current is None or first_ts < current:
-            self._set_inception_ts(symbol, first_ts, save=save)
+        return self._set_inception_ts(symbol, first_ts, save=save)
 
     # ----- CCXT fetching -----
 
@@ -5882,19 +5948,11 @@ class CandlestickManager:
 
     def get_last_live_ws_ohlcv_ts(self, symbol: str) -> int:
         """Return the newest finalized WS candle persisted for this symbol."""
-        idx = self._ensure_symbol_index(symbol, tf="1m")
-        try:
-            return int(idx.get("meta", {}).get("last_ws_final_ts", 0) or 0)
-        except Exception:
-            return 0
+        return self._index_timestamp(self._ensure_symbol_index(symbol, tf="1m"), "last_ws_final_ts")
 
     def get_last_live_ws_persist_ms(self, symbol: str) -> int:
         """Return when a finalized WS candle was most recently persisted."""
-        idx = self._ensure_symbol_index(symbol, tf="1m")
-        try:
-            return int(idx.get("meta", {}).get("last_ws_persist_ms", 0) or 0)
-        except Exception:
-            return 0
+        return self._index_timestamp(self._ensure_symbol_index(symbol, tf="1m"), "last_ws_persist_ms")
 
     def clear_live_ws_ohlcv_state(self, symbol: str) -> None:
         """Discard volatile CCXT-cache provenance without deleting candles."""
@@ -11032,8 +11090,10 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         defer_index: bool = False,
-    ) -> None:
+    ) -> bool:
         """Save shard as .npy and update index.json atomically.
+
+        Return whether the primary shard was written.
 
         Parameters
         ----------
@@ -11048,7 +11108,7 @@ class CandlestickManager:
         """
         arr = _ensure_dtype(array)
         if arr.size == 0:
-            return
+            return False
 
         arr = np.sort(arr, order="ts")
         data_bytes = arr.tobytes()
@@ -11061,7 +11121,7 @@ class CandlestickManager:
         if tf_norm == "1m":
             try:
                 if self._legacy_day_is_complete(symbol, tf_norm, date_key):
-                    return
+                    return False
             except (
                 Exception
             ) as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
@@ -11119,6 +11179,7 @@ class CandlestickManager:
                 self._enforce_disk_retention(symbol, tf=tf_norm)
             except Exception:
                 pass
+        return True
 
     def flush_deferred_index(
         self,

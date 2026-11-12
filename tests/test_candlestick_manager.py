@@ -6205,6 +6205,144 @@ async def test_unrecorded_cache_hole_repairs_from_real_source_and_recovers_ema(t
     assert cm._unverified_candle_gap_ranges(symbol, 100 * minute, 109 * minute) == []
 
 
+@pytest.mark.parametrize("defer_index", [False, True])
+def test_rest_minute_batch_commits_shards_and_metadata_once(tmp_path, monkeypatch, defer_index):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    first_minute = 24 * 60 - 1
+    rows = _resolution_candles(first_minute, first_minute + 1)
+    first_ts, last_ts = map(int, rows["ts"])
+    refresh_ms = last_ts + ONE_MIN_MS
+    cm._set_authoritative_start_ts(
+        symbol, last_ts + ONE_MIN_MS, source="test"
+    )
+    cm._save_known_gaps_enhanced(symbol, [{
+        "start_ts": first_ts,
+        "end_ts": last_ts + ONE_MIN_MS,
+        "reason": "pre_inception",
+        "retry_count": _GAP_MAX_RETRIES,
+    }])
+    path = Path(cm._index_path(symbol))
+    prior = path.read_bytes()
+    saves = []
+    original = cm._save_index
+
+    def save(*args, **kwargs):
+        original(*args, **kwargs)
+        saves.append(json.loads(path.read_text()))
+
+    monkeypatch.setattr(cm, "_save_index", save)
+    cm._persist_batch(symbol, rows, last_refresh_ms=refresh_ms, defer_index=defer_index)
+    if defer_index:
+        assert saves == []
+        assert path.read_bytes() == prior
+        cm.flush_deferred_index(symbol)
+
+    [committed] = saves
+    assert len(committed["shards"]) == 2
+    assert committed["meta"]["last_refresh_ms"] == refresh_ms
+    assert committed["meta"]["last_final_ts"] == last_ts
+    assert committed["meta"]["observed_start_ts"] == first_ts
+    assert committed["meta"]["authoritative_start_ts"] == first_ts
+    assert committed["meta"]["known_gaps"] == []
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(fresh._load_from_disk(symbol, first_ts, last_ts), rows)
+
+
+def test_rest_minute_batch_checks_contention_before_correcting_shard(tmp_path):
+    import portalocker
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    original = _resolution_candles(58, 59)
+    corrected = _resolution_candles(59, close_offset=100.0)
+    refresh_ms = 60 * ONE_MIN_MS
+    cm._persist_batch(symbol, original, last_refresh_ms=refresh_ms)
+    index_path = Path(cm._index_path(symbol))
+    old_index = index_path.read_bytes()
+    [shard] = json.loads(old_index)["shards"].values()
+    shard_path = Path(shard["path"])
+    old_shard = shard_path.read_bytes()
+
+    with portalocker.Lock(str(index_path) + ".lock", timeout=0, fail_when_locked=True):
+        with pytest.raises(portalocker.exceptions.LockException):
+            cm._persist_batch(symbol, corrected, last_refresh_ms=refresh_ms + ONE_MIN_MS)
+
+    assert index_path.read_bytes() == old_index
+    assert shard_path.read_bytes() == old_shard
+    assert cm.get_last_refresh_ms(symbol) == refresh_ms
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(
+        fresh._load_from_disk(symbol, 58 * ONE_MIN_MS, 59 * ONE_MIN_MS), original
+    )
+
+
+def test_rest_minute_batch_commit_failure_keeps_published_metadata_and_cache(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    rows = _resolution_candles(24 * 60 - 1, 24 * 60)
+    original, new = rows[:1], rows[1:]
+    old_refresh = int(new[0]["ts"])
+    cm._persist_batch(symbol, original, last_refresh_ms=old_refresh)
+    path = Path(cm._index_path(symbol))
+    old_index = path.read_bytes()
+    observed = []
+    cm.set_persist_batch_observer(lambda *_args: observed.append(True))
+
+    def fail_commit(*_args, **_kwargs):
+        raise OSError("index publication failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(cm, "_save_index", fail_commit)
+        with pytest.raises(OSError, match="index publication failed"):
+            cm._persist_batch(symbol, new, last_refresh_ms=old_refresh + ONE_MIN_MS)
+
+    assert path.read_bytes() == old_index
+    assert cm.get_last_refresh_ms(symbol) == old_refresh
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+    assert not observed
+
+    # An independent reader can still recover the atomically persisted shard.
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(
+        fresh._load_from_disk(symbol, int(original[0]["ts"]), int(new[0]["ts"])), rows
+    )
+
+    cm._persist_batch(symbol, new, last_refresh_ms=old_refresh + ONE_MIN_MS)
+    assert cm.get_last_refresh_ms(symbol) == old_refresh + ONE_MIN_MS
+    assert len(json.loads(path.read_text())["shards"]) == 2
+    np.testing.assert_array_equal(cm._cache[symbol], rows)
+    assert observed == [True]
+
+
+def test_failed_deferred_rest_page_keeps_previous_page_and_inception(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    late_minute = 24 * 60
+    late_ts = late_minute * ONE_MIN_MS
+    cm._set_authoritative_start_ts(symbol, late_ts, source="test")
+    late = _resolution_candles(late_minute)
+    cm._persist_batch(symbol, late, last_refresh_ms=late_ts + ONE_MIN_MS, defer_index=True)
+    early = _resolution_candles(late_minute - 1)
+
+    def fail_shard(*_args, **_kwargs):
+        raise OSError("shard publication failed")
+
+    monkeypatch.setattr(cm, "_save_shard", fail_shard)
+    with pytest.raises(OSError, match="shard publication failed"):
+        cm._persist_batch(
+            symbol, early, last_refresh_ms=late_ts + 2 * ONE_MIN_MS, defer_index=True
+        )
+    cm.flush_deferred_index(symbol)
+    committed = json.loads(Path(cm._index_path(symbol)).read_text())
+    assert len(committed["shards"]) == 1
+    assert committed["meta"]["observed_start_ts"] == late_ts
+    assert committed["meta"]["authoritative_start_ts"] == late_ts
+    assert committed["meta"]["last_refresh_ms"] == late_ts + ONE_MIN_MS
+    np.testing.assert_array_equal(cm._cache[symbol], late)
+
+
 def test_candle_index_write_fails_promptly_under_contention(tmp_path):
     import time
     from pathlib import Path
