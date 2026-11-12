@@ -168,6 +168,10 @@ its own version heading. See [release status](docs/releases.md).
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.
 
+- Keep Bitget, Bybit, Hyperliquid, and OKX fill history retryable when the pagination limit
+  leaves the requested range unproven. Reject fills with unresolved position sides before
+  replay, while preserving Binance income-only accounting records.
+
 - Skip the missing-PnL replay when all refreshed fills already have resolved realized PnL.
 
 - Reduce native HSL replay CPU on dense retained fill and account histories by indexing execution
