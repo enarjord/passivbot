@@ -138,10 +138,14 @@ post-protection calculation duration without raw input payloads.
 
 With HSL disabled, ordinary preparation retains initial receipt and readiness checks.
 It can join an account refresh already in flight before native calculation and
-reacquires canonical quotes after the wait. The serialized owner can recheck a ready
-plan once after the scheduled refresh and protection if account age alone blocked it.
-The plan retains its original snapshot and acquisition times. Admission requires exact
-account facts, valid clocks, no pending confirmations and current consumed receipts.
+reacquires canonical quotes after the wait. If another refresh starts during quote
+renewal or the final local candle read, the background task can join it once and
+repeat those reads after checking the prepared facts against the completed account
+cohort. The retry wait is bounded by the account age limit and leaves the owner's
+refresh running. The serialized owner can recheck a ready plan once after the scheduled
+refresh and protection if account age alone blocked it. The plan retains its original
+snapshot and acquisition times. Admission requires exact account facts, valid clocks,
+no pending confirmations and current consumed receipts.
 
 The offline fake runner drains unmet account confirmations, owner-required fill readiness and
 ordinary execution changes before advancing a bar. After a typed create/cancel connector deferral

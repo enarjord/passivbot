@@ -49,6 +49,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
 
+- Let ordinary planning with HSL disabled rejoin an in-flight account refresh once if
+  it overlaps final input preparation, with the existing freshness and protection checks.
+
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
 - Make live health summaries easier to scan and log the first accepted plan separately from startup checks.

@@ -17560,22 +17560,45 @@ class Passivbot:
             await hsl.wait_for_ordinary_fill_refresh()
         market_epoch = self._ensure_freshness_ledger().epoch
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        if await hsl.refresh_ordinary_account(
+        confirmed = await hsl.refresh_ordinary_account(
             prepared_account, allow_new_refresh=hsl_enabled
-        ):
-            if not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch:
-                # A confirming read may change the epoch or spend the first
-                # quotes' freshness headroom. Reuse only quotes accepted by the
-                # canonical provider, retaining their real acquisition timestamps.
-                market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-            hsl.require_ordinary_account(prepared_account)
-        else:
+        )
+        renew_quotes = confirmed and (
+            not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch
+        )
+        if not confirmed:
             prepared_account = None
-        # Remote acquisition may renew the factual fill tape. Rebuild every
-        # fill-derived trailing input from the current cohort, without remote
-        # I/O, before consuming HSL or native strategy inputs. An observation
-        # replaced after this point still invalidates even an equal payload.
-        receipts = await hsl.prepare_ordinary_consumption(prepared_account)
+        joined_epoch = None
+        for attempt in range(2):
+            try:
+                if joined_epoch is not None:
+                    market_snapshots = await self._get_orchestrator_market_snapshots(
+                        symbols, record_surface=False
+                    )
+                elif renew_quotes:
+                    # Use the canonical provider and retain real quote acquisition times.
+                    market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+                if prepared_account is not None:
+                    hsl.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
+                # Rebuild trailing inputs from the current fill cohort after quote I/O.
+                receipts = await hsl.prepare_ordinary_consumption(
+                    prepared_account, joined_epoch=joined_epoch,
+                    preparation=preparation if joined_epoch is not None else None,
+                )
+                if joined_epoch is not None:
+                    self._record_market_snapshot_surface(symbols, market_snapshots)
+                break
+            except hsl_live.OrdinaryPlanDeferred as exc:
+                if attempt or hsl_enabled or exc.reason != "account_refresh_in_progress":
+                    raise
+                # Another owner read can start while renewing quotes or reading
+                # local candles. Join it once and revalidate the same preparation.
+                await hsl.refresh_ordinary_account(
+                    prepared_account, allow_new_refresh=False,
+                    join_timeout_s=self._live_market_snapshot_max_age_ms() / 1000,
+                )
+                joined_epoch = self._ensure_freshness_ledger().epoch
+                hsl.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
         return Passivbot._calculate_prepared_ideal_orders(
             self, preparation, market_snapshots, receipts
         )
