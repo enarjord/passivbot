@@ -2530,42 +2530,7 @@ class CandlestickManager:
                 # attempt. A worker thread could acquire after caller cancellation
                 # and leak the lock before ownership is registered.
                 lock_obj.acquire()
-                acquired_at = time.time()
-                self._touch_lockfile(
-                    lock_path,
-                    symbol=symbol,
-                    timeframe=tf_norm,
-                    acquired_at=acquired_at,
-                    attempt=attempt,
-                )
-                self._held_fetch_locks[key] = _LockRecord(
-                    lock=lock_obj,
-                    path=lock_path,
-                    count=1,
-                    acquired_at=acquired_at,
-                    owner_task=current_task,
-                )
-                self._start_fetch_lock_watchdog(
-                    key,
-                    symbol=symbol,
-                    timeframe=tf_norm,
-                    acquired_at=acquired_at,
-                )
-                self._log(
-                    "debug",
-                    "fetch_lock_acquired",
-                    symbol=symbol,
-                    timeframe=tf_norm,
-                    attempt=attempt,
-                )
-                try:
-                    yield
-                finally:
-                    record = self._held_fetch_locks.pop(key, None)
-                    self._cancel_fetch_lock_watchdog(key)
-                    if record is not None:
-                        await self._release_lock(record.lock, record.path, symbol, tf_norm)
-                return
+                break
             except portalocker.exceptions.LockException as exc:
                 age = self._lockfile_age(lock_path)
                 if age is not None and age > self._lock_stale_seconds:
@@ -2598,6 +2563,43 @@ class CandlestickManager:
                     stage="fetch_lock_wait",
                 )
                 backoff = min(backoff * 2.0, self._lock_backoff_max)
+
+        # A lock error raised by protected work belongs to that operation.
+        acquired_at = time.time()
+        self._touch_lockfile(
+            lock_path,
+            symbol=symbol,
+            timeframe=tf_norm,
+            acquired_at=acquired_at,
+            attempt=attempt,
+        )
+        self._held_fetch_locks[key] = _LockRecord(
+            lock=lock_obj,
+            path=lock_path,
+            count=1,
+            acquired_at=acquired_at,
+            owner_task=current_task,
+        )
+        self._start_fetch_lock_watchdog(
+            key,
+            symbol=symbol,
+            timeframe=tf_norm,
+            acquired_at=acquired_at,
+        )
+        self._log(
+            "debug",
+            "fetch_lock_acquired",
+            symbol=symbol,
+            timeframe=tf_norm,
+            attempt=attempt,
+        )
+        try:
+            yield
+        finally:
+            record = self._held_fetch_locks.pop(key, None)
+            self._cancel_fetch_lock_watchdog(key)
+            if record is not None:
+                await self._release_lock(record.lock, record.path, symbol, tf_norm)
 
     @staticmethod
     def _normalize_timeframe_arg(
