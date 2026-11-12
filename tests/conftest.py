@@ -155,6 +155,10 @@ def _install_passivbot_rust_stub():
     stub.order_type_id_to_snake = _order_type_id_to_snake
     stub.order_type_snake_to_id = _order_type_snake_to_id
 
+    class NoEvaluatedIntervalError(ValueError):
+        pass
+
+    stub.NoEvaluatedIntervalError = NoEvaluatedIntervalError
     stub.run_backtest = lambda *args, **kwargs: {}
     stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
     stub.calc_twel_enforcer_orders_py = lambda *args, **kwargs: []

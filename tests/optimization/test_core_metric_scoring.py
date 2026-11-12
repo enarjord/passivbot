@@ -162,20 +162,6 @@ def test_invalid_transport_has_no_fabricated_raw_objective():
     )
 
 
-def test_only_the_exact_insufficient_candidate_window_error_is_recoverable():
-    from optimize import _is_recoverable_backtest_candidate_error
-
-    assert _is_recoverable_backtest_candidate_error(
-        ValueError("replay has no positive evaluated interval after declared warmup")
-    )
-    assert not _is_recoverable_backtest_candidate_error(
-        ValueError("missing required market metadata")
-    )
-    assert not _is_recoverable_backtest_candidate_error(
-        ValueError("unknown core metric")
-    )
-
-
 @pytest.mark.parametrize("authored", [None, "omitted"])
 def test_resume_resolves_the_same_native_campaign_half_life(authored):
     from copy import deepcopy

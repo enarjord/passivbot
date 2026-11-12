@@ -593,11 +593,6 @@ logging.basicConfig(
 INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
 DEFAULT_PARETO_MAX_SIZE = 1000
 OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
-_RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
-    "hard-stop evaluation failed",
-    "equity must be finite and > 0",
-    "peak_strategy_equity must be finite and > 0",
-)
 
 
 def _optimize_profile_enabled() -> bool:
@@ -658,27 +653,6 @@ def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -
     if len(keys) > limit:
         rendered += f", ... ({len(keys) - limit} more)"
     return rendered
-
-
-def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
-    name = exc.__class__.__name__
-    message = str(exc)
-    if isinstance(exc, ValueError) and message == "replay has no positive evaluated interval after declared warmup":
-        # This candidate has no scored window; never invent flat observations.
-        return True
-    if name == "PanicException":
-        return any(
-            pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS
-        )
-    if isinstance(exc, ValueError):
-        return "hard-stop evaluation failed" in message and any(
-            pattern in message
-            for pattern in (
-                "equity must be finite and > 0",
-                "peak_strategy_equity must be finite and > 0",
-            )
-        )
-    return False
 
 
 def _optimizer_exit_code(*, interrupted: bool, failed: bool) -> int:
@@ -1754,9 +1728,7 @@ class Evaluator:
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
-            except BaseException as exc:
-                if not _is_recoverable_backtest_candidate_error(exc):
-                    raise
+            except pbr.NoEvaluatedIntervalError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
                 logging.debug(
                     "Optimizer candidate invalid due to recoverable backtest failure | hash=%s | exchange=%s | error=%s",
@@ -2405,9 +2377,7 @@ class SuiteEvaluator:
                                 timings[key] = timings.get(key, 0.0) + float(value)
                             except (TypeError, ValueError):
                                 continue
-                except BaseException as exc:
-                    if not _is_recoverable_backtest_candidate_error(exc):
-                        raise
+                except pbr.NoEvaluatedIntervalError as exc:
                     error = f"{exc.__class__.__name__}: {exc}"
                     logging.debug(
                         "Optimizer suite candidate invalid due to recoverable backtest failure | label=%s | exchange=%s | error=%s",

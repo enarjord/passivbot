@@ -1,4 +1,4 @@
-use crate::backtest::BacktestEngine;
+use crate::backtest::{BacktestEngine, CoreMetricsSetupError};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     calc_trailing_martingale_close_diagnostic,
@@ -43,6 +43,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 pyo3::create_exception!(passivbot_rust, MissingEmaError, PyValueError);
+pyo3::create_exception!(passivbot_rust, NoEvaluatedIntervalError, PyValueError);
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, PyObject);
 
@@ -1669,8 +1670,14 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     );
     backtest.eligibility = eligibility.as_ref().map(|a| a.as_array());
     backtest.eligibility_rows = eligibility_rows.as_ref().map(|a| a.as_array());
-    backtest.configure_core_metrics(metric_requests, ew_half_life_days)
-        .map_err(PyValueError::new_err)?;
+    backtest
+        .configure_core_metrics(metric_requests, ew_half_life_days)
+        .map_err(|err| match err {
+            CoreMetricsSetupError::NoEvaluatedInterval => NoEvaluatedIntervalError::new_err(
+                "replay has no positive evaluated interval after declared warmup",
+            ),
+            CoreMetricsSetupError::InvalidSetup(message) => PyValueError::new_err(message),
+        })?;
     profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
