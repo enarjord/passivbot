@@ -50,6 +50,8 @@ its own version heading. See [release status](docs/releases.md).
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
+- Preserve candle index write contention errors during fetch-lock cleanup so callers can handle
+  the underlying persistence failure.
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 

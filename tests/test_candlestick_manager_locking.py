@@ -354,6 +354,40 @@ async def test_live_fetch_budget_bounds_contended_lock_wait(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fetch_lock_preserves_index_write_contention_and_releases(tmp_path):
+    import portalocker
+
+    owner = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    successor = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    symbol = "BTC/USDT:USDT"
+    key = (symbol, "1m")
+    owner._ensure_symbol_index(symbol)
+    owner._save_index(symbol)
+
+    index_lock_path = owner._index_path(symbol) + ".lock"
+    with portalocker.Lock(index_lock_path, timeout=0, fail_when_locked=True):
+        write_error = None
+        with pytest.raises(portalocker.exceptions.LockException) as failure:
+            async with owner._acquire_fetch_lock(*key):
+                try:
+                    owner._save_index(symbol)
+                except portalocker.exceptions.LockException as exc:
+                    write_error = exc
+                    raise
+        assert failure.value is write_error
+        assert owner._held_fetch_locks == {}
+
+        with successor.remote_fetch_budget(0.1):
+            async with successor._acquire_fetch_lock(*key):
+                assert key in successor._held_fetch_locks
+    assert successor._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
 async def test_live_budget_shared_by_children_preserves_cache_reads_after_expiry(tmp_path):
     cm = CandlestickManager(
         exchange=FakeExchange(), exchange_name="fake", cache_dir=str(tmp_path),

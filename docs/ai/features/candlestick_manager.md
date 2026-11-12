@@ -556,6 +556,8 @@ Protective HSL scheduling retains its independent current-fact requirements.
 A contended candle index write lock fails immediately through the existing persistence
 error path. The lock holder retains its atomic write. A later acquisition can retry the
 write without blocking the event loop on the lock.
+Fetch-lock backoff applies only to acquiring that lock. Errors in the protected operation
+propagate after its fetch lock is released.
 
 Trailing reconstruction still requires a completed candle beginning strictly after
 the latest fill minute. Before that first source candle finalizes, a one-to-two
