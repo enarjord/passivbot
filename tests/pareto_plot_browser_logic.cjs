@@ -152,9 +152,9 @@ const cliProjection = plotSpec(ranked, ['adg','risk'], ['max','min'], browserLim
 assert.deepEqual(cliProjection.view.indices, [1]);
 assert.deepEqual(cliProjection.view.retained, [1, 3]);
 assert.equal(cliProjection.filteredPickVisibility, 'visible');
-assert.equal(cliProjection.traces.find(trace => trace.name === 'All-objective pick after limits').marker.symbol, 'square-open');
+assert.equal(cliProjection.traces.find(trace => trace.name === 'Scoring pick after limits').marker.symbol, 'square-open');
 const cliProjection3D = plotSpec(ranked, ['adg','risk','third'], ['max','min','max'], browserLimits, 'knee', null, null, cliFilter);
-assert.deepEqual(cliProjection3D.traces.find(trace => trace.name === 'All-objective pick after limits').z, [2]);
+assert.deepEqual(cliProjection3D.traces.find(trace => trace.name === 'Scoring pick after limits').z, [2]);
 const missingCliPick = plotSpec(ranked, ['adg','risk'], ['max','min'], browserLimits, 'ideal', null, null, {...cliFilter, selected:'d'});
 assert.equal(missingCliPick.filteredPickVisibility, 'missing coordinates');
 

@@ -32,6 +32,7 @@ class PlotSelection:
         self.specs = specs
         self.args = args
         self.initial = initial
+        self.objective_metrics = tuple(spec.metric for spec in initial.active_specs)
         self.output = output
         self.rows = {candidate.filename: index for index, candidate in enumerate(candidates)}
         self.limit_basis = {}
@@ -71,7 +72,22 @@ class PlotSelection:
             keys.append((key, mode, value))
         return tuple(keys)
 
-    def _evaluate(self, limits):
+    def objective_keys(self, objectives):
+        if objectives is None:
+            return self.objective_metrics
+        if (
+            not isinstance(objectives, list)
+            or not objectives
+            or len(objectives) > len(self.objective_metrics)
+            or any(not isinstance(metric, str) or metric not in self.objective_metrics for metric in objectives)
+            or len(set(objectives)) != len(objectives)
+        ):
+            raise ValueError("Choose at least one distinct launch scoring objective.")
+        enabled = set(objectives)
+        # Retain launch order, including lexicographic priority.
+        return tuple(metric for metric in self.objective_metrics if metric in enabled)
+
+    def _evaluate(self, limits, objectives):
         entries = [
             json.dumps({
                 **self.limit_basis[key],
@@ -82,17 +98,31 @@ class PlotSelection:
         ]
         args = argparse.Namespace(**vars(self.args))
         args.limit_entries = [*(args.limit_entries or []), *entries]
-        evaluation = evaluate_selection(self.candidates, self.specs, args) if entries else self.initial
+        subset = objectives != self.objective_metrics
+        if subset:
+            objective_list = ",".join(objectives)
+            if args.priority is not None:
+                args.priority = objective_list
+            else:
+                args.objectives = objective_list
+            for option in ("weight", "target", "scale"):
+                pairs = getattr(args, option) or []
+                setattr(args, option, [
+                    pair for pair in pairs if pair.partition("=")[0].strip() in objectives
+                ])
+        evaluation = evaluate_selection(self.candidates, self.specs, args) if entries or subset else self.initial
         return args, evaluation
 
-    def result(self, limits=(), *, export=False):
-        args, evaluation = self.evaluate(limits)
+    def result(self, limits=(), *, objectives=None, export=False):
+        objectives = self.objective_metrics if objectives is None else objectives
+        args, evaluation = self.evaluate(limits, objectives)
         candidate = evaluation.result.candidate
         result = {
             "selected": candidate.filename,
             "retained": [self.rows[item.filename] for item in evaluation.filtered_candidates],
             "method": evaluation.result.method,
             "objective_count": len(evaluation.active_specs),
+            "objectives": [spec.metric for spec in evaluation.active_specs],
             "selection_command": shlex.join([
                 "passivbot", "tool", "pareto", str(self.source), *selection_cli_args(args)
             ]),
@@ -171,8 +201,9 @@ def selection_server(selection: PlotSelection, render: Callable[[dict], str]):
                 if not isinstance(data, dict) or type(data.get("export")) is not bool:
                     raise ValueError("Invalid plot selection request.")
                 keys = selection.limit_keys(data.get("limits"))
+                objectives = selection.objective_keys(data.get("objectives"))
                 with lock:
-                    result = selection.result(keys, export=data["export"])
+                    result = selection.result(keys, objectives=objectives, export=data["export"])
                 status = 200
             except (ValueError, OSError, RecursionError) as error:
                 result = {"error": str(error)}

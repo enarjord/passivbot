@@ -293,14 +293,16 @@ the CLI selection fixed. The panel still identifies it when the selected point i
 or excluded by a browser filter. Use `passivbot tool pareto PATH --json` for the CLI
 selection record in a script.
 
-Use `--open` for **All-objective selection after limits** and **Export filtered seeds**.
+Use `--open` for **Scoring pick after limits** and **Export filtered seeds**.
 This mode serves the viewer on loopback until you press Ctrl+C. Use `--serve` to print the
 viewer URL without opening a browser. The standalone HTML is also saved. Use
 `--offline --open` to open that file directly. The loopback viewer adds enabled plot limits to any launch
 limits and runs the Python CLI selector with the same method, active objectives, weights,
-targets, and scenario. Changing scatter axes, their directions, or the plotted-axis selector
-leaves this selection unchanged. The square marker shows the filtered all-objective pick
-when it has finite coordinates on the current axes.
+targets, and scenario. Expand **Scoring objectives for square marker** to rank the filtered
+candidates using a subset of the objectives active at launch. An unchecked metric can
+still serve as an axis or a limit. Changing scatter axes, their directions, or the
+plotted-axis selector leaves this selection unchanged. The square marker shows the
+scoring pick when it has finite coordinates on the current axes.
 
 The loopback viewer uses CLI limit resolution. A limit on a named statistic requests that reducer.
 The CLI resolves a limit on an ordinary metric from its saved aggregate or applicable fallback.
@@ -309,7 +311,7 @@ If a limit cannot be resolved or leaves no candidates, the viewer displays the C
 directory. It preserves candidate bytes and includes only candidate files so the directory
 can go directly to `passivbot optimize --start`.
 
-**Copy commands** includes the Pareto selection command with exact limit arguments and a
+**Copy commands** includes the Pareto selection command with the chosen objectives and exact limit arguments and a
 backtest command for the selected file. Backtest replays the file and any selected scenario.
 After export, copy the optimization command to use the selected source file as the base config,
 the new directory as `--start`, and the applied constraints as `--limits`. Review the base

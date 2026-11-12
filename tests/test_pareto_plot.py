@@ -132,6 +132,53 @@ def test_session_matches_cli_with_inclusive_slider_and_launch_limits(tmp_path, m
     assert not list(tmp_path.glob(".pareto-filtered-*"))
 
 
+@pytest.mark.parametrize("method", ["ideal", "reference", "aspiration", "lexicographic"])
+def test_scoring_subset_matches_cli_and_preserves_limit_membership(tmp_path, method, capsys):
+    front = tmp_path / "front"
+    front.mkdir()
+    for name, values in [
+        ("a", (0.05, 0.4, 1.0)),
+        ("b", (0.04, 0.1, 1.4)),
+        ("c", (0.02, 0.09, 3.0)),
+    ]:
+        write_candidate(front / f"{name}.json", values)
+    cagr, pain, sortino = METRICS
+    options = {
+        "ideal": ["--weight", f"{sortino}=2"],
+        "reference": [
+            "--objectives", ",".join(METRICS), "--target", f"{sortino}=2",
+            "--target", f"{cagr}=0.03", "--target", f"{pain}=0.15",
+        ],
+        "aspiration": [
+            "--target", f"{cagr}=0.03", "--target", f"{pain}=0.15", "--target", f"{sortino}=2",
+            "--scale", f"{cagr}=0.01", "--scale", f"{pain}=0.1", "--scale", f"{sortino}=1",
+        ],
+        "lexicographic": ["--priority", f"{sortino},{cagr},{pain}"],
+    }
+    _, candidates, specs = load_candidates(front)
+    args = pareto_plot.build_parser().parse_args([str(front), "--method", method, *options[method]])
+    initial = evaluate_selection(candidates, specs, args)
+    data = pareto_plot.build_dataset(candidates, specs)
+    session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "plot.html")
+    limits = session.limit_keys([{"key": sortino, "mode": "floor", "value": 1.4}])
+    chosen = session.objective_keys([pain, cagr])
+    assert chosen == (cagr, pain)
+    result = session.result(limits, objectives=chosen, export=True)
+    assert result["objectives"] == [cagr, pain]
+    assert result["retained"] == session.result(limits)["retained"] == [1, 2]
+    assert {path.name for path in Path(result["seed_directory"]).iterdir()} == {"b.json", "c.json"}
+    command = shlex.split(result["selection_command"])
+    flag = "--priority" if method == "lexicographic" else "--objectives"
+    assert command[command.index(flag) + 1] == f"{cagr},{pain}"
+    assert cli_main([*command[1:], "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert result["selected"] == record["selected"]["file"]
+    assert [item["metric"] for item in record["objectives"]] == [cagr, pain]
+    for invalid in ([], [cagr, cagr], [cagr, "unknown"], [None], cagr):
+        with pytest.raises(ValueError, match="distinct launch scoring objective"):
+            session.objective_keys(invalid)
+
+
 def test_session_uses_suite_reducer_and_scenario_for_commands(tmp_path, capsys):
     front = tmp_path / "front"
     front.mkdir()

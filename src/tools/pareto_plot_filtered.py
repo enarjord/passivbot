@@ -1,12 +1,21 @@
-"""Browser controls for the all-objective selection and seed export."""
+"""Browser controls for the scoring-objective selection and seed export."""
+
+OBJECTIVE_CONTROLS = r'''
+<details class="scoring-objectives" id="scoring-objectives" hidden>
+<summary id="scoring-objectives-summary">Scoring objectives for square marker</summary>
+<p class="muted">Choose which launch objectives rank the candidates that pass your limits.</p>
+<div class="objective-options" id="objective-options" role="group" aria-label="Scoring objectives"></div>
+<button type="button" id="restore-objectives">Restore all objectives</button>
+</details>
+'''
 
 FILTERED_PANEL = r'''
 <section class="selection" aria-labelledby="filtered-title">
-<h2 id="filtered-title">All-objective selection after limits</h2>
-<p class="muted" id="filtered-offline">This is the standalone HTML. Run <code>passivbot tool pareto-plot PATH --open --force</code> for the all-objective pick after slider limits and seed export.</p>
+<h2 id="filtered-title">Scoring pick after limits</h2>
+<p class="muted" id="filtered-offline">This is the standalone HTML. Run <code>passivbot tool pareto-plot PATH --open --force</code> for the scoring pick after slider limits and seed export.</p>
 <div id="filtered-controls" hidden>
 <p id="filtered-status" role="status"></p>
-<p class="muted">Uses the CLI selection method and objectives from launch. Plot limits are added to the launch limits.</p>
+<p class="muted">Uses the CLI selection method from launch and the checked scoring objectives. Plot limits are added to the launch limits.</p>
 <button type="button" id="export-seeds">Export filtered seeds</button>
 <p id="seed-status" role="status"></p>
 <details id="filtered-commands"><summary>Copy commands</summary><div id="command-list"></div></details>
@@ -18,9 +27,17 @@ FILTERED_STYLES = r'''
 .pareto-command{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;margin-top:10px;align-items:center}
 .pareto-command label{grid-column:1/-1;margin:0}
 .pareto-command input{min-width:0;padding:7px;border:1px solid #cbd5e1;border-radius:6px;font:13px ui-monospace,monospace}
+.scoring-objectives{margin:0;padding:10px 16px;border-bottom:1px solid #e7ecf2}
+.objective-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:4px 12px;margin:10px 0}
+.objective-options label{display:flex;align-items:start;gap:6px;overflow-wrap:anywhere}
+.objective-options input{margin:2px 0 0}
 '''
 
 FILTERED_SCRIPT = r'''
+function objectiveCountLabel(count) {
+    return count === 1 ? "1 objective" : `${count} objectives`;
+}
+
 function mountFilteredSelection(dataset, onChange) {
     if (!dataset.session) return null;
     document.getElementById("filtered-offline").hidden = true;
@@ -30,14 +47,36 @@ function mountFilteredSelection(dataset, onChange) {
     const exportButton = document.getElementById("export-seeds");
     const commands = document.getElementById("command-list");
     const details = document.getElementById("filtered-commands");
-    let current = dataset.session.initial, limits = [], signature = "[]";
+    const initial = dataset.session.initial;
+    const available = initial.objectives;
+    const options = document.getElementById("objective-options");
+    const objectiveSummary = document.getElementById("scoring-objectives-summary");
+    const restore = document.getElementById("restore-objectives");
+    document.getElementById("scoring-objectives").hidden = false;
+    const checkboxes = available.map(metric => {
+        const label = appendText(options, "label", "");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = metric;
+        checkbox.checked = true;
+        checkbox.addEventListener("change", onChange);
+        label.append(checkbox);
+        appendText(label, "span", metric);
+        return checkbox;
+    });
+    restore.addEventListener("click", () => {
+        checkboxes.forEach(checkbox => { checkbox.checked = true; });
+        onChange();
+    });
+    let current = initial, limits = [], objectives = available;
+    let signature = JSON.stringify([limits, objectives]);
     let timer, running = false, ready = true, exporting = false, exportResult = null;
 
     function renderCommands() {
         commands.replaceChildren();
         if (!ready || !current.selected) return;
         const entries = [
-            ["Select with these limits", current.selection_command],
+            ["Select with these objectives and limits", current.selection_command],
             ["Backtest the selected candidate", current.backtest_command],
             ["Start optimization with exported seeds and limits", exportResult?.optimize_command],
         ];
@@ -71,30 +110,30 @@ function mountFilteredSelection(dataset, onChange) {
         if (ready && current.selected) {
             const label = candidateLabel(dataset.selection, current.selected);
             const method = current.method === "ideal" ? "Euclidean ideal" : current.method;
-            status.textContent = `${label} · ${method} · ${current.objective_count} objectives · ${current.retained.length.toLocaleString()} retained`;
+            status.textContent = `${label} · ${method} · ${objectiveCountLabel(current.objective_count)} · ${current.retained.length.toLocaleString()} retained`;
         } else {
-            status.textContent = ready ? current.error : "Applying CLI limits…";
+            status.textContent = ready ? current.error : "Updating scoring pick…";
         }
         renderCommands();
     }
 
-    async function request(requestLimits, exportSeeds) {
+    async function request(exportSeeds) {
         const response = await fetch(dataset.session.endpoint, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({limits: requestLimits, export: exportSeeds}),
+            body: JSON.stringify({limits, objectives, export: exportSeeds}),
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "The local selection request failed.");
         return result;
     }
 
-    async function applyLimits() {
+    async function applySelection() {
         if (running) return;
         running = true;
         const requestSignature = signature;
         try {
-            const result = limits.length ? await request(limits, false) : dataset.session.initial;
+            const result = limits.length || objectives.length !== available.length ? await request(false) : initial;
             if (requestSignature !== signature) return;
             current = result;
             ready = true;
@@ -115,7 +154,7 @@ function mountFilteredSelection(dataset, onChange) {
 
     function runTimer() {
         timer = undefined;
-        applyLimits();
+        applySelection();
     }
 
     exportButton.addEventListener("click", async () => {
@@ -124,7 +163,7 @@ function mountFilteredSelection(dataset, onChange) {
         exportButton.disabled = true;
         seedStatus.textContent = "Exporting seeds…";
         try {
-            const result = await request(limits, true);
+            const result = await request(true);
             seedStatus.textContent = `Exported ${result.retained.length.toLocaleString()} seeds to ${result.seed_directory}`;
             if (requestSignature === signature) {
                 exportResult = result;
@@ -139,6 +178,12 @@ function mountFilteredSelection(dataset, onChange) {
         }
     });
 
+    function updateObjectiveControls() {
+        objectiveSummary.textContent = `Scoring objectives for square marker (${objectives.length} of ${available.length})`;
+        restore.disabled = objectives.length === available.length;
+        checkboxes.forEach(checkbox => { checkbox.disabled = checkbox.checked && objectives.length === 1; });
+    }
+    updateObjectiveControls();
     refresh();
     return {
         get current() { return current; },
@@ -146,10 +191,13 @@ function mountFilteredSelection(dataset, onChange) {
         get ready() { return ready && !current.error; },
         update(plotLimits) {
             const next = plotLimits.filter(limit => limit.enabled).map(({key, mode, value}) => ({key, mode, value}));
-            const nextSignature = JSON.stringify(next);
+            const nextObjectives = checkboxes.filter(checkbox => checkbox.checked).map(checkbox => checkbox.value);
+            const nextSignature = JSON.stringify([next, nextObjectives]);
             if (nextSignature === signature) return;
             signature = nextSignature;
             limits = next;
+            objectives = nextObjectives;
+            updateObjectiveControls();
             ready = false;
             exportResult = null;
             if (!exporting) seedStatus.textContent = "";

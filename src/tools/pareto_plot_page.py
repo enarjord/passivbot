@@ -5,7 +5,9 @@ from tools.pareto_plot_correlations import (
     CORRELATION_SCRIPT,
     CORRELATION_STYLES,
 )
-from tools.pareto_plot_filtered import FILTERED_PANEL, FILTERED_SCRIPT, FILTERED_STYLES
+from tools.pareto_plot_filtered import (
+    FILTERED_PANEL, FILTERED_SCRIPT, FILTERED_STYLES, OBJECTIVE_CONTROLS,
+)
 from tools.pareto_plot_selectors import SELECTOR_SCRIPT
 from tools.pareto_plot_tradeoffs import TRADEOFF_CSS, TRADEOFF_HTML, TRADEOFF_SCRIPT
 
@@ -59,6 +61,7 @@ __PANEL_STYLES__
 <div id="projection-weights" class="weights"></div>
 <button id="download-view" type="button">Download view JSON</button>
 </div><p id="projection-help" class="muted"></p></div>
+__OBJECTIVE_CONTROLS__
 <div class="summary" id="summary" role="status"></div><div id="ideal"></div><div id="plot"></div>
 <div id="inspected" role="status" hidden></div>
 <p class="note">Click a candidate to inspect it. The diamond combines the best visible value on each axis. Use the plot toolbar to zoom, reset or export PNG.</p>
@@ -67,7 +70,7 @@ __PANEL_STYLES__
 <section class="panel" role="tabpanel" id="tradeoffs-panel" aria-labelledby="tab-tradeoffs" hidden>__TRADEOFF_PANEL__</section>
 <section class="panel" role="tabpanel" id="correlations-panel" aria-labelledby="tab-correlations" hidden>__CORRELATION_PANEL__</section>
 </div><aside class="limits-sidebar"><h2>Plot limits</h2><p class="muted" id="limit-help">Limits apply across all views. Missing values fail an enabled limit.</p>
-<p><a href="#filtered-title">All-objective pick, seed export and commands</a></p>
+<p><a href="#filtered-title">Scoring pick, seed export and commands</a></p>
 <div class="add-filter"><select id="filter-metric" aria-label="Additional limit metric"></select><button id="add-filter">Add</button></div>
 <button id="reset-limits">Reset all limits</button><div id="limits"></div>
 <details><summary>About saved metrics</summary><p class="muted">Objectives are raw values before penalties. Other metrics use saved aggregates or means. Statistics are listed separately. A scatter coordinate requires a finite value.</p></details>
@@ -181,7 +184,7 @@ function plotSpec(dataset, axes, goals, limits, method = "ideal", weights = null
         const values = axes.map(key => metrics.get(key).values[filteredPickRow]);
         filteredPickVisibility = values.every(finite) ? "visible" : "missing coordinates";
         if (filteredPickVisibility === "visible") {
-            const label = "All-objective pick after limits";
+            const label = "Scoring pick after limits";
             const trace = {type:points.type, name:label, mode:"markers", showlegend:true,
                 x:[values[0]], y:[values[1]], ids:[String(filteredPickRow)],
                 customdata:[candidateHover(cliFilter.selected)],
@@ -435,6 +438,7 @@ function buildViewRecord(dataset, axes, goals, limits, method, weights, view, cl
         missing_coordinates: view.missing,
         cli_pick: dataset.selection?.selected?.file ?? null,
         filtered_cli_pick: cliFilter?.selected ?? null,
+        filtered_cli_objectives: cliFilter?.objectives ?? null,
         selected: view.selected === null ? null : dataset.names[view.selected],
         ranking: view.ranking.map(({row, score}, index) => ({rank: index + 1, file: dataset.names[row], score, metrics: values(row)})),
         visible_candidates: view.indices.map(row => dataset.names[row]),
@@ -601,7 +605,7 @@ function mountExplorer(dataset) {
                 const result = currentTab === scatterTab
                     ? plotSpec(dataset, keys, goals, limitValues, method, axisWeights, inspected, cliFilter) : null;
                 const view = result?.view ?? computeView(dataset, keys, goals, limitValues, method, axisWeights, cliFilter?.retained);
-                const poolStatus = filteredSelection?.pending ? "Applying CLI limits…"
+                const poolStatus = filteredSelection?.pending ? "Updating scoring pick…"
                     : cliFilter?.error || `${view.retained.length.toLocaleString()} of ${dataset.names.length.toLocaleString()} candidates pass plot limits`;
                 document.getElementById("pool-summary").textContent = poolStatus;
                 if (currentTab.id === "tab-tradeoffs") {
@@ -629,9 +633,9 @@ function mountExplorer(dataset) {
                 }
                 if (result.filteredPickVisibility) {
                     const method = cliFilter.method === "ideal" ? "Euclidean ideal" : cliFilter.method;
-                    lines.push(`□ All-objective pick after limits (${method}, ${cliFilter.objective_count} objectives): ${candidateLabel(dataset.selection, cliFilter.selected)} · ${result.filteredPickVisibility}`);
+                    lines.push(`□ Scoring pick after limits (${method}, ${objectiveCountLabel(cliFilter.objective_count)}): ${candidateLabel(dataset.selection, cliFilter.selected)} · ${result.filteredPickVisibility}`);
                 } else if (!filteredSelection) {
-                    lines.push("□ All-objective pick after limits is available when launched with --open.");
+                    lines.push("□ Scoring pick after limits is available when launched with --open.");
                 }
                 if (view.selected !== null) {
                     const fallback = view.mode !== method ? ` (using ${PROJECTION_METHODS[view.mode].label})` : "";
@@ -734,6 +738,7 @@ PAGE = (
     .replace("__TRADEOFF_PANEL__", TRADEOFF_HTML)
     .replace("__CORRELATION_PANEL__", CORRELATION_PANEL)
     .replace("__FILTERED_PANEL__", FILTERED_PANEL)
+    .replace("__OBJECTIVE_CONTROLS__", OBJECTIVE_CONTROLS)
 )
 SCRIPT = (
     '"use strict";\n'
