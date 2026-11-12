@@ -6436,6 +6436,113 @@ async def test_manager_refresh_registers_gap_and_reraises_fetch_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("uta", [False, True], ids=["classic", "uta"])
+async def test_bitget_pagination_cap_preserves_unproven_coverage(tmp_path, uta):
+    day_ms = 24 * 60 * 60 * 1000
+    start_ms = day_ms
+    end_ms = 13_000 * day_ms
+    timestamp = str(end_ms - 1)
+    if uta:
+        row = {
+            "execId": "first-fill",
+            "orderId": "first-order",
+            "createdTime": timestamp,
+            "symbol": "BTCUSDT",
+            "side": "sell",
+            "tradeSide": "open",
+            "execQty": "1",
+            "execPrice": "100",
+            "execPnl": "0",
+        }
+    else:
+        row = {
+            "tradeId": "first-fill",
+            "cTime": timestamp,
+            "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
+            "side": "sell",
+            "baseVolume": "1",
+            "price": "100",
+            "profit": "0",
+        }
+    api = _FakeBitgetAPI([[row]], options={"uta": uta})
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="test",
+        fetcher=BitgetFetcher(api, symbol_resolver=lambda symbol: symbol),
+        cache_path=tmp_path,
+    )
+
+    with pytest.raises(
+        fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(400\)"
+    ):
+        await manager.refresh(start_ms=start_ms, end_ms=end_ms)
+
+    assert len(api.history_calls) == 400
+    assert manager.cache.load() == []
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == 0
+    assert not metadata.get("covered_start_ms")
+    [gap] = manager.cache.get_known_gaps()
+    assert (gap["start_ts"], gap["end_ts"], gap["reason"]) == (
+        start_ms,
+        end_ms,
+        GAP_REASON_FETCH_FAILED,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("full_pages", [False, True], ids=["empty_windows", "full_pages"])
+async def test_bybit_trade_pagination_cap_rejects_incomplete_history(full_pages):
+    def fetch_page(*, params):
+        return [{"timestamp": params["endTime"] - 1}] if full_pages else []
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = BybitFetcher(api, trade_limit=1)
+    end_ms = 1_700_000_000_000
+
+    with pytest.raises(
+        fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(200\)"
+    ):
+        await fetcher.fetch(1, end_ms, {})
+
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True], ids=["unproven", "reaches_end"])
+async def test_hyperliquid_final_page_must_prove_coverage(complete):
+    def fetch_page(*, since, limit, params):
+        timestamp = since + 1
+        return [
+            {
+                "id": str(timestamp),
+                "timestamp": timestamp,
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 1.0,
+                "price": 100.0,
+                "info": {"dir": "Open Long"},
+            }
+        ]
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = HyperliquidFetcher(api, trade_limit=1)
+    if complete:
+        events = await fetcher.fetch(1, 201, {})
+        assert len(events) == 200
+        assert events[-1]["timestamp"] == 201
+    else:
+        with pytest.raises(
+            fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(200\)"
+        ):
+            await fetcher.fetch(1, 202, {})
+
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
 async def test_manager_pnl_repair_failure_does_not_invalidate_fill_coverage(
     tmp_path: Path,
 ):
@@ -6595,6 +6702,17 @@ async def test_okx_fetcher_basic_fetch(monkeypatch):
 
     assert len(api.fills_calls) == 1
     assert len(batches) >= 1
+
+
+@pytest.mark.parametrize("pos_side", [None, "", "both"])
+def test_okx_fetcher_rejects_unresolved_position_side(pos_side):
+    raw = _make_okx_fill(trade_id="tid", ts=1_000, pos_side=pos_side)
+    if pos_side is None:
+        del raw["posSide"]
+    fetcher = OkxFetcher(object())
+
+    with pytest.raises(fem.FillEventDataError, match="OKX fill posSide"):
+        fetcher._normalize_fill(raw)
 
 
 @pytest.mark.asyncio
@@ -8467,6 +8585,84 @@ def test_compute_psize_pprice_initial_state():
     # VWAP: (2*100 + 1*120) / 3 = 320/3 ≈ 106.67
     assert abs(events[0]["pprice"] - 106.66666666666667) < 0.01
     assert result[("BTC", "long")] == (3.0, events[0]["pprice"])
+
+
+@pytest.mark.parametrize("position_side", [None, "", "unknown", "both"])
+def test_fill_reconstruction_requires_an_attributed_position_side(position_side):
+    trade = {"id": "fill", "symbol": "BTC", "side": "buy", "qty": 1.0, "price": 100.0}
+    if position_side is not None:
+        trade["position_side"] = position_side
+
+    for reconstruct in (compute_psize_pprice, fem.compute_realized_pnls_from_trades):
+        with pytest.raises(fem.FillEventDataError, match="fill position_side"):
+            reconstruct([trade])
+
+    assert "psize" not in trade
+
+
+def test_fill_event_preserves_explicit_legacy_pside():
+    event = FillEvent.from_dict(
+        {
+            "id": "fill",
+            "timestamp": 1_500,
+            "symbol": "BTC/USDC:USDC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+            "pb_order_type": "unknown",
+            "pside": "SHORT",
+            "client_order_id": "",
+        }
+    )
+
+    assert event.position_side == "short"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position_side", [None, "unknown"], ids=["missing", "unknown"])
+async def test_fill_refresh_preserves_position_side_contract_error(tmp_path, position_side):
+    fill = {
+        "id": "fill",
+        "timestamp": 1_500,
+        "symbol": "BTC/USDC:USDC",
+        "side": "sell",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 1.0,
+        "pb_order_type": "unknown",
+        "client_order_id": "",
+    }
+    if position_side is not None:
+        fill["position_side"] = position_side
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([fill]), cache_path=tmp_path
+    )
+
+    with pytest.raises(fem.FillEventDataError, match="fill position_side"):
+        await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_binance_income_only_record_preserves_unattributed_pnl(tmp_path):
+    fetcher = BinanceFetcher(api=object(), symbol_resolver=lambda symbol: symbol)
+    income = fetcher._normalize_income(
+        {"tradeId": "income", "time": 1_500, "symbol": "BTC/USDT:USDT", "income": "5"}
+    )
+    manager = FillEventsManager(
+        exchange="binance", user="test", fetcher=_StaticFetcher([income]), cache_path=tmp_path
+    )
+
+    await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    [event] = manager.cache.load()
+    assert event.position_side == "unknown"
+    assert event.psize == 0.0
+    assert event.pprice == 0.0
+    assert event.pnl == 5.0
 
 
 def test_hyperliquid_raw_start_position_overrides_wrong_reconstructed_psize():

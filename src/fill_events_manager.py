@@ -42,6 +42,7 @@ from bitget_normalization import (
 )
 from config import load_input_config, prepare_config
 from live.diagnostic_safety import bounded_exception_type, exception_text_contains
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 try:
     from utils import (  # type: ignore
@@ -750,6 +751,27 @@ def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
             ev["qty"] = -abs(qty)
 
 
+def _fill_position_side(payload: Dict[str, object]) -> str:
+    position_side = str(payload.get("position_side") or payload.get("pside") or "").lower()
+    if position_side in {"long", "short"}:
+        return position_side
+    # Binance income can outlive the matching trade endpoint's retention.
+    # A standalone accounting row has no position effect or attributable side.
+    if (
+        position_side == "unknown"
+        and _fill_float(payload.get("qty")) == 0.0
+        and _fill_float(payload.get("amount") or 0.0) == 0.0
+        and _fill_float(payload.get("price")) == 0.0
+    ):
+        raw = _normalize_raw_field(payload.get("raw"))
+        if raw and all(
+            row.get("source") in ("binance_income_realized_pnl", "binance_income_commission")
+            for row in raw
+        ):
+            return position_side
+    raise FillEventDataError("fill position_side must be long or short")
+
+
 def _compute_add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
     """Compute add/reduce amounts based on position side and signed qty.
 
@@ -799,7 +821,7 @@ def compute_psize_pprice(
     for ev in events:
         key = (
             str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            _fill_position_side(ev),
         )
         grouped[key].append(ev)
 
@@ -869,6 +891,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     """
     recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
     for ev in events:
+        key = (str(ev.get("symbol") or ""), _fill_position_side(ev))
         components = _hyperliquid_raw_position_components(ev)
         candidates = [
             (after_size, qty, entry_price, reducing)
@@ -883,10 +906,6 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         ]
 
         if not candidates:
-            key = (
-                str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
-            )
             recovered_state.pop(key, None)
             continue
 
@@ -927,10 +946,6 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
                         / weighted_qty
                     )
 
-        key = (
-            str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
-        )
         component_order = _unique_position_chain_order(
             [(component[0], component[1]) for component in components]
         )
@@ -1352,7 +1367,7 @@ def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
     for index, ev in enumerate(events):
         key = (
             str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            _fill_position_side(ev),
             int(ev.get("timestamp") or 0),
         )
         grouped[key].append(index)
@@ -1411,7 +1426,7 @@ def compute_realized_pnls_from_trades(
             continue
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or "").lower()
-        pos_side = str(trade.get("position_side") or trade.get("pside") or "long").lower()
+        pos_side = _fill_position_side(trade)
         qty = abs(float(trade.get("qty") or trade.get("amount") or 0.0)) * (
             _payload_contract_multiplier(trade)
         )
@@ -1426,7 +1441,7 @@ def compute_realized_pnls_from_trades(
         # Determine whether this trade adds or reduces for this side
         if pos_side == "short":
             adds = side == "sell"
-        else:  # long or unknown
+        else:  # long
             adds = side == "buy"
 
         realized = 0.0
@@ -1753,12 +1768,12 @@ class FillEvent:
             "price",
             "pnl",
             "pb_order_type",
-            "position_side",
             "client_order_id",
         ]
         missing = [key for key in required if key not in data]
         if missing:
             raise ValueError(f"Fill event missing required keys: {missing}")
+        position_side = _fill_position_side(data)
         fee_paid, fee_meta = _normalize_fee_paid_from_payload(
             data,
             max_abs_fee_fraction=float("inf"),
@@ -1800,7 +1815,7 @@ class FillEvent:
             fee_ratio=_fill_float(fee_meta.get("fee_ratio") or 0.0),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
-            position_side=str(data["position_side"]).lower(),
+            position_side=position_side,
             client_order_id=str(data["client_order_id"]),
             psize=_fill_float(data.get("psize", 0.0)),
             pprice=_fill_float(data.get("pprice", 0.0)),
@@ -2654,11 +2669,11 @@ class BitgetFetcher(BaseFetcher):
 
         while True:
             if fetch_count >= max_fetches:
-                logger.warning(
-                    "BitgetFetcher.fetch: reached maximum pagination depth (%d)",
-                    max_fetches,
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BitgetFetcher.fetch: incomplete history after "
+                    f"pagination cap ({max_fetches})"
                 )
-                break
             fetch_count += 1
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
@@ -2880,8 +2895,11 @@ class BitgetFetcher(BaseFetcher):
         cursor: Optional[str] = None
         while True:
             if fetch_count >= max_fetches:
-                logger.warning("BitgetFetcher._fetch_uta: reached max pagination depth (%d)", max_fetches)
-                break
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BitgetFetcher._fetch_uta: incomplete history after "
+                    f"pagination cap ({max_fetches})"
+                )
             fetch_count += 1
             request_params = dict(params)
             request_params["endTime"] = end_time
@@ -3985,7 +4003,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -4102,7 +4120,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -4179,7 +4197,7 @@ class FillEventsManager:
         for close in close_fills:
             signed_qty = _payload_signed_effective_qty(close)
             _add_amt, reduce_amt = _compute_add_reduce(
-                str(lifecycle.get("position_side") or "long").lower(),
+                str(lifecycle["position_side"]),
                 signed_qty,
             )
             weights.append(max(reduce_amt, 0.0))
@@ -4849,7 +4867,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -5074,6 +5092,9 @@ class FillEventsManager:
                 raw.setdefault("raw", [])
                 try:
                     event = FillEvent.from_dict(raw)
+                except FillEventDataError:
+                    # The history owner handles known input defects as unavailable.
+                    raise
                 except ValueError as exc:
                     malformed_events.append((raw, exc))
                     continue
@@ -6156,6 +6177,12 @@ class BybitFetcher(BaseFetcher):
         fetch_count = 0
         prev_params = None
         while True:
+            if fetch_count >= max_fetches:
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BybitFetcher._fetch_my_trades: incomplete history after "
+                    f"pagination cap ({max_fetches})"
+                )
             new_key = _check_pagination_progress(
                 prev_params,
                 params,
@@ -6193,9 +6220,6 @@ class BybitFetcher(BaseFetcher):
             if params["endTime"] == first_ts:
                 break
             params["endTime"] = int(first_ts)
-            if fetch_count >= max_fetches:
-                logger.warning("BybitFetcher._fetch_my_trades: max fetches reached")
-                break
         ordered = sorted(
             results,
             key=lambda x: int(x.get("info", {}).get("updatedTime") or x.get("timestamp") or 0),
@@ -6592,11 +6616,11 @@ class HyperliquidFetcher(BaseFetcher):
                 break
             params["since"] = last_ts
             if fetch_count >= max_fetches:
-                logger.warning(
-                    "HyperliquidFetcher.fetch: reached maximum pagination depth (%d)",
-                    max_fetches,
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "HyperliquidFetcher.fetch: incomplete history after "
+                    f"pagination cap ({max_fetches})"
                 )
-                break
 
         # Hyperliquid's startPosition is per execution. Preserve those component
         # boundaries: coalescing same-side fills can merge disjoint links from an
@@ -8284,6 +8308,8 @@ class OkxFetcher(BaseFetcher):
                 symbol = f"{base}/{quote}:{quote}"
 
         side = str(raw.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise FillEventDataError("OKX fill side must be buy or sell")
         qty = abs(_fill_float(raw.get("fillSz") or 0.0))
         price = _fill_float(raw.get("fillPx") or 0.0)
         pnl = _fill_float(raw.get("fillPnl") or 0.0)
@@ -8302,8 +8328,7 @@ class OkxFetcher(BaseFetcher):
         elif pos_side_raw in ("long", "short"):
             position_side = pos_side_raw
         else:
-            # Fallback
-            position_side = "long" if side == "buy" else "short"
+            raise FillEventDataError("OKX fill posSide must be long, short, or net")
 
         client_order_id = str(raw.get("clOrdId") or "")
         fee_ccy = str(raw.get("feeCcy") or "")

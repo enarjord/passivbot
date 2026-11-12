@@ -236,6 +236,15 @@ Exchange fetch methods propagate endpoint failures. The manager or caller may re
 quarantine, rebuild, or defer according to `../error_contract.md`; it must not attach neutral PnL
 merely because an auxiliary endpoint failed.
 
+Bitget classic and UTA, Bybit executions, and Hyperliquid propagate pagination cap exhaustion
+when another page would be required. A failed bounded traversal leaves the interval retryable
+and does not advance coverage or the refresh checkpoint.
+
+Position replay requires a resolved long or short side. The OKX fill reader requires the venue's
+explicit long, short, or net position mode and buy or sell execution side. Binance income-only
+realized PnL and commission records with zero quantity and price may retain an explicit unknown
+side for accounting. They carry no position change.
+
 Unproven required coverage is a controlled live-planning deferral. The execution loop owns its
 bounded, reason-aware retry cadence, and failed coverage ranges do not consume the generic
 process-restart budget or become terminal after an independent manager retry limit. A change
