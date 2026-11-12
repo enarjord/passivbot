@@ -371,11 +371,11 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
     result keyed by the cached-tail timestamp, requested spans, and projection
-    horizon. The key also includes the content-bearing shard and known-gap state
-    for the requested window, so another process writing the shared cache
-    invalidates stale projections. Candle content, synthetic provenance, or
-    known-gap coverage changes invalidate local entries; metadata-only refresh
-    writes do not force a full recomputation.
+    horizon. The key also includes the content-bearing index state and the actual
+    shard file identities for the requested window. An atomic shard replacement
+    invalidates stale projections even if its index commit fails. Candle content,
+    synthetic provenance, or known-gap coverage changes invalidate local entries.
+    A metadata-only refresh retains an unchanged shard and its projection.
     Compatible current and bounded cache-only EMA spans share one candle-window
     load per metric policy. Cache-only coverage is validated independently per
     span, preserving complete shorter spans when a longer requested window is

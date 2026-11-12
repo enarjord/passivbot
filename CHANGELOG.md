@@ -53,6 +53,9 @@ its own version heading. See [release status](docs/releases.md).
 - Preserve candle index write contention errors during fetch-lock cleanup so callers can handle
   the underlying persistence failure.
 
+- Batch one-minute REST candle index updates, keep unchanged shards, and reuse
+  the index during each candle health read.
+
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
