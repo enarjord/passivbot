@@ -9829,6 +9829,9 @@ class CandlestickManager:
                 except FileNotFoundError:
                     identities.append((path, None))
                 except OSError:
+                    # The uncached read must also discover any later shards
+                    # we could not check after this identity failure.
+                    self._invalidate_shard_paths_cache(symbol, tf=timeframe)
                     return None
                 else:
                     # A completed shard can exist before it appears in a

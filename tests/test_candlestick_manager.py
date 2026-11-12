@@ -6317,10 +6317,12 @@ def test_rest_minute_batch_commit_failure_keeps_published_metadata_and_cache(tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("new_day", [False, True])
+@pytest.mark.parametrize(
+    ("new_day", "identity_error"), [(False, False), (True, False), (True, True)]
+)
 @pytest.mark.parametrize("timeframe", ["1m", "60s"])
 async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
-    tmp_path, monkeypatch, new_day, timeframe
+    tmp_path, monkeypatch, new_day, identity_error, timeframe
 ):
     def manager():
         return CandlestickManager(exchange=None, exchange_name="fake", cache_dir=str(tmp_path))
@@ -6368,6 +6370,17 @@ async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
     with pytest.raises(OSError, match="index publication failed"):
         writer._persist_batch(symbol, changed, last_refresh_ms=projected_ts)
     assert Path(writer._index_path(symbol)).read_bytes() == old_index
+
+    if identity_error:
+        earlier_shard = writer._shard_path(symbol, writer._date_key(last_ts), tf="1m")
+        file_identity = reader._disk_file_identity
+
+        def fail_earlier_identity(path):
+            if path == earlier_shard:
+                raise PermissionError("shard identity unavailable")
+            return file_identity(path)
+
+        monkeypatch.setattr(reader, "_disk_file_identity", fail_earlier_identity)
 
     fresh = manager()
     fresh._now_ms_callback = lambda: projected_ts + ONE_MIN_MS
