@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Give Pareto scatter plots a near-square plotting area. Use `pareto-plot --serve` to
+  recompute the CLI pick across all active objectives after slider limits, export the
+  retained candidates as optimizer seeds, and copy the matching selection, backtest, and
+  optimization commands.
+
 - Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
   next-ranked alternative, and the observed best and worst values. The report includes utility
   and normalized weights where applicable, plus copyable backtest and browser commands. Use

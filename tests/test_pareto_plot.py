@@ -7,8 +7,9 @@ import pytest
 
 from config.scoring import ObjectiveSpec
 from metrics_schema import encode_metric_values
-from pareto_explorer import load_candidates
+from pareto_explorer import evaluate_selection, load_candidates
 from tools import pareto_plot
+from tools.pareto_plot_session import PlotSelection
 from passivbot_cli.main import main as cli_main
 
 
@@ -83,6 +84,86 @@ def test_dataset_includes_objectives_and_preserves_members(front):
     assert metrics[METRICS[0]]["goal"] == "max"
     assert metrics[METRICS[1]]["goal"] == "min"
     assert pareto_plot.select_metrics([], data) == METRICS[:2]
+
+
+@pytest.mark.parametrize("method", ["ideal", "knee", "utility", "lexicographic"])
+def test_session_matches_cli_with_inclusive_slider_and_launch_limits(tmp_path, method, capsys):
+    front = tmp_path / "front's results"
+    front.mkdir()
+    for name, values in [
+        ("a", (0.05, 0.4, 1.0)),
+        ("b", (0.04, 0.1, 1.4)),
+        ("c", (0.02, 0.09, 3.0)),
+        ("d", (0.01, 0.09, 4.0)),
+    ]:
+        write_candidate(front / f"{name}.json", values)
+    _, candidates, specs = load_candidates(front)
+    args = pareto_plot.build_parser().parse_args([
+        str(front), "--method", method, "--limit", f"{METRICS[0]}>=0.02",
+    ])
+    initial = evaluate_selection(candidates, specs, args)
+    data = pareto_plot.build_dataset(candidates, specs)
+    session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "view.html")
+    limits = session.limit_keys([{"key": METRICS[1], "mode": "ceiling", "value": 0.1}])
+    result = session.result(limits, export=True)
+    command = shlex.split(result["selection_command"])
+    assert cli_main([*command[1:], "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert result["selected"] == record["selected"]["file"]
+    assert result["objective_count"] == 3
+    assert result["retained"] == [1, 2]
+    directory = Path(result["seed_directory"])
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == {
+        name: (front / name).read_bytes() for name in ("b.json", "c.json")
+    }
+    optimizer = shlex.split(result["optimize_command"])
+    assert optimizer[:3] == ["passivbot", "optimize", str(front / result["selected"])]
+    assert optimizer[optimizer.index("--start") + 1] == str(directory)
+    assert json.loads(optimizer[optimizer.index("--limits") + 1]) == record["applied_limits"]
+    assert Path(shlex.split(result["backtest_command"])[2]).resolve() == front / result["selected"]
+    with pytest.raises(ValueError, match="No Pareto candidates remained"):
+        session.result(((METRICS[0], "floor", 100),), export=True)
+    (front / "c.json").write_text("{}")
+    with pytest.raises(ValueError, match="changed after loading"):
+        session.result(limits, export=True)
+    assert list(tmp_path.glob("view-seeds-*")) == [directory]
+    assert not list(tmp_path.glob(".pareto-filtered-*"))
+
+
+def test_session_uses_suite_reducer_and_scenario_for_commands(tmp_path, capsys):
+    front = tmp_path / "front"
+    front.mkdir()
+    write_candidate(front / "a.json", (0.02, 0.1, 2), layout="suite")
+    write_candidate(front / "b.json", (0.03, 0.12, 2), layout="suite")
+    _, candidates, specs = load_candidates(front)
+    for scenario in (None, "example"):
+        args = pareto_plot.build_parser().parse_args(
+            [str(front), *(["--scenario", scenario] if scenario else [])]
+        )
+        initial = evaluate_selection(candidates, specs, args)
+        data = pareto_plot.build_dataset(initial.selection_candidates, specs)
+        session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "view.html")
+        limit = {
+            "key": METRICS[0] if scenario else f"stats.{METRICS[0]}.max",
+            "mode": "floor",
+            "value": 20.025 if scenario else 10.025,
+        }
+        result = session.result(session.limit_keys([limit]), export=True)
+        assert result["retained"] == [1]
+        assert result["selected"] == "b.json"
+        assert cli_main([*shlex.split(result["selection_command"])[1:], "--json"]) == 0
+        applied = json.loads(capsys.readouterr().out)["applied_limits"]
+        optimizer = shlex.split(result["optimize_command"])
+        optimizer_limits = json.loads(optimizer[optimizer.index("--limits") + 1])
+        if scenario:
+            assert optimizer_limits == [{**applied[0], "scenario": scenario}]
+            assert shlex.split(result["backtest_command"])[-2:] == ["--scenarios", scenario]
+        else:
+            assert applied[0]["reducer"] == "max"
+            assert optimizer_limits == applied
+        for invalid in ({"key": "arbitrary"}, {**limit, "value": float("inf")}):
+            with pytest.raises(ValueError, match="finite floor or ceiling"):
+                session.limit_keys([invalid])
 
 
 def test_plot_can_rank_and_minimize_saved_peak_recovery(tmp_path):

@@ -260,6 +260,7 @@ profile (`python3 -m pip install -e ".[full]"`).
 # Omit PATH to use the latest populated optimizer Pareto front.
 passivbot tool pareto-plot --open
 passivbot tool pareto-plot optimize_results/.../pareto --open
+passivbot tool pareto-plot optimize_results/.../pareto --serve --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
 passivbot tool pareto-plot optimize_results/... \
@@ -291,6 +292,28 @@ the chart uses that scenario's stored values. Browser axis, direction and filter
 the CLI selection fixed. The panel still identifies it when the selected point is off the chart
 or excluded by a browser filter. Use `passivbot tool pareto PATH --json` for the CLI
 selection record in a script.
+
+Use `--serve --open` for **All-objective selection after limits** and **Export filtered seeds**.
+This mode serves the viewer on loopback until you press Ctrl+C. The standalone HTML is also
+saved and can be reopened offline. The loopback viewer adds enabled plot limits to any launch
+limits and runs the Python CLI selector with the same method, active objectives, weights,
+targets, and scenario. Changing scatter axes, their directions, or the plotted-axis selector
+leaves this selection unchanged. The square marker shows the filtered all-objective pick
+when it has finite coordinates on the current axes.
+
+The loopback viewer uses CLI limit resolution. A limit on a named statistic requests that reducer.
+The CLI resolves a limit on an ordinary metric from its saved aggregate or applicable fallback.
+If a limit cannot be resolved or leaves no candidates, the viewer displays the CLI error.
+**Export filtered seeds** saves the members that pass the limits beside the HTML in a new
+directory. It preserves candidate bytes and includes only candidate files so the directory
+can go directly to `passivbot optimize --start`.
+
+**Copy commands** includes the Pareto selection command with exact limit arguments and a
+backtest command for the selected file. Backtest replays the file and any selected scenario.
+After export, copy the optimization command to use the selected source file as the base config,
+the new directory as `--start`, and the applied constraints as `--limits`. Review the base
+config before starting a new optimization. The exported candidates are evaluated under the
+new run as usual.
 
 Use **Selector on plotted axes** to rank candidates with finite coordinates that pass the plot
 limits. The star marks the first candidate in **Plotted-axis shortlist**. Each axis scales to

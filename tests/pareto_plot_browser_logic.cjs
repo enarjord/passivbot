@@ -143,3 +143,17 @@ for (const axes of [['adg','risk'],['adg','risk','third']]) {
     assert.deepEqual(pick.customdata[0],[shortLabel,"<br>File: " + legacyFile]);
     assert.deepEqual(result.traces[0].customdata[1],pick.customdata[0]);
 }
+
+// The served viewer uses CLI-retained rows even when a chart column has a
+// different reducer or a candidate has no coordinate on the current axes.
+const cliFilter = {retained:[1, 3], selected:'b'};
+const browserLimits = [bound('adg', 'floor', 0.025)];
+const cliProjection = plotSpec(ranked, ['adg','risk'], ['max','min'], browserLimits, 'ideal', null, null, cliFilter);
+assert.deepEqual(cliProjection.view.indices, [1]);
+assert.deepEqual(cliProjection.view.retained, [1, 3]);
+assert.equal(cliProjection.filteredPickVisibility, 'visible');
+assert.equal(cliProjection.traces.find(trace => trace.name === 'All-objective pick after limits').marker.symbol, 'square-open');
+const cliProjection3D = plotSpec(ranked, ['adg','risk','third'], ['max','min','max'], browserLimits, 'knee', null, null, cliFilter);
+assert.deepEqual(cliProjection3D.traces.find(trace => trace.name === 'All-objective pick after limits').z, [2]);
+const missingCliPick = plotSpec(ranked, ['adg','risk'], ['max','min'], browserLimits, 'ideal', null, null, {...cliFilter, selected:'d'});
+assert.equal(missingCliPick.filteredPickVisibility, 'missing coordinates');
