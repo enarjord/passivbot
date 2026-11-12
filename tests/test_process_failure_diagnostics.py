@@ -472,6 +472,42 @@ async def test_live_lifecycle_terminal_outcomes(caplog, monkeypatch, failure):
     assert "RESTART_SECRET" not in caplog.text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_signal", [pb.signal.SIGINT, pb.signal.SIGTERM])
+async def test_second_shutdown_signal_exits_before_the_event_loop_runs(monkeypatch, second_signal):
+    class ImmediateExit(BaseException):
+        pass
+
+    handlers = {}
+    queued = []
+
+    def register_handler(sig, handler):
+        previous = handlers.get(sig, pb.signal.SIG_DFL)
+        handlers[sig] = handler
+        return previous
+
+    def exit_process(status):
+        raise ImmediateExit(status)
+
+    async def blocked_live(_context):
+        handlers[pb.signal.SIGINT](pb.signal.SIGINT, None)
+        assert len(queued) == 1
+        handlers[second_signal](second_signal, None)
+        pytest.fail("Repeated signal returned while the shutdown callback was queued")
+
+    monkeypatch.setattr(pb.signal, "signal", register_handler)
+    monkeypatch.setattr(
+        pb.asyncio.get_running_loop(), "call_soon_threadsafe", lambda *args: queued.append(args)
+    )
+    monkeypatch.setattr(pb.os, "_exit", exit_process)
+    monkeypatch.setattr(pb, "_run_live", blocked_live)
+    monkeypatch.setattr(pb, "bot", None)
+
+    with pytest.raises(ImmediateExit) as exc:
+        await pb.main()
+    assert exc.value.args == (128 + int(second_signal),)
+    assert len(queued) == 1
+
 
 def test_last_failure_span_restarts_when_signature_changes(caplog, monkeypatch):
     state = {}

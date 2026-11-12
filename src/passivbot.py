@@ -499,26 +499,8 @@ bot = None
 
 
 def _force_exit_after_repeated_signal(sig):
-    """Exit immediately after a second shutdown signal during graceful cleanup."""
-    try:
-        logging.warning("[shutdown] repeated signal received; forcing immediate exit")
-    except Exception:
-        pass
-    try:
-        sys.stderr.write(
-            "\nRepeated shutdown signal received. Forcing immediate exit.\n"
-        )
-        sys.stderr.flush()
-    except Exception:
-        pass
-    try:
-        logging.shutdown()
-    finally:
-        try:
-            exit_code = 128 + int(sig)
-        except Exception:
-            exit_code = 130
-        os._exit(exit_code)
+    """Exit without cleanup or I/O that could wait on a blocked thread."""
+    os._exit(128 + int(sig))
 
 
 def signal_handler(sig, frame):
@@ -20353,16 +20335,16 @@ async def main():
     shutdown_requested = False
 
     def request_shutdown(sig):
-        nonlocal shutdown_requested
-        if shutdown_requested:
-            _force_exit_after_repeated_signal(sig)
-        shutdown_requested = True
         if bot is None:
             live_task.cancel()
         else:
             signal_handler(sig, None)
 
     def schedule_shutdown(sig, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            _force_exit_after_repeated_signal(sig)
+        shutdown_requested = True
         loop.call_soon_threadsafe(request_shutdown, sig)
 
     previous_handlers = {}

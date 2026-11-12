@@ -101,6 +101,8 @@ its own version heading. See [release status](docs/releases.md).
   budgets. The shipped Compose configurations allow 60 seconds for shutdown and leave stopped
   containers for operator review.
 
+- Force live shutdown on a second SIGINT or SIGTERM even when the event loop is blocked.
+
 - Restrict Docker build inputs to application files. Mount credentials, configs, and runtime
   data after building. The full image uses the locked Python package build and retains its
   source-script entrypoints.
