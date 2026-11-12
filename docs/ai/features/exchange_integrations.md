@@ -53,6 +53,17 @@ Future connectors encountering an equivalent venue rule must add their own exact
 not generalize one exchange's code, match human-readable messages, persist cooldowns across runs, or
 make held positions wholly nontradable.
 
+## CCXT Position Snapshot Readiness
+
+The shared CCXT position normalizer, also used by OKX and Bybit, requires a
+finite contract count on every position row. Explicit zero contracts are flat.
+Held rows require a symbol, a finite positive entry price, and a canonical
+long/short side. Bybit validates held rows before pagination deduplication and
+rejects a provided native hedge index if it contradicts the normalized side.
+Bybit follows the exchange cursor even if the current page contributes no held
+positions. A malformed row or incomplete pagination makes the whole positions
+surface unavailable.
+
 ## Private Order Websocket Normalization
 
 Order rows proving fill progress (`filled > 0` or `remaining < amount`) request an authoritative

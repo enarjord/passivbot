@@ -168,34 +168,6 @@ class OKXBot(CCXTBot):
             raise ValueError("OKX one-way order missing authoritative reduceOnly")
         return reduce_only
 
-    def _normalize_positions(self, fetched: list) -> list:
-        """OKX: Preserve live positions across both cross and isolated margin modes."""
-        positions = []
-        for elm in fetched:
-            contracts = float(elm.get("contracts", 0))
-            if contracts != 0:
-                normalized = {
-                    "symbol": elm["symbol"],
-                    "position_side": elm.get("side", "long").lower(),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                }
-                self._preserve_position_timing(elm, normalized)
-                margin_mode = self._extract_live_margin_mode(elm)
-                if margin_mode is not None:
-                    normalized["margin_mode"] = margin_mode
-                    self._record_live_margin_mode(normalized["symbol"], margin_mode)
-                positions.append(normalized)
-        return positions
-
-    def _get_pnl_from_trade(self, trade: dict) -> float:
-        """OKX uses fillPnl in info."""
-        return float(trade.get("info", {}).get("fillPnl", 0))
-
-    def _get_position_side_from_trade(self, trade: dict) -> str:
-        """OKX provides posSide in info."""
-        return trade.get("info", {}).get("posSide", "long").lower()
-
     # ═══════════════════ OKX-SPECIFIC METHODS ═══════════════════
 
     async def fetch_balance(self) -> float:
