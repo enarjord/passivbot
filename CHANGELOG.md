@@ -214,6 +214,10 @@ its own version heading. See [release status](docs/releases.md).
 - Allow `compose-coin-overrides` to load saved optimizer and backtest results directly
   as single-coin inputs or master configs, removing known result metadata before strict validation.
 
+- Reject Bybit and OKX position snapshots with missing held-position size, side,
+  or entry price so incomplete account data cannot reach live planning. Bybit
+  follows position cursors even when a page has no new held positions.
+
 - Use port 443 for official OKX production and demo WebSocket URLs, avoiding
   retired-port notices that disrupt private authentication and candle streams.
   Explicit custom endpoint overrides remain authoritative.
