@@ -9857,6 +9857,8 @@ class CandlestickManager:
         period_ms = _tf_to_ms(timeframe)
         if period_ms != ONE_MIN_MS:
             raise ValueError("open-tail EMA projection currently supports only 1m candles")
+        # Read and validate the same canonical shard paths for one-minute aliases.
+        timeframe = "1m"
         latest_expected = _floor_minute(int(latest_expected_ts))
         last_cached = _floor_minute(int(last_cached_ts))
         max_tail_gap = int(max_tail_gap_ms)
@@ -9918,7 +9920,7 @@ class CandlestickManager:
             start_ts=start_ts,
             end_ts=latest_expected,
             max_age_ms=None,
-            timeframe="1m",
+            timeframe=timeframe,
             allow_remote_fetch=False,
             allow_provisional_internal_gaps=True,
         )

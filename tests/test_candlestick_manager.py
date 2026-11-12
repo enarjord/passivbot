@@ -6318,8 +6318,9 @@ def test_rest_minute_batch_commit_failure_keeps_published_metadata_and_cache(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("new_day", [False, True])
+@pytest.mark.parametrize("timeframe", ["1m", "60s"])
 async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
-    tmp_path, monkeypatch, new_day
+    tmp_path, monkeypatch, new_day, timeframe
 ):
     def manager():
         return CandlestickManager(exchange=None, exchange_name="fake", cache_dir=str(tmp_path))
@@ -6337,7 +6338,7 @@ async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
     async def project(cm):
         return (await cm.get_projected_open_tail_ema_metrics(
             symbol, {"close": [1.0]}, latest_expected_ts=projected_ts,
-            last_cached_ts=last_ts, max_tail_gap_ms=ONE_MIN_MS,
+            last_cached_ts=last_ts, max_tail_gap_ms=ONE_MIN_MS, timeframe=timeframe,
         ))["close"][1.0]
 
     get_candles = reader.get_candles
