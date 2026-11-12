@@ -8284,6 +8284,12 @@ class OkxFetcher(BaseFetcher):
             after_cursor = last_fill.get("billId")
             if not after_cursor:
                 break
+        else:
+            raise AuthoritativeSurfaceUnavailable(
+                "fills",
+                f"OkxFetcher.fetch: incomplete /{endpoint_name} history after "
+                f"pagination cap ({max_fetches})",
+            )
 
         return fetch_count, collected
 

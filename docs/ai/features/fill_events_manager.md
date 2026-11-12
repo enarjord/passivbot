@@ -236,7 +236,7 @@ Exchange fetch methods propagate endpoint failures. The manager or caller may re
 quarantine, rebuild, or defer according to `../error_contract.md`; it must not attach neutral PnL
 merely because an auxiliary endpoint failed.
 
-Bitget classic and UTA, Bybit executions, and Hyperliquid propagate pagination cap exhaustion
+Bitget classic and UTA, Bybit executions, Hyperliquid, and OKX propagate pagination cap exhaustion
 when another page would be required. A failed bounded traversal leaves the interval retryable
 and does not advance coverage or the refresh checkpoint.
 

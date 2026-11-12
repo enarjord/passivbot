@@ -6753,6 +6753,43 @@ async def test_okx_fetcher_pagination_with_billid_cursor(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["recent", "history", "combined"])
+async def test_okx_fetcher_shares_pagination_cap_between_endpoints(scope):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    historical = scope != "recent"
+    page_start = now_ms - (OkxFetcher._THREE_DAYS_MS if historical else 0) - 60_000
+    batches = [
+        [_make_okx_fill(trade_id=f"trade-{i}", ts=page_start - i)]
+        for i in range(400)
+    ]
+    api = _FakeOkxAPI(
+        fills_batches=[] if historical else batches,
+        fills_history_batches=batches if historical else [],
+    )
+    fetcher = OkxFetcher(api, trade_limit=1)
+    start_ms = page_start - (399 if historical else 400)
+    end_ms = page_start if scope == "history" else now_ms
+
+    if scope == "history":
+        # The final available page proves the requested start and no recent
+        # endpoint is required.
+        events = await fetcher.fetch(start_ms, end_ms, {})
+        assert len(events) == 400
+        assert events[0]["timestamp"] == start_ms
+    else:
+        # Recent-only history remains incomplete, or the historical endpoint
+        # used the shared budget and the recent endpoint has not been read.
+        with pytest.raises(
+            fem.AuthoritativeSurfaceUnavailable,
+            match=r"incomplete /fills history after pagination cap \(400\)",
+        ):
+            await fetcher.fetch(start_ms, end_ms, {})
+
+    assert len(api.fills_history_calls) == (400 if historical else 0)
+    assert len(api.fills_calls) == (0 if historical else 400)
+
+
+@pytest.mark.asyncio
 async def test_okx_fetcher_dual_endpoint_old_and_recent(monkeypatch):
     """Test using both /fills-history and /fills endpoints for date ranges spanning 3+ days."""
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
