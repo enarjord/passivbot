@@ -1,5 +1,6 @@
 """CI partition completeness, ordering, error handling, and version gate wiring."""
 
+from collections import Counter
 from copy import deepcopy
 import hashlib
 import importlib.util
@@ -42,9 +43,8 @@ def suite(tmp_path):
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\naddopts = -m 'not excluded'\nmarkers =\n    excluded: default exclusion\n"
     )
-    # Exercise an override through pytest and manifest verification.
-    override = "tests/test_config_authoring_provenance.py"
-    buckets = {6: Path(override).name}
+    # At least one whole file in every bucket, without hardcoding fitted paths.
+    buckets = {}
     candidate = 0
     while len(buckets) < 8:
         name = f"test_sample_{candidate}.py"
@@ -99,6 +99,37 @@ def test_actual_pytest_shards_preserve_default_collection_order_and_exact_once_e
     assert len(json.loads((suite / "filtered.json").read_text())["collected"]) == 3
 
 
+def test_parallel_shards_preserve_collection_and_execute_once(suite, monkeypatch):
+    pytest.importorskip("xdist")
+    manifests = suite / "parallel-manifests"
+    for index in range(4):
+        execution_log = suite / f"parallel-execution-{index}.txt"
+        monkeypatch.setenv("EXECUTION_LOG", str(execution_log))
+        manifest = manifests / f"shard-{index}.json"
+        result = _run(suite, "-q", "-p", "xdist.plugin", "-n", "2", "--dist=loadfile",
+                      "--max-worker-restart=0", f"--ci-shard-index={index}",
+                      "--ci-shard-count=4", f"--ci-shard-manifest={manifest}")
+        assert result.returncode == 0, result.stdout + result.stderr
+        data = json.loads(manifest.read_text())
+        assert len(data["selected"]) == 6
+        assert Counter(execution_log.read_text().splitlines()) == Counter(data["selected"])
+    assert verify_manifests(manifests, count=4, python_version=VERSION) == 24
+
+
+def test_parallel_shard_rejects_missing_completion_reports(suite):
+    pytest.importorskip("xdist")
+    # Suppress test execution while letting xdist report that scheduling finished.
+    (suite / "conftest.py").write_text(
+        "def pytest_runtest_protocol(item, nextitem):\n"
+        "    return True\n"
+    )
+    result = _run(suite, "-q", "-p", "xdist.plugin", "-n", "2", "--dist=loadfile",
+                  "--ci-shard-index=0", "--ci-shard-count=4",
+                  f"--ci-shard-manifest={suite / 'missing.json'}")
+    assert result.returncode != 0
+    assert "Parallel shard did not complete every selected test exactly once" in result.stdout
+
+
 @pytest.mark.parametrize("args", [
     ["--ci-shard-index=0"], ["--ci-shard-count=8"], ["--ci-shard-manifest=x.json"],
     ["--ci-shard-index=-1", "--ci-shard-count=8"],
@@ -129,12 +160,6 @@ def test_empty_shard_is_an_error_and_collection_errors_are_not_hidden(suite):
 def test_default_assignment_is_unsalted_sha256_of_relative_posix_file_path(path):
     expected = int.from_bytes(hashlib.sha256(path.encode("utf-8")).digest(), "big") % 8
     assert shard_for_path(path, 8) == expected
-
-
-def test_timing_overrides_only_apply_to_the_eight_shard_matrix():
-    path = "tests/test_config_authoring_provenance.py"
-    assert shard_for_path(path, 8) == 6
-    assert shard_for_path(path, 4) == 1
 
 
 @pytest.mark.parametrize("path", ["", "/tests/test_a.py", "../test_a.py", "tests/../test_a.py",
@@ -228,6 +253,9 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
         assert gate["if"] == "${{ always() }}"
         assert gate["steps"][0]["env"]["RESULT"] == "${{ needs." + key + "_shards.result }}"
         assert gate["steps"][0]["run"] == 'test "$RESULT" = success'
+        assert gate["steps"][1]["uses"].startswith("actions/checkout@")
+        assert gate["steps"][2]["uses"] == "./.github/actions/verify-python-coverage"
+        assert gate["steps"][2]["with"] == {"python-version": version}
     rust = main["jobs"]["rust"]
     assert rust["name"] == "Rust"
     rust_commands = [step for step in rust["steps"] if "run" in step]
@@ -244,7 +272,7 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     shards = shared["jobs"]["shards"]
     assert shards["timeout-minutes"] == "90"
     assert shards["strategy"]["fail-fast"] == "false"
-    assert shards["strategy"]["matrix"]["shard"] == [str(index) for index in range(8)]
+    assert shards["strategy"]["matrix"]["shard"] == [str(index) for index in range(4)]
     for variable in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
                      "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "RAYON_NUM_THREADS"]:
         assert shards["env"][variable] == "1"
@@ -252,12 +280,15 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     for name in ["Validate documentation", "Run release CLI smokes"]:
         assert steps[name]["if"] == "matrix.shard == 0"
     assert "--maxfail=10" in steps["Run Python test shard"]["run"]
-    assert "--ci-shard-count=8" in steps["Run Python test shard"]["run"]
-    coverage = shared["jobs"]["coverage"]
-    assert coverage["if"] == "${{ always() }}"
-    assert coverage["needs"] == "shards"
-    assert coverage["steps"][0]["env"]["RESULT"] == "${{ needs.shards.result }}"
-    assert coverage["steps"][0]["run"] == 'test "$RESULT" = success'
+    assert "--ci-shard-count=4" in steps["Run Python test shard"]["run"]
+    assert "-n 2 --dist=loadfile --max-worker-restart=0" in steps["Run Python test shard"]["run"]
+    assert set(shared["jobs"]) == {"shards"}
+    coverage_path = ROOT / ".github/actions/verify-python-coverage/action.yml"
+    coverage = yaml.load(coverage_path.read_text(), Loader=yaml.BaseLoader)
+    download, verify = coverage["runs"]["steps"][-2:]
+    assert download["with"]["pattern"] == "python-${{ inputs.python-version }}-shard-*"
+    assert verify["env"]["PYTHON_VERSION"] == "${{ inputs.python-version }}"
+    assert '--shard-count=4 --python-version="$PYTHON_VERSION"' in verify["run"]
 
 
 def test_docker_cancels_only_superseded_runs_for_the_same_pr():

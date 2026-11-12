@@ -1,0 +1,28 @@
+name: Verify Python coverage
+description: Verify that one Python version's shards collected and ran the full suite
+inputs:
+  python-version:
+    description: Python version used by the shards
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Download this version's collection manifests
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      with:
+        pattern: python-${{ inputs.python-version }}-shard-*
+        path: ${{ runner.temp }}/collection
+        merge-multiple: true
+
+    - name: Verify complete disjoint collection
+      shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+      run: >-
+        python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
+        --shard-count=4 --python-version="$PYTHON_VERSION"

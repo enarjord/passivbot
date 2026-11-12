@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3]
     env:
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -53,7 +53,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -r requirements.txt
+          .venv/bin/python -m pip install -r requirements.txt pytest-xdist==3.8.0
 
       - name: Build and verify the Python Rust extension
         run: |
@@ -73,7 +73,8 @@ jobs:
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
         run: >-
           .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
-          -p ci_pytest_shard -p ci_pytest_timings --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
+          -p ci_pytest_shard -p ci_pytest_timings --ci-shard-index=${{ matrix.shard }} --ci-shard-count=4
+          -n 2 --dist=loadfile --max-worker-restart=0
           --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
 
       - name: Run original tagged v8 migration regressions
@@ -124,35 +125,3 @@ jobs:
           path: ${{ runner.temp }}/shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
-
-  coverage:
-    name: Verify Python ${{ inputs.python-version }} coverage
-    if: ${{ always() }}
-    needs: shards
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require every shard and its extra checks
-        env:
-          RESULT: ${{ needs.shards.result }}
-        run: test "$RESULT" = success
-
-      - name: Check out repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: ${{ inputs.python-version }}
-
-      - name: Download this version's collection manifests
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: python-${{ inputs.python-version }}-shard-*
-          path: ${{ runner.temp }}/collection
-          merge-multiple: true
-
-      - name: Verify complete disjoint collection
-        run: >-
-          python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
-          --shard-count=8 --python-version=${{ inputs.python-version }}
