@@ -8,12 +8,10 @@ from config.metrics import CORE_METRIC_CATALOG
 
 
 _SIDE_METRICS = {
-    "long": {"position_exposure_utilization_rms_ratio_long"},
-    "short": {
-        "position_exposure_utilization_rms_ratio_short",
-        "short_net_profit_contribution_fraction",
-    },
+    "long": "position_exposure_utilization_rms_ratio_long",
+    "short": "position_exposure_utilization_rms_ratio_short",
 }
+_SHORT_PROFIT_CONTRIBUTION = "short_net_profit_contribution_fraction"
 _HSL_METRICS = {name for name in CORE_METRIC_CATALOG if name.startswith("hsl_")}
 _STATUS_LABELS = {
     "positive_infinity": "+inf",
@@ -23,17 +21,17 @@ _STATUS_LABELS = {
 }
 
 
-def _disabled_zero_metrics(analysis, config, metadata, fill_types):
-    """Hide only explicit inactivity; unknown or contrary observations stay visible."""
+def _hidden_metrics(analysis, config, metadata, fill_types):
     hidden = set()
     bot = config.get("bot", {})
-    for side, names in _SIDE_METRICS.items():
+    for side, name in _SIDE_METRICS.items():
         if (
             bot.get(side, {}).get("enabled") is False
             and not any(kind.endswith("_" + side) for kind in fill_types)
-            and all(analysis[name] == 0 for name in names if name in analysis)
         ):
-            hidden.update(names)
+            if analysis.get(name) == 0:
+                hidden.add(name)
+            hidden.add(_SHORT_PROFIT_CONTRIBUTION)
     if (
         metadata.get("hsl_enabled") is False
         and not any(kind.startswith("close_panic_") for kind in fill_types)
@@ -69,12 +67,12 @@ def format_backtest_metrics(
     """Format five significant digits without changing values, requests or artifacts.
 
     Applicability comes from explicit side permission and native HSL metadata.
-    Actual fills and nonzero/unavailable metrics prevent a family being hidden.
+    Short profit contribution is a comparison between sides in the terminal table.
     """
     metadata = analysis.get("metric_metadata", {})
     statuses = analysis.get("metric_status", {})
     fill_types = set(fill_types)
-    hidden = _disabled_zero_metrics(analysis, config, metadata, fill_types)
+    hidden = _hidden_metrics(analysis, config, metadata, fill_types)
     rows = []
     for name in CORE_METRIC_CATALOG:
         if name not in analysis or name in hidden:

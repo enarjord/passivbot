@@ -19,6 +19,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
 
+- Omit short profit contribution from the terminal metrics table in long-only and short-only
+  backtests.
+
 - Distinguish HSL observation freshness from unavailable scopes in the console and suppress
   obsolete freshness changes already replaced by an equivalent current observation.
 
