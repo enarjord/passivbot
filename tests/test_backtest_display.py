@@ -96,10 +96,29 @@ def test_nonfinite_status_is_not_presented_as_zero_or_none(tag, value, reason):
 def test_disabled_long_short_and_hsl_hide_only_zero_inactive_rows():
     long_only = format_backtest_metrics(_analysis(), _config())
     assert LONG in long_only
-    assert SHORT not in long_only and SHARE not in long_only
+    assert SHORT not in long_only
     assert "hsl_" not in long_only and "HSL:" not in long_only
     short_only = format_backtest_metrics(_analysis(), _config(False, True))
-    assert LONG not in short_only and SHORT in short_only and SHARE in short_only
+    assert LONG not in short_only and SHORT in short_only
+
+
+@pytest.mark.parametrize("active_side,value", [
+    ("long", 0.0), ("short", 1.0), ("long", None), ("short", None),
+])
+def test_single_side_omits_profit_contribution(active_side, value):
+    analysis = {
+        SHARE: value,
+        "metric_status": {
+            SHARE: {"status": "undefined", "reason": "nonpositive_combined_net_profit"}
+        } if value is None else {},
+    }
+    before = deepcopy(analysis)
+    config = _config(long=active_side == "long", short=active_side == "short")
+
+    assert SHARE not in format_backtest_metrics(analysis, config)
+    assert analysis == before
+    dual_side_row = _row(format_backtest_metrics(analysis, _config(True, True)), SHARE)
+    assert dual_side_row.split()[1] == ("undefined" if value is None else f"{value:.0%}")
 
 
 def test_enabled_zero_activity_and_unknown_applicability_remain_visible():
@@ -114,12 +133,13 @@ def test_enabled_zero_activity_and_unknown_applicability_remain_visible():
 
 @pytest.mark.parametrize("side,metric", [("long", LONG), ("short", SHORT)])
 def test_disabled_side_retains_observed_fills_even_with_zero_metric(side, metric):
-    table = format_backtest_metrics(_analysis(), _config(False, False),
-                                    fill_types=[f"close_ema_anchor_{side}"])
+    config = _config(long=side == "short", short=side == "long")
+    table = format_backtest_metrics(_analysis(), config, fill_types=[f"close_ema_anchor_{side}"])
     assert metric in table
+    assert SHARE in table
 
 
-@pytest.mark.parametrize("metric", [SHORT, SHARE, HSL])
+@pytest.mark.parametrize("metric", [SHORT, HSL])
 def test_disabled_feature_retains_nonzero_or_unavailable_metrics(metric):
     for value in (0.125, None):
         analysis = _analysis(**{metric: value})
