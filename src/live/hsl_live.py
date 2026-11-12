@@ -400,14 +400,20 @@ class Owner:
             lambda: bot._log_staged_execution_defer(details),
         )
 
-    async def prepare_ordinary_consumption(self, prepared_account):
+    async def prepare_ordinary_consumption(
+        self, prepared_account, *, joined_epoch=None, preparation=None,
+    ):
         """Rebuild fill-dependent inputs after remote work, then freeze their cohort."""
         candles = await self.bot._preload_trailing_candles(allow_remote_fetch=False)
-        return await self._consume_ordinary_candles(prepared_account, candles)
+        if preparation is not None and not self.bot._orchestrator_preparation_is_current(preparation):
+            raise OrdinaryPlanDeferred("prepared_universe_changed")
+        return await self._consume_ordinary_candles(
+            prepared_account, candles, joined_epoch=joined_epoch
+        )
 
-    async def _consume_ordinary_candles(self, prepared_account, candles):
+    async def _consume_ordinary_candles(self, prepared_account, candles, *, joined_epoch=None):
         if prepared_account is not None:
-            self.require_ordinary_account(prepared_account)
+            self.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
         receipts = self.ordinary_receipts()
         # The prepared-candle route is a complete nonyielding derivation: no
         # confirmation state can leak from an abandoned cache-read cohort.
@@ -415,7 +421,7 @@ class Owner:
             allow_remote_fetch=False, prepared_candles=candles
         )
         if prepared_account is not None:
-            self.require_ordinary_account(prepared_account)
+            self.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
         reason = receipts.mismatch_reason(self.ordinary_receipts())
         if reason is not None:
             raise OrdinaryPlanDeferred(reason)
@@ -435,7 +441,10 @@ class Owner:
             )
         )
 
-    async def refresh_ordinary_account(self, prepared_account, *, allow_new_refresh: bool = True) -> bool:
+    async def refresh_ordinary_account(
+        self, prepared_account, *, allow_new_refresh: bool = True,
+        join_timeout_s: float | None = None,
+    ) -> bool:
         """Confirm unchanged facts after slow preparation, before capturing permission.
 
         A confirming read may advance receipt times, never rewrite an old one.
@@ -443,14 +452,18 @@ class Owner:
         stays in the ordinary task. Protection never awaits EMA preparation.
         With no new read allowed, return whether an existing refresh was joined.
         """
+        import asyncio
         from utils import utc_ms
 
         bot = self.bot
         if self._refresh_lock.locked():
-            # An existing protective refresh may already supply the needed
-            # confirmation. Wait for its complete cohort without cancelling it.
-            async with self._refresh_lock:
-                pass
+            # Timing out cancels only the ordinary lock waiter.
+            try:
+                async with asyncio.timeout(join_timeout_s):
+                    async with self._refresh_lock:
+                        pass
+            except TimeoutError as exc:
+                raise OrdinaryPlanDeferred("account_refresh_in_progress") from exc
         elif not allow_new_refresh:
             return False
         if self._shutdown_requested():
@@ -480,7 +493,7 @@ class Owner:
         self.require_ordinary_account(prepared_account)
         return True
 
-    def require_ordinary_account(self, prepared_account):
+    def require_ordinary_account(self, prepared_account, *, joined_epoch=None):
         from utils import utc_ms
 
         if self._shutdown_requested():
@@ -488,8 +501,22 @@ class Owner:
         if not self.same_account_facts(prepared_account, self.account_facts()):
             raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
         missing = self._current_account_unavailable(int(utc_ms()))
-        if self._refresh_lock.locked() or missing:
+        if missing:
             raise OrdinaryPlanDeferred("current_account_inputs_unavailable", missing)
+        if self._refresh_lock.locked():
+            raise OrdinaryPlanDeferred("account_refresh_in_progress")
+        if joined_epoch is not None:
+            ledger = self.bot._ensure_freshness_ledger()
+            if ledger.epoch != joined_epoch:
+                raise OrdinaryPlanDeferred("account_cohort_changed_during_consumption")
+            # A failed refresh can release its lock with prior young receipts.
+            stamped = ledger.surfaces_at_epoch(joined_epoch)
+            missing = tuple(
+                surface for surface in ("balance", "positions", "open_orders")
+                if surface not in stamped
+            )
+            if missing:
+                raise OrdinaryPlanDeferred("current_account_inputs_unavailable", missing)
 
     def admit(self, order):
         from utils import utc_ms
