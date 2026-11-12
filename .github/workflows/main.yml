@@ -54,10 +54,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require this version's complete test gate
+      - name: Require this version's shards
         env:
           RESULT: ${{ needs.python312_shards.result }}
         run: test "$RESULT" = success
+
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Verify complete Python coverage
+        uses: ./.github/actions/verify-python-coverage
+        with:
+          python-version: "3.12"
 
   python314:
     name: Python 3.14
@@ -66,10 +74,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require this version's complete test gate
+      - name: Require this version's shards
         env:
           RESULT: ${{ needs.python314_shards.result }}
         run: test "$RESULT" = success
+
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Verify complete Python coverage
+        uses: ./.github/actions/verify-python-coverage
+        with:
+          python-version: "3.14"
 
   rust:
     name: Rust

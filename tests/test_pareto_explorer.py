@@ -1333,7 +1333,10 @@ def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp
     assert result.objective_values["pain_index_fraction_strategy_equity"] == pytest.approx(12.0)
 
 
-def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Path, capsys):
+def test_run_from_args_formats_goal_for_non_scoring_metric(
+    sample_pareto_dir: Path, capsys, monkeypatch
+):
+    monkeypatch.setenv("COLUMNS", "160")
     for entry_path, sharpe in {
         "a_extreme.json": 0.2,
         "b_extreme.json": 0.3,

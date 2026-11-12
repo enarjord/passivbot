@@ -2208,10 +2208,36 @@ async def test_try_prepare_hlcvs_v2_local_uses_explicitly_imported_cache(monkeyp
     assert mss["__meta__"]["btc_source_exchange"] == "binance"
 
 
-@pytest.mark.asyncio
-async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatch, tmp_path):
+def _fresh_backtest(monkeypatch):
     import rust_utils
 
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    # Record the old entry even when backtest has never been imported.
+    monkeypatch.setitem(sys.modules, "backtest", None)
+    del sys.modules["backtest"]
+    monkeypatch.setattr(sys, "argv", sys.argv.copy())
+    return importlib.import_module("backtest")
+
+
+def test_fresh_backtest_import_restores_existing_module(monkeypatch):
+    original = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "backtest", original)
+    argv = sys.argv
+    with monkeypatch.context() as scoped:
+        fresh = _fresh_backtest(scoped)
+        assert sys.modules["backtest"] is fresh
+        assert fresh is not original
+    assert sys.modules["backtest"] is original
+    assert sys.argv is argv
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatch, tmp_path):
     prepared = (
         {
             "ETH": {"first_valid_index": 0, "last_valid_index": 0},
@@ -2233,14 +2259,7 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
 
@@ -2272,8 +2291,6 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
 async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     hlcvs = np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64)
     prepared = (
         {
@@ -2295,14 +2312,7 @@ async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
 
     async def fake_try_prepare(*args, **kwargs):
@@ -2326,8 +2336,6 @@ async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
 async def test_prepare_hlcvs_mss_rejects_outer_v2_miss_without_legacy_fallback(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2338,14 +2346,7 @@ async def test_prepare_hlcvs_mss_rejects_outer_v2_miss_without_legacy_fallback(
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     calls = {"outer_v2": 0}
@@ -2369,8 +2370,6 @@ async def test_prepare_hlcvs_mss_rejects_outer_v2_miss_without_legacy_fallback(
 
 @pytest.mark.asyncio
 async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch, tmp_path):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2381,14 +2380,7 @@ async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch,
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
 
@@ -2413,8 +2405,6 @@ async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch,
 async def test_prepare_hlcvs_mss_does_not_fallback_after_outer_v2_exception(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2425,14 +2415,7 @@ async def test_prepare_hlcvs_mss_does_not_fallback_after_outer_v2_exception(
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
 
@@ -2452,8 +2435,6 @@ async def test_prepare_hlcvs_mss_does_not_fallback_after_outer_v2_exception(
 
 @pytest.mark.asyncio
 async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_path):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2464,14 +2445,7 @@ async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_p
         "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
 
@@ -2494,8 +2468,6 @@ async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_p
 async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     source_dir = tmp_path / "ohlcv_source"
     config = {
         "backtest": {
@@ -2518,14 +2490,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
         np.array([50_000.0], dtype=np.float64),
     )
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     direct_prepare_calls = []
@@ -2560,8 +2525,6 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
 async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     source_dir = tmp_path / "ohlcv_source"
     config = {
         "backtest": {
@@ -2584,14 +2547,7 @@ async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
         np.array([50_000.0], dtype=np.float64),
     )
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     direct_prepare_calls = []
@@ -2626,8 +2582,6 @@ async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
 async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boundary(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2638,14 +2592,7 @@ async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boun
         "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     strict_calls = []
@@ -2671,8 +2618,6 @@ async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boun
 async def test_prepare_hlcvs_mss_mixed_stock_without_source_dir_does_not_downgrade_crypto(
     monkeypatch, tmp_path
 ):
-    import rust_utils
-
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
@@ -2683,14 +2628,7 @@ async def test_prepare_hlcvs_mss_mixed_stock_without_source_dir_does_not_downgra
         "bot": _minimal_bot_config({"long": ["ETH", "xyz:AAPL"], "short": []}),
     }
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     strict_calls = []
@@ -2718,8 +2656,6 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
 ):
     import hlcv_preparation as hp
     from ohlcv_utils import dump_ohlcv_data
-    import rust_utils
-
     source_dir = tmp_path / "ohlcv_source"
     start_ts = month_start_ts(2026, 4)
     stock_dir = source_dir / "hyperliquid" / "1m" / "xyz:AAPL"
@@ -2792,12 +2728,6 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
         self.cc = FakeExchange()
         self.cm = FakeCm()
 
-    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        rust_utils,
-        "verify_loaded_runtime_extension",
-        lambda *args, **kwargs: {"skipped": "test"},
-    )
     monkeypatch.setattr(hp, "_has_tradfi_provider_config", lambda: True)
 
     async def fake_first_timestamps(_coins, exchange=None):
@@ -2807,8 +2737,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
     monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)
     monkeypatch.setattr(hp.HLCVManager, "load_markets", fake_load_markets)
     monkeypatch.setattr(hp.HLCVManager, "load_cc", fake_load_cc)
-    sys.modules.pop("backtest", None)
-    backtest = importlib.import_module("backtest")
+    backtest = _fresh_backtest(monkeypatch)
 
     monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
     monkeypatch.setattr(
