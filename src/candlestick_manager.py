@@ -2853,6 +2853,14 @@ class CandlestickManager:
         self._legacy_day_quality_cache[cache_key] = bool(ok)
         return bool(ok)
 
+    @staticmethod
+    def _disk_file_identity(path: str) -> tuple:
+        stat = os.stat(path)
+        return (
+            str(path), stat.st_dev, stat.st_ino, stat.st_size,
+            stat.st_mtime_ns, stat.st_ctime_ns,
+        )
+
     def _disk_rows_signature(self, load_keys, day_ctx, symbol, tf_norm):
         """Identify every selected shard and index, including atomic replacements."""
         if sys.platform.startswith("win"):
@@ -2868,11 +2876,9 @@ class CandlestickManager:
         signature = []
         for path in paths:
             try:
-                stat = os.stat(path)
+                signature.append(self._disk_file_identity(path))
             except OSError:
                 return None  # Never certify a partial or inaccessible source.
-            signature.append((str(path), stat.st_dev, stat.st_ino, stat.st_size,
-                              stat.st_mtime_ns, stat.st_ctime_ns))
         return tuple(signature)
 
     def _remember_disk_rows(self, key, signature, rows):
@@ -3159,12 +3165,15 @@ class CandlestickManager:
         tf: Optional[str] = None,
         defer_index: bool = False,
         strict: bool = False,
+        reuse_unchanged_shards: bool = False,
     ) -> bool:
-        """Persist candles by merging with existing shards on disk and report whether any changed.
+        """Merge candle shards and report whether they contributed index entries.
 
         Args:
             defer_index: If True, defer index.json write until flush_deferred_index is called.
             strict: Propagate existing-shard read failures before overwriting any shard.
+            reuse_unchanged_shards: Keep byte-identical existing REST shards when their file identity
+                still matches the one read. Their index entries can still be repaired.
         """
         if arr.size == 0:
             return False
@@ -3178,6 +3187,7 @@ class CandlestickManager:
                 return
             chunk = np.array(bucket, dtype=CANDLE_DTYPE)
             existing = np.empty((0,), dtype=CANDLE_DTYPE)
+            existing_identity = None
             if strict:
                 # Another manager may have published this day since our last
                 # directory scan. Read the actual write target under the fetch
@@ -3189,12 +3199,27 @@ class CandlestickManager:
                     existing = np.empty((0,), dtype=CANDLE_DTYPE)
             else:
                 path = shard_paths.get(key)
-                if path and os.path.exists(path):
+                if path and reuse_unchanged_shards:
+                    try:
+                        existing_identity = self._disk_file_identity(path)
+                    except OSError:
+                        pass
+                    else:
+                        existing = self._load_shard(path)
+                elif path and os.path.exists(path):
                     existing = self._load_shard(path)
             merged = self._merge_overwrite(existing, chunk)
+            unchanged_identity = (
+                existing_identity
+                if existing_identity is not None and existing.tobytes() == merged.tobytes()
+                else None
+            )
             # Defer index write for all but the last shard (or all if defer_index=True)
             should_defer = defer_index or not is_last
-            if self._save_shard(symbol, key, merged, tf=tf_norm, defer_index=should_defer):
+            if self._save_shard(
+                symbol, key, merged, tf=tf_norm, defer_index=should_defer,
+                unchanged_file_identity=unchanged_identity,
+            ):
                 shard_paths[key] = self._shard_path(symbol, key, tf=tf_norm)
                 shards_saved.append(key)
 
@@ -3247,7 +3272,7 @@ class CandlestickManager:
 
         try:
             shards_saved = self._save_range_incremental(
-                symbol, rows, timeframe="1m", defer_index=True
+                symbol, rows, timeframe="1m", defer_index=True, reuse_unchanged_shards=True
             )
             inception_changed = self._maybe_update_inception_ts(symbol, rows, save=False)
             refresh_changed = last_refresh_ms is not None and merged_cache.size > 0
@@ -9787,6 +9812,31 @@ class CandlestickManager:
 
         return (tuple(shard_state), tuple(sorted(gap_state)))
 
+    def _projection_shard_files_signature(
+        self, symbol: str, start_ts: int, end_ts: int, *, timeframe: str
+    ) -> Optional[tuple]:
+        """Check projection sources even if a shard replaced before its index commit."""
+        legacy_paths = self._get_legacy_shard_paths(symbol, timeframe)
+        primary_paths = self._shard_paths_cache.get((symbol, timeframe))
+        identities = []
+        for day in self._date_keys_between(start_ts, end_ts):
+            primary = self._shard_path(symbol, day, tf=timeframe)
+            for path in (primary, legacy_paths.get(day)):
+                if path is None:
+                    continue
+                try:
+                    identities.append(self._disk_file_identity(path))
+                except FileNotFoundError:
+                    identities.append((path, None))
+                except OSError:
+                    return None
+                else:
+                    # A completed shard can exist before it appears in a
+                    # shared reader's cached directory listing.
+                    if path == primary and primary_paths is not None and day not in primary_paths:
+                        self._invalidate_shard_paths_cache(symbol, tf=timeframe)
+        return tuple(identities)
+
     @ema_timing.timed_async("projection")
     async def get_projected_open_tail_ema_metrics(
         self,
@@ -9837,11 +9887,15 @@ class CandlestickManager:
             latest_expected,
             timeframe=timeframe,
         )
+        shard_files_signature = self._projection_shard_files_signature(
+            symbol, start_ts, latest_expected, timeframe=timeframe
+        )
         cache_key = (
             int(latest_expected),
             int(last_cached),
             int(max_tail_gap),
             shared_content_signature,
+            shard_files_signature,
             tuple(
                 (metric_key, tuple(float(span) for span in spans))
                 for metric_key, spans in sorted(normalized.items())
@@ -9850,7 +9904,7 @@ class CandlestickManager:
         projection_cache = self._projected_open_tail_ema_cache.setdefault(
             symbol, OrderedDict()
         )
-        cached = projection_cache.get(cache_key)
+        cached = projection_cache.get(cache_key) if shard_files_signature is not None else None
         if cached is not None:
             projection_cache.move_to_end(cache_key)
             return {
@@ -9960,12 +10014,13 @@ class CandlestickManager:
                         values=tail, commit=False,
                     )
             out[metric_key] = metric_out
-        projection_cache[cache_key] = {
-            metric_key: dict(values) for metric_key, values in out.items()
-        }
-        projection_cache.move_to_end(cache_key)
-        while len(projection_cache) > self._projected_open_tail_ema_cache_cap:
-            projection_cache.popitem(last=False)
+        if shard_files_signature is not None:
+            projection_cache[cache_key] = {
+                metric_key: dict(values) for metric_key, values in out.items()
+            }
+            projection_cache.move_to_end(cache_key)
+            while len(projection_cache) > self._projected_open_tail_ema_cache_cap:
+                projection_cache.popitem(last=False)
         return out
 
     async def get_latest_cached_ema_metrics(
@@ -11090,10 +11145,11 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         defer_index: bool = False,
+        unchanged_file_identity: Optional[tuple] = None,
     ) -> bool:
         """Save shard as .npy and update index.json atomically.
 
-        Return whether the primary shard was written.
+        Return whether the shard contributes an index entry.
 
         Parameters
         ----------
@@ -11134,15 +11190,21 @@ class CandlestickManager:
                     error_type=bounded_exception_type(exc),
                 )
         shard_path = self._shard_path(symbol, date_key, tf=tf_norm)
-        os.makedirs(os.path.dirname(shard_path), exist_ok=True)
-        # Write .npy content atomically
-        # Use numpy.save to ensure .npy format, writing to a temp path then replace
-        tmp_path = f"{shard_path}.tmp"
-        with open(tmp_path, "wb") as f:
-            np.save(f, arr)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, shard_path)
+        reuse_shard = False
+        if unchanged_file_identity is not None:
+            try:
+                reuse_shard = self._disk_file_identity(shard_path) == unchanged_file_identity
+            except OSError:
+                pass
+        if not reuse_shard:
+            os.makedirs(os.path.dirname(shard_path), exist_ok=True)
+            # Write .npy content to a temporary file before replacing the shard.
+            tmp_path = f"{shard_path}.tmp"
+            with open(tmp_path, "wb") as f:
+                np.save(f, arr)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, shard_path)
 
         # Update shard paths cache directly instead of invalidating (avoids re-scan)
         cache_key = (symbol, tf_norm)

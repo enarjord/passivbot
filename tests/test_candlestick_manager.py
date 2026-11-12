@@ -6316,6 +6316,64 @@ def test_rest_minute_batch_commit_failure_keeps_published_metadata_and_cache(tmp
     assert observed == [True]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_day", [False, True])
+async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
+    tmp_path, monkeypatch, new_day
+):
+    def manager():
+        return CandlestickManager(exchange=None, exchange_name="fake", cache_dir=str(tmp_path))
+
+    writer, reader = manager(), manager()
+    symbol = "BATCH/USDT:USDT"
+    last_minute = 24 * 60 - 1 if new_day else 59
+    last_ts = last_minute * ONE_MIN_MS
+    projected_ts = last_ts + ONE_MIN_MS
+    for cm in (writer, reader):
+        cm._now_ms_callback = lambda: projected_ts + ONE_MIN_MS
+    original = _resolution_candles(last_minute - 1, last_minute)
+    writer._persist_batch(symbol, original, last_refresh_ms=last_ts)
+
+    async def project(cm):
+        return (await cm.get_projected_open_tail_ema_metrics(
+            symbol, {"close": [1.0]}, latest_expected_ts=projected_ts,
+            last_cached_ts=last_ts, max_tail_gap_ms=ONE_MIN_MS,
+        ))["close"][1.0]
+
+    get_candles = reader.get_candles
+    reads = 0
+
+    async def counted_read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return await get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(reader, "get_candles", counted_read)
+    before = await project(reader)
+    assert reads == 1
+    writer._set_last_refresh_meta(symbol, last_ts + 1)
+    assert await project(reader) == before
+    assert reads == 1
+
+    changed = _resolution_candles(
+        last_minute + int(new_day), close_offset=100.0
+    )
+
+    def fail_index(*_args, **_kwargs):
+        raise OSError("index publication failed")
+
+    old_index = Path(writer._index_path(symbol)).read_bytes()
+    monkeypatch.setattr(writer, "_atomic_write_bytes", fail_index)
+    with pytest.raises(OSError, match="index publication failed"):
+        writer._persist_batch(symbol, changed, last_refresh_ms=projected_ts)
+    assert Path(writer._index_path(symbol)).read_bytes() == old_index
+
+    fresh = manager()
+    fresh._now_ms_callback = lambda: projected_ts + ONE_MIN_MS
+    assert await project(reader) == await project(fresh) == float(changed[0]["c"])
+    assert reads == 2
+
+
 def test_failed_deferred_rest_page_keeps_previous_page_and_inception(tmp_path, monkeypatch):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
     symbol = "BATCH/USDT:USDT"

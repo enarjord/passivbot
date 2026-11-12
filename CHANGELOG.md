@@ -5,7 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Batch one-minute REST candle index updates and reuse the index during each candle health read.
+- Batch one-minute REST candle index updates, keep unchanged shards, and reuse
+  the index during each candle health read.
 
 - Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
   next-ranked alternative, and the observed best and worst values. The report includes utility
