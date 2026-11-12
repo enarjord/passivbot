@@ -573,6 +573,9 @@ its own version heading. See [release status](docs/releases.md).
 - Fix optimizer coin-override validation when dataset metadata, result paths and other
   runtime bookkeeping are present, while retaining strict rejection of unknown authored fields.
 
+- Classify optimizer candidates with no evaluated replay interval by a native exception type.
+  Unexpected native failures propagate without being mistaken for invalid candidates.
+
 - Reduce GPU optimizer host-memory peaks with read-only file-backed candle inputs and
   bounded validation buffers. Check exact cached input sizes before decoding or packing,
   and stop memory admission failures without retrying historical downloads.

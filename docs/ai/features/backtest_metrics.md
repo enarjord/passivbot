@@ -243,6 +243,9 @@ Unselected unavailable diagnostics have no scoring effect. Raw extended-real val
 govern limits: positive infinity passes a finite lower bound and fails a finite upper
 bound, with the converse for negative infinity. An infinite violation enters the finite
 invalid-candidate path; it does not produce an infinite optimizer penalty vector.
+On CPU, a replay with no evaluated interval after the declared warmup enters that path
+through the native `NoEvaluatedIntervalError`. Other native errors propagate. Finite
+liquidation remains a replay outcome with its own termination status.
 
 Reduce raw values before objective adaptation. `min`/`max` use extended-real ordering;
 `mean` propagates a single infinity sign but opposing infinities are undefined; an even
