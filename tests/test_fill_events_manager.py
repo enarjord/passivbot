@@ -6511,6 +6511,27 @@ async def test_bybit_trade_pagination_cap_rejects_incomplete_history(full_pages)
 
 
 @pytest.mark.asyncio
+async def test_bybit_short_final_page_crossing_start_completes_at_cap():
+    day_ms = 24 * 60 * 60 * 1000
+    start_ms = 1_700_000_000_000
+    end_ms = start_ms + 27 * day_ms // 4
+
+    def fetch_page(*, params):
+        if api.fetch_my_trades.await_count == 200:
+            return [{"timestamp": start_ms - 1}]
+        return [{"timestamp": params["endTime"] - i} for i in (1, 2)]
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = BybitFetcher(api, trade_limit=2)
+
+    trades = await fetcher._fetch_my_trades(start_ms, end_ms)
+
+    assert len(trades) == 399
+    assert trades[0]["timestamp"] == start_ms - 1
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("complete", [False, True], ids=["unproven", "reaches_end"])
 async def test_hyperliquid_final_page_must_prove_coverage(complete):
     def fetch_page(*, since, limit, params):
@@ -6787,6 +6808,27 @@ async def test_okx_fetcher_shares_pagination_cap_between_endpoints(scope):
 
     assert len(api.fills_history_calls) == (400 if historical else 0)
     assert len(api.fills_calls) == (0 if historical else 400)
+
+
+@pytest.mark.asyncio
+async def test_okx_full_final_page_crossing_start_completes_at_cap():
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    newest_ms = now_ms - 60_000
+    batches = [
+        [_make_okx_fill(trade_id=f"trade-{i}", ts=newest_ms - 2 * i)]
+        for i in range(400)
+    ]
+    api = _FakeOkxAPI(batches)
+    fetcher = OkxFetcher(api, trade_limit=1)
+    start_ms = newest_ms - 797  # Falls between the final two fills.
+    emitted = []
+
+    events = await fetcher.fetch(start_ms, now_ms, {}, on_batch=emitted.extend)
+
+    assert len(api.fills_calls) == 400
+    assert len(events) == len(emitted) == 399
+    assert events[0]["timestamp"] == start_ms + 1
+    assert all(event["timestamp"] >= start_ms for event in emitted)
 
 
 @pytest.mark.asyncio

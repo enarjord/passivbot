@@ -6209,14 +6209,14 @@ class BybitFetcher(BaseFetcher):
                 continue
             batch.sort(key=lambda x: x["timestamp"])
             results.extend(batch)
+            first_ts = batch[0]["timestamp"]
+            if first_ts <= start_ms:
+                break
             if len(batch) < self.trade_limit:
                 if params["endTime"] - start_ms < self._max_span_ms:
                     break
                 params["endTime"] = max(start_ms, params["endTime"] - self._max_span_ms)
                 continue
-            first_ts = batch[0]["timestamp"]
-            if first_ts <= start_ms:
-                break
             if params["endTime"] == first_ts:
                 break
             params["endTime"] = int(first_ts)
@@ -8248,16 +8248,15 @@ class OkxFetcher(BaseFetcher):
                 if event_id and client_oid:
                     detail_cache[event_id] = (client_oid, pb_type)
 
-                # Check time bounds
+                # Use the page boundary for pagination even when the row is
+                # outside the requested interval and must not be published.
                 ts = event["timestamp"]
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
                 if since_ms is not None and ts < since_ms:
                     continue
                 if until_ms is not None and ts > until_ms:
                     continue
-
-                # Track oldest for boundary check
-                if oldest_ts is None or ts < oldest_ts:
-                    oldest_ts = ts
 
                 # Enrich from cache
                 if event_id in detail_cache:
