@@ -17,6 +17,17 @@ from suite_runner import build_scenarios, validate_simulation_scenarios
 
 
 @pytest.fixture(autouse=True)
+def isolate_cli_logging(monkeypatch):
+    """Keep in-process CLI calls from replacing pytest's root log handlers."""
+    import backtest
+    import optimize
+    import suite_runner
+
+    for module in (backtest, optimize, suite_runner):
+        monkeypatch.setattr(module, "configure_logging", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def deny_network(monkeypatch):
     def denied(*args, **kwargs):
         pytest.fail("simulation validation attempted network access")
