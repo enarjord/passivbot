@@ -146,11 +146,7 @@ from config.access import (
 from config.coerce import (
     normalize_hsl_signal_mode,
 )
-from config.strategy import (
-    build_runtime_strategy_side,
-    get_active_strategy_side,
-    normalize_strategy_kind,
-)
+from config.strategy import normalize_strategy_kind
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import PnlsLookback
@@ -14764,40 +14760,8 @@ class Passivbot:
         )
         return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
-    def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        config = getattr(self, "config", {})
-        strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(config, 'bot.portfolio.strategy_kind')
-        )
-        strategy_cfg = get_active_strategy_side(
-            config.get("bot", {}).get(pside, {}),
-            strategy_kind=strategy_kind,
-            pside=pside,
-        )
-        symbol_override = (
-            getattr(self, "coin_overrides", {})
-            .get(symbol, {})
-            .get("bot", {})
-            .get(pside, {})
-            if symbol is not None
-            else {}
-        )
-        return build_runtime_strategy_side(
-            strategy_cfg,
-            strategy_kind=strategy_kind,
-            pside=pside,
-            override_side=symbol_override,
-        )
-
-    def _strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
-        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
-        current = strategy_cfg
-        for part in key.split("."):
-            if not isinstance(current, dict) or part not in current:
-                raise KeyError(f"missing required strategy key {pside}.{key}")
-            current = current[part]
-        return current
-
+    _strategy_params_to_rust_dict = planner_inputs.strategy_params_to_rust_dict
+    _strategy_value = planner_inputs.strategy_value
     _bot_params_to_rust_dict = planner_inputs.bot_params_to_rust_dict
 
     def _unstuck_ema_required(
