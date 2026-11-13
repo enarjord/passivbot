@@ -1731,7 +1731,12 @@ def _report_source(pareto_dir: Path, args: argparse.Namespace) -> str:
 
 
 def _plot_command(source: str, args: argparse.Namespace) -> str:
-    command = ["passivbot", "tool", "pareto-plot", source, "--open"]
+    return shlex.join(["passivbot", "tool", "pareto-plot", source, "--open", *selection_cli_args(args)])
+
+
+def selection_cli_args(args: argparse.Namespace) -> list[str]:
+    """Recreate explicitly set selection options for either Pareto entry point."""
+    command = []
     for attr, flag in (
         ("method", "--method"),
         ("scenario", "--scenario"),
@@ -1756,7 +1761,20 @@ def _plot_command(source: str, args: argparse.Namespace) -> str:
                 command.append(f"{flag}={token}")
             else:
                 command.extend([flag, token])
-    return shlex.join(command)
+    return command
+
+
+def selection_backtest_command(candidate: ParetoCandidate, scenario: str | None) -> str | None:
+    """Replay the selected member under the selected suite scenario, when expressible."""
+    if scenario is not None and "," in scenario:
+        return None
+    replay = ["passivbot", "backtest", _command_path(candidate.path)]
+    if scenario is not None:
+        if scenario.startswith("-"):
+            replay.append(f"--scenarios={scenario}")
+        else:
+            replay.extend(["--scenarios", scenario])
+    return shlex.join(replay)
 
 
 def _report_header(source, *, loaded, retained, front, ranked=None, limits, scenario):
@@ -1950,18 +1968,12 @@ def format_selection_result(
         lines.extend(_report_sensitivity(sensitivity, labels, selected))
     lines.extend(_report_qualification(record["qualification"], shortlist, labels))
 
-    replay = ["passivbot", "backtest", _command_path(result.candidate.path)]
-    scenario = evaluation.scenario
+    replay = selection_backtest_command(result.candidate, evaluation.scenario)
     lines.extend(["", "Backtest"])
-    if scenario is not None and "," in scenario:
+    if replay is None:
         lines.append("Choose this scenario in the backtest suite config. --scenarios splits labels on commas.")
     else:
-        if scenario is not None:
-            if scenario.startswith("-"):
-                replay.append(f"--scenarios={scenario}")
-            else:
-                replay.extend(["--scenarios", scenario])
-        lines.append(shlex.join(replay))
+        lines.append(replay)
     lines.extend(["", "Explore in browser", _plot_command(source, args)])
     return "\n".join(lines)
 
@@ -2170,16 +2182,7 @@ def _install_selected(temporary: Path, output: Path) -> None:
         _remove_selected_stage(temporary)
 
 
-def _stage_filtered(
-    output: Path,
-    pareto_dir: Path,
-    candidates: Sequence[ParetoCandidate],
-    *,
-    loaded_count: int,
-    active_limits: Sequence[Mapping[str, Any]],
-    scenario: str | None,
-    selected: ParetoCandidate,
-) -> Path:
+def _stage_filtered_files(output: Path, candidates: Sequence[ParetoCandidate]) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
     try:
@@ -2192,6 +2195,24 @@ def _stage_filtered(
                 )
             shutil.copyfile(candidate.path, destination)
             _verify_export_digest(candidate, destination)
+        return stage
+    except Exception:
+        _remove_export_tree(stage)
+        raise
+
+
+def _stage_filtered(
+    output: Path,
+    pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+    *,
+    loaded_count: int,
+    active_limits: Sequence[Mapping[str, Any]],
+    scenario: str | None,
+    selected: ParetoCandidate,
+) -> Path:
+    stage = _stage_filtered_files(output, candidates)
+    try:
         manifest = {
             "tool": "passivbot tool pareto",
             "pareto_dir": str(pareto_dir),
@@ -2227,15 +2248,25 @@ def _remove_selected_stage(path: Path) -> None:
         _remove_export_tree(path.parent)
 
 
-def _install_filtered(stage: Path, output: Path) -> Path:
+def _install_filtered(stage: Path, output: Path) -> None:
     try:
         if output.exists():
             raise FileExistsError(f"Filtered output directory already exists: {output}")
         stage.rename(output)
-        return output / FILTERED_SELECTION_MANIFEST
     finally:
         if stage.exists():
             _remove_export_tree(stage)
+
+
+def export_selection_seeds(
+    output: Path, pareto_dir: Path, evaluation: SelectionEvaluation
+) -> Path:
+    """Install just the retained candidate files for optimize --start."""
+    output = _prepare_filtered_output(output, pareto_dir, evaluation.filtered_candidates)
+    assert output is not None
+    stage = _stage_filtered_files(output, evaluation.filtered_candidates)
+    _install_filtered(stage, output)
+    return output
 
 
 @dataclass(frozen=True)
@@ -2523,10 +2554,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult | None:
             _install_selected(selected_stage, selected_output)
             selected_stage = None
         if filtered_output is not None and filtered_stage is not None:
-            filtered_manifest = _install_filtered(
-                filtered_stage,
-                filtered_output,
-            )
+            _install_filtered(filtered_stage, filtered_output)
+            filtered_manifest = filtered_output / FILTERED_SELECTION_MANIFEST
             filtered_stage = None
     finally:
         if selected_stage is not None:
