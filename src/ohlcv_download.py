@@ -160,7 +160,9 @@ async def main() -> None:
         help='Backtest end date. Use "-ed now" for the latest available candles.',
     )
     args = parser.parse_args()
-    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        args.config_path, allow_result_records=True,
+    )
     update_config_with_args(
         source_config,
         args,
