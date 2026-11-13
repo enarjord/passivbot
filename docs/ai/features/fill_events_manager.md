@@ -136,13 +136,18 @@ A refresh awaits those writes before publishing new in-memory events or advancin
 refresh metadata. A cancelled refresh drains its current disk write before another refresh can
 start. Failed writes propagate to the existing caller policy.
 
-## Empty-refresh replay reuse
+## Fill refresh replay reuse
 
-A successful empty fetch may skip reconstruction only after a full replay proved the same history
-was unchanged, with the same fee policy and no new PnL observations. The disposable proof owns a
-deep copy including mutable raw/fee/provenance data. Fetched duplicates and all enrichment still
-use the full path. Fetches, failure propagation, coverage repair, metadata and refresh checkpoints
-remain unconditional; restart or loss of the proof simply repeats full reconstruction.
+A successful empty or exact-duplicate-only fetch may skip reconstruction after a full replay proves
+the complete ordered history is unchanged under the same fee policy. Check duplicate rows after
+normalization, fee enrichment, source-ID replacement, and provenance handling. Only omitted
+replay-derived position annotations may be copied from the matching cached row for comparison.
+Changes to facts, explicit annotations, raw evidence, fees, or any PnL observation take the full
+path. The disposable proof owns a deep copy and is restored only after successful publication.
+Duplicate days are verified once using final annotated rows, so a missing or partially published
+file can be repaired without rewriting unchanged data. Fetches, failure propagation, coverage repair,
+metadata, and refresh checkpoints still run. Restart or loss of the proof requires a full replay
+before reuse.
 
 ## Runtime Provenance
 

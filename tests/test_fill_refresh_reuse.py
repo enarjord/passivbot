@@ -1,4 +1,5 @@
-"""Empty-refresh replay equivalence and invalidation, without exchange access."""
+"""Fill-refresh replay equivalence and invalidation, without exchange access."""
+import json
 from copy import deepcopy
 from dataclasses import replace
 
@@ -57,7 +58,8 @@ async def test_empty_refresh_skips_replay_but_preserves_fetch_and_metadata(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['fee_policy', 'raw', 'fees', 'provenance', 'source_ids',
-                                  'position', 'pending', 'late_fill', 'duplicate', 'observation'])
+                                  'position', 'pending', 'late_fill', 'explicit_position',
+                                  'raw_type', 'observation'])
 async def test_changed_inputs_match_full_replay(tmp_path, monkeypatch, change):
     cached = await ready(tmp_path / 'cached')
     reference = await ready(tmp_path / 'reference')
@@ -80,8 +82,14 @@ async def test_changed_inputs_match_full_replay(tmp_path, monkeypatch, change):
         elif change == 'late_fill':
             # A late execution in the same timestamp cohort changes replay.
             manager.fetcher.events = [{**event.to_dict(), 'id': 'late', 'source_ids': ['late'], 'price': 110.}]
-        elif change == 'duplicate':
-            manager.fetcher.events = [event.to_dict()]
+        elif change == 'explicit_position':
+            manager.fetcher.events = [{**event.to_dict(), 'psize': 999.0}]
+        elif change == 'raw_type':
+            event.raw.append({'nested': {'reported': True}})
+            # True == 1 in Python, but they are distinct raw evidence.
+            manager.fetcher.events = [{**event.to_dict(), 'raw': [
+                {'nested': {'reported': 1}},
+            ]}]
         else:
             manager.fetcher.observations = [fem.PnlObservation(
                 symbol=event.symbol, position_side='long', scope='position_cycle',
@@ -104,6 +112,165 @@ async def test_changed_inputs_match_full_replay(tmp_path, monkeypatch, change):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_batch", [True, False])
+async def test_duplicate_overlap_skips_replay_and_verifies_disk_once(tmp_path, monkeypatch, as_batch):
+    manager = await ready(tmp_path)
+    event, = manager.get_events()
+    day = fem._day_key(event.timestamp)
+    path = tmp_path / f"{day}.json"
+    assert event.psize > 0 and event.pprice > 0
+    raw = event.to_dict()
+    raw.pop("psize")
+    raw.pop("pprice")
+    manager.fetcher.events = [raw]
+    if not as_batch:
+        fetch = manager.fetcher.fetch
+
+        async def returns_rows(start, end, details, on_batch=None):
+            return await fetch(start, end, details)
+
+        monkeypatch.setattr(manager.fetcher, "fetch", returns_rows)
+
+    checked = []
+    original = manager.cache._stage_day_writes
+
+    def stage(days):
+        checked.append(list(days))
+        return original(days)
+
+    monkeypatch.setattr(manager.cache, "_stage_day_writes", stage)
+    monkeypatch.setattr(fem, "compute_psize_pprice", lambda *_: pytest.fail("redundant replay"))
+    before = path.stat()
+    start, end = event.timestamp, event.timestamp + 1_000
+    manager.cache.add_known_gap(start, end, reason=fem.GAP_REASON_FETCH_FAILED)
+    checkpoint = manager.cache.load_metadata()["last_refresh_ms"]
+    work = await manager.refresh(start_ms=start, end_ms=end, mark_refreshed=False)
+    assert work == fem.FillRefreshWork(
+        received_rows=1,
+        duplicate_rows=1,
+        changed_overlap_rows=0,
+        ignored_overlap_rows=0,
+        pnl_observations=0,
+        duplicate_days_checked=1,
+        day_replacements=0,
+        replay_reused=True,
+    )
+    assert checked == [[day]]
+    assert (path.stat().st_ino, path.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert manager.get_events() == [event]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == checkpoint
+    assert manager.cache.load_metadata()["known_gaps"] == []
+    assert len(manager.fetcher.calls) == 3
+
+    # An identical exchange row also repairs missing on-disk coverage.
+    path.unlink()
+    assert (await manager.refresh()).day_replacements == 1
+    assert manager.cache.load() == [event]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_repairs_durable_raw_evidence_type(tmp_path):
+    fetcher = Fetcher()
+    fetcher.events[0]["raw"] = [{"reported": False}]
+    manager = fem.FillEventsManager(
+        exchange="example", user="test", fetcher=fetcher, cache_path=tmp_path,
+    )
+    await manager.refresh()
+    raw = deepcopy(fetcher.events)
+    fetcher.events = []
+    await manager.refresh()
+    event, = manager.get_events()
+    path = tmp_path / f"{fem._day_key(event.timestamp)}.json"
+    incorrect = json.loads(path.read_text())
+    incorrect[0]["raw"][0]["reported"] = 0
+    assert incorrect == [event.to_dict()]
+    path.write_text(json.dumps(incorrect))
+
+    fetcher.events = raw
+    work = await manager.refresh()
+    assert work.duplicate_rows == 1 and work.replay_reused
+    assert work.day_replacements == 1
+    assert manager.cache.load()[0].raw[0]["reported"] is False
+
+
+@pytest.mark.asyncio
+async def test_duplicate_only_refresh_can_establish_proof_without_empty_fetch(tmp_path):
+    manager = await ready(tmp_path)
+    manager._empty_refresh_proof = None
+    event, = manager.get_events()
+    manager.fetcher.events = [event.to_dict()]
+    first = await manager.refresh()
+    second = await manager.refresh()
+    assert first.duplicate_rows == second.duplicate_rows == 1
+    assert first.replay_reused is False and second.replay_reused is True
+    assert first.day_replacements == second.day_replacements == 0
+
+
+@pytest.mark.asyncio
+async def test_changed_fill_replays_duplicate_day_and_preserves_same_timestamp_order(tmp_path):
+    manager = await ready(tmp_path)
+    entry, = manager.get_events()
+    later = [
+        {**entry.to_dict(), "id": key, "source_ids": [key],
+         "timestamp": entry.timestamp + 86_400_000, "datetime": "", "qty": qty}
+        for key, qty in (("second", 1.0), ("third", 3.0))
+    ]
+    manager.fetcher.events = later
+    await manager.refresh()
+    manager.fetcher.events = []
+    await manager.refresh()
+    assert manager._empty_refresh_proof is not None
+    original = manager.get_events()
+
+    duplicates = [event.to_dict() for event in reversed(original[1:])]
+    for event in duplicates:
+        event.pop("psize")
+        event.pop("pprice")
+    correction = {**entry.to_dict(), "qty": 4.0}
+    manager.fetcher.events = [*duplicates, correction]
+    work = await manager.refresh()
+    assert work.duplicate_rows == 2 and work.changed_overlap_rows == 1
+    assert work.replay_reused is False
+    expected = manager.get_events()
+    assert [(ev.id, ev.psize) for ev in expected] == [
+        ("open", 4.0), ("second", 5.0), ("third", 8.0),
+    ]
+    assert manager.cache.load() == expected
+    restarted = fem.FillEventsManager(
+        exchange="example", user="test", fetcher=Fetcher(), cache_path=tmp_path,
+    )
+    await restarted.ensure_loaded()
+    assert restarted.get_events() == expected
+
+
+@pytest.mark.asyncio
+async def test_duplicate_after_failed_correction_repairs_day_before_checkpoint(tmp_path, monkeypatch):
+    manager = await ready(tmp_path)
+    event, = manager.get_events()
+    checkpoint = manager.cache.load_metadata()["last_refresh_ms"]
+    save_metadata = manager.cache.save_metadata
+
+    def fail_metadata(_metadata):
+        raise OSError("failed refresh checkpoint")
+
+    manager.fetcher.events = [{**event.to_dict(), "price": 101.0}]
+    monkeypatch.setattr(manager.cache, "save_metadata", fail_metadata)
+    with pytest.raises(OSError, match="failed refresh checkpoint"):
+        await manager.refresh()
+    assert manager.cache.load_metadata()["last_refresh_ms"] == checkpoint
+    assert manager.cache.load()[0].price == 101.0
+    assert manager.get_events() == [event]
+    assert manager._empty_refresh_proof is None
+
+    monkeypatch.setattr(manager.cache, "save_metadata", save_metadata)
+    manager.fetcher.events = [event.to_dict()]
+    work = await manager.refresh()
+    assert work.duplicate_rows == 1 and work.day_replacements == 1
+    assert work.replay_reused is False
+    assert manager.cache.load() == [event]
+
+
+@pytest.mark.asyncio
 async def test_nested_mutation_does_not_alias_proof(tmp_path, monkeypatch):
     manager = await ready(tmp_path)
     manager._events[0].raw.append({'nested': {'value': [1]}})
@@ -117,6 +284,35 @@ async def test_nested_mutation_does_not_alias_proof(tmp_path, monkeypatch):
         return original(*args)
     monkeypatch.setattr(fem, 'compute_psize_pprice', counted)
     await manager.refresh()
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_nested_type_change_outside_overlap_invalidates_replay_proof(tmp_path, monkeypatch):
+    manager = await ready(tmp_path)
+    prior, = manager.get_events()
+    prior.raw.append({"raw_fact": False})
+    later = {**prior.to_dict(), "id": "later", "source_ids": ["later"],
+             "timestamp": prior.timestamp + 1000, "raw": []}
+    manager.fetcher.events = [later]
+    await manager.refresh()
+    manager.fetcher.events = []
+    await manager.refresh()
+    assert manager._empty_refresh_proof is not None
+
+    prior, later = manager.get_events()
+    prior.raw[0]["raw_fact"] = 0
+    manager.fetcher.events = [later.to_dict()]
+    calls = []
+    replay = fem.compute_psize_pprice
+
+    def counted(payload):
+        calls.append(1)
+        return replay(payload)
+
+    monkeypatch.setattr(fem, "compute_psize_pprice", counted)
+    work = await manager.refresh()
+    assert work.duplicate_rows == 1 and work.replay_reused is False
     assert calls == [1]
 
 

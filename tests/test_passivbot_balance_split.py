@@ -5333,6 +5333,8 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
 
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven():
+    from fill_events_manager import FillRefreshWork
+
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
@@ -5412,6 +5414,16 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
         monitor_sinks=[],
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
+    bot._pnls_manager.refresh_latest.return_value = FillRefreshWork(
+        received_rows=1,
+        duplicate_rows=1,
+        changed_overlap_rows=0,
+        ignored_overlap_rows=0,
+        pnl_observations=0,
+        duplicate_days_checked=1,
+        day_replacements=0,
+        replay_reused=True,
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -5448,6 +5460,17 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
     assert event.data["coverage_ready_after"] is True
     assert event.data["coverage_reason_after"] == "window_covered"
     assert event.data["pending_pnl_count"] == 0
+    assert event.data["refresh_work"] == {
+        "received_rows": 1,
+        "duplicate_rows": 1,
+        "changed_overlap_rows": 0,
+        "ignored_overlap_rows": 0,
+        "pnl_observations": 0,
+        "duplicate_days_checked": 1,
+        "day_replacements": 0,
+        "replay_reused": True,
+    }
+    assert bot.freshness_ledger.surface_signature("fills") is not None
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
