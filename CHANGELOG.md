@@ -53,6 +53,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
 
+- Move the manual TradFi provider probe to `src/tools/probe_tradfi_providers.py` and keep
+  historical depth and multi-symbol probes on the selected provider.
+
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
