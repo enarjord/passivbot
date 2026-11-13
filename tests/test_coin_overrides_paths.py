@@ -16,6 +16,33 @@ def _write_config(path, cfg):
         json.dump(cfg, f, indent=2)
 
 
+def test_parse_overrides_validates_each_default_file_document_once(tmp_path, monkeypatch):
+    from config import overrides
+
+    source = get_expanded_config_prototype()
+    override = tmp_path / "btc.json"
+    _write_config(override, {"bot": {"long": {"unstuck": {"close_fraction": 0.04}}}})
+    source["coin_overrides"] = {
+        "BTC": {
+            "override_config_path": str(override),
+            "bot": {"long": {"unstuck": {"close_fraction": 0.06}}},
+        },
+    }
+    prepared = prepare_config(source, verbose=False)
+    calls = []
+    validate = overrides._validated_file_patch
+
+    def count_file_validation(*args, **kwargs):
+        calls.append(kwargs["resolved_path"])
+        return validate(*args, **kwargs)
+
+    monkeypatch.setattr(overrides, "_validated_file_patch", count_file_validation)
+    result = parse_overrides(prepared, verbose=False)
+
+    assert result["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.06
+    assert calls == [str(override)]
+
+
 def test_prepared_inline_validation_matches_full_coin_validation(monkeypatch):
     from config import overrides
 
