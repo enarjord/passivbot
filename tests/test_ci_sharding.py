@@ -99,21 +99,76 @@ def test_actual_pytest_shards_preserve_default_collection_order_and_exact_once_e
     assert len(json.loads((suite / "filtered.json").read_text())["collected"]) == 3
 
 
-def test_parallel_shards_preserve_collection_and_execute_once(suite, monkeypatch):
+@pytest.mark.parametrize("weighted", [False, True])
+def test_parallel_shards_preserve_collection_and_execute_once(suite, monkeypatch, weighted):
     pytest.importorskip("xdist")
     manifests = suite / "parallel-manifests"
+    weights = None
+    args = []
+    if weighted:
+        weights_path = suite / "weights.json"
+        weights_path.write_text(json.dumps({VERSION: {
+            "shard_zero_extra_worker_ms": 12_000,
+            "files_ms": {
+                path.relative_to(suite).as_posix(): (index + 1) * 1000
+                for index, path in enumerate(sorted((suite / "tests").glob("*.py"))[:6])
+            },
+        }}))
+        weights = sharding.load_weights(weights_path, VERSION)
+        args.append(f"--ci-shard-weights={weights_path}")
     for index in range(4):
         execution_log = suite / f"parallel-execution-{index}.txt"
         monkeypatch.setenv("EXECUTION_LOG", str(execution_log))
         manifest = manifests / f"shard-{index}.json"
         result = _run(suite, "-q", "-p", "xdist.plugin", "-n", "2", "--dist=loadfile",
                       "--max-worker-restart=0", f"--ci-shard-index={index}",
-                      "--ci-shard-count=4", f"--ci-shard-manifest={manifest}")
+                      "--ci-shard-count=4", f"--ci-shard-manifest={manifest}", *args)
         assert result.returncode == 0, result.stdout + result.stderr
         data = json.loads(manifest.read_text())
-        assert len(data["selected"]) == 6
+        assert data["selected"] == selected_nodeids(data["collected"], index, 4, weights=weights)
+        if not weighted:
+            assert len(data["selected"]) == 6
         assert Counter(execution_log.read_text().splitlines()) == Counter(data["selected"])
-    assert verify_manifests(manifests, count=4, python_version=VERSION) == 24
+    assert verify_manifests(manifests, count=4, python_version=VERSION, weights=weights) == 24
+    if weighted:
+        with pytest.raises(ValueError, match="misassigned"):
+            verify_manifests(manifests, count=4, python_version=VERSION)
+
+
+def test_duration_weights_keep_files_together_and_ignore_stale_weights():
+    collected = [
+        "tests/d.py::test_d",
+        "tests/a.py::test_1",
+        "tests/c.py::test_c",
+        "tests/a.py::test_2",
+        "tests/b.py::test_b",
+        "tests/e.py::test_e",
+    ]
+    weights = {
+        "shard_zero_extra_worker_ms": 5000,
+        "files_ms": {
+            "tests/a.py": 4000,
+            "tests/b.py": 4000,
+            "tests/c.py": 2000,
+            "tests/deleted.py": 200_000,
+        },
+    }
+    assert [selected_nodeids(collected, i, 4, weights=weights) for i in range(4)] == [
+        ["tests/d.py::test_d"],
+        ["tests/a.py::test_1", "tests/a.py::test_2"],
+        ["tests/b.py::test_b"],
+        ["tests/c.py::test_c", "tests/e.py::test_e"],
+    ]
+
+
+@pytest.mark.parametrize("duration", [0, -1, 1.5, True, "500"])
+def test_duration_weights_reject_invalid_milliseconds(tmp_path, duration):
+    weights_path = tmp_path / "weights.json"
+    weights_path.write_text(json.dumps({VERSION: {
+        "shard_zero_extra_worker_ms": 0, "files_ms": {"tests/a.py": duration},
+    }}))
+    with pytest.raises(ValueError, match="invalid test file duration"):
+        sharding.load_weights(weights_path, VERSION)
 
 
 def test_parallel_shard_rejects_missing_completion_reports(suite):
@@ -281,6 +336,7 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
         assert steps[name]["if"] == "matrix.shard == 0"
     assert "--maxfail=10" in steps["Run Python test shard"]["run"]
     assert "--ci-shard-count=4" in steps["Run Python test shard"]["run"]
+    assert "--ci-shard-weights=" in steps["Run Python test shard"]["run"]
     assert "-n 2 --dist=loadfile --max-worker-restart=0" in steps["Run Python test shard"]["run"]
     assert set(shared["jobs"]) == {"shards"}
     coverage_path = ROOT / ".github/actions/verify-python-coverage/action.yml"
@@ -289,6 +345,7 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     assert download["with"]["pattern"] == "python-${{ inputs.python-version }}-shard-*"
     assert verify["env"]["PYTHON_VERSION"] == "${{ inputs.python-version }}"
     assert '--shard-count=4 --python-version="$PYTHON_VERSION"' in verify["run"]
+    assert "--weights=.github/ci/python-test-durations.json" in verify["run"]
 
 
 def test_docker_cancels_only_superseded_runs_for_the_same_pr():

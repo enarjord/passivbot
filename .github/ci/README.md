@@ -1,8 +1,11 @@
 # Python CI shards
 
 The main workflow calls `python-tests.yml` separately for Python 3.12 and 3.14.
-Each version runs four shards. A file is assigned by taking the SHA-256 digest
-of its repository-relative POSIX path as an integer modulo the shard count.
+Each version runs four shards. Assign whole files in descending order of their
+estimated worker time to the shard with the lowest estimated load. Break ties
+by path and shard index. The estimate for shard zero includes its extra checks.
+The timing snapshot affects assignment only. Pytest collection determines the
+tests to run, including new files, which start with a one-second estimate.
 Each shard runs two pytest-xdist workers with `--dist=loadfile`, which keeps
 the cases from each file together. Workers must collect identical ordered test
 IDs. The controller verifies that every selected test reports completion once
@@ -15,6 +18,7 @@ the original collection order. To run one shard locally:
 ```bash
 PYTHONPATH=.github/ci:src python -m pytest -p ci_pytest_shard \
   --ci-shard-index=0 --ci-shard-count=4 \
+  --ci-shard-weights=.github/ci/python-test-durations.json \
   --ci-shard-manifest=/tmp/shard-0.json
 ```
 
@@ -34,7 +38,8 @@ standard library:
 
 ```bash
 python .github/ci/ci_sharding.py /tmp/collection \
-  --shard-count=4 --python-version=3.12
+  --shard-count=4 --python-version=3.12 \
+  --weights=.github/ci/python-test-durations.json
 ```
 
 The required checks retain the names `Python 3.12`, `Python 3.14` and `Rust`.
@@ -43,7 +48,9 @@ its own version's shard workflow and manifest verification to succeed.
 
 ## Comparing runtimes
 
-Compare completed runs with the same Python versions and test layout. Use
+Compare layouts on the same commit, Python versions, runner class, and worker
+count. Omit both weights arguments to use the original SHA-256 path assignment.
+Use
 `created_at` to `started_at` for initial job wait and `started_at` to
 `completed_at` for job runtime. Dependent jobs' initial wait includes time
 waiting on their prerequisites. The workflow's trigger-to-completion time
@@ -65,3 +72,16 @@ can exceed the pytest step's wall time. Use job step timestamps for wall time.
 gh api "repos/enarjord/passivbot/actions/jobs/$JOB_ID/logs" \
   | sed -n 's/^.* CI_TEST_FILE //p'
 ```
+
+The initial timing snapshot uses successful four-shard runs
+[43280872788](https://github.com/enarjord/passivbot/actions/runs/43280872788),
+[43272080676](https://github.com/enarjord/passivbot/actions/runs/43272080676),
+[43269237654](https://github.com/enarjord/passivbot/actions/runs/43269237654),
+[43261910453](https://github.com/enarjord/passivbot/actions/runs/43261910453),
+[43252373336](https://github.com/enarjord/passivbot/actions/runs/43252373336), and
+[43136896484](https://github.com/enarjord/passivbot/actions/runs/43136896484).
+To refresh it, take the median observed test-file time per Python version from
+several successful runs. Round to integer milliseconds with a minimum of one.
+Set shard zero's extra worker milliseconds to twice the median wall time of its
+documentation, tagged migration, release CLI, and installed wheel steps. Two
+workers share the shard, and these steps occupy the runner outside pytest.

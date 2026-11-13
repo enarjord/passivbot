@@ -26,3 +26,4 @@ runs:
       run: >-
         python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
         --shard-count=4 --python-version="$PYTHON_VERSION"
+        --weights=.github/ci/python-test-durations.json

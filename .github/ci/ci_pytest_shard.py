@@ -7,7 +7,10 @@ import sys
 
 import pytest
 
-from ci_sharding import FORMAT_VERSION, shard_for_path, validate_shard
+from ci_sharding import FORMAT_VERSION, load_weights, selected_nodeids, validate_shard
+
+
+PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
 def pytest_addoption(parser):
@@ -15,19 +18,22 @@ def pytest_addoption(parser):
     group.addoption("--ci-shard-index", type=int, default=None)
     group.addoption("--ci-shard-count", type=int, default=None)
     group.addoption("--ci-shard-manifest", type=Path, default=None)
+    group.addoption("--ci-shard-weights", type=Path, default=None)
 
 
 def pytest_configure(config):
     index = config.getoption("ci_shard_index")
     count = config.getoption("ci_shard_count")
     manifest = config.getoption("ci_shard_manifest")
-    if index is None and count is None and manifest is None:
+    weights_path = config.getoption("ci_shard_weights")
+    if index is None and count is None and manifest is None and weights_path is None:
         return
     if index is None or count is None:
         raise pytest.UsageError("--ci-shard-index and --ci-shard-count must be supplied together")
     try:
         validate_shard(index, count)
-    except ValueError as exc:
+        config.ci_shard_weights = load_weights(weights_path, PYTHON_VERSION) if weights_path else None
+    except (OSError, ValueError) as exc:
         raise pytest.UsageError(str(exc)) from exc
     parallel = config.getoption("numprocesses", default=0) and not config.getoption("collectonly")
     if manifest is not None and parallel and not hasattr(config, "workerinput"):
@@ -65,12 +71,13 @@ def pytest_collection_modifyitems(config, items):
         return
     count = config.getoption("ci_shard_count")
     collected = [item.nodeid for item in items]
+    selected_ids = set(selected_nodeids(collected, index, count, weights=config.ci_shard_weights))
     selected, deselected = [], []
     for item in items:
         path = item.path.relative_to(config.rootpath).as_posix()
         if item.nodeid.split("::", 1)[0] != path:
             raise pytest.UsageError("collected node ID does not use its repository-relative file path")
-        target = selected if shard_for_path(path, count) == index else deselected
+        target = selected if item.nodeid in selected_ids else deselected
         target.append(item)
     if not selected:
         raise pytest.UsageError(f"CI shard {index}/{count} selected no tests")
@@ -81,7 +88,7 @@ def pytest_collection_modifyitems(config, items):
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps({
             "format_version": FORMAT_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "python_version": PYTHON_VERSION,
             "shard_index": index,
             "shard_count": count,
             "collected": collected,

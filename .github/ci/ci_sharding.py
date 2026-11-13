@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 
 
 FORMAT_VERSION = 1
+UNKNOWN_FILE_WORKER_MS = 1000
 
 
 def validate_shard(index, count):
@@ -16,22 +17,65 @@ def validate_shard(index, count):
         raise ValueError("shard index must be an integer in [0, shard count)")
 
 
-def shard_for_path(path, count):
-    validate_shard(0, count)
+def validate_test_path(path):
     if (not isinstance(path, str) or not path or "\\" in path
             or PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts
             or PurePosixPath(path).as_posix() != path):
         raise ValueError("test paths must be canonical repository-relative POSIX paths")
+
+
+def shard_for_path(path, count):
+    validate_shard(0, count)
+    validate_test_path(path)
     return int.from_bytes(hashlib.sha256(path.encode("utf-8")).digest(), "big") % count
 
 
-def selected_nodeids(collected, index, count):
+def load_weights(path, python_version):
+    """Load the timing snapshot for the Python version running the tests."""
+    snapshot = json.loads(Path(path).read_text(encoding="utf-8"))
+    weights = snapshot.get(python_version) if isinstance(snapshot, dict) else None
+    if not isinstance(weights, dict) or set(weights) != {
+        "shard_zero_extra_worker_ms", "files_ms"
+    }:
+        raise ValueError(f"invalid shard timing snapshot for Python {python_version}")
+    extra = weights["shard_zero_extra_worker_ms"]
+    files = weights["files_ms"]
+    if type(extra) is not int or extra < 0 or not isinstance(files, dict) or not files:
+        raise ValueError("invalid shard timing weights")
+    for file, duration in files.items():
+        validate_test_path(file)
+        if type(duration) is not int or duration <= 0:
+            raise ValueError(f"invalid test file duration for {file}")
+    return weights
+
+
+def selected_nodeids(collected, index, count, *, weights=None):
     validate_shard(index, count)
+    paths = {nodeid.split("::", 1)[0] for nodeid in collected}
+    if weights is None:
+        assignment = {path: shard_for_path(path, count) for path in paths}
+    else:
+        for path in paths:
+            validate_test_path(path)
+        durations = {
+            path: weights["files_ms"].get(path, UNKNOWN_FILE_WORKER_MS)
+            for path in paths
+        }
+        loads = [weights["shard_zero_extra_worker_ms"]] + [0] * (count - 1)
+        assignment = {}
+        # Seed each shard with a file, even when shard zero's smoke work
+        # outweighs the entire selected suite (for example with pytest -k).
+        empty_shards = set(range(count))
+        for path in sorted(paths, key=lambda file: (-durations[file], file)):
+            shard = min(empty_shards or range(count), key=lambda shard: (loads[shard], shard))
+            assignment[path] = shard
+            loads[shard] += durations[path]
+            empty_shards.discard(shard)
     return [nodeid for nodeid in collected
-            if shard_for_path(nodeid.split("::", 1)[0], count) == index]
+            if assignment[nodeid.split("::", 1)[0]] == index]
 
 
-def verify_manifests(directory, *, count, python_version):
+def verify_manifests(directory, *, count, python_version, weights=None):
     validate_shard(0, count)
     paths = sorted(Path(directory).glob("*.json"))
     if len(paths) != count:
@@ -65,7 +109,7 @@ def verify_manifests(directory, *, count, python_version):
             collected = manifest["collected"]
         elif manifest["collected"] != collected:
             raise ValueError("shards did not collect the same ordered default test suite")
-        expected = selected_nodeids(manifest["collected"], index, count)
+        expected = selected_nodeids(manifest["collected"], index, count, weights=weights)
         if manifest["selected"] != expected:
             raise ValueError(f"shard {index} has missing, extra, misassigned, or reordered tests")
         by_index[index] = manifest
@@ -82,10 +126,12 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--shard-count", type=int, required=True)
     parser.add_argument("--python-version", required=True)
+    parser.add_argument("--weights", type=Path)
     args = parser.parse_args()
     try:
+        weights = load_weights(args.weights, args.python_version) if args.weights else None
         total = verify_manifests(args.directory, count=args.shard_count,
-                                 python_version=args.python_version)
+                                 python_version=args.python_version, weights=weights)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     print(f"Verified {args.shard_count} shards: {total} tests on Python {args.python_version}")
