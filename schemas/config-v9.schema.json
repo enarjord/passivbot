@@ -757,7 +757,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 3.4098966,
+                      "default": 4.2367604,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -814,7 +814,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 11.242806,
+                          "default": 10.345851,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -834,7 +834,7 @@
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 16.628462,
+                          "default": 14.078595,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -888,7 +888,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 1747.2975,
+                      "default": 1856.2118,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -906,7 +906,7 @@
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 2169.1726,
+                      "default": 2179.8856,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -943,7 +943,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.1978654292597687,
+                          "default": 0.22812909201597234,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -963,7 +963,7 @@
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.362967082971877,
+                          "default": 0.3887780283123959,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -983,7 +983,7 @@
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.39918534095105473,
+                          "default": 0.34923144063945005,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -1003,7 +1003,7 @@
                         },
                         "volume": {
                           "type": "number",
-                          "default": 0.03998214681729961,
+                          "default": 0.033861439032181764,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -1026,7 +1026,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 518.62365,
+                      "default": 479.49336,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -1308,7 +1308,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.39417859,
+                      "default": 0.32776852,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -1547,7 +1547,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.93803486,
+                              "default": 0.96744324,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -1567,7 +1567,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0057765653,
+                              "default": 0.0057398883,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "global",
@@ -1586,7 +1586,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 24.787212,
+                              "default": 21.225923,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1606,7 +1606,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 49.906207,
+                              "default": 56.269795,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1626,7 +1626,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0030097131,
+                              "default": -0.0023059504,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "global",
@@ -1645,7 +1645,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.00058227967,
+                              "default": -0.00059250011,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1665,7 +1665,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.56895399,
+                              "default": 0.48374635,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1685,7 +1685,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 5.0051617,
+                              "default": 4.8845369,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1729,7 +1729,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 951.23145,
+                              "default": 844.90759,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "global",
                               "x-passivbot-consumers": [
@@ -1747,7 +1747,7 @@
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1056.4949,
+                              "default": 1151.7853,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "global",
                               "x-passivbot-consumers": [
@@ -1765,7 +1765,7 @@
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0027829935,
+                              "default": 0.0026543044,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "global",
@@ -1784,7 +1784,7 @@
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0077516943,
+                              "default": 0.0081143155,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "global",
@@ -1803,7 +1803,7 @@
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.9568071,
+                              "default": 1.0673422,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -1823,7 +1823,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.00080691599,
+                              "default": 0.00087551751,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "global",
@@ -1842,7 +1842,7 @@
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.35159298,
+                              "default": 0.32397689,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1862,7 +1862,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 19.828034,
+                              "default": 23.252683,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1882,7 +1882,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 40.343733,
+                              "default": 33.653735,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1902,7 +1902,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.039986647,
+                              "default": 0.037889696,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "global",
@@ -1921,7 +1921,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.7900066,
+                              "default": 2.1248844,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -1941,7 +1941,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.5892069,
+                              "default": 5.2149163,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1961,7 +1961,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 20.462763,
+                              "default": 18.159537,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -1984,7 +1984,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 768.63555,
+                          "default": 954.84237,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "global",
@@ -2003,7 +2003,7 @@
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 583.95467,
+                          "default": 543.84367,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "global",
@@ -2123,7 +2123,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.11659791,
+                      "default": 0.11267315,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -2143,7 +2143,7 @@
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.049689319,
+                      "default": -0.047491595,
                       "exclusiveMinimum": -1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -2174,7 +2174,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 513.39957,
+                      "default": 431.30526,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -2192,7 +2192,7 @@
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 2042.1798,
+                      "default": 2460.1193,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
@@ -2222,7 +2222,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.55288224,
+                      "default": 0.55261617,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -2241,7 +2241,7 @@
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0032770496,
+                      "default": 0.0037045229,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
@@ -2286,7 +2286,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 3.4098966,
+                      "default": 4.2367604,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2346,7 +2346,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 11.242806,
+                          "default": 10.345851,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -2367,7 +2367,7 @@
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 16.628462,
+                          "default": 14.078595,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -2422,7 +2422,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 1747.2975,
+                      "default": 1856.2118,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2441,7 +2441,7 @@
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 2169.1726,
+                      "default": 2179.8856,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -2479,7 +2479,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.1978654292597687,
+                          "default": 0.22812909201597234,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2500,7 +2500,7 @@
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.362967082971877,
+                          "default": 0.3887780283123959,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2521,7 +2521,7 @@
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.39918534095105473,
+                          "default": 0.34923144063945005,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2542,7 +2542,7 @@
                         },
                         "volume": {
                           "type": "number",
-                          "default": 0.03998214681729961,
+                          "default": 0.033861439032181764,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -2566,7 +2566,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 518.62365,
+                      "default": 479.49336,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -2857,7 +2857,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.39417859,
+                      "default": 0.32776852,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -3107,7 +3107,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.93803486,
+                              "default": 0.96744324,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -3128,7 +3128,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0057765653,
+                              "default": 0.0057398883,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "long",
@@ -3148,7 +3148,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 24.787212,
+                              "default": 21.225923,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3169,7 +3169,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 49.906207,
+                              "default": 56.269795,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3190,7 +3190,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0030097131,
+                              "default": -0.0023059504,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "long",
@@ -3210,7 +3210,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.00058227967,
+                              "default": -0.00059250011,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3231,7 +3231,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.56895399,
+                              "default": 0.48374635,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3252,7 +3252,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 5.0051617,
+                              "default": 4.8845369,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3297,7 +3297,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 951.23145,
+                              "default": 844.90759,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "long",
                               "x-passivbot-consumers": [
@@ -3316,7 +3316,7 @@
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1056.4949,
+                              "default": 1151.7853,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "long",
                               "x-passivbot-consumers": [
@@ -3335,7 +3335,7 @@
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0027829935,
+                              "default": 0.0026543044,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "long",
@@ -3355,7 +3355,7 @@
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0077516943,
+                              "default": 0.0081143155,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "long",
@@ -3375,7 +3375,7 @@
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.9568071,
+                              "default": 1.0673422,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -3396,7 +3396,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.00080691599,
+                              "default": 0.00087551751,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "long",
@@ -3416,7 +3416,7 @@
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.35159298,
+                              "default": 0.32397689,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3437,7 +3437,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 19.828034,
+                              "default": 23.252683,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3458,7 +3458,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 40.343733,
+                              "default": 33.653735,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3479,7 +3479,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.039986647,
+                              "default": 0.037889696,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "long",
@@ -3499,7 +3499,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.7900066,
+                              "default": 2.1248844,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -3520,7 +3520,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.5892069,
+                              "default": 5.2149163,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3541,7 +3541,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 20.462763,
+                              "default": 18.159537,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -3565,7 +3565,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 768.63555,
+                          "default": 954.84237,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "long",
@@ -3585,7 +3585,7 @@
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 583.95467,
+                          "default": 543.84367,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "long",
@@ -3710,7 +3710,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.11659791,
+                      "default": 0.11267315,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -3731,7 +3731,7 @@
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.049689319,
+                      "default": -0.047491595,
                       "exclusiveMinimum": -1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -3763,7 +3763,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 513.39957,
+                      "default": 431.30526,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -3782,7 +3782,7 @@
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 2042.1798,
+                      "default": 2460.1193,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "long",
@@ -3813,7 +3813,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.55288224,
+                      "default": 0.55261617,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -3833,7 +3833,7 @@
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0032770496,
+                      "default": 0.0037045229,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
@@ -4105,7 +4105,7 @@
                   "properties": {
                     "memory_ema_span_minutes": {
                       "type": "number",
-                      "default": 96141.557,
+                      "default": 85511.137,
                       "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
                       "minimum": 1.0,
                       "x-passivbot-unit": "minutes",
@@ -4186,7 +4186,7 @@
                   "properties": {
                     "base_duration_minutes": {
                       "type": "number",
-                      "default": 3.4098966,
+                      "default": 4.2367604,
                       "minimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4243,7 +4243,7 @@
                       "properties": {
                         "adverse_directionality": {
                           "type": "number",
-                          "default": 11.242806,
+                          "default": 10.345851,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -4260,7 +4260,7 @@
                         },
                         "exposure_ratio": {
                           "type": "number",
-                          "default": 16.628462,
+                          "default": 14.078595,
                           "description": "Additional cooldown minutes per unit modifier.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "minutes",
@@ -4311,7 +4311,7 @@
                     },
                     "log_range_ema_span_minutes": {
                       "type": "number",
-                      "default": 1747.2975,
+                      "default": 1856.2118,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4331,7 +4331,7 @@
                     },
                     "rms_directionality_ema_span_minutes": {
                       "type": "number",
-                      "default": 2169.1726,
+                      "default": 2179.8856,
                       "minimum": 1.0,
                       "maximum": 100000.0,
                       "x-passivbot-unit": "minutes",
@@ -4365,7 +4365,7 @@
                       "properties": {
                         "ema_readiness": {
                           "type": "number",
-                          "default": 0.1978654292597687,
+                          "default": 0.22812909201597234,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4387,7 +4387,7 @@
                         },
                         "log_range": {
                           "type": "number",
-                          "default": 0.362967082971877,
+                          "default": 0.3887780283123959,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback. Weights the relative ranking of the one-minute EMA of ln(candle high / candle low).",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4409,7 +4409,7 @@
                         },
                         "rms_directionality": {
                           "type": "number",
-                          "default": 0.39918534095105473,
+                          "default": 0.34923144063945005,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4431,7 +4431,7 @@
                         },
                         "volume": {
                           "type": "number",
-                          "default": 0.03998214681729961,
+                          "default": 0.033861439032181764,
                           "description": "Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.",
                           "minimum": 0.0,
                           "x-passivbot-unit": "relative weight",
@@ -4456,7 +4456,7 @@
                     },
                     "volume_ema_span_minutes": {
                       "type": "number",
-                      "default": 518.62365,
+                      "default": 479.49336,
                       "description": "Positive finite span required when this ranking component is active.",
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -4747,7 +4747,7 @@
                     },
                     "we_excess_allowance_fraction": {
                       "type": "number",
-                      "default": 0.39417859,
+                      "default": 0.32776852,
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -4998,7 +4998,7 @@
                           "properties": {
                             "qty_fraction": {
                               "type": "number",
-                              "default": 0.93803486,
+                              "default": 0.96744324,
                               "description": "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior.",
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "budget-derived full-position quantity at position entry price",
@@ -5020,7 +5020,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.0057765653,
+                              "default": 0.0057398883,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "short",
@@ -5041,7 +5041,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 24.787212,
+                              "default": 21.225923,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5063,7 +5063,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 49.906207,
+                              "default": 56.269795,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5085,7 +5085,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": -0.0030097131,
+                              "default": -0.0023059504,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "short",
@@ -5106,7 +5106,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": -0.00058227967,
+                              "default": -0.00059250011,
                               "description": "Adds an exposure-ratio-scaled price fraction to the close threshold; this coefficient can be signed.",
                               "x-passivbot-unit": "price fraction per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5128,7 +5128,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 0.56895399,
+                              "default": 0.48374635,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5150,7 +5150,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 5.0051617,
+                              "default": 4.8845369,
                               "description": "Adds the log-range-scaled price fraction to the close threshold; signed coefficients retain their existing domain.",
                               "x-passivbot-unit": "price fraction per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5196,7 +5196,7 @@
                             },
                             "ema_span_0_minutes": {
                               "type": "number",
-                              "default": 951.23145,
+                              "default": 844.90759,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "short",
                               "x-passivbot-consumers": [
@@ -5216,7 +5216,7 @@
                             },
                             "ema_span_1_minutes": {
                               "type": "number",
-                              "default": 1056.4949,
+                              "default": 1151.7853,
                               "x-passivbot-unit": "minutes",
                               "x-passivbot-scope": "short",
                               "x-passivbot-consumers": [
@@ -5236,7 +5236,7 @@
                             },
                             "initial_ema_distance_fraction": {
                               "type": "number",
-                              "default": 0.0027829935,
+                              "default": 0.0026543044,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "entry EMA band reference price",
                               "x-passivbot-scope": "short",
@@ -5257,7 +5257,7 @@
                             },
                             "initial_qty_fraction": {
                               "type": "number",
-                              "default": 0.0077516943,
+                              "default": 0.0081143155,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "raw balance times effective per-position wallet exposure limit, converted at entry price",
                               "x-passivbot-scope": "short",
@@ -5278,7 +5278,7 @@
                             },
                             "reentry_qty_multiplier": {
                               "type": "number",
-                              "default": 0.9568071,
+                              "default": 1.0673422,
                               "description": "Scales the additional re-entry quantity before initial/minimum sizing floors and exposure caps; one adds the current position quantity, before those safeguards.",
                               "x-passivbot-unit": "multiplier",
                               "x-passivbot-denominator": "absolute current position quantity",
@@ -5300,7 +5300,7 @@
                             },
                             "retracement_base_fraction": {
                               "type": "number",
-                              "default": 0.00080691599,
+                              "default": 0.00087551751,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "trailing price extremum",
                               "x-passivbot-scope": "short",
@@ -5321,7 +5321,7 @@
                             },
                             "retracement_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 0.35159298,
+                              "default": 0.32397689,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5343,7 +5343,7 @@
                             },
                             "retracement_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 19.828034,
+                              "default": 23.252683,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5365,7 +5365,7 @@
                             },
                             "retracement_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 40.343733,
+                              "default": 33.653735,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5387,7 +5387,7 @@
                             },
                             "threshold_base_fraction": {
                               "type": "number",
-                              "default": 0.039986647,
+                              "default": 0.037889696,
                               "x-passivbot-unit": "fraction",
                               "x-passivbot-denominator": "position entry price",
                               "x-passivbot-scope": "short",
@@ -5408,7 +5408,7 @@
                             },
                             "threshold_exposure_ratio_coefficient": {
                               "type": "number",
-                              "default": 1.7900066,
+                              "default": 2.1248844,
                               "description": "Adds exposure-ratio sensitivity to the distance multiplier, whose floor remains one.",
                               "x-passivbot-unit": "distance multiplier per exposure ratio",
                               "x-passivbot-denominator": "position wallet exposure divided by effective per-position wallet exposure limit",
@@ -5430,7 +5430,7 @@
                             },
                             "threshold_log_range_1h_coefficient": {
                               "type": "number",
-                              "default": 4.5892069,
+                              "default": 5.2149163,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5452,7 +5452,7 @@
                             },
                             "threshold_log_range_1m_coefficient": {
                               "type": "number",
-                              "default": 20.462763,
+                              "default": 18.159537,
                               "description": "Adds log-range sensitivity to the existing distance multiplier; its floor remains one.",
                               "x-passivbot-unit": "distance multiplier per log range",
                               "x-passivbot-denominator": "EMA of ln(candle high / candle low) at the named horizon",
@@ -5477,7 +5477,7 @@
                         },
                         "log_range_ema_span_1h_candles": {
                           "type": "number",
-                          "default": 768.63555,
+                          "default": 954.84237,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "one-hour candles",
                           "x-passivbot-scope": "short",
@@ -5498,7 +5498,7 @@
                         },
                         "log_range_ema_span_minutes": {
                           "type": "number",
-                          "default": 583.95467,
+                          "default": 543.84367,
                           "description": "Floating-point EMA span for ln(candle high / candle low), using completed candles of the named horizon.",
                           "x-passivbot-unit": "minutes",
                           "x-passivbot-scope": "short",
@@ -5624,7 +5624,7 @@
                   "properties": {
                     "close_fraction": {
                       "type": "number",
-                      "default": 0.11659791,
+                      "default": 0.11267315,
                       "minimum": 0.0,
                       "maximum": 1.0,
                       "x-passivbot-unit": "fraction",
@@ -5646,7 +5646,7 @@
                     },
                     "ema_distance_fraction": {
                       "type": "number",
-                      "default": -0.049689319,
+                      "default": -0.047491595,
                       "exclusiveMaximum": 1.0,
                       "x-passivbot-unit": "fraction",
                       "x-passivbot-denominator": "unstuck EMA band reference",
@@ -5679,7 +5679,7 @@
                     },
                     "ema_span_0_minutes": {
                       "type": "number",
-                      "default": 513.39957,
+                      "default": 431.30526,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -5699,7 +5699,7 @@
                     },
                     "ema_span_1_minutes": {
                       "type": "number",
-                      "default": 2042.1798,
+                      "default": 2460.1193,
                       "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "short",
@@ -5731,7 +5731,7 @@
                     },
                     "exposure_trigger_ratio": {
                       "type": "number",
-                      "default": 0.55288224,
+                      "default": 0.55261617,
                       "description": "Eligibility requires position wallet exposure / effective WEL strictly above this value.",
                       "x-passivbot-unit": "ratio",
                       "x-passivbot-denominator": "effective per-position wallet exposure limit",
@@ -5752,7 +5752,7 @@
                     },
                     "loss_allowance_fraction": {
                       "type": "number",
-                      "default": 0.0032770496,
+                      "default": 0.0037045229,
                       "description": "Multiplies applicable TWEL in the realized-loss allowance formula.",
                       "minimum": 0.0,
                       "x-passivbot-unit": "fraction",
