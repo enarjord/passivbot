@@ -30,10 +30,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check Python for undefined names
+      - name: Check Python for undefined and redefined names
         run: |
           python -m pip install ruff==0.11.13
           ruff check --target-version py312 --select F821 src tests .github/ci
+          ruff check --target-version py312 --select F811 src
 
   python312_shards:
     name: Python 3.12 shards
