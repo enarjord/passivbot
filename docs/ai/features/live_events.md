@@ -288,6 +288,11 @@ count. An all-pending batch must not present its known PnL as zero. The legacy d
 fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
 
+A completed fill refresh can attach `refresh_work` to its structured summary. It counts received
+rows, normalized duplicates, applied or ignored overlap rows, PnL observations, duplicate days
+verified against disk, and actual day-file replacements. The replay-reuse flag describes the
+same fetch. No fill payload or identifier is included.
+
 Fill refresh failures retain code-owned source, refresh mode, coverage, retry, timing, and count
 context plus a bounded exception type. The structured `fills.refresh_summary`, exchange-specific
 fetcher and manager request-timing lines, staged authoritative remote-call failure, blocking and

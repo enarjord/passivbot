@@ -181,6 +181,9 @@ its own version heading. See [release status](docs/releases.md).
   leaves the requested range unproven. Reject fills with unresolved position sides before
   replay, while preserving Binance income-only accounting records.
 
+- Reuse proven fill history when a refresh returns only exact duplicates, while still checking
+  disk state, coverage, and fresh exchange receipts.
+
 - Skip the missing-PnL replay when all refreshed fills already have resolved realized PnL.
 
 - Reduce native HSL replay CPU on dense retained fill and account histories by indexing execution

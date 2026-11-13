@@ -5359,6 +5359,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     coverage_before: dict[str, Any] | None = None,
     coverage_after: dict[str, Any] | None = None,
     overlap_minutes: float | None = None,
+    refresh_work: dict[str, Any] | None = None,
     retry_count: int | None = None,
     next_retry_in_ms: int | None = None,
     start_ms: int | None = None,
@@ -5390,6 +5391,8 @@ def _emit_fills_refresh_summary_event_unchecked(
         "pending_pnl_count": _safe_int(pending_pnl_count),
         "degraded_pnl_count": _safe_int(degraded_pnl_count),
     }
+    if refresh_work is not None:
+        data["refresh_work"] = refresh_work
     if coverage_before_summary:
         data["coverage_before"] = coverage_before_summary
         if "ready" in coverage_before_summary:

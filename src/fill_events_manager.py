@@ -1833,6 +1833,38 @@ class FillEvent:
         return str(self.pnl_status).lower() == "pending"
 
 
+def _same_nested_fill_evidence(left: object, right: object) -> bool:
+    """Compare retained evidence without coercing scalar types."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            type(key) is str and _same_nested_fill_evidence(value, right[key])
+            for key, value in left.items()
+        )
+    if isinstance(left, (list, tuple)):
+        return len(left) == len(right) and all(
+            _same_nested_fill_evidence(a, b) for a, b in zip(left, right)
+        )
+    if isinstance(left, float) and left == right == 0.0:
+        return math.copysign(1.0, left) == math.copysign(1.0, right)
+    return type(left) in (str, bool, int, float, type(None)) and left == right
+
+
+def _same_fill_payload(left: FillEvent, right: FillEvent) -> bool:
+    return (
+        _same_nested_fill_evidence(left.raw, right.raw)
+        and _same_nested_fill_evidence(left.fees, right.fees)
+        and _same_nested_fill_evidence(left.provenance, right.provenance)
+    )
+
+
+def _same_fill_tape(left: list[FillEvent], right: list[FillEvent]) -> bool:
+    # Dataclass equality checks all canonical fields, but Python equates nested
+    # True, 1, and 1.0. Preserve differences in raw evidence and provenance.
+    return left == right and all(_same_fill_payload(a, b) for a, b in zip(left, right))
+
+
 def fill_event_pnl_status(event: object) -> str:
     """Return normalized realized-PnL completeness status for a fill event."""
     return str(getattr(event, "pnl_status", "complete") or "complete").lower()
@@ -2123,7 +2155,7 @@ class FillEventCache:
                             current = json.load(fh)
                     except Exception:
                         current = None
-                    if current == payload:
+                    if current == payload and _same_nested_fill_evidence(current, payload):
                         logger.debug("FillEventCache.save_days: %s unchanged", path.name)
                         continue
                 with tempfile.NamedTemporaryFile(
@@ -2470,6 +2502,20 @@ class BaseFetcher:
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
         raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class FillRefreshWork:
+    """Operation counts for a completed refresh, without exchange payloads."""
+
+    received_rows: int
+    duplicate_rows: int
+    changed_overlap_rows: int
+    ignored_overlap_rows: int
+    pnl_observations: int
+    duplicate_days_checked: int
+    day_replacements: int
+    replay_reused: bool
 
 
 @dataclass
@@ -5012,7 +5058,7 @@ class FillEventsManager:
             logger.info("[fills-doctor] KuCoin repair complete; cache backed up at %s", backup_path)
         return report
 
-    async def _save_refresh_days(self, day_payload):
+    async def _save_refresh_days(self, day_payload) -> int:
         """Drain staging even on repeated cancellation. Only this task can publish."""
         write = asyncio.create_task(asyncio.to_thread(self.cache._stage_day_writes, day_payload))
         try:
@@ -5026,7 +5072,7 @@ class FillEventsManager:
             self.cache._discard_day_writes(write.result())
             raise
         self.cache._publish_day_writes(staged)
-
+        return len(staged)
 
     async def refresh(
         self,
@@ -5035,9 +5081,9 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
-    ) -> None:
+    ) -> FillRefreshWork:
         async with self._refresh_lock:
-            await self._refresh(
+            return await self._refresh(
                 start_ms=start_ms,
                 end_ms=end_ms,
                 mark_refreshed=mark_refreshed,
@@ -5051,8 +5097,9 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
-    ) -> None:
+    ) -> FillRefreshWork:
         await self.ensure_loaded()
+        proof, self._empty_refresh_proof = self._empty_refresh_proof, None
         logger.debug(
             "[fills] refresh: start=%s end=%s current_cache=%d",
             _format_ms(start_ms),
@@ -5070,6 +5117,9 @@ class FillEventsManager:
                     source_id_index[str(source_id)].add(ev.id)
         added_ids: set[str] = set()
         all_days_persisted: set[str] = set()
+        duplicate_days: set[str] = set()
+        received_rows = duplicate_rows = changed_overlap_rows = ignored_overlap_rows = 0
+        day_replacements = 0
 
         def _drop_indexed_event(event_id: str) -> FillEvent | None:
             existing = updated_map.pop(event_id, None)
@@ -5084,6 +5134,9 @@ class FillEventsManager:
             return existing
 
         async def handle_batch(batch: List[Dict[str, object]]) -> None:
+            nonlocal received_rows, duplicate_rows, changed_overlap_rows, ignored_overlap_rows
+            nonlocal day_replacements
+            received_rows += len(batch)
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
             parsed_events: List[Tuple[Dict[str, object], FillEvent]] = []
@@ -5109,7 +5162,7 @@ class FillEventsManager:
                 raise ValueError(
                     f"malformed fill event(s) fetched from {self.exchange}: {preview}{extra}"
                 ) from malformed_events[0][1]
-            for _raw, event in parsed_events:
+            for raw, event in parsed_events:
                 source_ids = {str(source_id) for source_id in event.source_ids or [] if source_id}
                 replaced_ids: set[str] = set()
                 existing_events: List[FillEvent] = []
@@ -5127,6 +5180,7 @@ class FillEventsManager:
                         if existing is not None:
                             existing_source_ids.update(str(x) for x in existing.source_ids or [] if x)
                     if overlapping_ids and not existing_source_ids <= source_ids:
+                        ignored_overlap_rows += 1
                         continue
                     replaced_ids = overlapping_ids
                     existing_events.extend(
@@ -5140,6 +5194,10 @@ class FillEventsManager:
                             days_touched.add(_day_key(replaced.timestamp))
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
+                    if replaced_ids:
+                        changed_overlap_rows += 1
+                    else:
+                        ignored_overlap_rows += 1
                     continue
                 if (
                     prev is not None
@@ -5173,6 +5231,21 @@ class FillEventsManager:
                         datetime.now(tz=timezone.utc).timestamp() * 1000
                     )
                     event = replace(event, provenance=first_ingested)
+                if prev is not None and not replaced_ids:
+                    # These optional annotations are derived again by a full
+                    # replay. Explicitly supplied values and all factual fields,
+                    # including raw after-state data, still have to match.
+                    candidate = replace(
+                        event,
+                        psize=event.psize if "psize" in raw else prev.psize,
+                        pprice=event.pprice if "pprice" in raw else prev.pprice,
+                    )
+                    if candidate == prev and _same_fill_payload(candidate, prev):
+                        duplicate_rows += 1
+                        duplicate_days.add(_day_key(prev.timestamp))
+                        continue
+                if existing_events:
+                    changed_overlap_rows += 1
                 if prev is not None:
                     for source_id in prev.source_ids or []:
                         indexed = source_id_index.get(str(source_id))
@@ -5192,7 +5265,7 @@ class FillEventsManager:
             if not days_touched:
                 return
             day_payload = self._events_for_days(updated_map.values(), days_touched)
-            await self._save_refresh_days(day_payload)
+            day_replacements += await self._save_refresh_days(day_payload)
             all_days_persisted.update(days_touched)
 
         fetch_started = time.monotonic()
@@ -5288,21 +5361,22 @@ class FillEventsManager:
         new_events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
 
-        # Empty successful fetches need not replay history once a full replay
-        # has demonstrated a fixed point. New rows (including duplicate fetches),
-        # PnL observations, policy changes and nested-data changes use the full path.
-        empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
+        # Reuse only after the complete normalized tape reached a replay fixed
+        # point. A same-ID correction, source replacement or new observation
+        # still requires the full path.
+        replay_candidate = not pnl_observations and (
+            (not fetched_batches and not fetched_events)
+            or (received_rows > 0 and received_rows == duplicate_rows)
+        )
         fee_policy = (self.fallback_fee_fraction, self.max_abs_fee_fraction)
-        proof = self._empty_refresh_proof
-        self._empty_refresh_proof = None
         unchanged = bool(
-            empty_refresh
+            replay_candidate
             and proof is not None
             and fee_policy == proof[0]
-            and new_events == proof[1]
+            and _same_fill_tape(new_events, proof[1])
         )
         before_replay = (
-            deepcopy(new_events) if empty_refresh and new_events and not unchanged else None
+            deepcopy(new_events) if replay_candidate and new_events and not unchanged else None
         )
 
         # Annotate psize/pprice for all events unless replay is proven redundant.
@@ -5324,10 +5398,13 @@ class FillEventsManager:
             all_days_persisted.update(synthesized_days)
             all_days_persisted.update(cycle_reconciled_days)
 
-            # Re-persist touched days with annotated psize/pprice values
-            if all_days_persisted:
-                day_payload = self._events_for_days(new_events, all_days_persisted)
-                await self._save_refresh_days(day_payload)
+        # Check duplicate days once against the final canonical rows. This
+        # repairs missing files or a partial previous publication without
+        # writing unannotated duplicates and then writing their replay again.
+        final_days = all_days_persisted | duplicate_days
+        if final_days:
+            day_payload = self._events_for_days(new_events, final_days)
+            day_replacements += await self._save_refresh_days(day_payload)
 
         fetched_bounded_range = start_ms is not None and end_ms is not None
 
@@ -5358,7 +5435,11 @@ class FillEventsManager:
         # Losing this cache (including restart) merely performs another full replay.
         if unchanged:
             self._empty_refresh_proof = proof
-        elif before_replay is not None and self._events == before_replay and not all_days_persisted:
+        elif (
+            before_replay is not None
+            and not all_days_persisted
+            and _same_fill_tape(self._events, before_replay)
+        ):
             self._empty_refresh_proof = (fee_policy, before_replay)
 
         # Consolidated refresh summary log
@@ -5376,14 +5457,24 @@ class FillEventsManager:
                 days_preview,
             )
         else:
-            logger.debug("[fills] refresh: events=%d (no changes)", len(self._events))
+            logger.debug("[fills] refresh: events=%d (no new fills)", len(self._events))
+        return FillRefreshWork(
+            received_rows=received_rows,
+            duplicate_rows=duplicate_rows,
+            changed_overlap_rows=changed_overlap_rows,
+            ignored_overlap_rows=ignored_overlap_rows,
+            pnl_observations=len(pnl_observations),
+            duplicate_days_checked=len(duplicate_days),
+            day_replacements=day_replacements,
+            replay_reused=unchanged,
+        )
 
     async def refresh_latest(
         self,
         *,
         overlap: int = 20,
         last_refresh_overlap_ms: Optional[int] = None,
-    ) -> None:
+    ) -> FillRefreshWork:
         """Fetch recent fills, overlapping Hyperliquid by timestamp cohort."""
         await self.ensure_loaded()
         if not self._events:
@@ -5460,7 +5551,7 @@ class FillEventsManager:
                 old_synthetic_count,
                 synthetic_refresh_margin_ms / 60_000,
             )
-        await self.refresh(start_ms=start_ms, end_ms=None)
+        return await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_degraded_pnl_events(
         self,

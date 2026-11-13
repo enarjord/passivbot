@@ -45,6 +45,7 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
+    FillRefreshWork,
     PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
@@ -182,7 +183,7 @@ from utils import (
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
@@ -12120,6 +12121,7 @@ class Passivbot:
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
         account_confirmation_requested = False
+        refresh_work = None
 
         def request_account_confirmation() -> None:
             nonlocal account_confirmation_requested
@@ -12132,7 +12134,7 @@ class Passivbot:
             return []
 
         async def refresh_evidence(operation, *, confirms_tail=True, **kwargs):
-            nonlocal fill_capture_interval
+            nonlocal fill_capture_interval, refresh_work
             started_ms = int(utc_ms())
             sync = position_fill_sync.state(self)
             if not sync.fetch_ready():
@@ -12142,6 +12144,7 @@ class Passivbot:
                 result = await operation(**kwargs)
                 if result is False:
                     raise position_fill_sync.FetchSkipped()
+                refresh_work = result if isinstance(result, FillRefreshWork) else None
                 if confirms_tail:
                     sync.finish_fetch(receipt)
                 fill_capture_interval = (
@@ -12672,6 +12675,7 @@ class Passivbot:
                 coverage_before=coverage_status,
                 coverage_after=post_refresh_coverage_status,
                 overlap_minutes=overlap_minutes,
+                refresh_work=asdict(refresh_work) if refresh_work is not None else None,
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
