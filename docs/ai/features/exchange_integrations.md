@@ -388,6 +388,19 @@ Handling in Passivbot:
 3. Prefer the raw exchange `info` field over a CCXT top-level default when proving close-only
    semantics.
 
+### Net-mode fill attribution
+
+Use native transaction-detail subtypes that identify an opening or closing position side,
+and reject conflicts with the execution side, reduce-only evidence, or realized PnL.
+An explicit reduce-only flag or a finite nonzero realized PnL identifies a reduction when
+the fill lacks a side-specific subtype. A generic buy/sell subtype, a false reduce-only
+flag, and zero realized PnL cannot distinguish an opening trade from a break-even close.
+Reject unresolved history before advancing fill coverage. Recheck the preserved raw
+evidence when loading existing net-mode cache rows and use the cache rebuild path when
+the original sides cannot be recovered.
+
+[OKX transaction details](https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-days)
+
 ## Gate.io Futures
 
 ### Exchange identity boundary

@@ -4062,6 +4062,8 @@ class FillEventsManager:
                 payload = [ev.to_dict() for ev in self._events]
                 if self.exchange.lower() == "hyperliquid":
                     payload = _expand_hyperliquid_coalesced_events(payload)
+                elif self.exchange.lower() == "okx":
+                    _restore_cached_okx_net_position_sides(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
@@ -8175,6 +8177,96 @@ class KucoinFetcher(BaseFetcher):
 # ---------------------------------------------------------------------------
 
 
+# OKX transaction-detail subtypes that explicitly identify a position side.
+_OKX_FILL_SUBTYPE_POSITION_SIDES = {
+    "3": ("buy", "long"),
+    "4": ("sell", "short"),
+    "5": ("sell", "long"),
+    "6": ("buy", "short"),
+    "100": ("sell", "long"),
+    "101": ("buy", "short"),
+    "104": ("sell", "long"),
+    "105": ("buy", "short"),
+    "125": ("sell", "long"),
+    "126": ("buy", "short"),
+    "206": ("buy", "long"),
+    "207": ("sell", "short"),
+    "208": ("sell", "long"),
+    "209": ("buy", "short"),
+    "272": ("buy", "long"),
+    "273": ("sell", "short"),
+    "274": ("sell", "long"),
+    "275": ("buy", "short"),
+    "326": ("buy", "long"),
+    "327": ("sell", "short"),
+    "328": ("sell", "long"),
+    "329": ("buy", "short"),
+}
+
+
+def _okx_fill_timestamp(raw: Dict[str, object]) -> int:
+    timestamp = _fill_int(raw.get("ts") or raw.get("fillTime"))
+    if timestamp <= 0:
+        raise FillEventDataError("OKX fill timestamp must be positive")
+    return timestamp
+
+
+def _okx_net_fill_position_side(raw: Dict[str, object], side: str, pnl: float) -> str:
+    if side not in {"buy", "sell"}:
+        raise FillEventDataError("OKX fill side must be buy or sell")
+    opening_side, closing_side = ("long", "short") if side == "buy" else ("short", "long")
+    reduce_only = raw.get("reduceOnly")
+    if reduce_only not in (None, "") and str(reduce_only).lower() not in {"true", "false"}:
+        raise FillEventDataError("OKX net fill has invalid reduceOnly evidence")
+    if not math.isfinite(pnl) or raw.get("fillPnl") in (None, ""):
+        raise FillEventDataError("OKX net fill requires explicit finite realized PnL")
+    proves_close = str(reduce_only).lower() == "true" or pnl != 0.0
+
+    subtype = _OKX_FILL_SUBTYPE_POSITION_SIDES.get(str(raw.get("subType") or ""))
+    if subtype is not None:
+        expected_side, position_side = subtype
+        if expected_side != side or (proves_close and position_side == opening_side):
+            raise FillEventDataError("OKX net fill has contradictory position-side evidence")
+        return position_side
+    if proves_close:
+        return closing_side
+    raise FillEventDataError("OKX net fill position side is unproven at zero realized PnL")
+
+
+def _restore_cached_okx_net_position_sides(events: List[Dict[str, object]]) -> None:
+    """Recheck cached net fills written before zero PnL required side evidence."""
+    for event in events:
+        raw_fills = [
+            item["data"]
+            for item in _normalize_raw_field(event.get("raw"))
+            if item.get("source") == "okx_fills" and isinstance(item.get("data"), dict)
+        ]
+        if not any(str(raw.get("posSide") or "").lower() == "net" for raw in raw_fills):
+            continue
+        sides = set()
+        try:
+            for raw in raw_fills:
+                side = str(raw.get("side") or "").lower()
+                if side != event["side"]:
+                    raise FillEventDataError("cached OKX fill side differs from its source")
+                position_side = str(raw.get("posSide") or "").lower()
+                if position_side == "net":
+                    position_side = _okx_net_fill_position_side(
+                        raw, side, _fill_float(raw.get("fillPnl"))
+                    )
+                if position_side not in {"long", "short"}:
+                    raise FillEventDataError("cached OKX fill has invalid position-side evidence")
+                sides.add(position_side)
+            if len(sides) != 1:
+                raise FillEventDataError("cached OKX fill combines different position sides")
+        except FillEventDataError as exc:
+            raise FillEventCacheContractError(
+                "cached OKX net fill position side cannot be reconstructed; "
+                "quarantine and rebuild the cache from exchange fills"
+            ) from exc
+        event["position_side"] = sides.pop()
+
+
 class OkxFetcher(BaseFetcher):
     """Fetches fill events from OKX using fills and fills-history endpoints.
 
@@ -8360,11 +8452,20 @@ class OkxFetcher(BaseFetcher):
             batch_events = []
             oldest_ts = None
             for raw in fills:
-                event = self._normalize_fill(raw)
-                event_id = event["id"]
-                if not event_id:
+                if not raw.get("tradeId"):
+                    continue
+                # An out-of-range row can prove pagination progress without
+                # requiring position-side evidence for the unrequested fill.
+                ts = _okx_fill_timestamp(raw)
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
                     continue
 
+                event = self._normalize_fill(raw)
+                event_id = event["id"]
                 # Ensure client_order_id/pb_order_type are populated before batch callbacks
                 cached = detail_cache.get(event_id)
                 if cached:
@@ -8383,16 +8484,6 @@ class OkxFetcher(BaseFetcher):
                 event["pb_order_type"] = pb_type
                 if event_id and client_oid:
                     detail_cache[event_id] = (client_oid, pb_type)
-
-                # Use the page boundary for pagination even when the row is
-                # outside the requested interval and must not be published.
-                ts = event["timestamp"]
-                if oldest_ts is None or ts < oldest_ts:
-                    oldest_ts = ts
-                if since_ms is not None and ts < since_ms:
-                    continue
-                if until_ms is not None and ts > until_ms:
-                    continue
 
                 # Enrich from cache
                 if event_id in detail_cache:
@@ -8432,7 +8523,7 @@ class OkxFetcher(BaseFetcher):
         """Normalize a raw OKX fill to the canonical fill event format."""
         trade_id = str(raw.get("tradeId") or "")
         order_id = str(raw.get("ordId") or "")
-        timestamp = _fill_int(raw.get("ts") or raw.get("fillTime") or 0)
+        timestamp = _okx_fill_timestamp(raw)
         inst_id = str(raw.get("instId") or "")
 
         # Convert instId (e.g., "BTC-USDT-SWAP") to CCXT symbol format
@@ -8459,13 +8550,7 @@ class OkxFetcher(BaseFetcher):
         # Position side handling (supports both hedge and net modes)
         pos_side_raw = str(raw.get("posSide") or "").lower()
         if pos_side_raw == "net":
-            # Net mode: infer position side from side + pnl
-            # If closing (has PnL), opposite of trade side was the position
-            if pnl != 0:
-                position_side = "short" if side == "buy" else "long"
-            else:
-                # Opening: same as trade side
-                position_side = "long" if side == "buy" else "short"
+            position_side = _okx_net_fill_position_side(raw, side, pnl)
         elif pos_side_raw in ("long", "short"):
             position_side = pos_side_raw
         else:
