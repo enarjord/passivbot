@@ -6873,72 +6873,94 @@ async def test_okx_fetcher_dual_endpoint_old_and_recent(monkeypatch):
     assert len(api.fills_calls) == 1
 
 
+@pytest.mark.parametrize(
+    "side,pnl,evidence,expected",
+    [
+        ("buy", "0", {"subType": "3"}, "long"),
+        ("sell", "0", {"subType": "4"}, "short"),
+        ("sell", "0", {"subType": "5"}, "long"),
+        ("buy", "0", {"subType": "6"}, "short"),
+        ("sell", "0", {"reduceOnly": "true"}, "long"),
+        ("buy", "0", {"reduceOnly": True}, "short"),
+        ("sell", "100", {}, "long"),
+        ("buy", "-50", {}, "short"),
+    ],
+)
+def test_okx_net_fill_requires_position_side_evidence(side, pnl, evidence, expected):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side=side, pnl=pnl, pos_side="net")
+    raw.update(evidence)
+
+    assert OkxFetcher(object())._normalize_fill(raw)["position_side"] == expected
+
+
+@pytest.mark.parametrize(
+    "pnl,evidence",
+    [
+        ("0", {}),
+        ("0", {"subType": "2", "reduceOnly": "false"}),
+        ("0", {"subType": "3"}),
+        ("0", {"subType": "4", "reduceOnly": "true"}),
+        ("5", {"subType": "4"}),
+        ("NaN", {"reduceOnly": True}),
+        ("", {"reduceOnly": True}),
+    ],
+)
+def test_okx_net_fill_rejects_ambiguous_or_contradictory_evidence(pnl, evidence):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side="sell", pnl=pnl, pos_side="net")
+    raw.update(evidence)
+
+    with pytest.raises(fem.FillEventDataError, match="OKX net fill"):
+        OkxFetcher(object())._normalize_fill(raw)
+
+
 @pytest.mark.asyncio
-async def test_okx_fetcher_net_mode_position_side_inference(monkeypatch):
-    """Test net mode position side inference from side + pnl."""
+async def test_okx_unattributed_net_fill_does_not_advance_coverage(tmp_path):
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-
-    fills = [
-        # Opening long: buy with no pnl -> position_side = long
-        _make_okx_fill(
-            trade_id="tid-open-long",
-            ts=now_ms - 3000,
-            side="buy",
-            pnl="0",
-            pos_side="net",
-        ),
-        # Closing long: sell with pnl -> position_side = long (was holding long)
-        _make_okx_fill(
-            trade_id="tid-close-long",
-            ts=now_ms - 2000,
-            side="sell",
-            pnl="100",
-            pos_side="net",
-        ),
-        # Opening short: sell with no pnl -> position_side = short
-        _make_okx_fill(
-            trade_id="tid-open-short",
-            ts=now_ms - 1000,
-            side="sell",
-            pnl="0",
-            pos_side="net",
-        ),
-        # Closing short: buy with pnl -> position_side = short (was holding short)
-        _make_okx_fill(
-            trade_id="tid-close-short",
-            ts=now_ms,
-            side="buy",
-            pnl="50",
-            pos_side="net",
-        ),
-    ]
-
-    api = _FakeOkxAPI([fills])
-    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
-
-    fetcher = OkxFetcher(api, trade_limit=100)
-    detail_cache: Dict[str, Tuple[str, str]] = {}
-
-    events = await fetcher.fetch(
-        since_ms=now_ms - 5000,
-        until_ms=now_ms + 1000,
-        detail_cache=detail_cache,
+    start_ms = now_ms - 1_000
+    valid = _make_okx_fill("valid", now_ms - 100)
+    ambiguous = _make_okx_fill("ambiguous", now_ms - 200, side="sell", pos_side="net")
+    out_of_range = _make_okx_fill("older", start_ms - 1, side="sell", pos_side="net")
+    api = _FakeOkxAPI([[valid, ambiguous], [valid, out_of_range]])
+    manager = FillEventsManager(
+        exchange="okx", user="test", fetcher=OkxFetcher(api), cache_path=tmp_path
     )
 
-    assert len(events) == 4
+    with pytest.raises(fem.FillEventDataError, match="position side is unproven"):
+        await manager.refresh(start_ms=start_ms, end_ms=now_ms)
 
-    # Check position side inference for net mode
-    open_long = next(ev for ev in events if ev["id"] == "tid-open-long")
-    assert open_long["position_side"] == "long"  # buy with no pnl = opening long
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+    assert not manager.get_coverage_status(start_ms=start_ms, end_ms=now_ms)["ready"]
 
-    close_long = next(ev for ev in events if ev["id"] == "tid-close-long")
-    assert close_long["position_side"] == "long"  # sell with pnl = closing long
+    await manager.refresh(start_ms=start_ms, end_ms=now_ms)
 
-    open_short = next(ev for ev in events if ev["id"] == "tid-open-short")
-    assert open_short["position_side"] == "short"  # sell with no pnl = opening short
+    assert [event.id for event in manager.get_events()] == ["valid"]
+    assert manager.cache.load_metadata()["last_refresh_ms"] > 0
+    assert manager.cache.get_known_gaps() == []
 
-    close_short = next(ev for ev in events if ev["id"] == "tid-close-short")
-    assert close_short["position_side"] == "short"  # buy with pnl = closing short
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attributable", [True, False])
+async def test_cached_okx_net_zero_pnl_is_rechecked_before_replay(tmp_path, attributable):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side="sell", pos_side="short")
+    stale = OkxFetcher(object())._normalize_fill(raw)
+    stale["raw"][0]["data"]["posSide"] = "net"
+    if attributable:
+        stale["raw"][0]["data"]["subType"] = "5"
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(stale)])
+    manager = FillEventsManager(
+        exchange="okx", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    if attributable:
+        await manager.ensure_loaded()
+        assert manager.get_events()[0].position_side == "long"
+        assert cache.load()[0].position_side == "long"
+    else:
+        with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild"):
+            await manager.ensure_loaded()
+        assert not manager.get_coverage_status(start_ms=raw["ts"])["ready"]
 
 
 @pytest.mark.asyncio
