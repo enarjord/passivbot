@@ -75,6 +75,11 @@ Passivbot also recognizes configured providers such as Finnhub and Alpha Vantage
 the private `tradfi` entry in `api-keys.json`. Provider coverage varies. Record the data
 source when comparing results.
 
+To manually probe a provider from a source checkout, run
+`PYTHONPATH=src python src/tools/probe_tradfi_providers.py --provider yfinance`.
+This command makes real market-data requests and uses the selected provider's
+credentials when required. The offline test suite uses mocked responses.
+
 ### Synthetic Candles During Market Closure (Backtesting Model)
 
 Underlying-asset history does not capture perpetual funding or the builder's pricing while

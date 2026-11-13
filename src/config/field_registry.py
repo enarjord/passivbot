@@ -419,7 +419,6 @@ def get_field_registry() -> FieldRegistry:
     from .field_metadata import enrich_fields
 
     enriched = enrich_fields(fields)
-    from dataclasses import replace
     # The exact paired directional registry is the inheritability catalog.
     # A common field has no independent native parameter ID: its binding owns
     # the already registered directional target IDs.

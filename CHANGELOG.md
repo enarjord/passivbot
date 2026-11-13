@@ -55,6 +55,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
 
+- Move the manual TradFi provider probe to `src/tools/probe_tradfi_providers.py` and keep
+  historical depth and multi-symbol probes on the selected provider.
+
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
@@ -2838,6 +2841,10 @@ The earlier incremental entries are preserved in the
   already-fetched balance response. The bounded rows add no exchange calls,
   valuation inference, scalar-balance changes, planning, order, or risk
   behavior; raw connector payloads remain excluded.
+
+- Calculate the OKX wallet balance in USD by converting each currency's cross and
+  isolated unrealized PnL using its equity values from the same account snapshot.
+  Incomplete snapshots make the trading balance unavailable.
 
 - `balance.changed` now carries a bounded optional asset-composition diagnostic
   from the same authoritative balance response. The first connector parser is

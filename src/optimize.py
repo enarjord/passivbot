@@ -125,7 +125,6 @@ from pure_funcs import (
     calc_hash,
     str2bool,
 )
-from opt_utils import deep_updated
 from utils import (
     date_to_ts,
     ts_to_date,

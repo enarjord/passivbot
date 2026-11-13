@@ -267,7 +267,9 @@ def test_workflow_preserves_version_specific_required_gates_and_shared_steps():
     ]
     lint = main["jobs"]["python_lint"]
     assert lint["name"] == "Python undefined names"
-    assert "ruff check --target-version py312 --select F821 src tests .github/ci" in lint["steps"][-1]["run"]
+    lint_commands = lint["steps"][-1]["run"].splitlines()
+    assert "ruff check --target-version py312 --select F821 src tests .github/ci" in lint_commands
+    assert "ruff check --target-version py312 --select F811 src" in lint_commands
     assert "continue-on-error" not in lint["steps"][-1]
     shards = shared["jobs"]["shards"]
     assert shards["timeout-minutes"] == "90"
