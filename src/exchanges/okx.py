@@ -1,11 +1,13 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_okx_balance_composition
 from live.diagnostic_safety import bounded_exception_type
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
 from live import hsl_live
 import passivbot_rust as pbr
 
 import asyncio
+import math
 from urllib.parse import urlsplit, urlunsplit
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
@@ -170,46 +172,69 @@ class OKXBot(CCXTBot):
 
     # ═══════════════════ OKX-SPECIFIC METHODS ═══════════════════
 
-    async def fetch_balance(self) -> float:
-        """OKX: return wallet balance in quote terms, including multi-asset collateral."""
-        fetched = await self._do_fetch_balance()
-        return self._get_balance(fetched)
+    @staticmethod
+    def _balance_number(value, field: str) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            raise AuthoritativeSurfaceUnavailable("balance", f"invalid_okx_{field}") from None
+        if isinstance(value, bool) or not math.isfinite(number):
+            raise AuthoritativeSurfaceUnavailable("balance", f"invalid_okx_{field}")
+        return number
 
     def _get_balance(self, fetched: dict) -> float:
-        """OKX account equity includes UPL; Passivbot raw balance should not."""
-        info = fetched["info"]
-        data = info["data"]
-        if not data:
-            raise KeyError("okx: fetch_balance response missing info.data[0]")
+        """Remove unrealized PnL from the full trading account's USD equity."""
+        info = fetched.get("info") if isinstance(fetched, dict) else None
+        data = info.get("data") if isinstance(info, dict) else None
+        if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+            raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_account")
         account = data[0]
-        details = account.get("details", [])
-        if "totalEq" in account:
-            upl_sum = sum(float(detail.get("upl") or 0.0) for detail in details)
-            return float(account["totalEq"]) - upl_sum
+        total_equity_usd = self._balance_number(account.get("totalEq"), "total_equity")
+        details = account.get("details")
+        if not isinstance(details, list):
+            raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_details")
+        if not details:
+            # OKX can omit currencies with zero cash balance and equity. A
+            # zero account value alone does not prove there are no positions.
+            notional_usd = self._balance_number(account.get("notionalUsd"), "notional")
+            if total_equity_usd != 0.0 or notional_usd != 0.0:
+                raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_details")
+            for field in ("isoEq", "upl"):
+                value = account.get(field)
+                if value not in (None, "") and self._balance_number(value, "exposure") != 0.0:
+                    raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_details")
+            return 0.0
 
-        balance = 0.0
+        currencies = set()
+        upl_usd = []
         for detail in details:
-            collateral_enabled = detail.get("collateralEnabled")
-            if (
-                str(collateral_enabled).lower() not in {"true", "1"}
-                and collateral_enabled is not True
-            ):
+            currency = detail.get("ccy") if isinstance(detail, dict) else None
+            if not isinstance(currency, str) or not currency or currency.strip() != currency:
+                raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_currency")
+            currency_key = currency.upper()
+            if currency_key in currencies:
+                raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_currency")
+            currencies.add(currency_key)
+
+            # Per-currency UPL includes cross and isolated positions. The
+            # account-level UPL is cross only and has a different unit.
+            upl = self._balance_number(detail.get("upl"), "unrealized_pnl")
+            if upl == 0.0:
                 continue
-            ccy = detail["ccy"]
-            if ccy == self.quote:
-                balance += float(detail["cashBal"])
-            elif "eqUsd" in detail:
-                balance += float(detail["eqUsd"]) - float(detail.get("upl") or 0.0)
-            else:
-                raise KeyError(f"okx: collateral detail for {ccy} missing eqUsd")
-        if balance == 0.0:
-            total = fetched.get("total")
-            if not isinstance(total, dict) or self.quote not in total:
-                raise KeyError(
-                    f"okx: fetch_balance response missing total[{self.quote!r}]"
-                )
-            return float(total[self.quote])
-        return balance
+            equity = self._balance_number(detail.get("eq"), "currency_equity")
+            equity_usd = self._balance_number(detail.get("eqUsd"), "currency_equity_usd")
+            if equity == 0.0:
+                raise AuthoritativeSurfaceUnavailable("balance", "unproven_okx_usd_conversion")
+            usd_per_currency = equity_usd / equity
+            if not math.isfinite(usd_per_currency) or usd_per_currency <= 0.0:
+                raise AuthoritativeSurfaceUnavailable("balance", "unproven_okx_usd_conversion")
+            upl_usd.append(self._balance_number(upl * usd_per_currency, "unrealized_pnl_usd"))
+
+        try:
+            balance = total_equity_usd - math.fsum(upl_usd)
+        except OverflowError:
+            raise AuthoritativeSurfaceUnavailable("balance", "invalid_okx_wallet_balance") from None
+        return self._balance_number(balance, "wallet_balance")
 
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only bounded documented OKX account-detail diagnostics."""

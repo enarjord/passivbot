@@ -372,6 +372,26 @@ sessions; do not suppress arbitrary error messages or bypass authentication.
 
 Primary reference: [OKX WebSocket port migration](https://www.okx.com/docs-v5/log_en/).
 
+### Account wallet balance
+
+Use the unfiltered REST trading-account balance for one account-wide USD-equivalent
+wallet value. Subtract each currency's unrealized PnL from `totalEq` after
+converting it to USD with that detail row's `eqUsd / eq`. Detail `upl` includes
+both cross and isolated PnL. Account `upl` covers only cross margin. Use every
+currency detail, regardless of its collateral flag, to match the scope of
+`totalEq`.
+
+A missing or malformed account total, missing or malformed detail, duplicate
+currency, unknown detail PnL, or unproven conversion for nonzero PnL makes the
+balance unavailable. An explicit zero PnL needs no conversion. An empty detail
+list represents a zero wallet only with explicit zero account equity and gross
+position notional and no contradictory reported isolated equity or account PnL.
+A unified quote-currency total cannot prove the account-wide balance.
+Staged and direct capture use the same parser.
+
+Primary references: [OKX trading-account balance](https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-balance)
+and [OKX equity and PnL formulas](https://www.okx.com/help/iii-single-currency-margin-cross-margin-trading#asset-fields).
+
 ### Long/short-mode close semantics
 
 Problem:

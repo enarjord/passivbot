@@ -2831,6 +2831,10 @@ The earlier incremental entries are preserved in the
   valuation inference, scalar-balance changes, planning, order, or risk
   behavior; raw connector payloads remain excluded.
 
+- Calculate the OKX wallet balance in USD by converting each currency's cross and
+  isolated unrealized PnL using its equity values from the same account snapshot.
+  Incomplete snapshots make the trading balance unavailable.
+
 - `balance.changed` now carries a bounded optional asset-composition diagnostic
   from the same authoritative balance response. The first connector parser is
   OKX: it reports only documented account-detail amount, USD value, unrealized
