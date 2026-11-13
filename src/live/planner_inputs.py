@@ -1,6 +1,14 @@
 """Projection of live policy into native planning inputs."""
 
+from typing import Any
+
+from config.access import get_optional_config_value
 from config.bot import normalize_twel_enforcer_policy
+from config.strategy import (
+    build_runtime_strategy_side,
+    get_active_strategy_side,
+    normalize_strategy_kind,
+)
 from live import hsl_live
 
 
@@ -100,3 +108,38 @@ def bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         hsl_panic_close_order_type=policy["panic_close_order_type"],
     )
     return out
+
+
+def strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
+    config = getattr(self, "config", {})
+    strategy_kind = normalize_strategy_kind(
+        get_optional_config_value(config, 'bot.portfolio.strategy_kind')
+    )
+    strategy_cfg = get_active_strategy_side(
+        config.get("bot", {}).get(pside, {}),
+        strategy_kind=strategy_kind,
+        pside=pside,
+    )
+    symbol_override = (
+        getattr(self, "coin_overrides", {})
+        .get(symbol, {})
+        .get("bot", {})
+        .get(pside, {})
+        if symbol is not None
+        else {}
+    )
+    return build_runtime_strategy_side(
+        strategy_cfg,
+        strategy_kind=strategy_kind,
+        pside=pside,
+        override_side=symbol_override,
+    )
+
+def strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
+    strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+    current = strategy_cfg
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(f"missing required strategy key {pside}.{key}")
+        current = current[part]
+    return current
