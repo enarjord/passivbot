@@ -129,6 +129,27 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
+## Migrating legacy adapter callers
+
+Live planning reads fills through `FillEventsManager`. Legacy exchange-adapter
+methods such as `fetch_pnls` and `gather_fill_events` are compatibility paths.
+They do not establish the manager's coverage, fee quality, or replay state.
+
+For existing bot integrations, use the manager initialized by the live fill
+owner and reuse its cache. For independent consumers, construct a
+`FillEventsManager` with the venue's `BaseFetcher` implementation and an
+explicit cache location. Await `ensure_loaded()` to read existing local data.
+If the caller needs fresh exchange facts, await `refresh_for_lookback(start_ms)`
+and require `manager.get_coverage_status(start_ms=...)["ready"]` before reading
+`get_events(start_ms=...)`.
+The read accessor filters loaded rows and does not prove interval coverage by
+itself. Consumers that require realized PnL must also check pending or degraded
+PnL under the contract above.
+
+Use each event's signed quantity and position side, and read net realized PnL
+through `fill_event_net_pnl(event)`. Keep the manager as the sole writer of its fill
+cache. Legacy method removal should follow migration of their callers.
+
 ## Refresh day persistence
 
 Refreshes serialize per manager. Bulk day-file reads and atomic writes run off the event loop.
