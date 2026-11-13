@@ -558,6 +558,9 @@ error path. The lock holder retains its atomic write. A later acquisition can re
 write without blocking the event loop on the lock.
 Fetch-lock backoff applies only to acquiring that lock. Errors in the protected operation
 propagate after its fetch lock is released.
+Fetch-lock files persist across release and restart. The OS releases ownership on process
+exit. Removing a lock file while another process has it open lets a third process lock a
+different inode for the same symbol. Apply this rule to every writer sharing the directory.
 
 Trailing reconstruction still requires a completed candle beginning strictly after
 the latest fill minute. Before that first source candle finalizes, a one-to-two
