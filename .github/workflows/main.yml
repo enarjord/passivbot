@@ -1,8 +1,15 @@
 name: CI
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('CI benchmark ({0})', inputs.layout) || 'CI' }}
 
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      layout:
+        description: Python shard assignment for the comparison
+        type: choice
+        options: [hash, weighted]
+        required: true
   push:
     branches:
       - master
@@ -13,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.layout || 'standard' }}
   cancel-in-progress: true
 
 jobs:

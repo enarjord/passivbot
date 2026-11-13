@@ -23,7 +23,22 @@ runs:
       shell: bash
       env:
         PYTHON_VERSION: ${{ inputs.python-version }}
-      run: >-
-        python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
-        --shard-count=4 --python-version="$PYTHON_VERSION"
-        --weights=.github/ci/python-test-durations.json
+        CI_SHARD_LAYOUT: ${{ github.event.inputs.layout }}
+        COLLECTION_DIR: ${{ runner.temp }}/collection
+      run: |
+        weights=()
+        if [[ "$CI_SHARD_LAYOUT" != hash ]]; then
+          weights=(--weights=.github/ci/python-test-durations.json)
+        fi
+        python .github/ci/ci_sharding.py "$COLLECTION_DIR" \
+          --shard-count=4 --python-version="$PYTHON_VERSION" "${weights[@]}"
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+
+        manifest = Path(os.environ["COLLECTION_DIR"]) / "shard-0.json"
+        collection = json.loads(manifest.read_text(encoding="utf-8"))["collected"]
+        print("Ordered collection SHA256:", hashlib.sha256(json.dumps(collection).encode()).hexdigest())
+        PY

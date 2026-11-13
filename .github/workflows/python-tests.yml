@@ -71,10 +71,11 @@ jobs:
       - name: Run Python test shard
         env:
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+          CI_SHARD_WEIGHTS: ${{ github.event.inputs.layout != 'hash' && '.github/ci/python-test-durations.json' || '' }}
         run: >-
           .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
           -p ci_pytest_shard -p ci_pytest_timings --ci-shard-index=${{ matrix.shard }} --ci-shard-count=4
-          --ci-shard-weights=.github/ci/python-test-durations.json
+          ${CI_SHARD_WEIGHTS:+--ci-shard-weights="$CI_SHARD_WEIGHTS"}
           -n 2 --dist=loadfile --max-worker-restart=0
           --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
 
