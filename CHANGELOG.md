@@ -53,9 +53,6 @@ its own version heading. See [release status](docs/releases.md).
 
 - Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
 
-- Honor request-local HTTP `Retry-After` in live current-I/O recovery, including date values,
-  and keep inline transport retries from resubmitting the failed request early.
-
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
@@ -100,6 +97,9 @@ its own version heading. See [release status](docs/releases.md).
 - Calculate ordinary live orders after the current account refresh and protective pass when
   HSL is enabled. Prepare candle and EMA inputs in the background to reduce deferrals caused
   by account updates and renewed input receipts.
+
+- Honor request-local HTTP `Retry-After` in live current-I/O recovery, including date values,
+  and keep inline transport retries from resubmitting the failed request early.
 
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer

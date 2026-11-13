@@ -5,14 +5,31 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from functools import wraps
 from math import isfinite
+import re
 from time import time
 
 from ccxt.async_support.base.exchange import Exchange
 from ccxt.base.errors import InvalidNonce, NetworkError
 
 
+_SHORT_DAY = r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)"
+_LONG_DAY = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+_CLOCK = r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
+_HTTP_DATE = re.compile(
+    rf"{_SHORT_DAY}, [0-9]{{2}} {_MONTH} [0-9]{{4}} {_CLOCK} GMT"
+    rf"|{_LONG_DAY}, [0-9]{{2}}-{_MONTH}-[0-9]{{2}} {_CLOCK} GMT"
+    rf"|{_SHORT_DAY} {_MONTH} (?: [0-9]|[0-9]{{2}}) {_CLOCK} [0-9]{{4}}"
+)
+
+
 def _http_date(value):
     if not value:
+        return None
+    value = value.strip()
+    # CCXT joins repeated response fields. Match one complete HTTP-date before
+    # using the email parser, which otherwise accepts trailing input.
+    if not _HTTP_DATE.fullmatch(value):
         return None
     try:
         parsed = parsedate_to_datetime(value)
@@ -34,7 +51,7 @@ def retry_after_from_headers(headers):
                 return 0.0
             retry_after = value.strip()
         elif name == "date":
-            response_date = value
+            response_date = "" if response_date is not None else value
     if not retry_after:
         return 0.0
     if retry_after.isascii() and retry_after.isdecimal():

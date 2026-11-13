@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import ccxt.async_support as ccxt
+from multidict import CIMultiDict
 import pytest
 from ccxt.base.errors import AuthenticationError, DDoSProtection, RateLimitExceeded, RequestTimeout
 
@@ -65,6 +66,28 @@ def test_retry_after_date_uses_response_clock_and_falls_back_to_local_clock(monk
     assert retry_after.retry_after_from_headers(headers) == 0.0
     headers["retry-after"] = "1"
     assert retry_after.retry_after_from_headers(headers) == 0.0
+
+
+@pytest.mark.parametrize("value", [
+    "Wednesday, 21-Oct-15 07:34:00 GMT",
+    "Wed Oct 21 07:34:00 2015",
+])
+def test_retry_after_accepts_legacy_http_date_formats(value):
+    assert retry_after.retry_after_from_headers({
+        "Date": "Wed, 21 Oct 2015 07:33:00 GMT", "Retry-After": value,
+    }) == 60.0
+
+
+@pytest.mark.asyncio
+async def test_ccxt_concatenated_retry_after_dates_are_ambiguous(client):
+    response = RestResponse(429, CIMultiDict([
+        ("Date", "Wed, 21 Oct 2015 07:33:00 GMT"),
+        ("Retry-After", "Wed, 21 Oct 2015 07:34:00 GMT"),
+        ("Retry-After", "Wed, 21 Oct 2015 07:35:00 GMT"),
+    ]))
+    with pytest.raises(DDoSProtection) as error:
+        await client(lambda *args, **kwargs: response).fapiPublicGetTime()
+    assert not hasattr(error.value, "retry_after_seconds")
 
 
 @pytest.mark.asyncio
