@@ -619,6 +619,9 @@ its own version heading. See [release status](docs/releases.md).
 - Reduce configuration preparation copying by reusing immutable internal policy payloads;
   candidate values and exported configurations retain independent mutable state.
 
+- Validate each referenced coin override file once per default override parse while
+  preserving inline override precedence.
+
 - Keep GPU host ADG and dependent growth metrics stable across CPU float64 batch sizes by
   evaluating each candidate's power with the same scalar arithmetic.
 
