@@ -5,6 +5,9 @@ from tools.pareto_plot_correlations import (
     CORRELATION_SCRIPT,
     CORRELATION_STYLES,
 )
+from tools.pareto_plot_filtered import (
+    FILTERED_PANEL, FILTERED_SCRIPT, FILTERED_STYLES, OBJECTIVE_CONTROLS,
+)
 from tools.pareto_plot_selectors import SELECTOR_SCRIPT
 from tools.pareto_plot_tradeoffs import TRADEOFF_CSS, TRADEOFF_HTML, TRADEOFF_SCRIPT
 
@@ -19,7 +22,7 @@ label{display:block;font-size:12px;font-weight:650;margin-bottom:5px}select,inpu
 select{max-width:100%;width:100%}.axis{flex:1 1 200px;min-width:0}.axis .goal{margin-top:6px;font-size:12px}.mode{width:68px}button{cursor:pointer}button:hover{background:#eef4fa}button:disabled{cursor:default;opacity:.55}
 .tabs{display:flex;gap:5px;overflow:auto;margin-bottom:12px}.tabs button{padding:9px 13px;white-space:nowrap;border-color:transparent;background:transparent;font-weight:600}.tabs button[aria-selected=true]{background:#dceef0;color:#145264}.tabs button:hover{background:#e6edf4}
 .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(245px,285px);gap:14px}.chart,.panel,.limits-sidebar,.selection{background:white;border:1px solid #dce3ed;border-radius:12px;min-width:0}.views{min-width:0}.chart{overflow:hidden}
-#plot{width:100%;height:clamp(380px,56vh,650px)}.summary{padding:10px 16px 0;font-weight:650}#ideal{padding:0 16px 8px;color:#675023;font-size:12px;overflow-wrap:anywhere;white-space:pre-line}
+#plot{width:100%;max-width:760px;aspect-ratio:1;margin:auto}.summary{padding:10px 16px 0;font-weight:650}#ideal{padding:0 16px 8px;color:#675023;font-size:12px;overflow-wrap:anywhere;white-space:pre-line}
 .note{padding:0 16px 12px;font-size:12px}.limits-sidebar{padding:15px;align-self:start}h2{font-size:17px;margin:0 0 10px}.limit{border-top:1px solid #e2e8f0;padding:13px 0}.limit-title{overflow-wrap:anywhere;font-size:12px;margin-bottom:8px}.limit-title input{margin-right:7px}.limit-controls{display:grid;grid-template-columns:94px minmax(0,1fr);gap:6px}.limit input[type=range]{width:100%;accent-color:#287b91;margin:10px 0 0}.limit input[type=number]{width:100%;min-width:0}.muted{font-size:12px;color:#5b6c81}.add-filter{display:flex;gap:6px;margin:12px 0}.add-filter select{min-width:0}.hidden,[hidden]{display:none!important}#error{color:#b42318;padding:14px;margin-bottom:10px;background:#fff1ef;border-radius:6px}details{margin-top:12px}summary{cursor:pointer;font-size:13px;font-weight:650}
 .ranking-controls{padding:12px 16px;border-block:1px solid #e7ecf2;background:#f8fafc}
 .ranking-controls .fields,.weights{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
@@ -34,7 +37,7 @@ select{max-width:100%;width:100%}.axis{flex:1 1 200px;min-width:0}.axis .goal{ma
 .table-wrap th,.table-wrap td{padding:7px 9px;text-align:left;vertical-align:top;border-bottom:1px solid #e2e8f0}
 .table-wrap th{background:#f4f6fa;min-width:70px}.table-wrap td .muted{display:block}.table-wrap td.filename{min-width:160px;font-family:monospace}
 @media(max-width:860px){.workspace{grid-template-columns:1fr}header{padding:16px 12px}main{padding:0 12px 12px}}
-@media(max-width:520px){.axis{flex-basis:130px}.tabs button{padding:8px}.toolbar,.panel{padding:12px}#plot{height:370px}}
+@media(max-width:520px){.axis{flex-basis:130px}.tabs button{padding:8px}.toolbar,.panel{padding:12px}}
 __PANEL_STYLES__
 </style><script>__PLOTLY_JS__</script></head>
 <body><header><h1>Pareto explorer</h1><span class="muted" id="pool-summary" role="status"></span></header>
@@ -58,24 +61,31 @@ __PANEL_STYLES__
 <div id="projection-weights" class="weights"></div>
 <button id="download-view" type="button">Download view JSON</button>
 </div><p id="projection-help" class="muted"></p></div>
-<div class="summary" id="summary" role="status"></div><div id="plot"></div><div id="ideal"></div>
+__OBJECTIVE_CONTROLS__
+<div class="summary" id="summary" role="status"></div><div id="ideal"></div><div id="plot"></div>
 <div id="inspected" role="status" hidden></div>
 <p class="note">Click a candidate to inspect it. The diamond combines the best visible value on each axis. Use the plot toolbar to zoom, reset or export PNG.</p>
 <div class="shortlist"><details id="projection-shortlist"><summary>Plotted-axis shortlist</summary><div id="projection-ranking"></div></details></div>
 </section>
 <section class="panel" role="tabpanel" id="tradeoffs-panel" aria-labelledby="tab-tradeoffs" hidden>__TRADEOFF_PANEL__</section>
 <section class="panel" role="tabpanel" id="correlations-panel" aria-labelledby="tab-correlations" hidden>__CORRELATION_PANEL__</section>
-</div><aside class="limits-sidebar"><h2>Plot limits</h2><p class="muted">Limits apply across all views. Missing values fail an enabled limit.</p>
+</div><aside class="limits-sidebar"><h2>Plot limits</h2><p class="muted" id="limit-help">Limits apply across all views. Missing values fail an enabled limit.</p>
+<p><a href="#filtered-title">Scoring pick, seed export and commands</a></p>
 <div class="add-filter"><select id="filter-metric" aria-label="Additional limit metric"></select><button id="add-filter">Add</button></div>
 <button id="reset-limits">Reset all limits</button><div id="limits"></div>
 <details><summary>About saved metrics</summary><p class="muted">Objectives are raw values before penalties. Other metrics use saved aggregates or means. Statistics are listed separately. A scatter coordinate requires a finite value.</p></details>
 </aside></div>
+__FILTERED_PANEL__
 <section class="selection" aria-labelledby="selection-title"><h2 id="selection-title">CLI selection</h2><div id="selection"></div></section>
 </main><script id="pareto-data" type="application/json">__DATA__</script><script>__APP_SCRIPT__</script></body></html>'''
 
 EXPLORER_SCRIPT = r'''
 const finite = value => typeof value === "number" && Number.isFinite(value);
-function computeView(dataset, axes, goals, limits, method = "ideal", weights = null) {
+function plotGoal(goal, limit) {
+    if (goal || !limit?.enabled) return goal;
+    return limit.mode === "floor" ? "max" : "min";
+}
+function computeView(dataset, axes, goals, limits, method = "ideal", weights = null, cliRows = null) {
     const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
     const columns = axes.map(key => metrics.get(key).values);
     const limitValue = (key, row) => {
@@ -83,17 +93,13 @@ function computeView(dataset, axes, goals, limits, method = "ideal", weights = n
         return status === "positive_infinity" ? Infinity : status === "negative_infinity" ? -Infinity : metric.values[row];
     };
     const active = limits.filter(limit => limit.enabled);
-    const indices = [], retained = [];
-    let filtered = 0, missing = 0;
-    for (let row = 0; row < dataset.names.length; row++) {
-        if (!active.every(limit => {
+    const retained = cliRows ?? dataset.names.flatMap((_, row) => active.every(limit => {
             const value = limitValue(limit.key, row);
             return typeof value === "number" && !Number.isNaN(value) && (limit.mode === "floor" ? value >= limit.value : value <= limit.value);
-        })) { filtered++; continue; }
-        retained.push(row);
-        if (!columns.every(values => finite(values[row]))) { missing++; continue; }
-        indices.push(row);
-    }
+        }) ? [row] : []);
+    const indices = retained.filter(row => columns.every(values => finite(values[row])));
+    const filtered = dataset.names.length - retained.length;
+    const missing = retained.length - indices.length;
     return {indices, retained, filtered, missing, ...rankProjection(columns, indices, goals, method, weights)};
 }
 function finiteExtent(values, fallback) {
@@ -116,9 +122,9 @@ const formatValue = value => finite(value) ? Number(value.toPrecision(8)).toStri
 function candidateLabel(record, filename) {
     return record?.candidate_labels?.[filename] ?? filename;
 }
-function plotSpec(dataset, axes, goals, limits, method = "ideal", weights = null, inspected = null) {
+function plotSpec(dataset, axes, goals, limits, method = "ideal", weights = null, inspected = null, cliFilter = null) {
     const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
-    const view = computeView(dataset, axes, goals, limits, method, weights), is3d = axes.length === 3;
+    const view = computeView(dataset, axes, goals, limits, method, weights, cliFilter?.retained), is3d = axes.length === 3;
     const columns = axes.map(key => view.indices.map(row => metrics.get(key).values[row]));
     const extents = axes.map((key, i) => is3d ? metrics.get(key) : finiteExtent(columns[i], metrics.get(key)));
     const hover = axes.map((key, i) => `${escapeHtml(metrics.get(key).label)}: %{${"xyz"[i]}:.8g}`).join("<br>");
@@ -172,6 +178,22 @@ function plotSpec(dataset, axes, goals, limits, method = "ideal", weights = null
             traces.splice(1, 0, pickTrace);
         }
     }
+    const filteredPickRow = dataset.names.indexOf(cliFilter?.selected);
+    let filteredPickVisibility = null;
+    if (filteredPickRow >= 0) {
+        const values = axes.map(key => metrics.get(key).values[filteredPickRow]);
+        filteredPickVisibility = values.every(finite) ? "visible" : "missing coordinates";
+        if (filteredPickVisibility === "visible") {
+            const label = "Scoring pick after limits";
+            const trace = {type:points.type, name:label, mode:"markers", showlegend:true,
+                x:[values[0]], y:[values[1]], ids:[String(filteredPickRow)],
+                customdata:[candidateHover(cliFilter.selected)],
+                marker:{symbol:"square-open",size:is3d ? 17 : 31,color:"#b53e35",line:{color:"#b53e35",width:2.5}},
+                hovertemplate:"<b>" + label + ": %{customdata[0]}</b>%{customdata[1]}<br>" + hover + "<extra></extra>"};
+            if (is3d) trace.z = [values[2]];
+            traces.splice(pickVisibility === "visible" ? 2 : 1, 0, trace);
+        }
+    }
     if (inspected !== null && view.indices.includes(inspected)) {
         const values = axes.map(key => metrics.get(key).values[inspected]);
         const trace = {type:points.type, name:"Inspected candidate", mode:"markers", showlegend:false,
@@ -197,7 +219,7 @@ function plotSpec(dataset, axes, goals, limits, method = "ideal", weights = null
     if (is3d) layout.scene = {xaxis:axis(axes[0],0),yaxis:axis(axes[1],1),zaxis:axis(axes[2],2),
         aspectmode:"cube",dragmode:"orbit",uirevision:revision,camera:{eye:{x:1.65,y:1.65,z:1.2}}};
     else Object.assign(layout,{xaxis:axis(axes[0],0),yaxis:axis(axes[1],1)});
-    return {traces,layout,view,pickVisibility};
+    return {traces,layout,view,pickVisibility,filteredPickVisibility};
 }
 function preserveCamera(layout, previous) {
     if (layout.scene && previous?.scene?.camera && layout.uirevision === previous.uirevision) {
@@ -394,7 +416,7 @@ function renderProjectionRanking(parent, dataset, axes, view, onCandidateClick) 
     }
     appendText(parent, "p", `Showing ${Math.min(PROJECTION_SHORTLIST_SIZE, view.eligible)} of ${view.eligible} ranked candidates. Download the view JSON for the full ranking.`, "muted");
 }
-function buildViewRecord(dataset, axes, goals, limits, method, weights, view) {
+function buildViewRecord(dataset, axes, goals, limits, method, weights, view, cliFilter = null) {
     const metrics = new Map(dataset.metrics.map(metric => [metric.key, metric]));
     const values = row => Object.fromEntries(axes.map(key => [key, metrics.get(key).values[row]]));
     const score = PROJECTION_METHODS[view.mode];
@@ -415,6 +437,8 @@ function buildViewRecord(dataset, axes, goals, limits, method, weights, view) {
         count_after_limits: view.retained.length,
         missing_coordinates: view.missing,
         cli_pick: dataset.selection?.selected?.file ?? null,
+        filtered_cli_pick: cliFilter?.selected ?? null,
+        filtered_cli_objectives: cliFilter?.objectives ?? null,
         selected: view.selected === null ? null : dataset.names[view.selected],
         ranking: view.ranking.map(({row, score}, index) => ({rank: index + 1, file: dataset.names[row], score, metrics: values(row)})),
         visible_candidates: view.indices.map(row => dataset.names[row]),
@@ -438,6 +462,7 @@ function mountExplorer(dataset) {
     if (selected.length === 2) selected.push(available.find(metric => !selected.includes(metric.key))?.key);
     const directions = new Map(dataset.metrics.map(metric => [metric.key,metric.goal]));
     const limits = new Map(), extras = new Set();
+    const effectiveGoal = key => plotGoal(directions.get(key), limits.get(key));
     const dimension = document.getElementById("dimension"), axes = ["x","y","z"];
     dimension.value = String(dataset.selected.length);
     dimension.options[1].disabled = available.length < 3;
@@ -458,6 +483,12 @@ function mountExplorer(dataset) {
     };
     const tradeoffs = mountTradeoffs(dataset, fillOptions, inspectCandidate);
     const updateCorrelations = mountParameterCorrelations(dataset, inspectCandidate);
+    const filteredSelection = mountFilteredSelection(dataset, schedulePlot);
+    const downloadButton = document.getElementById("download-view");
+    if (filteredSelection) {
+        document.getElementById("limit-help").textContent =
+            "Plot limits use CLI metric resolution and apply on top of launch limits.";
+    }
     function fillOptions(select) {
         for (const group of ["Objectives","Metrics","Statistics"]) {
             const optgroup = document.createElement("optgroup"); optgroup.label = group;
@@ -549,6 +580,13 @@ function mountExplorer(dataset) {
     }
     let pending = false, rendering = false;
     function schedulePlot() {
+        filteredSelection?.update([...limits.values()]);
+        downloadButton.disabled = filteredSelection !== null && !filteredSelection.ready;
+        for (const [index, key] of activeAxes().entries()) {
+            const inferred = !directions.get(key) && effectiveGoal(key);
+            goalSelects[index].options[0].textContent = inferred === "max" ? "Use floor direction (higher)"
+                : inferred === "min" ? "Use ceiling direction (lower)" : "Choose ideal direction…";
+        }
         if (pending) return;
         pending = true;
         if (!rendering) requestAnimationFrame(renderPlot);
@@ -559,16 +597,20 @@ function mountExplorer(dataset) {
         try {
             while (pending) {
                 pending = false;
-                const keys = activeAxes(), goals = keys.map(key => directions.get(key));
+                const keys = activeAxes(), goals = keys.map(effectiveGoal);
                 const limitValues = [...limits.values()], method = methodSelect.value;
                 const axisWeights = viewWeights(keys, method);
                 const currentTab = activeTab;
+                const cliFilter = filteredSelection?.current ?? null;
                 const result = currentTab === scatterTab
-                    ? plotSpec(dataset, keys, goals, limitValues, method, axisWeights, inspected) : null;
-                const view = result?.view ?? computeView(dataset, keys, goals, limitValues, method, axisWeights);
-                document.getElementById("pool-summary").textContent = `${view.retained.length.toLocaleString()} of ${dataset.names.length.toLocaleString()} candidates pass plot limits`;
+                    ? plotSpec(dataset, keys, goals, limitValues, method, axisWeights, inspected, cliFilter) : null;
+                const view = result?.view ?? computeView(dataset, keys, goals, limitValues, method, axisWeights, cliFilter?.retained);
+                const poolStatus = filteredSelection?.pending ? "Updating scoring pick…"
+                    : cliFilter?.error || `${view.retained.length.toLocaleString()} of ${dataset.names.length.toLocaleString()} candidates pass plot limits`;
+                document.getElementById("pool-summary").textContent = poolStatus;
                 if (currentTab.id === "tab-tradeoffs") {
-                    tradeoffs.update({indices: view.retained, directions, selected: view.selected, inspected});
+                    const profileDirections = new Map([...directions.keys()].map(key => [key, effectiveGoal(key)]));
+                    tradeoffs.update({indices: view.retained, directions: profileDirections, selected: view.selected, inspected});
                     continue;
                 }
                 if (currentTab.id === "tab-correlations") {
@@ -589,9 +631,15 @@ function mountExplorer(dataset) {
                 if (result.pickVisibility) {
                     lines.push(`○ CLI selection: ${candidateLabel(dataset.selection, dataset.selection.selected.file)} · ${result.pickVisibility}`);
                 }
+                if (result.filteredPickVisibility) {
+                    const method = cliFilter.method === "ideal" ? "Euclidean ideal" : cliFilter.method;
+                    lines.push(`□ Scoring pick after limits (${method}, ${objectiveCountLabel(cliFilter.objective_count)}): ${candidateLabel(dataset.selection, cliFilter.selected)} · ${result.filteredPickVisibility}`);
+                } else if (!filteredSelection) {
+                    lines.push("□ Scoring pick after limits is available when launched with --open.");
+                }
                 if (view.selected !== null) {
                     const fallback = view.mode !== method ? ` (using ${PROJECTION_METHODS[view.mode].label})` : "";
-                    lines.push(`★ ${PROJECTION_METHODS[method].label}${fallback}: ${candidateLabel(dataset.selection, dataset.names[view.selected])}`);
+                    lines.push(`★ ${PROJECTION_METHODS[method].label} on plotted axes${fallback}: ${candidateLabel(dataset.selection, dataset.names[view.selected])}`);
                 }
                 if (view.ideal) {
                     lines.push("◇ Theoretical ideal: " + coordinates(view.ideal));
@@ -635,11 +683,12 @@ function mountExplorer(dataset) {
     }
     shortlist.addEventListener("toggle", () => { if (shortlist.open) renderRanking(); });
     methodSelect.addEventListener("change", () => { renderProjectionControls(); schedulePlot(); });
-    document.getElementById("download-view").addEventListener("click", () => {
-        const keys = activeAxes(), goals = keys.map(key => directions.get(key));
+    downloadButton.addEventListener("click", () => {
+        const keys = activeAxes(), goals = keys.map(effectiveGoal);
         const method = methodSelect.value, axisWeights = viewWeights(keys, method), limitValues = [...limits.values()];
-        const view = computeView(dataset, keys, goals, limitValues, method, axisWeights);
-        downloadView(buildViewRecord(dataset, keys, goals, limitValues, method, axisWeights, view));
+        const cliFilter = filteredSelection?.current ?? null;
+        const view = computeView(dataset, keys, goals, limitValues, method, axisWeights, cliFilter?.retained);
+        downloadView(buildViewRecord(dataset, keys, goals, limitValues, method, axisWeights, view, cliFilter));
     });
     function activateTab(tab) {
         if (tab === activeTab) return;
@@ -680,19 +729,22 @@ function mountExplorer(dataset) {
     document.getElementById("reset-limits").addEventListener("click",() => {limits.clear();extras.clear();renderLimits();schedulePlot();});
     syncAxes();
 }
-if (typeof module !== "undefined") module.exports = {computeView,axisRange,plotSpec,preserveCamera,buildViewRecord};
+if (typeof module !== "undefined") module.exports = {computeView,axisRange,plotSpec,preserveCamera,buildViewRecord,plotGoal};
 if (typeof document !== "undefined") mountExplorer(JSON.parse(document.getElementById("pareto-data").textContent));
 '''
 
 PAGE = (
-    PAGE.replace("__PANEL_STYLES__", TRADEOFF_CSS + CORRELATION_STYLES)
+    PAGE.replace("__PANEL_STYLES__", TRADEOFF_CSS + CORRELATION_STYLES + FILTERED_STYLES)
     .replace("__TRADEOFF_PANEL__", TRADEOFF_HTML)
     .replace("__CORRELATION_PANEL__", CORRELATION_PANEL)
+    .replace("__FILTERED_PANEL__", FILTERED_PANEL)
+    .replace("__OBJECTIVE_CONTROLS__", OBJECTIVE_CONTROLS)
 )
 SCRIPT = (
     '"use strict";\n'
     + SELECTOR_SCRIPT
     + TRADEOFF_SCRIPT
     + CORRELATION_SCRIPT
+    + FILTERED_SCRIPT
     + EXPLORER_SCRIPT
 )

@@ -63,7 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="HTML output (default: pareto_plots/<input-name>.html)",
     )
     parser.add_argument(
-        "--open", action="store_true", help="Open the saved plot in the default browser"
+        "--open", action="store_true", help="Open the loopback viewer in the default browser"
+    )
+    launch = parser.add_mutually_exclusive_group()
+    launch.add_argument(
+        "--serve", action="store_true",
+        help="Serve a loopback viewer with exact CLI ranking after plot limits and seed export",
+    )
+    launch.add_argument(
+        "--offline", action="store_true",
+        help="With --open, open the standalone HTML file instead of starting the loopback viewer",
     )
     parser.add_argument(
         "--force", action="store_true", help="Replace an existing HTML output file"
@@ -256,7 +265,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"Exported {len(candidates)} candidates and {len(dataset['metrics'])} metrics from {pareto_dir}"
     )
     print(f"HTML: {output}")
-    if args.open and not webbrowser.open(output.as_uri()):
+    if args.serve or (args.open and not args.offline):
+        from tools.pareto_plot_session import PlotSelection, selection_server
+
+        selection = PlotSelection(pareto_dir, candidates, scoring_specs, args, evaluation, dataset["metrics"], output)
+        try:
+            server, url = selection_server(
+                selection, lambda session: render_html({**dataset, "session": session}, selected)
+            )
+        except OSError as exc:
+            parser.error(str(exc))
+        with server:
+            print(f"Viewer: {url} (Ctrl+C to stop)", flush=True)
+            if args.open and not webbrowser.open(url):
+                print("Could not open a browser automatically. Open the viewer URL above.")
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
+    elif args.open and not webbrowser.open(output.as_uri()):
         print("Could not open a browser automatically; open the HTML file manually.")
     return 0
 

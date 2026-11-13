@@ -260,6 +260,7 @@ profile (`python3 -m pip install -e ".[full]"`).
 # Omit PATH to use the latest populated optimizer Pareto front.
 passivbot tool pareto-plot --open
 passivbot tool pareto-plot optimize_results/.../pareto --open
+passivbot tool pareto-plot optimize_results/.../pareto --offline --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
 passivbot tool pareto-plot optimize_results/... \
@@ -292,6 +293,31 @@ the CLI selection fixed. The panel still identifies it when the selected point i
 or excluded by a browser filter. Use `passivbot tool pareto PATH --json` for the CLI
 selection record in a script.
 
+Use `--open` for **Scoring pick after limits** and **Export filtered seeds**.
+This mode serves the viewer on loopback until you press Ctrl+C. Use `--serve` to print the
+viewer URL without opening a browser. The standalone HTML is also saved. Use
+`--offline --open` to open that file directly. The loopback viewer adds enabled plot limits to any launch
+limits and runs the Python CLI selector with the same method, active objectives, weights,
+targets, and scenario. Expand **Scoring objectives for square marker** to rank the filtered
+candidates using a subset of the objectives active at launch. An unchecked metric can
+still serve as an axis or a limit. Changing scatter axes, their directions, or the
+plotted-axis selector leaves this selection unchanged. The square marker shows the
+scoring pick when it has finite coordinates on the current axes.
+
+The loopback viewer uses CLI limit resolution. A limit on a named statistic requests that reducer.
+The CLI resolves a limit on an ordinary metric from its saved aggregate or applicable fallback.
+If a limit cannot be resolved or leaves no candidates, the viewer displays the CLI error.
+**Export filtered seeds** saves the members that pass the limits beside the HTML in a new
+directory. It preserves candidate bytes and includes only candidate files so the directory
+can go directly to `passivbot optimize --start`.
+
+**Copy commands** includes the Pareto selection command with the chosen objectives and exact limit arguments and a
+backtest command for the selected file. Backtest replays the file and any selected scenario.
+After export, copy the optimization command to use the selected source file as the base config,
+the new directory as `--start`, and the applied constraints as `--limits`. Review the base
+config before starting a new optimization. The exported candidates are evaluated under the
+new run as usual.
+
 Use **Selector on plotted axes** to rank candidates with finite coordinates that pass the plot
 limits. The star marks the first candidate in **Plotted-axis shortlist**. Each axis scales to
 its current visible raw range. An axis with range at most `1e-15` has zero distance and full
@@ -310,8 +336,10 @@ visible saved points. See [Das's characterization of Pareto knees](https://doi.o
 
 The **theoretical ideal** diamond combines the best visible value on each axis. Different
 candidates can provide those values. Direction controls default to saved scoring goals or
-known metric goals. Choose a direction for unknown goals, including standard deviations,
-to enable plotted-axis selection. In 2D, maximization axes are reversed so better values
+known metric goals. For a metric without a known goal, an enabled floor suggests higher and
+an enabled ceiling suggests lower. You can override either direction in the axis control.
+Choose a direction manually if there is no enabled limit on an undirected metric.
+In 2D, maximization axes are reversed so better values
 lie toward the lower-left. 3D axes use normal orientation. **Download view JSON** captures
 the plotted-axis ranking with candidate filenames, raw values, and scores. The JSON also
 records the axes, directions, enabled limits, and selector settings.
