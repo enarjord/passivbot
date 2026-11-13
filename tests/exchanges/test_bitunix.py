@@ -2278,6 +2278,24 @@ class _RecordingSession:
 
 
 @pytest.mark.asyncio
+async def test_native_market_discovery_propagates_http_retry_after_without_early_retry():
+    client = BitunixClient({})
+    response = SimpleNamespace(
+        status=429,
+        headers={"retry-after": "45"},
+        text=AsyncMock(return_value="server backpressure"),
+    )
+    client._get_session = AsyncMock(return_value=_RecordingSession(response))
+    client._throttle = AsyncMock()
+
+    with pytest.raises(RateLimitExceeded, match="Bitunix HTTP 429") as error:
+        await client.load_markets()
+
+    assert error.value.retry_after_seconds == 45.0
+    response.text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_native_request_uses_configured_rest_base_and_extra_headers():
     client = BitunixClient(
         {

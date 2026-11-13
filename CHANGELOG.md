@@ -107,6 +107,9 @@ its own version heading. See [release status](docs/releases.md).
   HSL is enabled. Prepare candle and EMA inputs in the background to reduce deferrals caused
   by account updates and renewed input receipts.
 
+- Honor request-local HTTP `Retry-After` in live current-I/O recovery, including date values,
+  and keep inline transport retries from resubmitting the failed request early.
+
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
   fitness needs reevaluation when adopting this revision.

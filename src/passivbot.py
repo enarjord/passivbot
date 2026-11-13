@@ -1415,6 +1415,10 @@ class Passivbot:
         self.cca = None
         self.ccp = None
         self.create_ccxt_sessions()
+        from exchanges.retry_after import install_ccxt_retry_after
+
+        install_ccxt_retry_after(self.cca)
+        install_ccxt_retry_after(self.ccp)
         self.debug_mode = False
         self.live_event_debug_profiles = normalize_live_event_debug_profiles(
             os.environ.get(

@@ -64,9 +64,13 @@ fresh account facts, including balance, before each protective write. Malformed
 or incomplete close batches are fatal.
 
 The live execution owner backs off transport failures, including exchange backpressure,
-with an interruptible bounded schedule and logs persistent outages. An authoritative
-retry delay can extend that wait. Ordinary readiness deferrals keep their existing cadence.
-An outage does not authorize action on an expired cohort.
+with an interruptible bounded schedule and logs persistent outages. A valid request-local
+HTTP `Retry-After` on a current I/O transport failure can extend that wait. The owner
+uses a monotonic deadline and does not retry the failed cycle before it expires. Ordinary
+readiness deferrals keep their existing cadence. An outage does not authorize action on an
+expired cohort.
+During startup preparation the same deadline gates current-account refreshes for protection.
+The independent preparation task can complete while that deadline is pending.
 
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
