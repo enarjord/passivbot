@@ -129,6 +129,27 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
+## Migrating legacy adapter callers
+
+Live planning reads fills through `FillEventsManager`. Legacy exchange-adapter
+methods such as `fetch_pnls` and `gather_fill_events` are compatibility paths.
+They do not establish the manager's coverage, fee quality, or replay state.
+
+For existing bot integrations, use the manager initialized by the live fill
+owner and reuse its cache. For independent consumers, construct a
+`FillEventsManager` with the venue's `BaseFetcher` implementation and an
+explicit cache location. Await `ensure_loaded()` to read existing local data.
+If the caller needs fresh exchange facts, await `refresh_for_lookback(start_ms)`
+and require `manager.get_coverage_status(start_ms=...)["ready"]` before reading
+`get_events(start_ms=...)`.
+The read accessor filters loaded rows and does not prove interval coverage by
+itself. Consumers that require realized PnL must also check pending or degraded
+PnL under the contract above.
+
+Use each event's signed quantity and position side, and read net realized PnL
+through `fill_event_net_pnl(event)`. Keep the manager as the sole writer of its fill
+cache. Legacy method removal should follow migration of their callers.
+
 ## Refresh day persistence
 
 Refreshes serialize per manager. Bulk day-file reads and atomic writes run off the event loop.
@@ -232,6 +253,25 @@ logs, runtime windows, and immutable manifests.
    quantity, gross PnL, and signed fees reconcile to the aggregate. An unreconciled aggregate is a
    cache-contract failure: quarantine the cache and rebuild the configured lookback before
    accepting individually fetched components.
+
+### Hyperliquid one-way execution attribution
+
+Hyperliquid's account fill feed can contain spot and perpetual executions. Only perpetual
+executions enter this ledger. Use the signed native `startPosition`, execution side and size to
+distinguish an addition, reduction, or position flip. Accept an explicit, side-consistent
+opening or closing action on older rows without a signed position. A reduction needs explicit
+finite realized PnL. A full page that stalls on a timestamp cannot certify coverage.
+
+A flip yields two components of the same raw execution with distinct event and source IDs.
+Allocate gross realized PnL to the close and the reported fee in proportion to each leg's
+quantity at the common execution price. The native Hyperliquid fee already includes the
+builder fee. Missing fees continue through the existing best-effort fee policy. Retain raw
+evidence and component roles for same-millisecond position replay. On cache load, reconstruct a
+legacy single-row flip only when its original execution reconciles to the retained identity,
+timestamp, market, side, price, total quantity and gross PnL. Missing or contradictory split
+legs and unreconciled cache aggregates require the existing quarantine/rebuild path.
+
+[Hyperliquid account fill payloads](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-fills)
 
 ## Failure Semantics And Risks
 

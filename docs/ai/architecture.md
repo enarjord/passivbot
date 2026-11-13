@@ -27,6 +27,10 @@ from contract-valid exchange state, but must not reimplement strategy intent.
 
 ## Live Data Flow
 
+Live strategy and shared policy projection into native input dictionaries live in
+`src/live/planner_inputs.py`. Exchange parameters, market evidence, and execution
+admission retain their respective owners.
+
 1. Refresh account and relevant market state.
 2. Build canonical strategy and risk inputs.
 3. Ask Rust for ideal orders.

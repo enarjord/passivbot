@@ -29,6 +29,7 @@ from collections import defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
@@ -597,7 +598,11 @@ def _is_synthetic_pnl_source(source: object) -> bool:
 def _raw_quote_value(payload: Dict[str, object]) -> float:
     total = 0.0
     for raw in _normalize_raw_field(payload.get("raw")):
-        data = raw.get("data") if isinstance(raw, dict) else raw
+        if raw.get("source") == "fetch_my_trades" and raw.get("piece") in ("open", "close"):
+            # The raw Hyperliquid execution is shared by both legs. Use the
+            # canonical component's quantity and price for its own notional.
+            continue
+        data = raw.get("data")
         if not isinstance(data, dict):
             continue
         info = data.get("info")
@@ -1041,6 +1046,55 @@ def _unique_position_chain_order(
     return ordered
 
 
+def _hyperliquid_native_size(value: object) -> Decimal:
+    try:
+        size = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise FillEventDataError("invalid Hyperliquid position or execution size") from exc
+    if not size.is_finite() or not math.isfinite(float(size)):
+        raise FillEventDataError("invalid Hyperliquid position or execution size")
+    return size
+
+
+def _hyperliquid_trade_side(trade: Dict[str, object]) -> str:
+    info = trade.get("info") or {}
+    sides = {"b": "buy", "buy": "buy", "a": "sell", "sell": "sell"}
+    raw_side = info.get("side")
+    normalized = trade.get("side")
+    native = sides.get(str(raw_side).lower())
+    side = sides.get(str(normalized).lower())
+    if (raw_side is not None and native is None) or (
+        normalized is not None and side is None
+    ) or (native and side and native != side):
+        raise FillEventDataError("invalid Hyperliquid execution side")
+    if native or side:
+        return native or side
+    raise FillEventDataError("missing Hyperliquid execution side")
+
+
+def _hyperliquid_signed_fill_sizes(
+    trade: Dict[str, object],
+) -> tuple[Decimal, Decimal] | None:
+    info = trade.get("info") or {}
+    if "startPosition" not in info:
+        return None
+    before = _hyperliquid_native_size(info["startPosition"])
+    size = _hyperliquid_native_size(info.get("sz", trade.get("amount")))
+    if size <= 0:
+        raise FillEventDataError("Hyperliquid execution size must be positive")
+    if trade.get("amount") is not None and not math.isclose(
+        float(size), _fill_float(trade["amount"]), rel_tol=1e-12, abs_tol=0.0
+    ):
+        raise FillEventDataError("Hyperliquid raw execution size disagrees with CCXT")
+    return before, size if _hyperliquid_trade_side(trade) == "buy" else -size
+
+
+def _hyperliquid_is_spot_fill(trade: Dict[str, object]) -> bool:
+    coin = str((trade.get("info") or {}).get("coin") or "")
+    symbol = str(trade.get("symbol") or "")
+    return coin.startswith("@") or "/" in coin or ("/" in symbol and ":" not in symbol)
+
+
 def _hyperliquid_raw_position_components(
     ev: Dict[str, object],
 ) -> List[Tuple[float, float, float, float, float, bool]]:
@@ -1074,7 +1128,27 @@ def _hyperliquid_raw_position_components(
             continue
         if qty <= 0.0:
             continue
-        side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
+        piece = item.get("piece")
+        if piece is not None:
+            try:
+                sizes = _hyperliquid_signed_fill_sizes(data)
+                if sizes is None:
+                    continue
+                before, delta = sizes
+                after = before + delta
+            except FillEventDataError:
+                continue
+            if piece == "close":
+                close_qty = float(abs(before))
+                components.append((close_qty, 0.0, close_qty, price, 0.0, True))
+            elif piece == "open":
+                open_qty = float(abs(after))
+                components.append((0.0, open_qty, open_qty, price, price, False))
+            continue
+        try:
+            side = _hyperliquid_trade_side(data)
+        except FillEventDataError:
+            continue
         position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
         if not position_side:
             direction = str(info.get("dir") or "").lower()
@@ -1285,6 +1359,73 @@ def _hyperliquid_coalesced_reconciliation_failure(
     return None
 
 
+def _restore_hyperliquid_singleton(
+    event: Dict[str, object], trade: Dict[str, object],
+) -> List[Dict[str, object]]:
+    """Repair only cached side/fee changes or flips proven by a retained raw execution."""
+    info = trade.get("info") or {}
+    if _hyperliquid_is_spot_fill(trade):
+        return []
+    trade_id = str(trade.get("id") or info.get("tid") or "")
+    event_id = str(event["id"])
+    try:
+        pieces = HyperliquidFetcher._normalize_trade_components(trade)
+        if event_id != trade_id:
+            # Split rows already contain allocated fees and exact source IDs.
+            # Validate them without converting a second time.
+            matching = next((piece for piece in pieces if piece["id"] == event_id), None)
+            if (
+                matching is None or len(pieces) != 2
+                or event.get("source_ids") != [event_id]
+                or not _same_nested_fill_evidence(event["raw"], matching["raw"])
+                or event["position_side"] != matching["position_side"]
+                or event["symbol"] != matching["symbol"]
+                or event["side"] != matching["side"]
+                or event["timestamp"] != matching["timestamp"]
+                or event["price"] != matching["price"]
+                or event["pnl"] != matching["pnl"]
+                or event["c_mult"] != matching["c_mult"]
+                or abs(event["qty"]) != matching["qty"]
+                or not _same_nested_fill_evidence(event["fees"], matching["fees"])
+            ):
+                raise FillEventDataError("cached Hyperliquid split leg disagrees with its source")
+            return [event]
+
+        if (
+            event["symbol"] != pieces[0]["symbol"]
+            or event["side"] != pieces[0]["side"]
+            or event["timestamp"] != pieces[0]["timestamp"]
+            or event["price"] != pieces[0]["price"]
+            or event["pnl"] != sum(piece["pnl"] for piece in pieces)
+            or _payload_contract_multiplier(event) != pieces[0]["c_mult"]
+            or not math.isclose(
+                abs(event["qty"]), sum(piece["qty"] for piece in pieces),
+                rel_tol=1e-12, abs_tol=0.0,
+            )
+        ):
+            raise FillEventDataError("cached Hyperliquid fill disagrees with its execution")
+
+        native_builder_fee = info.get("builderFee") is not None and info.get("fee") is not None
+        fee_changed = native_builder_fee and not _same_nested_fill_evidence(
+            event.get("fees"), pieces[0]["fees"]
+        )
+        if len(pieces) == 1 and not fee_changed:
+            return [{**event, "position_side": pieces[0]["position_side"]}]
+
+        # Derived fee and position metadata must be recomputed from the leg
+        # amounts. Preserve ownership labels and existing attribution only.
+        for piece in pieces:
+            for key in ("client_order_id", "pb_order_type", "provenance"):
+                if key in event:
+                    piece[key] = deepcopy(event[key])
+        return pieces
+    except FillEventDataError as exc:
+        raise FillEventCacheContractError(
+            "cached Hyperliquid fill cannot be reconciled to its execution; "
+            "quarantine and rebuild the cache"
+        ) from exc
+
+
 def _expand_hyperliquid_coalesced_events(
     events: List[Dict[str, object]],
 ) -> List[Dict[str, object]]:
@@ -1318,7 +1459,18 @@ def _expand_hyperliquid_coalesced_events(
             seen_ids.add(trade_id)
             unique_trades.append((trade_id, trade))
         if len(unique_trades) <= 1 and not is_legacy_aggregate:
-            expanded.append(event)
+            if unique_trades:
+                expanded.extend(_restore_hyperliquid_singleton(event, unique_trades[0][1]))
+            elif raw_trades or any(
+                str(item.get("source") or "") == "fetch_my_trades"
+                for item in _normalize_raw_field(event.get("raw"))
+            ):
+                raise FillEventCacheContractError(
+                    "cached Hyperliquid fill lacks an identifiable raw execution; "
+                    "quarantine and rebuild the cache"
+                )
+            else:
+                expanded.append(event)
             continue
 
         children: List[Dict[str, object]] = []
@@ -1353,6 +1505,29 @@ def _expand_hyperliquid_coalesced_events(
                 f"components={len(children)} reason={failure}"
             )
         expanded.extend(children)
+    # A legacy unsplit row and already-split rows, or one surviving leg from
+    # a malformed cache, cannot safely certify the full execution.
+    split_parents: Dict[str, Dict[str, object]] = defaultdict(dict)
+    split_ids: set[str] = set()
+    for event in expanded:
+        for item in _normalize_raw_field(event.get("raw")):
+            if item.get("source") != "fetch_my_trades" or not item.get("piece"):
+                continue
+            event_id = str(event["id"])
+            if event_id in split_ids:
+                raise FillEventCacheContractError(
+                    "duplicate cached Hyperliquid flip leg; quarantine and rebuild the cache"
+                )
+            split_ids.add(event_id)
+            split_parents[event_id.rsplit(":", 1)[0]][str(item["piece"])] = item["data"]
+    for legs in split_parents.values():
+        if legs.keys() != {"close", "open"} or not _same_nested_fill_evidence(
+            legs["close"], legs["open"]
+        ):
+            raise FillEventCacheContractError(
+                "incomplete or contradictory cached Hyperliquid position flip; "
+                "quarantine and rebuild the cache"
+            )
     return expanded
 
 
@@ -4060,7 +4235,8 @@ class FillEventsManager:
                 if self.exchange.lower() == "kucoin":
                     self._run_kucoin_doctor({}, auto_repair=True)
                 payload = [ev.to_dict() for ev in self._events]
-                if self.exchange.lower() == "hyperliquid":
+                is_hyperliquid = self.exchange.lower() == "hyperliquid"
+                if is_hyperliquid:
                     payload = _expand_hyperliquid_coalesced_events(payload)
                 elif self.exchange.lower() == "okx":
                     _restore_cached_okx_net_position_sides(payload)
@@ -4072,10 +4248,16 @@ class FillEventsManager:
                 apply_exchange_raw_position_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
-                normalized_days = {_day_key(ev.timestamp) for ev in self._events}
+                normalized_days = {_day_key(ev.timestamp) for ev in filtered}
                 if normalized_days:
                     self.cache.save_days(self._events_for_days(self._events, normalized_days))
-                if synthesized_days or normalized_days:
+                if is_hyperliquid and not self._events:
+                    # A spot-only legacy day was removed without making a
+                    # remote observation or moving the refresh checkpoint.
+                    metadata = self.cache.load_metadata()
+                    metadata["oldest_event_ts"] = metadata["newest_event_ts"] = 0
+                    self.cache.save_metadata(metadata)
+                elif synthesized_days or normalized_days:
                     self.cache.update_metadata_from_events(
                         self._events, mark_refreshed=False
                     )
@@ -6724,34 +6906,26 @@ class HyperliquidFetcher(BaseFetcher):
                 )
             if not trades:
                 break
-            before_count = len(collected)
             for trade in trades:
-                event = self._normalize_trade(trade)
-                ts = event["timestamp"]
-                if since_ms is not None and ts < since_ms:
+                ts = self._trade_timestamp(trade)
+                if (since_ms is not None and ts < since_ms) or (
+                    until_ms is not None and ts > until_ms
+                ) or _hyperliquid_is_spot_fill(trade):
                     continue
-                if until_ms is not None and ts > until_ms:
-                    continue
-                collected[event["id"]] = event
-            added = len(collected) - before_count
+                for event in self._normalize_trade_components(trade):
+                    previous = collected.get(event["id"])
+                    if previous is not None and not _same_nested_fill_evidence(previous, event):
+                        raise FillEventDataError("conflicting Hyperliquid execution identity")
+                    collected[event["id"]] = event
             if len(trades) < self.trade_limit:
                 break
-            last_ts = int(
-                trades[-1].get("timestamp")
-                or trades[-1].get("info", {}).get("time")
-                or trades[-1].get("info", {}).get("updatedTime")
-                or 0
-            )
-            if last_ts <= 0:
+            last_ts = self._trade_timestamp(trades[-1])
+            if until_ms is not None and last_ts > until_ms:
                 break
-            if until_ms is not None and last_ts >= until_ms:
-                break
-            if added <= 0:
-                logger.debug(
-                    "HyperliquidFetcher.fetch: no new trades added on page (last_ts=%s), stopping",
-                    last_ts,
+            if params.get("since") is not None and last_ts <= params["since"]:
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills", "Hyperliquid full fill page made no timestamp progress"
                 )
-                break
             params["since"] = last_ts
             if fetch_count >= max_fetches:
                 raise AuthoritativeSurfaceUnavailable(
@@ -6783,50 +6957,140 @@ class HyperliquidFetcher(BaseFetcher):
         return events
 
     @staticmethod
-    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
-        info = trade.get("info", {}) or {}
-        trade_id = str(trade.get("id") or info.get("hash") or info.get("tid") or "")
-        order_id = str(trade.get("order") or info.get("oid") or "")
+    def _trade_timestamp(trade: Dict[str, object]) -> int:
+        info = trade.get("info") or {}
         timestamp = _fill_int(
             trade.get("timestamp")
             or info.get("time")
             or info.get("tradeTime")
             or info.get("updatedTime")
-            or 0
         )
-        symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
-        side = str(trade.get("side") or info.get("side") or "").lower()
-        qty = abs(_fill_float(trade.get("amount") or info.get("sz") or 0.0))
-        price = _fill_float(trade.get("price") or info.get("px") or 0.0)
-        pnl = _fill_float(trade.get("pnl") or info.get("closedPnl") or 0.0)
+        if timestamp <= 0:
+            raise FillEventDataError("Hyperliquid fill timestamp must be positive")
+        return timestamp
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        """Normalize a singleton fill for legacy aggregate reconciliation."""
+        events = HyperliquidFetcher._normalize_trade_components(trade)
+        if len(events) != 1:
+            raise FillEventDataError("Hyperliquid position flip requires both legs")
+        return events[0]
+
+    @staticmethod
+    def _normalize_trade_components(trade: Dict[str, object]) -> List[Dict[str, object]]:
+        info = trade.get("info") or {}
+        trade_id = str(trade.get("id") or info.get("tid") or "")
+        if not trade_id:
+            raise FillEventDataError("Hyperliquid fill lacks an execution ID")
+        if info.get("tid") is not None and str(info["tid"]) != trade_id:
+            raise FillEventDataError("Hyperliquid raw execution ID disagrees with CCXT")
+        order_id = str(trade.get("order") or info.get("oid") or "")
+        timestamp = HyperliquidFetcher._trade_timestamp(trade)
+        symbol = str(trade.get("symbol") or info.get("symbol") or info.get("coin") or "")
+        if not symbol:
+            raise FillEventDataError("Hyperliquid fill lacks a market symbol")
+        side = _hyperliquid_trade_side(trade)
+        price = _fill_float(info.get("px", trade.get("price")))
+        if not math.isfinite(price) or price <= 0.0:
+            raise FillEventDataError("invalid Hyperliquid fill price")
+        if trade.get("price") is not None and not math.isclose(
+            price, _fill_float(trade["price"]), rel_tol=1e-12, abs_tol=0.0
+        ):
+            raise FillEventDataError("Hyperliquid raw fill price disagrees with CCXT")
+        pnl_raw = info.get("closedPnl", trade.get("pnl"))
+        pnl = _fill_float(pnl_raw) if pnl_raw not in (None, "") else None
+        if pnl is not None and not math.isfinite(pnl):
+            raise FillEventDataError("invalid Hyperliquid realized PnL")
+
         fee = trade.get("fee")
-        if fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
+        if info.get("builderFee") is not None and info.get("fee") is not None:
+            # The native total already includes the builder fee. CCXT versions
+            # that add it again must not double charge the execution.
+            fee = {"currency": info.get("feeToken"), "cost": info["fee"]}
+        elif fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
             fee = {"currency": info.get("feeToken"), "cost": info.get("fee")}
-        client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
-        direction = str(info.get("dir", "")).lower()
-        if "short" in direction:
-            position_side = "short"
-        elif "long" in direction:
-            position_side = "long"
-        else:
-            position_side = "long" if side == "buy" else "short"
-        return {
+
+        event = {
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": _fill_datetime(timestamp) if timestamp else "",
-            "symbol": str(symbol_raw or ""),
+            "datetime": _fill_datetime(timestamp),
+            "symbol": symbol,
             "side": side,
-            "qty": qty,
             "price": price,
-            "pnl": pnl,
             "fees": fee,
             "pb_order_type": "",
-            "position_side": position_side,
-            "client_order_id": str(client_order_id or ""),
+            "client_order_id": str(
+                trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
+            ),
             "raw": [{"source": "fetch_my_trades", "data": trade}],
             "c_mult": _fill_float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
         }
+
+        sizes = _hyperliquid_signed_fill_sizes(trade)
+        if sizes is None:
+            # Older retained rows can carry an explicit direction without a
+            # signed startPosition. Verify the complete action tuple.
+            direction = str(info.get("dir") or "").lower()
+            directions = {
+                "open long": ("buy", "long", False),
+                "open short": ("sell", "short", False),
+                "close long": ("sell", "long", True),
+                "close short": ("buy", "short", True),
+            }
+            evidence = directions.get(direction)
+            if evidence is None or evidence[0] != side:
+                raise FillEventDataError("Hyperliquid fill lacks position-side evidence")
+            _, position_side, reducing = evidence
+            qty = float(_hyperliquid_native_size(info.get("sz", trade.get("amount"))))
+            if qty <= 0.0:
+                raise FillEventDataError("Hyperliquid execution size must be positive")
+            after = None
+        else:
+            before, delta = sizes
+            after = before + delta
+            qty = float(abs(delta))
+            reducing = (before > 0 > delta) or (before < 0 < delta)
+            position_side = (
+                ("long" if before > 0 else "short") if reducing
+                else ("long" if delta > 0 else "short")
+            )
+        if reducing and pnl is None:
+            raise FillEventDataError("Hyperliquid reducing fill lacks realized PnL")
+        if not reducing and pnl not in (None, 0.0):
+            raise FillEventDataError("Hyperliquid opening fill has nonzero realized PnL")
+        if sizes is None or not ((before > 0 > after) or (before < 0 < after)):
+            return [{**event, "qty": qty, "pnl": pnl or 0.0, "position_side": position_side}]
+
+        events = []
+        for piece, piece_size, piece_side, piece_pnl in (
+            ("close", abs(before), position_side, pnl),
+            ("open", abs(after), "long" if after > 0 else "short", 0.0),
+        ):
+            event_id = f"{trade_id}:{piece}"
+            ratio = float(piece_size / abs(delta))
+            entries = []
+            for raw_fee in _fee_entries(fee):
+                entry = dict(raw_fee)
+                if _fee_entry_has_reported_amount(entry):
+                    entry = {
+                        "currency": _fee_entry_currency(entry),
+                        "fee_paid": _fee_entry_signed_fee_paid(entry) * ratio,
+                        "rate": entry.get("rate"),
+                    }
+                entries.append(entry)
+            events.append({
+                **event,
+                "id": event_id,
+                "source_ids": [event_id],
+                "qty": float(piece_size),
+                "pnl": piece_pnl,
+                "fees": entries,
+                "position_side": piece_side,
+                "raw": [{"source": "fetch_my_trades", "data": trade, "piece": piece}],
+            })
+        return events
 
 
 class BitunixFetcher(BaseFetcher):

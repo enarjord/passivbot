@@ -2,37 +2,38 @@
 
 ## Contract
 
-1. The relay is read-only and must not affect bot runtime behavior or trading decisions.
-2. The monitor root on disk remains the source of truth; the relay is a network view over that data.
-3. WebSocket clients must receive a snapshot first, then live-forward event/history messages.
-4. Relay failures must stay contained to the relay process and must not require bot-process changes.
-5. Browser WebSocket requests must have a configured allowed origin before any monitor data is loaded or sent. HTTP Host headers must match configured origin authorities, preventing DNS rebinding. Originless native clients remain supported; these checks are not authentication. Proxy origins are configured explicitly, without trusting forwarded headers.
+The relay is a read-only network view of [monitor files](monitor_persistence.md).
+Keep relay failures contained to its process and bot behavior independent of relay availability.
+The [operator guide](../../monitor.md) owns endpoints, origin configuration, and dashboard usage.
 
-## Non-Obvious Details
+Before loading or sending data, require HTTP Host to match an allowed origin authority and any
+WebSocket Origin to match an allowed origin. This prevents DNS rebinding and still permits
+originless native clients. Configure proxy origins explicitly. Ignore forwarded headers for these
+checks, which are separate from authentication.
 
-1. Existing current files are primed to EOF on relay startup so reconnecting the relay does not replay the entire current segment by default.
-2. The websocket replay tail is read directly from the current files on connect and is independent of the live poll offsets.
-3. New current files created after relay startup are tailed from the beginning so their first live entries are not skipped.
-4. The relay is intentionally best-effort on malformed monitor lines: invalid JSON is skipped with a warning instead of killing the process.
-5. The poll loop logs relay-side failures and continues; this is acceptable because the relay is observability-only and disk remains authoritative.
-6. Browser focus selection is client-side only. Query params may choose the initial bot/symbol focus, but the dashboard still attaches to the aggregate relay feed.
-7. Dashboard assets are intentionally tiny static files under `src/monitor_dashboard_static/`; keep the browser reader read-only and avoid coupling it to bot internals.
+## Delivery
+
+Send the available snapshot envelopes first, then replay, then live event and history messages. Prime existing current
+files to EOF at startup. Read the connection replay tail directly from current files, independently
+of live poll offsets. Tail newly discovered current files from the beginning.
+
+Warn and skip invalid JSON lines. Log relay poll failures and continue because the monitor root on
+disk remains authoritative.
+
+The dashboard uses the aggregate feed. Query parameters only set initial client-side bot and symbol
+focus. Keep its static reader small, read-only, and independent of bot internals.
 
 ## Validation
 
-1. Snapshot and health handlers should work without binding sockets.
-2. Aggregate snapshot/websocket handlers should work clearly when `exchange` + `user` are omitted.
-3. WebSocket flow should send snapshot first, then replay backlog, then live updates.
-4. New current files created after relay startup should publish their first entries.
-5. Dashboard routes should serve expected static assets without binding sockets.
-6. Browser dashboard should remain multi-bot first-class even when query params are used for initial focus.
+- snapshot, health, and static asset handlers without binding sockets
+- aggregate snapshot and WebSocket without exchange and user selectors
+- snapshot, replay, and live update ordering
+- delivery of first entries in files created after relay startup
+- multi-bot dashboard with initial-focus query parameters
 
 ## Key Code
 
 - `src/monitor_relay.py`
-- `src/monitor_dashboard_static/index.html`
-- `src/monitor_dashboard_static/dashboard.css`
-- `src/monitor_dashboard_static/dashboard.js`
+- `src/monitor_dashboard_static/`
 - `src/tools/monitor_relay.py`
 - `tests/test_monitor_relay.py`
-- `docs/monitor.md`

@@ -51,6 +51,7 @@ from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 from typing import (
     Any,
     AsyncIterator,
@@ -198,6 +199,22 @@ class OhlcvTerminalEmptyPage(OhlcvFetchError):
 
 
 _LOCK_STALE_SECONDS = 180.0
+
+
+def _stage_candle_index(path: str, payload: bytes) -> str:
+    """Write a private staging file without acquiring locks or publishing it."""
+    staged = os.path.join(os.path.dirname(path), f".index-{uuid4().hex}.tmp")
+    handle = open(staged, "xb")
+    try:
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        with suppress(FileNotFoundError):
+            os.unlink(staged)
+        raise
+    return staged
 
 
 def _log_symbol(symbol: Any) -> str:
@@ -1221,6 +1238,7 @@ class CandlestickManager:
         self._persist_batch_observer: Optional[
             Callable[[str, str, np.ndarray], None]
         ] = None
+        self._index_stage_slots = asyncio.Semaphore(2)
         self._disk_load_observer: Optional[Callable[[Dict[str, Any]], None]] = None
         # Summary tracking for strict gap warnings (logged once per 15 min instead of per-event)
         self._strict_gaps_summary: Dict[str, int] = {}  # symbol -> missing count
@@ -2383,6 +2401,14 @@ class CandlestickManager:
             index_path + ".lock", timeout=0, fail_when_locked=True
         )
 
+    @staticmethod
+    def _index_disk_revision(path: str) -> tuple[int, int, int] | None:
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return int(stat.st_mtime_ns), int(stat.st_size), int(stat.st_ino)
+
     def _save_index(
         self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
     ) -> None:
@@ -2392,15 +2418,55 @@ class CandlestickManager:
         payload = json.dumps(self._index[key], sort_keys=True).encode("utf-8")
         with self._index_write_lock(idx_path):
             self._atomic_write_bytes(idx_path, payload)
-        try:
-            stat = os.stat(idx_path)
-            self._index_mtime[key] = (
-                int(stat.st_mtime_ns),
-                int(stat.st_size),
-                int(stat.st_ino),
-            )
-        except Exception:
             self._index_mtime[key] = None
+            with suppress(OSError):
+                self._index_mtime[key] = self._index_disk_revision(idx_path)
+
+    async def _save_empty_refresh_checkpoint(self, symbol: str, last_refresh_ms: int) -> None:
+        """Stage the index off-loop, publishing only against its original revision."""
+        key = f"{symbol}::1m"
+        path = self._index_path(symbol, tf="1m")
+        async with self._index_stage_slots:
+            index = self._ensure_symbol_index(symbol)
+            expected_revision = self._index_mtime[key]
+            baseline = json.dumps(index, sort_keys=True)
+            updated = {**index, "meta": {**index["meta"], "last_refresh_ms": int(last_refresh_ms)}}
+            payload = json.dumps(updated, sort_keys=True).encode("utf-8")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write = asyncio.create_task(asyncio.to_thread(_stage_candle_index, path, payload))
+            try:
+                staged = await asyncio.shield(write)
+            except asyncio.CancelledError:
+                while not write.done():
+                    try:
+                        await asyncio.shield(write)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not write.cancelled() and write.exception() is None:
+                    with suppress(FileNotFoundError):
+                        os.unlink(write.result())
+                raise
+            try:
+                with self._index_write_lock(path):
+                    current = self._index.get(key)
+                    if (
+                        self._index_disk_revision(path) != expected_revision
+                        or json.dumps(current, sort_keys=True) != baseline
+                    ):
+                        raise portalocker.exceptions.LockException(
+                            "candle index changed during refresh checkpoint staging"
+                        )
+                    os.replace(staged, path)
+                    self._index[key] = updated
+                    self._index[symbol] = updated
+                    self._index_mtime[key] = None
+                    with suppress(OSError):
+                        self._index_mtime[key] = self._index_disk_revision(path)
+            finally:
+                with suppress(FileNotFoundError):
+                    os.unlink(staged)
 
     def _fetch_lock_path(self, symbol: str, timeframe: str) -> str:
         safe_symbol = _sanitize_symbol(symbol)
@@ -11070,7 +11136,7 @@ class CandlestickManager:
                 # A missing open-ended tail is not synthesized. Record the successful
                 # empty poll to avoid repeated immediate refetches; future real candles
                 # will bound the gap and normal runtime standardization can replay it.
-                self._set_last_refresh_meta(symbol, now_fetch)
+                await self._save_empty_refresh_checkpoint(symbol, now_fetch)
                 return None
             if not persisted_batches:
                 self._persist_batch(

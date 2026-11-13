@@ -27,6 +27,7 @@ from ccxt.base.errors import (
 from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from exchanges.retry_after import retry_after_from_headers
 from live.balance_composition import normalize_bitunix_balance_composition
 from live.diagnostic_safety import bounded_exception_code
 from live.state_refresh import AuthoritativeSurfaceUnavailable
@@ -461,12 +462,13 @@ class BitunixClient:
                 data=body_text if body is not None else None,
             ) as response:
                 response_text = await response.text()
-                if response.status == 429:
-                    raise RateLimitExceeded("Bitunix HTTP 429")
                 if response.status in {401, 403}:
                     raise AuthenticationError(f"Bitunix HTTP {response.status}")
                 if response.status >= 400:
-                    raise NetworkError(f"Bitunix HTTP {response.status}")
+                    error_type = RateLimitExceeded if response.status == 429 else NetworkError
+                    failure = error_type(f"Bitunix HTTP {response.status}")
+                    failure.retry_after_seconds = retry_after_from_headers(response.headers)
+                    raise failure
         except asyncio.CancelledError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
@@ -494,8 +496,8 @@ class BitunixClient:
                     "GET", "/api/v1/futures/market/trading_pairs"
                 )
                 break
-            except NetworkError:
-                if attempt == 2:
+            except NetworkError as exc:
+                if attempt == 2 or getattr(exc, "retry_after_seconds", 0.0):
                     raise
                 await asyncio.sleep(0.5 * (2**attempt))
         if not isinstance(rows, list):

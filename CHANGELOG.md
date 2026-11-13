@@ -7,6 +7,10 @@ its own version heading. See [release status](docs/releases.md).
 
 - Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
 
+- Refresh the Trailing Martingale starter and inherited bot defaults for entry and close
+  sizing and trailing, forager ranking, adaptive entry cooldown, excess exposure allowance,
+  and unstuck. Reevaluate saved optimizer fitness against the updated native fingerprint.
+
 - Give Pareto scatter plots a near-square plotting area. Use `pareto-plot --open` to
   recompute the CLI pick across checked scoring objectives after slider limits, export the
   retained candidates as optimizer seeds, and copy the matching selection, backtest, and
@@ -70,6 +74,9 @@ its own version heading. See [release status](docs/releases.md).
 - Preserve candle fetch-lock file identity across releases and restarts so shared-cache writers
   keep using the same lock.
 
+- Stage the final index checkpoint of an empty REST candle refresh off the event loop and reject
+  publication if the index changed while staging.
+
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
@@ -105,6 +112,9 @@ its own version heading. See [release status](docs/releases.md).
 - Calculate ordinary live orders after the current account refresh and protective pass when
   HSL is enabled. Prepare candle and EMA inputs in the background to reduce deferrals caused
   by account updates and renewed input receipts.
+
+- Honor request-local HTTP `Retry-After` in live current-I/O recovery, including date values,
+  and keep inline transport retries from resubmitting the failed request early.
 
 - Move the direct `packaging` dependency from the full install profile to development.
   Retiring the old dependency walker changes the evaluator source fingerprint, so saved optimizer
@@ -194,6 +204,10 @@ its own version heading. See [release status](docs/releases.md).
 
 - Reuse proven fill history when a refresh returns only exact duplicates, while still checking
   disk state, coverage, and fresh exchange receipts.
+
+- Attribute Hyperliquid perpetual fills from the signed exchange position before execution.
+  Preserve both legs of a position flip with one allocation of reported PnL and fees, and
+  exclude spot fills from perpetual replay.
 
 - Skip the missing-PnL replay when all refreshed fills already have resolved realized PnL.
 
@@ -629,6 +643,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Reduce configuration preparation copying by reusing immutable internal policy payloads;
   candidate values and exported configurations retain independent mutable state.
+
+- Validate each referenced coin override file once per default override parse while
+  preserving inline override precedence.
 
 - Keep GPU host ADG and dependent growth metrics stable across CPU float64 batch sizes by
   evaluating each candidate's power with the same scalar arithmetic.

@@ -2199,14 +2199,14 @@ async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path
             "c_mult": 1.0,
             "raw": [
                 {
-                    "source": "fetch_my_trades",
+                    "source": "legacy",
                     "data": {
                         "cost": 106.72464,
                         "fee": {"currency": "USDC", "cost": 0.048026},
                     },
                 },
                 {
-                    "source": "fetch_my_trades",
+                    "source": "legacy",
                     "data": {
                         "cost": 257.26712,
                         "fee": {"currency": "USDC", "cost": 0.11577},
@@ -4189,7 +4189,7 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
                 "id": "tid-hl-1",
                 "timestamp": base_ts,
                 "symbol": "BTC/USDC:USDC",
-                "side": "buy",
+                "side": "sell",
                 "amount": 0.1,
                 "price": 30000.0,
                 "info": {
@@ -4204,7 +4204,7 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
                 "id": "tid-hl-1b",
                 "timestamp": base_ts,
                 "symbol": "BTC/USDC:USDC",
-                "side": "buy",
+                "side": "sell",
                 "amount": 0.2,
                 "price": 30000.0,
                 "info": {
@@ -4248,7 +4248,7 @@ async def test_hyperliquid_fetcher_uses_cache():
                 "side": "sell",
                 "amount": 0.5,
                 "price": 2000.0,
-                "info": {"closedPnl": "-2.0", "dir": "Close Short"},
+                "info": {"closedPnl": "-2.0", "dir": "Close Long"},
             }
         ]
     ]
@@ -4264,6 +4264,183 @@ async def test_hyperliquid_fetcher_uses_cache():
     event = events[0]
     assert event["client_order_id"] == "cached-id"
     assert event["pb_order_type"] == "entry_initial_normal_long"
+
+
+def _hyperliquid_flip_trade(side, start):
+    return {
+        "id": "101",
+        "timestamp": 1_700_000_000_000,
+        "symbol": "BTC/USDC:USDC",
+        "side": side,
+        "amount": 3.0,
+        "price": 100.0,
+        "cost": 300.0,
+        "fee": {"currency": "USDC", "cost": 0.36},
+        "info": {
+            "coin": "BTC",
+            "tid": 101,
+            "time": 1_700_000_000_000,
+            "side": "A" if side == "sell" else "B",
+            "startPosition": str(start),
+            "sz": "3.0",
+            "px": "100.0",
+            "closedPnl": "5.0",
+            "feeToken": "USDC",
+            "fee": "0.30",
+            "builderFee": "0.06",
+            "dir": "ambiguous display",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side,start", [("sell", 2), ("buy", -2)])
+async def test_hyperliquid_flip_is_idempotent_through_overlap_and_restart(tmp_path, side, start):
+    trade = _hyperliquid_flip_trade(side, start)
+    timestamp = trade["timestamp"]
+    api = _FakeHyperliquidAPI([[trade], [trade], [trade], [trade]])
+    fetcher = HyperliquidFetcher(api)
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+
+    for _ in range(2):
+        await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+        close, opening = manager.get_events()
+        assert [close.id, opening.id] == ["101:close", "101:open"]
+        assert [close.source_ids, opening.source_ids] == [["101:close"], ["101:open"]]
+        assert [close.position_side, opening.position_side] == (
+            ["long", "short"] if side == "sell" else ["short", "long"]
+        )
+        assert [abs(close.qty), abs(opening.qty)] == [2.0, 1.0]
+        assert [close.psize, opening.psize] == [0.0, 1.0]
+        assert [close.pprice, opening.pprice] == [0.0, 100.0]
+        assert [close.pnl, opening.pnl] == [5.0, 0.0]
+        assert [close.fee_paid, opening.fee_paid] == pytest.approx([-0.2, -0.1])
+        assert [close.fee_notional, opening.fee_notional] == [200.0, 100.0]
+    snapshot = manager.get_events()
+
+    restarted = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+    await restarted.ensure_loaded()
+    assert restarted.get_events() == snapshot
+    await restarted.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert restarted.get_events() == snapshot
+    assert restarted._empty_refresh_proof is not None
+    await restarted.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert restarted.get_events() == snapshot
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_replays_a_legacy_flip_before_new_overlap(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    timestamp = trade["timestamp"]
+    # Legacy cache represented the entire execution as one short opening.
+    legacy = dict(HyperliquidFetcher._normalize_trade_components(trade)[1])
+    legacy.update(
+        id="101", source_ids=["101"], qty=-3.0, pnl=5.0,
+        fees=trade["fee"], raw=[{"source": "fetch_my_trades", "data": trade}],
+    )
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(legacy)])
+    fetcher = HyperliquidFetcher(_FakeHyperliquidAPI([[trade]]))
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+
+    await manager.ensure_loaded()
+    assert [event.id for event in cache.load()] == ["101:close", "101:open"]
+    await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert [event.id for event in manager.get_events()] == ["101:close", "101:open"]
+    assert sum(event.fee_paid for event in manager.get_events()) == pytest.approx(-0.3)
+
+
+def test_hyperliquid_flip_fee_fallback_uses_component_notional():
+    trade = _hyperliquid_flip_trade("sell", 2)
+    trade.pop("fee")
+    trade["info"].pop("fee")
+
+    legs = HyperliquidFetcher._normalize_trade_components(trade)
+
+    fees = [
+        fem._normalize_fee_paid_from_payload(
+            leg, fallback_fee_fraction=0.001, quote_currency="USDC"
+        )[0]
+        for leg in legs
+    ]
+    assert fees == pytest.approx([-0.2, -0.1])
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_rejects_incomplete_cached_flip(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    [close, _opening] = HyperliquidFetcher._normalize_trade_components(trade)
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(close)])
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="cached Hyperliquid position flip"):
+        await manager.ensure_loaded()
+    assert not manager.get_coverage_status(start_ms=trade["timestamp"] - 1)["ready"]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_removes_legacy_spot_without_advancing_checkpoint(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    [legacy, _opening] = HyperliquidFetcher._normalize_trade_components(trade)
+    trade["symbol"] = "PURR/USDC"
+    trade["info"]["coin"] = "@107"
+    legacy.update(
+        id="101", source_ids=["101"], symbol=trade["symbol"],
+        raw=[{"source": "fetch_my_trades", "data": trade}],
+    )
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(legacy)])
+    cache.update_metadata_from_events(cache.load())
+    checkpoint = cache.load_metadata()["last_refresh_ms"]
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    await manager.ensure_loaded()
+    assert manager.get_events() == cache.load() == []
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == checkpoint
+    assert metadata["oldest_event_ts"] == metadata["newest_event_ts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_filters_spot_before_position_replay():
+    trade = _hyperliquid_flip_trade("sell", 2)
+    spot = deepcopy(trade)
+    spot["symbol"] = "PURR/USDC"
+    spot["info"]["coin"] = "@107"
+    api = _FakeHyperliquidAPI([[spot, trade]])
+    fetcher = HyperliquidFetcher(api)
+    events = await fetcher.fetch(trade["timestamp"] - 1, trade["timestamp"] + 1, {})
+    assert [event["id"] for event in events] == ["101:close", "101:open"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["closedPnl", "startPosition"])
+async def test_hyperliquid_uncertain_flip_does_not_confirm_history(tmp_path, missing):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    del trade["info"][missing]
+    timestamp = trade["timestamp"]
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test",
+        fetcher=HyperliquidFetcher(_FakeHyperliquidAPI([[trade]])), cache_path=tmp_path,
+    )
+
+    with pytest.raises(fem.FillEventDataError, match="Hyperliquid"):
+        await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+    assert not manager.get_coverage_status(start_ms=timestamp - 1)["ready"]
 
 
 # ---------------------------------------------------------------------------
@@ -6551,9 +6728,9 @@ async def test_hyperliquid_final_page_must_prove_coverage(complete):
     api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
     fetcher = HyperliquidFetcher(api, trade_limit=1)
     if complete:
-        events = await fetcher.fetch(1, 201, {})
-        assert len(events) == 200
-        assert events[-1]["timestamp"] == 201
+        events = await fetcher.fetch(1, 200, {})
+        assert len(events) == 199
+        assert events[-1]["timestamp"] == 200
     else:
         with pytest.raises(
             fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(200\)"
@@ -9205,8 +9382,10 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
         aggregate["raw"][0]["data"]["amount"] = "invalid"
     elif mismatch == "component_price":
         aggregate["raw"][0]["data"]["price"] = "NaN"
+        mismatch = "malformed_component"
     elif mismatch == "component_position_chain":
         aggregate["raw"][0]["data"]["info"]["startPosition"] = "NaN"
+        mismatch = "malformed_component"
     elif mismatch == "component_symbol":
         aggregate["raw"][0]["data"]["symbol"] = "BTC/USDC:USDC"
     elif mismatch == "component_timestamp":

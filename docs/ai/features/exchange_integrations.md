@@ -53,6 +53,17 @@ Future connectors encountering an equivalent venue rule must add their own exact
 not generalize one exchange's code, match human-readable messages, persist cooldowns across runs, or
 make held positions wholly nontradable.
 
+## HTTP Retry Delays
+
+Live CCXT clients and the native Bitunix transport carry a valid HTTP `Retry-After`
+delay on the transport exception from that response. Parse nonnegative integer
+seconds or an HTTP date, relative to the response `Date` when available and the
+local wall clock otherwise. Preserve the exchange's error classification and avoid
+an inline retry of the request when the response requires a positive delay. The
+owner schedules current-account transport recovery. Other retry policies retain
+their own input readiness and scope. Never read shared last-response headers to
+associate a retry delay with a request.
+
 ## CCXT Position Snapshot Readiness
 
 The shared CCXT position normalizer, also used by OKX and Bybit, requires a
