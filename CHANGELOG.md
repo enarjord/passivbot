@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Reduce copying when assembling candle history from cached shards.
+
 - Reuse saved optimizer results as base configs for `passivbot optimize` and
   `passivbot download`. Saved metrics and runtime metadata are ignored, and
   config validation still rejects unknown settings.

@@ -3069,7 +3069,14 @@ class CandlestickManager:
             arrays = [a for a in arrays if a.size]
             if not arrays:
                 return
-            merged_disk = _sorted_candle_copy(np.concatenate(arrays))
+            if len(arrays) == 1 and arrays[0].ndim == 1 and arrays[0].dtype == CANDLE_DTYPE:
+                merged_disk = _sorted_candle_copy(arrays[0])
+            else:
+                # Concatenation already detaches the rows from their source arrays.
+                merged_disk = _ensure_dtype(np.concatenate(arrays))
+                timestamps = merged_disk["ts"]
+                if not np.all(timestamps[1:] > timestamps[:-1]):
+                    merged_disk = np.sort(merged_disk, order="ts")
 
             # If legacy data revealed earlier candles than our stored inception_ts,
             # update inception_ts now so archive prefetch logic doesn't skip.
