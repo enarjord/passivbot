@@ -562,6 +562,12 @@ Fetch-lock files persist across release and restart. The OS releases ownership o
 exit. Removing a lock file while another process has it open lets a third process lock a
 different inode for the same symbol. Apply this rule to every writer sharing the directory.
 
+An empty REST refresh stages its final refresh-time checkpoint on a bounded worker.
+The worker writes only a temporary file. The owning task publishes under the index
+lock after checking both the disk revision and the in-memory index. Cancellation
+discards the staged file, and a competing update remains authoritative. Gap repair
+and shard writes use their existing persistence paths.
+
 Trailing reconstruction still requires a completed candle beginning strictly after
 the latest fill minute. Before that first source candle finalizes, a one-to-two
 minute wait can be intrinsic to the completed-bar contract. Missing that reset

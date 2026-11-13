@@ -68,6 +68,9 @@ its own version heading. See [release status](docs/releases.md).
 - Preserve candle fetch-lock file identity across releases and restarts so shared-cache writers
   keep using the same lock.
 
+- Stage the final index checkpoint of an empty REST candle refresh off the event loop and reject
+  publication if the index changed while staging.
+
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
