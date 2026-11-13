@@ -3,128 +3,116 @@
 ## Contract
 
 `src/monitor_publisher.py` owns monitor appends, snapshots, manifest checkpoints, rotation,
-retention, and startup recovery. Persistence failures stay visible but never alter trading behavior.
+retention, and recovery. Persistence failures stay visible and trading decisions remain independent.
+The [relay](monitor_relay.md) reads the published files.
 
-New snapshots, event rows and history rows must serialize as strict JSON. Unexpected NaN or
-infinity, including values produced by NumPy conversion, rejects that write through the existing
-visible persistence-failure policy. A failed snapshot leaves the previous snapshot and its
-checkpoint unchanged; a failed event/history serialization appends no partial row. Later valid
-writes recover normally. Rejection precedes event sequence reservation and segment rotation;
-uncertain append I/O still reserves its sequence to prevent reuse. Candle history advances its
-cursor only through successfully persisted rows and stops at a failed row so corrected data can
-retry without skipping a gap. Do not replace unknown non-finite observations with zero or silently
-change trading inputs to make a diagnostic serializable.
+Snapshots, event rows, and history rows require strict JSON. Reject NaN and infinity, including
+after NumPy conversion, through the existing persistence-failure policy. Failed snapshots keep
+the previous snapshot and checkpoint. Failed event or history serialization appends no partial
+row. Event rejection precedes sequence reservation and rotation. Uncertain append I/O reserves
+its sequence to prevent reuse. The candle history cursor advances through persisted rows and stops
+at the first failure, allowing corrected data to retry without a gap. Later valid writes recover.
+Preserve unknown values and trading inputs when serialization fails.
 
-Trailing projected prices distinguish available values, disabled/not-required projections, and
-unavailable extrema or arithmetic overflow. Unavailable projected prices and their dependent
-price-change observations are null with explicit diagnostic status/reason. Native trailing
-sentinels and native order results keep their trading semantics; monitor projection is not order
-authority. Structured trailing events preserve that absence and classification; dashboard
-comparisons show unknown rather than an observed negative when their value is null or absent.
+## Snapshot Production
 
-`state.latest.json` is refreshed by a serialized background maintainer, independent
-of whether the trading loop reaches a valid planning snapshot. Successful and
-degraded cycles may also request a flush; concurrent requests serialize and the
-publisher's configured interval remains the write throttle. The independent
-maintainer uses a five-second minimum cadence to keep degraded state visible
-without turning diagnostic persistence into a high-frequency trading dependency.
-Trailing diagnostics resolve strategy settings once per symbol and position side within
-one synchronous section build. Those resolved settings are discarded afterward; configuration
-and coin-override changes must be observed by the next snapshot.
-The maintainer writes snapshots off the event loop. It captures the event sequence before
-writing `state.latest.json` so event publication can advance during that file write.
+A serialized background maintainer refreshes `state.latest.json` independently of planning.
+Successful and degraded cycles may also request a flush. The publisher interval throttles all
+writes, and the independent maintainer has a five-second minimum cadence. Snapshot writes run off
+the event loop. The maintainer captures the event sequence before writing, so event publication
+can advance during the write.
 
-Market `strategy_inputs` reports canonical per-side 1m/1h log-range spans (including fractional
-spans and symbol overrides), units, nullable prepared values, availability reasons and the last
-validated ordinary-input capture time/age. A real observed zero remains available; absent,
-malformed or non-finite values are `null`, never zero placeholders. Capture age describes the
-last prepared bundle, not independent proof of candle freshness. Missing inputs omit dependent
-native trailing calculations and retain explicit `entry_diagnostic_status` and
-`close_diagnostic_status`; diagnostic failure cannot discard unrelated snapshot sections.
-Complete canonical coefficients determine consumption separately for entry and close. An absent
-dimension whose consuming threshold/retracement coefficients are all zero is `not_required`, with
-`required=false` and a null observed value; only its inert native diagnostic transport may use
-zero. A nonzero consuming coefficient requires the actual prepared value. Available observed zero
-remains `available`, even for an optional dimension. Branch diagnostic payloads retain their own
-input classifications, so entry unavailability cannot suppress an independent close calculation.
-The snapshot-based trailing diagnostic tool rejects unavailable/non-finite indicator imports
-instead of replacing them with manual-wizard zeros; genuine observed log-range zeros remain valid.
-It accepts `not_required` transport only after independently confirming zero consumption from the
-current canonical configuration, including exact-symbol overrides. Without an exchange market
-resolver, authored override aliases that cannot be matched exactly conservatively prevent that
-zero transport; the importer neither guesses a coin mapping nor fetches market data.
-The same proof is required when an older snapshot omits M1 metadata entirely. Missing data with
-nonzero or unknown current consumption is rejected; legacy absence is not an implicit zero.
-`market.*.tradable_basis=market_and_prepared_inputs_only` explicitly limits the existing point
-readiness flag; it does not grant order permission.
+HSL account and health equity use fresh committed balance and positions plus cached held-symbol
+quotes. Missing or stale inputs give null equity. Reporting performs no exchange I/O.
 
-The separate `ordinary` section observes the last validated Rust computation and its exact ordinary HSL
-capture, independently of the latest fast protective `hsl` observation. It retains native input
-and effective modes, active/initial-entry flags, captured HSL permission and bounded unavailability
-classifications. Its `stage=computed_native_plan` precedes the HSL owner's final receipt acceptance
-and does not imply submission or execution; current write admission remains independent. All rows
-are observational, never execution authority. Capture age, input expiry,
-account generation changes and pending confirmations distinguish current from stale observations.
-For captured HSL scopes, expiry includes the actual balance observation time retained before native
-evaluation alongside the consumed position and mark observations. A later unchanged balance refresh
-cannot renew an older computation's captured receipt; a required capture lacking that timestamp
-has unknown input age.
-`input_receipts` also projects the exact immutable `PlanningSnapshot` used by ordinary Rust:
-all required quote symbols/receipt counts and oldest quote time under that snapshot's quote TTL,
-plus balance, positions and open-orders times under the captured current-account TTL. Missing,
-future, incomplete or mismatched receipts produce unknown/stale observations. Required surface
-epochs are checked, while fills and completed candles retain their coverage/generation obligations
-and do not acquire a quote-age deadline. HSL input times add constraints only for actually captured
-HSL scopes; disabled/uncaptured scopes cannot substitute for the ordinary quote cohort. Neither a
-later market-provider cache update nor a replacement planning snapshot renews a retained computation.
-At most 128 held/restricted-prioritized rows accompany complete mode/scope/restricted-held counts
-and an explicit omitted count. Health summaries show the ordinary observation status/age and held
-restriction count separately from strategy close-wait conditions.
+### Trailing and Strategy Inputs
 
-`health.ordinary_progress` measures a later boundary. An accepted ordinary plan advances its
-timestamp after reconciliation returns, including valid no-op plans. This proves progress through
-reconciliation without implying a connector call or exchange acknowledgement. The payload keeps
-the age of the last acceptance, the age of the last completed outer cycle, and the elapsed span of
-outer cycle completions without an acceptance. Unknown ages are null. The last defer after
-acceptance retains only known ordinary phase, reason, and missing input surface classifications.
-Capture is independent of event sink success.
+Monitor trailing projections distinguish available, disabled or not required, and unavailable
+extrema or arithmetic overflow. Unavailable prices and dependent price changes are null with
+explicit diagnostic status and reason. [Structured events](live_events.md) preserve that
+classification and dashboards show unknown for null or absent values. Native sentinels and
+order results keep their trading semantics. Each synchronous section build resolves strategy
+settings once per symbol and position side, then discards them so the next snapshot sees config
+and coin-override changes.
 
-`ordinary.pending_confirmations` reports current required account surfaces with requested and
-observed epochs. `last_create_filter` and `last_cancel_first_barrier` retain only bounded reason,
-count, wave id, required surface names and observation age. These are labelled last observed
-outcomes, including after confirmation settles; they do not imply an active barrier. Capture is
-independent of optional event sink success. Raw event data, order details and exception messages
-are not copied into this projection.
+Market `strategy_inputs` records canonical per-side 1m/1h log-range spans (including fractional
+spans and symbol overrides), units, nullable prepared values, availability reasons, and the last
+validated ordinary-input capture time and age. Age describes that prepared bundle. Observed zero
+is available, while absent, malformed, or non-finite values are null. The
+`market.*.tradable_basis=market_and_prepared_inputs_only` flag describes point readiness.
+Order permission and candle freshness follow their respective trading input contracts.
 
-`record_error` retains the event kind, tags, known code-owned source/stage classifications, and a
-bounded exception type. It must not persist arbitrary caller strings or numbers, exception messages,
-request URLs, responses, tracebacks, or caller-supplied raw diagnostic aliases. More detailed
-incident context belongs in an explicitly sanitized event or protected developer path; persistence
-behavior and caller control flow remain unchanged.
+Canonical coefficients determine input consumption independently for entry and close. A missing
+dimension with all consuming threshold and retracement coefficients zero is `not_required`,
+with `required=false` and a null observation. Only inert native diagnostic transport may use zero.
+Any nonzero consuming coefficient requires the prepared value. Missing inputs omit dependent
+native calculations with explicit `entry_diagnostic_status` and `close_diagnostic_status`.
+Each branch retains its classification, so independent diagnostics and other snapshot sections
+survive failures.
 
-Private normal-run monitor history may retain an explicitly sanitized incident detail event. The
-startup and execution-loop `error.bot.detail` schema stores a bounded normalized frame chain,
-correlated to its compact `error.bot` summary by incident id, while excluding exception text,
-locals, source lines, URLs, payloads, and credentials. Existing rotation and retention limits bound
-this diagnostic data; its production does not depend on DEBUG logging.
+The [trailing diagnostic tool](trailing_diagnostics.md) rejects unavailable or non-finite snapshot
+inputs and accepts observed log-range zeros. It accepts zero transport for `not_required` or
+missing legacy M1 metadata only after independently proving zero consumption from current canonical
+configuration, including exact-symbol overrides. Without an exchange market resolver, unresolved
+override aliases prevent that proof. Import performs no exchange lookup or guessed mapping.
 
-During an internal bot restart, a failed or timed-out event-pipeline close may leave its worker
-holding the publisher lock. The restart path therefore abandons that process-local publisher
-without calling its synchronous close; startup recovery owns any missing final checkpoint. This
-bounded observability fallback must not delay exchange-client closure or replacement-bot startup.
+### Ordinary Planning and Progress
 
-Event sequences are monotonic within a monitor root, including across unclean restart. The startup
-watermark is the maximum of the manifest and checksummed segment recovery metadata. Never infer an
-envelope sequence from payload bytes or an invalid row.
+`ordinary` observes the last validated Rust computation and its exact ordinary HSL capture.
+`hsl` observes the latest fast protective computation. Ordinary rows retain native input and
+effective modes, active and initial-entry flags, captured HSL permission, and bounded
+unavailability classifications. `stage=computed_native_plan` precedes final receipt acceptance.
+Write admission, submission, and execution remain independent.
 
-HSL account and health equity are passive observations of fresh committed balance and
-positions plus cached held-symbol quotes. Missing or stale inputs produce `null` equity rather
-than a startup placeholder or a partial portfolio sum; reporting performs no exchange I/O.
+`input_receipts` projects the immutable `PlanningSnapshot` used by Rust, including required quote
+symbols, receipt counts, and oldest quote time under the captured quote TTL. Balance, positions,
+and open-order times use the captured account TTL. Missing, future, incomplete, or mismatched
+receipts give unknown or stale observations. Required surface epochs are checked. Fills and
+completed candles retain coverage and generation requirements. Quote age applies to quotes.
+
+Capture age, input expiry, account generation, and pending confirmations distinguish current from
+stale observations. Captured HSL scopes also use the position, mark, and actual balance
+observation times consumed before native evaluation. A required missing timestamp gives unknown
+age. Disabled or uncaptured HSL scopes cannot substitute for the ordinary quote cohort. A later
+balance refresh, market cache update, or replacement planning snapshot cannot renew the retained
+computation. Prioritize held and restricted rows within the 128-row limit. Retain complete mode,
+scope, and restricted-held counts plus the omitted count. Health summaries report ordinary status,
+age, and held restriction count separately from strategy close-wait conditions.
+
+`health.ordinary_progress` records accepted plans after reconciliation returns, including valid
+no-ops. This measures reconciliation progress. It keeps the ages of the last acceptance and
+completed outer cycle, and the span of outer cycle completions without acceptance. Unknown ages
+are null. The last defer after acceptance retains known phase, reason, and missing input surface.
+
+`ordinary.pending_confirmations` reports required account surfaces and requested and observed
+epochs. `last_create_filter` and `last_cancel_first_barrier` show the last observed bounded reason,
+count, wave id, required surfaces, and age, including after confirmation settles. Progress and
+confirmation capture are independent of optional event sinks. These outcomes exclude raw event
+data, order details, and exception messages.
+
+## Errors and Restart
+
+`record_error` retains event kind, tags, known code-owned source and stage, and bounded exception
+type. Exclude arbitrary caller strings and numbers, raw diagnostic aliases, exception messages,
+request URLs, responses, and tracebacks. Use an explicitly sanitized event or protected developer
+path for more detail. Keep persistence behavior and caller control flow independent.
+
+Private monitor history may retain the sanitized
+[`error.bot.detail` incident record](live_events.md#execution-loop-incidents), correlated to
+`error.bot` at normal logging levels. Its frame projection excludes credentials. Rotation and
+retention bound that diagnostic data.
+
+During an internal restart, a failed or timed-out event-pipeline close may leave a worker holding
+the publisher lock. Abandon that process-local publisher and let startup recover any missing
+checkpoint. Exchange-client closure and replacement-bot startup proceed without synchronous
+publisher close.
 
 ## Recovery Framing
 
-Event rows carry a `_recovery` trailer whose checksum binds the envelope to its sequence. It is
-persistence metadata, not a query-facing field.
+Sequences increase monotonically within a monitor root across unclean restarts. Start at the
+maximum of the manifest watermark and checksummed segment recovery metadata. Event rows carry a
+`_recovery` trailer whose checksum binds envelope and sequence. Recover sequence numbers only
+from verified envelopes. Queries exclude the trailer.
 
 Recovery must:
 
@@ -140,22 +128,21 @@ sequence reuse.
 
 ## Checkpoints And Retention
 
-Ordinary appends may coalesce manifest checkpoints to the snapshot cadence. Initialization,
+Ordinary appends may coalesce manifest checkpoints to snapshot cadence. Initialization,
 rotation boundaries, successful snapshots, and close force checkpoints. Failed due checkpoints
 remain dirty for retry.
 
 Retention protects current files, counts regular files in managed roots, and deletes only direct
-non-current candidates using strict age and oldest-first cap pruning. Races must not broaden the
+non-current candidates using strict age and oldest-first cap pruning. Races must preserve that
 deletion domain.
 
-Window-bounded smoke selection may use `current_segment_started_ms` from the
-bounded manifest as coverage proof when no rotated predecessor exists. Missing,
-oversized, malformed, or later-than-window evidence remains unavailable rather
-than treating `current.ndjson` as complete by assumption.
+Window-bounded smoke selection may use `current_segment_started_ms` from a bounded manifest as
+coverage proof when no rotated predecessor exists. Missing, oversized, malformed, or
+later-than-window evidence makes coverage unavailable.
 
 ## Validation
 
-- manifest/row/trailer corruption and oversized rows
+- manifest, row, and trailer corruption and oversized rows
 - uncheckpointed restart without sequence reuse
 - checkpoint retry, rotation, and relay discovery
 - retention order, protection, accounting, races, and symlinks
