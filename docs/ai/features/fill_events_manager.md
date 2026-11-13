@@ -165,6 +165,8 @@ normalization, fee enrichment, source-ID replacement, and provenance handling. O
 replay-derived position annotations may be copied from the matching cached row for comparison.
 Changes to facts, explicit annotations, raw evidence, fees, or any PnL observation take the full
 path. The disposable proof owns a deep copy and is restored only after successful publication.
+It compares canonical rows and process-local type-preserving bytes for their raw evidence, fees,
+and provenance. Evidence outside the supported encoding keeps the exact recursive comparison.
 Duplicate days are verified once using final annotated rows, so a missing or partially published
 file can be repaired without rewriting unchanged data. Fetches, failure propagation, coverage repair,
 metadata, and refresh checkpoints still run. Restart or loss of the proof requires a full replay

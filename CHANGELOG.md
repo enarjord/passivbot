@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
+
 - Refresh the Trailing Martingale starter and inherited bot defaults for entry and close
   sizing and trailing, forager ranking, adaptive entry cooldown, excess exposure allowance,
   and unstuck. Reevaluate saved optimizer fitness against the updated native fingerprint.
