@@ -231,6 +231,25 @@ logs, runtime windows, and immutable manifests.
    cache-contract failure: quarantine the cache and rebuild the configured lookback before
    accepting individually fetched components.
 
+### Hyperliquid one-way execution attribution
+
+Hyperliquid's account fill feed can contain spot and perpetual executions. Only perpetual
+executions enter this ledger. Use the signed native `startPosition`, execution side and size to
+distinguish an addition, reduction, or position flip. Accept an explicit, side-consistent
+opening or closing action on older rows without a signed position. A reduction needs explicit
+finite realized PnL. A full page that stalls on a timestamp cannot certify coverage.
+
+A flip yields two components of the same raw execution with distinct event and source IDs.
+Allocate gross realized PnL to the close and the reported fee in proportion to each leg's
+quantity at the common execution price. The native Hyperliquid fee already includes the
+builder fee. Missing fees continue through the existing best-effort fee policy. Retain raw
+evidence and component roles for same-millisecond position replay. On cache load, reconstruct a
+legacy single-row flip only when its original execution reconciles to the retained identity,
+timestamp, market, side, price, total quantity and gross PnL. Missing or contradictory split
+legs and unreconciled cache aggregates require the existing quarantine/rebuild path.
+
+[Hyperliquid account fill payloads](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-fills)
+
 ## Failure Semantics And Risks
 
 1. Missing records from pagination assumptions.

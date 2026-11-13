@@ -184,6 +184,10 @@ its own version heading. See [release status](docs/releases.md).
 - Reuse proven fill history when a refresh returns only exact duplicates, while still checking
   disk state, coverage, and fresh exchange receipts.
 
+- Attribute Hyperliquid perpetual fills from the signed exchange position before execution.
+  Preserve both legs of a position flip with one allocation of reported PnL and fees, and
+  exclude spot fills from perpetual replay.
+
 - Skip the missing-PnL replay when all refreshed fills already have resolved realized PnL.
 
 - Reduce native HSL replay CPU on dense retained fill and account histories by indexing execution
