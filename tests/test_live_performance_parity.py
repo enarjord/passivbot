@@ -237,6 +237,63 @@ def test_returned_array_mutation_does_not_modify_cached_disk_rows(manager, timef
     np.testing.assert_array_equal(load(manager, rows, timeframe), rows)
 
 
+@pytest.mark.parametrize("days", [1, 2])
+@pytest.mark.parametrize("ordered", [True, False])
+def test_disk_shard_assembly_matches_structured_sort(manager, monkeypatch, days, ordered):
+    """Read fresh shards with disjoint, overlapping, and duplicate timestamps."""
+    step = 3_600_000
+    first_day = NOW // (24 * step) * (24 * step)
+    first = candles(3, step=step)
+    first["ts"] = first_day + np.arange(3) * step
+    shards = [first]
+    if days == 2:
+        second = first.copy()
+        second["ts"] += 24 * step
+        shards.append(second)
+    persist(manager, np.concatenate(shards), "1h")
+
+    if not ordered:
+        # Equal timestamps still sort by other structured fields, including
+        # when rows from different day files overlap.
+        day_key = manager._date_key(int(shards[-1]["ts"][0]))
+        path = manager._shard_path(SYMBOL, day_key, tf="1h")
+        shards[-1]["ts"][:2] = first_day + step
+        shards[-1]["c"][:2] = (105.0, 95.0)
+        with open(path, "wb") as handle:
+            np.save(handle, shards[-1])
+
+    decoded = []
+    original_load = manager._load_shard
+
+    def record_load(*args, **kwargs):
+        arr = original_load(*args, **kwargs)
+        decoded.append(arr)
+        return arr
+
+    monkeypatch.setattr(manager, "_load_shard", record_load)
+    actual = manager._load_from_disk(
+        SYMBOL, first_day, first_day + (days * 24 - 1) * step,
+        timeframe="1h", strict=True,
+    )
+    expected = np.sort(np.concatenate(shards), order="ts")
+    np.testing.assert_array_equal(actual, expected)
+    assert len(decoded) == days
+    assert all(not np.shares_memory(actual, source) for source in decoded)
+
+
+def test_disk_shard_assembly_rejects_scalar_file(manager):
+    rows = candles(3, step=3_600_000)
+    persist(manager, rows, "1h")
+    day_key = manager._date_key(int(rows["ts"][-1]))
+    path = manager._shard_path(SYMBOL, day_key, tf="1h")
+    with open(path, "wb") as handle:
+        np.save(handle, rows[-1])
+
+    assert load(manager, rows, "1h") is None
+    with pytest.raises(ValueError, match="zero-dimensional"):
+        load(manager, rows, "1h", strict=True)
+
+
 @pytest.mark.parametrize('case', range(48))
 def test_merge_shortcut_matches_last_write_wins_reference(manager, case):
     """Exact unchanged subsets, corrections, duplicates and disorder retain semantics."""
