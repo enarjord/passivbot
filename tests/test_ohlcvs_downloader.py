@@ -336,7 +336,7 @@ async def test_download_cli_forwards_acquisition_mode(monkeypatch, mode, for_opt
     if for_optimize:
         argv.append("--for-optimize")
     monkeypatch.setattr("sys.argv", argv)
-    monkeypatch.setattr(ohlcv_download, "load_input_config", lambda path: (config, None, None))
+    monkeypatch.setattr(ohlcv_download, "load_input_config", lambda path, **kwargs: (config, None, None))
     seen = []
     async def warm(prepared, **kwargs):
         assert kwargs == {"for_optimize": for_optimize}
