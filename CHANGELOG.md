@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Reuse saved optimizer results as base configs for `passivbot optimize` and
+  `passivbot download`. Saved metrics and runtime metadata are ignored, and
+  config validation still rejects unknown settings.
+
 - Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
 
 - Refresh the Trailing Martingale starter and inherited bot defaults for entry and close

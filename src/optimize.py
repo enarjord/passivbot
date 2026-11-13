@@ -3766,7 +3766,7 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(
-        args.config_path, use_starter=True,
+        args.config_path, allow_result_records=True, use_starter=True,
     )
     existing_limits = deepcopy(
         effective_config_payload(source_config).get("optimize", {}).get("limits")

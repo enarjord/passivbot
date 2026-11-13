@@ -241,3 +241,50 @@ def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, caps
     with pytest.raises(PreparedBeforeDataAccess):
         cli_main([subcommand, selected_path])
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("command", ["optimize", "download"])
+@pytest.mark.parametrize("unknown_setting", [False, True])
+def test_optimizer_commands_load_saved_result(tmp_path, monkeypatch, command, unknown_setting):
+    import ohlcv_download
+    import optimize
+    from passivbot_cli.main import main as cli_main
+
+    record = result_record()
+    if unknown_setting:
+        record["backtest"]["starting_balnce"] = 1000.0
+    path = tmp_path / "candidate.json"
+    original = json.dumps(record)
+    path.write_text(original)
+    argv = [command, str(path)]
+
+    class ReachedPreparationBoundary(Exception):
+        pass
+
+    def check_config(config):
+        assert require_side_universe_sources(config, "approved_coins") == {
+            "long": ["BTC"], "short": [],
+        }
+        assert "metrics" not in config["_raw"]
+        assert "coins" not in config["backtest"]
+        raise ReachedPreparationBoundary
+
+    if command == "optimize":
+        argv += ["--polish-bounds-fraction", "0.5", "-t", str(path)]
+        monkeypatch.setattr(optimize, "validate_optimizer_effective_configs", check_config)
+    else:
+        argv += ["--for-optimize"]
+
+        async def check_download(config, *, for_optimize):
+            assert for_optimize
+            check_config(config)
+
+        monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", check_download)
+
+    if unknown_setting:
+        with pytest.raises(ValueError, match=r"config\.backtest\.starting_balnce is an unknown"):
+            cli_main(argv)
+    else:
+        with pytest.raises(ReachedPreparationBoundary):
+            cli_main(argv)
+    assert path.read_text() == original
