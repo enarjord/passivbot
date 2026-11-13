@@ -1332,7 +1332,6 @@ class CandlestickManager:
             pass  # Another startup owns this current-store integrity check.
 
         self._setup_logging()
-        self._cleanup_stale_locks()
 
         # Initialize optional global semaphore for remote calls
         try:
@@ -1587,52 +1586,6 @@ class CandlestickManager:
 
     # ----- Retention helpers -----
 
-    def _cleanup_stale_locks(self) -> None:
-        """Remove leftover lock files that are clearly stale."""
-        try:
-            base = Path(self.cache_dir) / self.exchange_name
-        except Exception:
-            return
-        if not base.exists():
-            return
-        now = time.time()
-        threshold = self._lock_stale_seconds
-        for lock_path in base.glob("*/locks/*.lock"):
-            try:
-                stat = lock_path.stat()
-            except FileNotFoundError:
-                continue
-            except Exception as exc:
-                self.log.warning(
-                    "failed to stat lock %s during cleanup error_type=%s",
-                    lock_path,
-                    bounded_exception_type(exc),
-                )
-                continue
-            age = now - stat.st_mtime
-            if age > threshold:
-                lock = portalocker.Lock(str(lock_path), timeout=0, fail_when_locked=True)
-                try:
-                    lock.acquire()
-                except portalocker.exceptions.LockException:
-                    continue
-                try:
-                    lock_path.unlink()
-                    self.log.info("removed stale candle lock %s (age %.1fs)", lock_path, age)
-                except FileNotFoundError:
-                    pass
-                except Exception as exc:
-                    self.log.error(
-                        "failed to remove stale lock %s error_type=%s",
-                        lock_path,
-                        bounded_exception_type(exc),
-                    )
-                finally:
-                    try:
-                        lock.release()
-                    except Exception:
-                        pass
-
     def _cleanup_on_exit(self) -> None:
         with self._shutdown_guard:
             if self._closed:
@@ -1668,15 +1621,6 @@ class CandlestickManager:
             record.lock.release()
         except Exception:
             pass
-        self._remove_lockfile(record.path)
-
-    def _remove_lockfile(self, path: str) -> None:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            return
-        except Exception:
-            return
 
     @contextmanager
     def remote_fetch_budget(self, seconds: float):
@@ -1721,9 +1665,9 @@ class CandlestickManager:
         return remaining
 
     async def _release_lock(
-        self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
+        self, lock: portalocker.Lock, symbol: str, timeframe: str
     ) -> None:
-        """Release a portalocker lock safely and refresh its metadata."""
+        """Release a fetch lock while preserving its shared filesystem identity."""
         try:
             # Unlocking is nonblocking. Keep acquisition/release in the owning
             # task so cancellation cannot leave an unregistered OS lock behind.
@@ -1744,8 +1688,6 @@ class CandlestickManager:
                 timeframe=timeframe,
                 error_type=bounded_exception_type(exc),
             )
-        finally:
-            self._remove_lockfile(path)
 
     def _touch_lockfile(
         self,
@@ -2503,7 +2445,7 @@ class CandlestickManager:
                 if record is not None and record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
                     self._cancel_fetch_lock_watchdog(key)
-                    await self._release_lock(record.lock, record.path, symbol, tf_norm)
+                    await self._release_lock(record.lock, symbol, tf_norm)
                 elif record is not None:
                     self._held_fetch_locks[key] = _LockRecord(
                         lock=record.lock,
@@ -2599,7 +2541,7 @@ class CandlestickManager:
             record = self._held_fetch_locks.pop(key, None)
             self._cancel_fetch_lock_watchdog(key)
             if record is not None:
-                await self._release_lock(record.lock, record.path, symbol, tf_norm)
+                await self._release_lock(record.lock, symbol, tf_norm)
 
     @staticmethod
     def _normalize_timeframe_arg(

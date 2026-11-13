@@ -64,6 +64,9 @@ its own version heading. See [release status](docs/releases.md).
 - Batch one-minute REST candle index updates, keep unchanged shards, and reuse
   the index during each candle health read.
 
+- Preserve candle fetch-lock file identity across releases and restarts so shared-cache writers
+  keep using the same lock.
+
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.

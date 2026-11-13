@@ -18,7 +18,6 @@ import time
 import zlib
 
 import numpy as np
-import portalocker
 import pytest
 
 from candlestick_manager import (
@@ -761,48 +760,6 @@ class TestConcurrentAccess:
         # Both symbols should have been fetched
         assert "BTC/USDT:USDT" in fetch_calls
         assert "ETH/USDT:USDT" in fetch_calls
-
-    def test_stale_lock_cleanup_skips_locks_it_cannot_acquire(self, tmp_cache_dir, monkeypatch):
-        """Cleanup must not unlink an active stale-looking lock file."""
-        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
-        lock_path = cm._fetch_lock_path("BTC/USDT:USDT", "1m")
-        with open(lock_path, "w", encoding="utf-8") as handle:
-            handle.write("held")
-        stale_mtime = time.time() - cm._lock_stale_seconds - 10.0
-        os.utime(lock_path, (stale_mtime, stale_mtime))
-
-        class BusyLock:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def acquire(self):
-                raise portalocker.exceptions.LockException("busy")
-
-            def release(self):
-                raise AssertionError("release should not be called when acquire failed")
-
-        monkeypatch.setattr(portalocker, "Lock", BusyLock)
-        cm._cleanup_stale_locks()
-        assert os.path.exists(lock_path)
-
-        events = []
-
-        class AvailableLock:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def acquire(self):
-                events.append("acquire")
-
-            def release(self):
-                events.append("release")
-
-        monkeypatch.setattr(portalocker, "Lock", AvailableLock)
-        cm._cleanup_stale_locks()
-
-        assert not os.path.exists(lock_path)
-        assert events == ["acquire", "release"]
-
 
 # ==============================================================================
 # 6. MEMORY MANAGEMENT
