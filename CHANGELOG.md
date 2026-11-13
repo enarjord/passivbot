@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Refresh the Trailing Martingale starter and inherited bot defaults for entry and close
+  sizing and trailing, forager ranking, adaptive entry cooldown, excess exposure allowance,
+  and unstuck. Reevaluate saved optimizer fitness against the updated native fingerprint.
+
 - Give Pareto scatter plots a near-square plotting area. Use `pareto-plot --open` to
   recompute the CLI pick across checked scoring objectives after slider limits, export the
   retained candidates as optimizer seeds, and copy the matching selection, backtest, and

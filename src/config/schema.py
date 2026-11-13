@@ -125,7 +125,7 @@ def _build_template_config():
                         "max_drawdown_fraction": 1.0,
                         "memory_ema_span_minutes": 43200.0,
                     },
-                    "unstuck": {"memory_ema_span_minutes": 96141.557},
+                    "unstuck": {"memory_ema_span_minutes": 85511.137},
                 },
                 "global": get_common_bot_defaults(),
                 "long": _side_bot_prototype(),
