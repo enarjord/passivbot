@@ -71,7 +71,6 @@ if TYPE_CHECKING:
     import aiohttp
 
 import warnings
-import time
 from datetime import datetime, timezone
 
 import numpy as np

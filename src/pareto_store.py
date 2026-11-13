@@ -619,7 +619,6 @@ def comma_separated_values_float(x):
 def main():
     import argparse
     import matplotlib.pyplot as plt
-    import numpy as np
     import json
 
     parser = argparse.ArgumentParser(
