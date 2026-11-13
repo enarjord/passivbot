@@ -1025,7 +1025,7 @@ async def test_cache_diagnostics_redact_hostile_exception_text_and_keep_context(
         def release(self):
             raise RuntimeError(secret)
 
-    await cm._release_lock(FailingLock(), str(tmp_path / "fetch.lock"), symbol, "1m")
+    await cm._release_lock(FailingLock(), symbol, "1m")
 
     index_path = Path(cm._index_path(symbol, tf="1m"))
     index_path.parent.mkdir(parents=True, exist_ok=True)

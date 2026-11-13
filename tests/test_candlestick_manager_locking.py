@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
+import subprocess
+import sys
 import time
 from typing import List
 
@@ -10,6 +13,42 @@ import numpy as np
 import pytest
 
 from candlestick_manager import CANDLE_DTYPE, CandlestickManager
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_file_survives_handoff_to_another_process(tmp_path):
+    manager = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    symbol, timeframe = "BTC/USDT:USDT", "1m"
+    path = Path(manager._fetch_lock_path(symbol, timeframe))
+    child_script = (
+        "import sys; import portalocker\n"
+        "try:\n"
+        "    with portalocker.Lock(sys.argv[1], timeout=0, fail_when_locked=True):\n"
+        "        pass\n"
+        "except portalocker.exceptions.LockException:\n"
+        "    sys.exit(23)\n"
+    )
+
+    def child_attempt():
+        return subprocess.run(
+            [sys.executable, "-c", child_script, str(path)],
+            check=False, capture_output=True, timeout=10,
+        ).returncode
+
+    async with manager._acquire_fetch_lock(symbol, timeframe):
+        original_inode = path.stat().st_ino
+        assert child_attempt() == 23
+    assert path.stat().st_ino == original_inode
+    assert child_attempt() == 0
+
+    restarted = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    async with restarted._acquire_fetch_lock(symbol, timeframe):
+        assert path.stat().st_ino == original_inode
+        assert child_attempt() == 23
 
 
 class FakeExchange:
