@@ -11,6 +11,9 @@ its own version heading. See [release status](docs/releases.md).
   optimization commands. For plotted metrics without a known direction, use the enabled
   floor or ceiling to orient the axis and rank the visible points.
 
+- Restrict suite candle preparation to the configured coin universe when a source override
+  names an unapproved coin.
+
 - Show a bordered Pareto CLI comparison with exact metric keys, raw objective values, the
   next-ranked alternative, and the observed best and worst values. The report includes utility
   and normalized weights where applicable, plus copyable backtest and browser commands. Use
@@ -21,6 +24,9 @@ its own version heading. See [release status](docs/releases.md).
   the plotted-axis ranking and its settings as JSON.
 
 - Bind the fill-events dashboard to loopback by default. Use `--host` to opt into another address.
+
+- Omit short profit contribution from the terminal metrics table in long-only and short-only
+  backtests.
 
 - Distinguish HSL observation freshness from unavailable scopes in the console and suppress
   obsolete freshness changes already replaced by an equivalent current observation.
@@ -50,10 +56,18 @@ its own version heading. See [release status](docs/releases.md).
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
+- Preserve candle index write contention errors during fetch-lock cleanup so callers can handle
+  the underlying persistence failure.
+
+- Batch one-minute REST candle index updates, keep unchanged shards, and reuse
+  the index during each candle health read.
 
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
+
+- Let ordinary planning with HSL disabled rejoin an in-flight account refresh once if
+  it overlaps final input preparation, with the existing freshness and protection checks.
 
 - Show maximum strategy-equity recovery time in days alongside maximum drawdown in the equity report.
 
@@ -100,6 +114,8 @@ its own version heading. See [release status](docs/releases.md).
 - Handle SIGTERM in live runs and return a failure status for fatal errors and exhausted restart
   budgets. The shipped Compose configurations allow 60 seconds for shutdown and leave stopped
   containers for operator review.
+
+- Force live shutdown on a second SIGINT or SIGTERM even when the event loop is blocked.
 
 - Restrict Docker build inputs to application files. Mount credentials, configs, and runtime
   data after building. The full image uses the locked Python package build and retains its
@@ -161,6 +177,10 @@ its own version heading. See [release status](docs/releases.md).
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.
 
+- Keep Bitget, Bybit, Hyperliquid, and OKX fill history retryable when the pagination limit
+  leaves the requested range unproven. Reject fills with unresolved position sides before
+  replay, while preserving Binance income-only accounting records.
+
 - Skip the missing-PnL replay when all refreshed fills already have resolved realized PnL.
 
 - Reduce native HSL replay CPU on dense retained fill and account histories by indexing execution
@@ -219,6 +239,10 @@ its own version heading. See [release status](docs/releases.md).
 
 - Allow `compose-coin-overrides` to load saved optimizer and backtest results directly
   as single-coin inputs or master configs, removing known result metadata before strict validation.
+
+- Reject Bybit and OKX position snapshots with missing held-position size, side,
+  or entry price so incomplete account data cannot reach live planning. Bybit
+  follows position cursors even when a page has no new held positions.
 
 - Use port 443 for official OKX production and demo WebSocket URLs, avoiding
   retired-port notices that disrupt private authentication and candle streams.
@@ -566,6 +590,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Fix optimizer coin-override validation when dataset metadata, result paths and other
   runtime bookkeeping are present, while retaining strict rejection of unknown authored fields.
+
+- Classify optimizer candidates with no evaluated replay interval by a native exception type.
+  Unexpected native failures propagate without being mistaken for invalid candidates.
 
 - Reduce GPU optimizer host-memory peaks with read-only file-backed candle inputs and
   bounded validation buffers. Check exact cached input sizes before decoding or packing,

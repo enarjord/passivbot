@@ -499,7 +499,7 @@ def _reconcile_suite_coin_sources(
 def _coalesce_master_coins(
     coins: Sequence[str], sources: Dict[str, str], exchanges: Sequence[str]
 ) -> list[str]:
-    """Use one dataset identity per resolved market, preferring forced-source keys."""
+    """Coalesce approved markets, using forced-source keys for matching identities."""
     source_assignments = {}
     for source_coin, exchange in sorted(sources.items()):
         exchange = to_standard_exchange_name(str(exchange))
@@ -524,7 +524,6 @@ def _coalesce_master_coins(
         try:
             source_symbol = coin_to_symbol(source_coin, exchange, verbose=False)
         except UnknownMarketIdentifier:
-            coalesced.add(source_coin)
             continue
         equivalent = set()
         for coin in coalesced:
@@ -533,8 +532,9 @@ def _coalesce_master_coins(
                     equivalent.add(coin)
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
-        coalesced.difference_update(equivalent)
-        coalesced.add(source_coin)
+        if equivalent:
+            coalesced.difference_update(equivalent)
+            coalesced.add(source_coin)
 
     representatives = {}
     for coin in sorted(coalesced):

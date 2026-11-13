@@ -27,6 +27,7 @@ import numpy as np
 import pytest
 
 import optimize
+from passivbot_rust import NoEvaluatedIntervalError
 from opt_utils import load_results
 from optimize import (
     _apply_config_overrides,
@@ -4778,57 +4779,7 @@ class TestEvaluator:
             "stress": 0.5,
         }
 
-    def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
-        from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
-        from config.schema import get_expanded_config_prototype
-
-        class PanicException(Exception):
-            pass
-
-        class DummyIndividual(list):
-            pass
-
-        mock_config = get_expanded_config_prototype()
-        mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = [
-            {"metric": "cagr_fraction_strategy_equity", "goal": "max"},
-            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
-        ]
-
-        evaluator = Evaluator(
-            hlcvs_specs={"binance": object()},
-            btc_usd_specs={},
-            msss={"binance": {}},
-            config=mock_config,
-            timestamps={"binance": None},
-        )
-        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
-        evaluator.shared_btc_np["binance"] = None
-
-        individual = DummyIndividual(
-            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
-        )
-
-        with patch(
-            "optimize.build_backtest_payload", return_value=object()
-        ) as build_payload, patch(
-            "optimize.execute_backtest",
-            side_effect=PanicException(
-                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
-            ),
-        ):
-            objectives, penalty, metrics, _ = unpack_evaluation_payload(
-                evaluator.evaluate(individual, [])
-            )
-
-        assert objectives == (0.0, 0.0)
-        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
-        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
-        assert "PanicException" in metrics["error"]
-        assert metrics["stats"] == {}
-        assert build_payload.call_args.kwargs["metrics_only"] is True
-
-    def test_evaluate_converts_recoverable_backtest_value_error_to_penalty(self):
+    def test_evaluate_converts_missing_evaluated_interval_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
         from config.schema import get_expanded_config_prototype
 
@@ -4860,11 +4811,7 @@ class TestEvaluator:
             "optimize.build_backtest_payload", return_value=object()
         ) as build_payload, patch(
             "optimize.execute_backtest",
-            side_effect=ValueError(
-                "pside hard-stop evaluation failed at k 277412 ts 1765207920000 "
-                "strategy_equity -0.1245573841258647 peak_strategy_equity 0.4814953389800394 "
-                "pside 1: equity must be finite and > 0"
-            ),
+            side_effect=NoEvaluatedIntervalError("no scored interval"),
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
@@ -4873,11 +4820,23 @@ class TestEvaluator:
         assert objectives == (0.0, 0.0)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
-        assert "ValueError" in metrics["error"]
+        assert "NoEvaluatedIntervalError" in metrics["error"]
         assert metrics["stats"] == {}
         assert build_payload.call_args.kwargs["metrics_only"] is True
 
-    def test_evaluate_keeps_unrelated_value_errors_fatal(self):
+    class PanicException(BaseException):
+        """Stand in for the PyO3 panic type without panicking in Rust."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ValueError("optimizer scoring metric is missing"),
+            ValueError("replay has no positive evaluated interval after declared warmup"),
+            ValueError("hard-stop evaluation failed: equity must be finite and > 0"),
+            PanicException("hard-stop evaluation failed: equity must be finite and > 0"),
+        ],
+    )
+    def test_evaluate_propagates_unexpected_native_errors(self, error):
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4903,13 +4862,13 @@ class TestEvaluator:
         )
 
         with patch("optimize.build_backtest_payload", return_value=object()), patch(
-            "optimize.execute_backtest",
-            side_effect=ValueError("optimizer scoring metric is missing"),
+            "optimize.execute_backtest", side_effect=error
         ):
-            with pytest.raises(ValueError, match="optimizer scoring metric is missing"):
+            with pytest.raises(type(error)) as exc:
                 evaluator.evaluate(individual, [])
+        assert exc.value is error
 
-    def test_pymoo_async_runner_returns_penalty_for_recoverable_backtest_value_error(
+    def test_pymoo_async_runner_returns_penalty_for_missing_evaluated_interval(
         self,
     ):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -4970,11 +4929,7 @@ class TestEvaluator:
 
         with patch("optimize.build_backtest_payload", return_value=object()), patch(
             "optimize.execute_backtest",
-            side_effect=ValueError(
-                "pside hard-stop evaluation failed at k 277412 ts 1765207920000 "
-                "strategy_equity -0.1245573841258647 peak_strategy_equity 0.4814953389800394 "
-                "pside 1: equity must be finite and > 0"
-            ),
+            side_effect=NoEvaluatedIntervalError("no scored interval"),
         ):
             results = runner(object(), [individual])
 
@@ -4987,18 +4942,15 @@ class TestEvaluator:
             recorded["metrics"]["constraint_violation"]
             == INVALID_BACKTEST_CANDIDATE_PENALTY
         )
-        assert "ValueError" in recorded["metrics"]["error"]
+        assert "NoEvaluatedIntervalError" in recorded["metrics"]["error"]
 
-    def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
+    def test_suite_evaluate_converts_missing_evaluated_interval_to_penalty(self):
         from optimize import (
             Evaluator,
             SuiteEvaluator,
             INVALID_BACKTEST_CANDIDATE_PENALTY,
         )
         from config.schema import get_expanded_config_prototype
-
-        class PanicException(Exception):
-            pass
 
         class DummyIndividual(list):
             pass
@@ -5037,9 +4989,7 @@ class TestEvaluator:
             "optimize.build_backtest_payload", return_value=object()
         ) as build_payload, patch(
             "optimize.execute_backtest",
-            side_effect=PanicException(
-                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
-            ),
+            side_effect=NoEvaluatedIntervalError("no scored interval"),
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
@@ -5048,7 +4998,7 @@ class TestEvaluator:
         assert objectives == (0.0,)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
-        assert "PanicException" in metrics["error"]
+        assert "NoEvaluatedIntervalError" in metrics["error"]
         assert metrics["suite_metrics"] == {}
         assert build_payload.call_args.kwargs["metrics_only"] is True
 

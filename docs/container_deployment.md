@@ -157,7 +157,8 @@ See `container/examples/docker-compose.live.yml`.
 ## Shutdown and restart policy
 
 The live process handles SIGINT and SIGTERM through its graceful shutdown path. The Compose
-examples give cleanup up to 60 seconds before Docker forcibly stops the process.
+examples give cleanup up to 60 seconds before Docker forcibly stops the process. A second
+SIGINT or SIGTERM forces an immediate exit, even if the event loop cannot run the cleanup.
 
 A fatal bot error or exhaustion of `live.recovery.max_n_restarts_per_day` exits with status 1.
 Compose leaves the container stopped so an operator can inspect the failure. Restart policies

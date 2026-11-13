@@ -450,6 +450,26 @@ def test_suite_coin_sources_coalesce_master_aliases_to_forced_key(tmp_path, monk
     ) == ["BTCUSDT"]
 
 
+@pytest.mark.parametrize("source_coin", ["SOL", "UNLISTED/USDT:USDT"])
+def test_suite_coin_sources_do_not_add_unapproved_coins(tmp_path, monkeypatch, source_coin):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        f"{coin}/USDT:USDT": {
+            "id": f"{coin}USDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": coin,
+        }
+        for coin in ("HBAR", "SOL")
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    assert _coalesce_master_coins(
+        ["HBAR"], {"HBARUSDT": "bitget", source_coin: "bitget"}, ["bitget"]
+    ) == ["HBARUSDT"]
+
+
 def test_suite_master_coins_coalesce_resolved_aliases_without_forced_source(
     tmp_path, monkeypatch
 ):

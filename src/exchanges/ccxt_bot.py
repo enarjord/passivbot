@@ -540,6 +540,8 @@ class CCXTBot(Passivbot):
         logging.debug(f"{self.exchange}: fetching positions via CCXT fetch_positions()")
         t0 = time.time()
         result = await self.cca.fetch_positions()
+        if not isinstance(result, list):
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_payload")
         elapsed_ms = (time.time() - t0) * 1000
         logging.debug(
             f"{self.exchange}: fetch_positions completed in {elapsed_ms:.1f}ms, {len(result)} raw positions"
@@ -552,35 +554,45 @@ class CCXTBot(Passivbot):
         Default: Use CCXT unified fields (contracts, entryPrice, side)
         Override: Exchange-specific field mappings
         """
+        if not isinstance(fetched, list):
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_payload")
         positions = []
         for row in fetched:
-            contracts = self._authoritative_position_number(row.get("contracts"), "contracts")
-            if contracts == 0.0:
-                continue
-            entry_price = self._authoritative_position_number(row.get("entryPrice"), "entry_price")
-            if entry_price <= 0.0:
-                raise AuthoritativeSurfaceUnavailable("positions", "invalid_entry_price")
-            symbol = row.get("symbol")
-            if not isinstance(symbol, str) or not symbol:
-                raise AuthoritativeSurfaceUnavailable("positions", "invalid_symbol")
-            side = self._get_position_side(row)
-            if side not in {"long", "short"}:
-                raise AuthoritativeSurfaceUnavailable("positions", "invalid_position_side")
-            normalized = {
-                "symbol": symbol,
-                "position_side": side,
-                "size": contracts,
-                "price": entry_price,
-            }
-            self._preserve_position_timing(row, normalized)
-            margin_mode = self._extract_live_margin_mode(row)
-            if margin_mode is not None:
-                normalized["margin_mode"] = margin_mode
-            positions.append(normalized)
+            position = self._normalize_position(row)
+            if position is not None:
+                positions.append(position)
         for position in positions:
             if "margin_mode" in position:
                 self._record_live_margin_mode(position["symbol"], position["margin_mode"])
         return positions
+
+    def _normalize_position(self, row: dict) -> dict | None:
+        """Validate a single CCXT position without changing the margin-mode cache."""
+        if not isinstance(row, dict):
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_row")
+        contracts = self._authoritative_position_number(row.get("contracts"), "contracts")
+        if contracts == 0.0:
+            return None
+        entry_price = self._authoritative_position_number(row.get("entryPrice"), "entry_price")
+        if entry_price <= 0.0:
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_entry_price")
+        symbol = row.get("symbol")
+        if not isinstance(symbol, str) or not symbol:
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_symbol")
+        side = self._get_position_side(row)
+        if side not in {"long", "short"}:
+            raise AuthoritativeSurfaceUnavailable("positions", "invalid_position_side")
+        normalized = {
+            "symbol": symbol,
+            "position_side": side,
+            "size": contracts,
+            "price": entry_price,
+        }
+        self._preserve_position_timing(row, normalized)
+        margin_mode = self._extract_live_margin_mode(row)
+        if margin_mode is not None:
+            normalized["margin_mode"] = margin_mode
+        return normalized
 
     @staticmethod
     def _authoritative_position_number(value, field: str) -> float:

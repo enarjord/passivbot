@@ -1,5 +1,6 @@
 #[path = "backtest_core_metrics.rs"]
 mod core_metric_observer;
+pub(crate) use core_metric_observer::CoreMetricsSetupError;
 #[path = "backtest_hsl_report.rs"]
 mod hsl_report;
 #[path = "backtest_hsl_runtime.rs"]

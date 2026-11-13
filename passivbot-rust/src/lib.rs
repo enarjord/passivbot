@@ -222,6 +222,10 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_twel_enforcer_orders_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest_bundle, m)?)?;
+    m.add(
+        "NoEvaluatedIntervalError",
+        m.py().get_type_bound::<NoEvaluatedIntervalError>(),
+    )?;
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;

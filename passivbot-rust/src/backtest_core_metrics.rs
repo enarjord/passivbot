@@ -5,13 +5,25 @@ use crate::core_metrics::{
     Finalization, Metric, MetricRequest, PositionSide, DAY_MS, MINUTE_MS,
 };
 
+#[derive(Debug)]
+pub(crate) enum CoreMetricsSetupError {
+    NoEvaluatedInterval,
+    InvalidSetup(&'static str),
+}
+
+impl From<&'static str> for CoreMetricsSetupError {
+    fn from(message: &'static str) -> Self {
+        Self::InvalidSetup(message)
+    }
+}
+
 impl<const ORGANILLO: bool> BacktestEngine<'_, ORGANILLO> {
     /// Resolve a fixed evaluation boundary before replay, independent of capacity.
     pub fn configure_core_metrics(
         &mut self,
         request: MetricRequest,
         ew_half_life_days: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), CoreMetricsSetupError> {
         if self.current_step != 0 || self.core_request.is_some() {
             return Err("core metric request must be configured once before replay".into());
         }
@@ -35,16 +47,16 @@ impl<const ORGANILLO: bool> BacktestEngine<'_, ORGANILLO> {
             .checked_sub(1)
             .ok_or("empty replay has no evaluated interval")? as u64;
         if first_index >= final_index {
-            return Err("replay has no positive evaluated interval after declared warmup".into());
+            return Err(CoreMetricsSetupError::NoEvaluatedInterval);
         }
-        let timestamp = |index: u64| {
+        let timestamp = |index: u64| -> Result<u64, CoreMetricsSetupError> {
             self.first_timestamp_ms
                 .checked_add(
                     index
                         .checked_mul(self.interval_ms)
                         .ok_or("core metric clock overflow")?,
                 )
-                .ok_or("core metric clock overflow")
+                .ok_or_else(|| "core metric clock overflow".into())
         };
         self.core_window = Some(EvaluationWindow {
             start_timestamp_ms: timestamp(first_index)?,
@@ -625,22 +637,26 @@ mod tests {
         close(number(&bt, Metric::Completion), 1.0);
         let mut short = engine(&data, &btc, true, 1);
         short.backtest_params.requested_start_timestamp_ms = 7 * MINUTE_MS;
-        assert!(short
-            .configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS)
-            .unwrap_err()
-            .contains("no positive evaluated interval"));
+        assert!(matches!(
+            short.configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS),
+            Err(CoreMetricsSetupError::NoEvaluatedInterval)
+        ));
         let mut overflow = engine(&data, &btc, true, 1);
         overflow.warmup_bars = usize::MAX;
-        assert!(overflow
-            .configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS)
-            .unwrap_err()
-            .contains("warmup clock overflow"));
+        assert!(matches!(
+            overflow.configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS),
+            Err(CoreMetricsSetupError::InvalidSetup(
+                "core metric warmup clock overflow"
+            ))
+        ));
         let mut zero = engine(&data, &btc, true, 1);
         zero.interval_ms = 0;
-        assert!(zero
-            .configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS)
-            .unwrap_err()
-            .contains("must be positive"));
+        assert!(matches!(
+            zero.configure_core_metrics(MetricRequest::all(), DEFAULT_EW_HALF_LIFE_DAYS),
+            Err(CoreMetricsSetupError::InvalidSetup(
+                "metric observation interval must be positive"
+            ))
+        ));
     }
 
     #[test]
