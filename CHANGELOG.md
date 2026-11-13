@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
+
 - Give Pareto scatter plots a near-square plotting area. Use `pareto-plot --open` to
   recompute the CLI pick across checked scoring objectives after slider limits, export the
   retained candidates as optimizer seeds, and copy the matching selection, backtest, and

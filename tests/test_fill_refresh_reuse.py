@@ -1,7 +1,9 @@
 """Fill-refresh replay equivalence and invalidation, without exchange access."""
 import json
+import math
 from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +56,100 @@ async def test_empty_refresh_skips_replay_but_preserves_fetch_and_metadata(tmp_p
     assert manager.cache.load_metadata()['known_gaps'] == []
     await manager.refresh()
     assert manager.cache.load_metadata()['last_refresh_ms'] >= checkpoint
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_overlap", [False, True])
+async def test_encoded_proof_avoids_recursive_tape_comparison(tmp_path, monkeypatch, with_overlap):
+    manager = await ready(tmp_path)
+    assert manager._empty_refresh_proof.evidence_bytes is not None
+    if with_overlap:
+        manager.fetcher.events = [manager.get_events()[0].to_dict()]
+    monkeypatch.setattr(fem, "_same_fill_tape", lambda *_: pytest.fail("recursive tape comparison"))
+    work = await manager.refresh()
+    assert work.replay_reused
+    assert work.duplicate_rows == int(with_overlap)
+    assert work.day_replacements == 0
+
+
+@pytest.mark.asyncio
+async def test_encoding_failure_uses_exact_replay_and_recursive_fallback(tmp_path, monkeypatch):
+    manager = await ready(tmp_path)
+    assert manager._empty_refresh_proof.evidence_bytes is not None
+
+    def unavailable(*_):
+        raise ValueError("unsupported evidence encoding")
+
+    monkeypatch.setattr(fem, "marshal", SimpleNamespace(dumps=unavailable))
+    work = await manager.refresh()
+    assert not work.replay_reused
+    assert manager._empty_refresh_proof.evidence_bytes is None
+    assert (await manager.refresh()).replay_reused
+
+    manager.get_events()[0].raw.append({"changed": True})
+    assert not (await manager.refresh()).replay_reused
+
+
+class _PretendsToBeList(type):
+    __hash__ = type.__hash__
+
+    def __eq__(self, other):
+        return other is list
+
+
+class _ListSubclass(list, metaclass=_PretendsToBeList):
+    def __buffer__(self, _flags):
+        return memoryview(b"list")
+
+
+class _BufferEvidence(int):
+    def __buffer__(self, _flags):
+        return memoryview(b"1")
+
+
+@pytest.mark.asyncio
+async def test_unsupported_container_seed_keeps_recursive_tape_proof(tmp_path):
+    manager = await ready(tmp_path)
+    manager.get_events()[0].raw.append({"nested": _ListSubclass([True])})
+    assert not (await manager.refresh()).replay_reused
+    assert manager._empty_refresh_proof.evidence_bytes is None
+    assert (await manager.refresh()).replay_reused
+
+    manager.get_events()[0].raw[0]["nested"][0] = 1
+    assert not (await manager.refresh()).replay_reused
+
+
+@pytest.mark.asyncio
+async def test_encoded_tape_ignores_equivalent_evidence_sharing(tmp_path):
+    manager = await ready(tmp_path)
+    shared = [1, False]
+    manager.get_events()[0].raw.append({"first": shared, "second": shared})
+    assert not (await manager.refresh()).replay_reused
+    assert manager._empty_refresh_proof.evidence_bytes is not None
+
+    manager.get_events()[0].raw[0]["second"] = list(shared)
+    assert (await manager.refresh()).replay_reused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old, new", [(False, 0), (1, 1.0), (-0.0, 0.0)])
+async def test_same_id_evidence_correction_replays_and_persists(tmp_path, old, new):
+    manager = await ready(tmp_path)
+    event, = manager.get_events()
+    manager.fetcher.events = [{**event.to_dict(), "raw": [{"fact": old}]}]
+    await manager.refresh()
+    manager.fetcher.events = []
+    await manager.refresh()
+    assert manager._empty_refresh_proof.evidence_bytes is not None
+
+    manager.fetcher.events = [{**event.to_dict(), "raw": [{"fact": new}]}]
+    work = await manager.refresh()
+    assert not work.replay_reused and work.changed_overlap_rows == 1
+    for saved in (manager.get_events()[0], manager.cache.load()[0]):
+        result = saved.raw[0]["fact"]
+        assert type(result) is type(new)
+        if type(new) is float:
+            assert math.copysign(1, result) == math.copysign(1, new)
 
 
 @pytest.mark.asyncio
@@ -288,20 +384,30 @@ async def test_nested_mutation_does_not_alias_proof(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_nested_type_change_outside_overlap_invalidates_replay_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("before, after", [
+    (False, 0),
+    (1, 1.0),
+    (-0.0, 0.0),
+    ([1], (1,)),
+    ([1], _ListSubclass([1])),
+    (1, _BufferEvidence(1)),
+])
+async def test_nested_type_change_outside_overlap_invalidates_replay_proof(
+    tmp_path, monkeypatch, before, after
+):
     manager = await ready(tmp_path)
     prior, = manager.get_events()
-    prior.raw.append({"raw_fact": False})
+    prior.raw.append({"raw_fact": before})
     later = {**prior.to_dict(), "id": "later", "source_ids": ["later"],
              "timestamp": prior.timestamp + 1000, "raw": []}
     manager.fetcher.events = [later]
     await manager.refresh()
     manager.fetcher.events = []
     await manager.refresh()
-    assert manager._empty_refresh_proof is not None
+    assert manager._empty_refresh_proof.evidence_bytes is not None
 
     prior, later = manager.get_events()
-    prior.raw[0]["raw_fact"] = 0
+    prior.raw[0]["raw_fact"] = after
     manager.fetcher.events = [later.to_dict()]
     calls = []
     replay = fem.compute_psize_pprice

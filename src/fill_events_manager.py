@@ -18,6 +18,7 @@ import errno
 import inspect
 import json
 import logging
+import marshal
 import math
 import os
 import re
@@ -1863,6 +1864,49 @@ def _same_fill_tape(left: list[FillEvent], right: list[FillEvent]) -> bool:
     # Dataclass equality checks all canonical fields, but Python equates nested
     # True, 1, and 1.0. Preserve differences in raw evidence and provenance.
     return left == right and all(_same_fill_payload(a, b) for a, b in zip(left, right))
+
+
+def _encodable_fill_evidence(value: object) -> bool:
+    value_type = type(value)
+    if value_type is dict:
+        return all(
+            type(key) is str and _encodable_fill_evidence(item)
+            for key, item in value.items()
+        )
+    if value_type is list or value_type is tuple:
+        return all(_encodable_fill_evidence(item) for item in value)
+    return (
+        value_type is str or value_type is bool or value_type is int
+        or value_type is float or value is None
+    )
+
+
+def _fill_tape_evidence_bytes(tape: list[FillEvent], *, validate: bool = False) -> bytes | None:
+    evidence = [(event.raw, event.fees, event.provenance) for event in tape]
+    try:
+        if validate and not _encodable_fill_evidence(evidence):
+            return None
+        # Format 2 preserves scalar types and signed zero without encoding
+        # object sharing. These bytes are process-local and are never decoded.
+        return marshal.dumps(evidence, 2)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+
+
+@dataclass(frozen=True)
+class _FillReplayProof:
+    fee_policy: tuple[float, float]
+    tape: list[FillEvent]
+    evidence_bytes: bytes | None
+
+    def matches(self, tape: list[FillEvent], fee_policy: tuple[float, float]) -> bool:
+        if fee_policy != self.fee_policy:
+            return False
+        if self.evidence_bytes is None:
+            return _same_fill_tape(tape, self.tape)
+        # The saved evidence uses exact built-in types. Other encodable values
+        # have distinct tags or encode as bytes, which validation excludes.
+        return tape == self.tape and _fill_tape_evidence_bytes(tape) == self.evidence_bytes
 
 
 def fill_event_pnl_status(event: object) -> str:
@@ -3758,7 +3802,7 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         # A disposable proof that replay left this exact history unchanged.
         # Own nested data too: frozen FillEvents still contain mutable raw/fee data.
-        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
+        self._empty_refresh_proof: _FillReplayProof | None = None
         self._loaded = False
         self._lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
@@ -5372,8 +5416,7 @@ class FillEventsManager:
         unchanged = bool(
             replay_candidate
             and proof is not None
-            and fee_policy == proof[0]
-            and _same_fill_tape(new_events, proof[1])
+            and proof.matches(new_events, fee_policy)
         )
         before_replay = (
             deepcopy(new_events) if replay_candidate and new_events and not unchanged else None
@@ -5440,7 +5483,9 @@ class FillEventsManager:
             and not all_days_persisted
             and _same_fill_tape(self._events, before_replay)
         ):
-            self._empty_refresh_proof = (fee_policy, before_replay)
+            self._empty_refresh_proof = _FillReplayProof(
+                fee_policy, before_replay, _fill_tape_evidence_bytes(before_replay, validate=True)
+            )
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG
