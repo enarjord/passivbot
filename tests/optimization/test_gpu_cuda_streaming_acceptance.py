@@ -104,10 +104,15 @@ def test_cuda_global_replay_preserves_candidate_packets_and_reuse(
             ) as worker:
                 worker.register_dataset("market", dataset)
                 for cycle in range(2):
-                    futures = [worker.submit(BacktestRequest(
+                    requests = [BacktestRequest(
                         f"{cycle}-{i}", "market", {f"{param_side}_{quantity}": .04 + i * .004},
-                    )) for i in range(width)]
-                    results.append([future.result(timeout=180) for future in futures])
+                    ) for i in range(width)]
+                    futures = [worker.submit(request) for request in requests]
+                    outcomes = [future.result(timeout=180) for future in futures]
+                    assert [(row.request_id, row.dataset_id) for row in outcomes] == [
+                        (request.request_id, request.dataset_id) for request in requests
+                    ]
+                    results.append([(row.metrics, row.liquidated, row.metadata) for row in outcomes])
 
     assert len(captures) == 4
     for raw in captures[1:]:
