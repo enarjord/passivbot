@@ -1,11 +1,13 @@
 import os
 import pickle
 import signal
+from dataclasses import replace
 from types import MappingProxyType
 
 import numpy as np
 import pytest
 
+from optimization import native_planner_workers as preparation
 from optimization.native_planner_workers import (
     CandidatePreparationError,
     CandidatePreparationQueueFull,
@@ -116,3 +118,92 @@ def test_dead_worker_fails_its_ordered_row_after_other_worker_result():
         assert workers.poll(timeout=20).candidate_id == "first"
         with pytest.raises(CandidatePreparationError, match="dies:"):
             workers.poll(timeout=20)
+
+
+def _wait_without_initializing(connection):
+    with connection:
+        connection.recv_bytes()
+        connection.recv()
+
+
+def _started_pids(monkeypatch, workers):
+    pids = []
+    start = workers._start_process
+
+    def track(process):
+        start(process)
+        pids.append(process.pid)
+
+    monkeypatch.setattr(workers, "_start_process", track)
+    return pids
+
+
+def _assert_reaped(pids, workers, count):
+    assert len(pids) == count and workers.pending_count == 0
+    for pid in pids:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        workers.submit("later", ())
+
+
+def test_every_worker_is_verified_before_admission(monkeypatch):
+    planner, vector = planner_inputs(suite=True)
+    workers = OrderedCandidateWorkers(planner, workers=2, max_pending=3)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    monkeypatch.delenv("SKIP_RUST_COMPILE", raising=False)
+    with workers:
+        assert len(workers.resource_snapshot()) == 2
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
+        assert "SKIP_RUST_COMPILE" not in os.environ
+        workers.submit("ready", vector)
+        assert workers.poll(timeout=20) == planner.prepare("ready", vector)
+
+
+def test_startup_preserves_rust_initializer_fault_and_reaps_workers(monkeypatch):
+    planner, _ = planner_inputs()
+    snapshot = replace(_Snapshot.capture(planner), rust_artifact_sha256="0" * 64)
+    workers = OrderedCandidateWorkers(planner, workers=2, max_pending=3)
+    workers._snapshot = pickle.dumps(snapshot, protocol=pickle.HIGHEST_PROTOCOL)
+    pids = _started_pids(monkeypatch, workers)
+
+    with pytest.raises(CandidatePreparationError, match="startup failed: RuntimeError: .*Rust extension differs") as caught:
+        with workers:
+            pytest.fail("A failed initializer must prevent plan submission")
+    assert caught.value.candidate_id is None
+    assert "build_planner" in caught.value.remote_traceback
+    _assert_reaped(pids, workers, 2)
+
+
+def test_startup_interrupt_reaps_workers_and_preserves_the_interrupt(monkeypatch):
+    planner, _ = planner_inputs()
+    ready_checks = 0
+    original = KeyboardInterrupt("interrupted while waiting for initializers")
+
+    def interrupt():
+        nonlocal ready_checks
+        if len(pids) == 2:
+            ready_checks += 1
+            if ready_checks == 2:
+                raise original
+
+    workers = OrderedCandidateWorkers(planner, workers=2, max_pending=3, interrupt_check=interrupt)
+    pids = _started_pids(monkeypatch, workers)
+    monkeypatch.setattr(preparation, "_prepare_worker", _wait_without_initializing)
+    with pytest.raises(KeyboardInterrupt, match="waiting for initializers") as caught:
+        with workers:
+            pytest.fail("An interrupted startup must prevent plan submission")
+    assert caught.value is original
+    _assert_reaped(pids, workers, 2)
+
+
+def test_startup_deadline_bounds_an_unresponsive_worker(monkeypatch):
+    planner, _ = planner_inputs()
+    workers = OrderedCandidateWorkers(planner, workers=1, max_pending=2)
+    pids = _started_pids(monkeypatch, workers)
+    monkeypatch.setattr(preparation, "_STARTUP_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(preparation, "_prepare_worker", _wait_without_initializing)
+    with pytest.raises(TimeoutError, match="startup deadline"):
+        with workers:
+            pytest.fail("An unresponsive initializer must prevent plan submission")
+    _assert_reaped(pids, workers, 1)

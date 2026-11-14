@@ -16,17 +16,33 @@ import traceback
 from types import MappingProxyType
 
 
+_STARTUP_TIMEOUT_SECONDS = 60.0
+_WAIT_INTERVAL_SECONDS = 0.02
+_WORKER_ENVIRONMENT = {
+    "SKIP_RUST_COMPILE": "1",
+    "CUDA_VISIBLE_DEVICES": "",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+}
+
+
 class CandidatePreparationQueueFull(Full):
     """The pending window is full, including completed plans awaiting delivery."""
 
 
 class CandidatePreparationError(RuntimeError):
-    """A child could not prepare this row; later rows cannot be delivered."""
+    """The original worker initializer or candidate-preparation error."""
 
     def __init__(self, candidate_id, error):
         self.candidate_id = candidate_id
         self.error_type, message, self.remote_traceback = error
-        super().__init__(f"CPU preparation failed for {candidate_id}: {self.error_type}: {message}")
+        operation = (
+            "CPU planner startup failed" if candidate_id is None
+            else f"CPU preparation failed for {candidate_id}"
+        )
+        super().__init__(f"{operation}: {self.error_type}: {message}")
 
 
 @dataclass(frozen=True)
@@ -110,16 +126,14 @@ def _process_metrics():
     return time.process_time(), rss
 
 
-def _prepare_worker(connection, packed_snapshot):
+def _prepare_worker(connection):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    # The parent verified the installed artifact before process startup. Each
-    # child verifies its identity, without competing to build the extension.
-    os.environ.update(SKIP_RUST_COMPILE="1", CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1",
-                      OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1")
     os.environ.pop("CUPY_CACHE_DIR", None)
     with connection:
         try:
+            packed_snapshot = connection.recv_bytes()
             planner = pickle.loads(packed_snapshot).build_planner()
+            del packed_snapshot
             _check_cpu_only()
             connection.send((True, _process_metrics()))
         except Exception as error:
@@ -172,10 +186,11 @@ class OrderedCandidateWorkers:
     whether to wait or advance the cohort. Later ready rows remain buffered.
     """
 
-    def __init__(self, planner, *, workers, max_pending):
+    def __init__(self, planner, *, workers, max_pending, interrupt_check=None):
         if type(workers) is not int or type(max_pending) is not int or not 1 <= workers <= max_pending:
             raise ValueError("planner worker count and pending capacity must satisfy 1 <= workers <= max_pending")
         self._snapshot = pickle.dumps(_Snapshot.capture(planner), protocol=pickle.HIGHEST_PROTOCOL)
+        self._interrupt_check = interrupt_check
         self.worker_count = workers
         self.max_pending = max_pending
         self._workers = []
@@ -205,31 +220,83 @@ class OrderedCandidateWorkers:
     def __enter__(self):
         if self._started or self._stopping.is_set():
             raise RuntimeError("parallel CPU preparation cannot be started twice")
-        self._started = True
+        deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
         try:
-            context = multiprocessing.get_context("spawn")
-            for _ in range(self.worker_count):
-                parent, child = context.Pipe()
-                process = context.Process(target=_prepare_worker, args=(child, self._snapshot), daemon=True)
-                with child:
-                    try:
-                        process.start()
-                    except BaseException:
-                        parent.close()
-                        raise
-                worker = _Worker(process, parent, Queue(maxsize=1))
-                self._workers.append(worker)
-                worker.thread = Thread(target=self._relay, args=(worker,), daemon=True)
-                worker.thread.start()
+            self._start_workers(deadline)
+            self._await_ready(deadline)
         except BaseException:
             self._close_preserving_error()
             raise
+        self._started = True
         return self
+
+    def _start_workers(self, deadline):
+        context = multiprocessing.get_context("spawn")
+        for _ in range(self.worker_count):
+            if self._interrupt_check is not None:
+                self._interrupt_check()
+            self._startup_remaining(deadline)
+            parent, child = context.Pipe()
+            process = context.Process(target=_prepare_worker, args=(child,), daemon=True)
+            with child:
+                try:
+                    self._start_process(process)
+                except BaseException:
+                    parent.close()
+                    raise
+            worker = _Worker(process, parent, Queue(maxsize=1))
+            self._workers.append(worker)
+            worker.thread = Thread(target=self._relay, args=(worker,), daemon=True)
+            worker.thread.start()
+
+    def _await_ready(self, deadline):
+        pending = set(self._workers)
+        while True:
+            if self._interrupt_check is not None:
+                self._interrupt_check()
+            remaining = self._startup_remaining(deadline)
+            try:
+                worker, kind, detail = self._events.get(timeout=min(remaining, _WAIT_INTERVAL_SECONDS))
+            except Empty:
+                continue
+            if kind == "failed":
+                raise CandidatePreparationError(None, detail)
+            if kind != "ready" or worker not in pending:
+                raise RuntimeError("Invalid CPU planner startup acknowledgment")
+            self._handle_event(worker, kind, detail)
+            pending.remove(worker)
+            if not pending:
+                return
+
+    @staticmethod
+    def _start_process(process):
+        # Spawn can import __main__ before invoking the target. Scope the child
+        # environment to start(), before that import can load Rust or BLAS.
+        previous = {key: os.environ.get(key) for key in _WORKER_ENVIRONMENT}
+        try:
+            os.environ.update(_WORKER_ENVIRONMENT)
+            process.start()
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    @staticmethod
+    def _startup_remaining(deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("CPU planner workers did not initialize before the startup deadline")
+        return remaining
 
     def _relay(self, worker):
         # Keep the socket's framing and large payload reads outside optimizer
         # polling. The parent still owns all state and chooses delivery order.
         try:
+            # Keep potentially large snapshot writes off the startup thread so
+            # an idle or failed child cannot block its timeout or interrupt.
+            worker.connection.send_bytes(self._snapshot)
             ready, initialization = worker.connection.recv()
             if not ready:
                 self._events.put((worker, "failed", initialization))
@@ -345,7 +412,8 @@ class OrderedCandidateWorkers:
             if remaining <= 0:
                 return None
             try:
-                event = self._events.get(timeout=min(remaining, 0.02) if interrupt_check is not None else remaining)
+                event = self._events.get(timeout=min(remaining, _WAIT_INTERVAL_SECONDS)
+                                         if interrupt_check is not None else remaining)
             except Empty:
                 continue
             self._handle_event(*event)
@@ -372,7 +440,7 @@ class OrderedCandidateWorkers:
         if self._stopping.is_set():
             return
         self._stopping.set()
-        cancelling = self.pending_count != 0
+        cancelling = not self._started or self.pending_count != 0
         for worker in self._workers:
             if worker.process.is_alive() and cancelling:
                 worker.process.terminate()
@@ -390,9 +458,10 @@ class OrderedCandidateWorkers:
                 worker.process.join(timeout=max(0.0, deadline - time.monotonic()))
         if any(worker.process.is_alive() for worker in self._workers):
             raise RuntimeError("CPU planner worker did not stop")
+        relay_deadline = time.monotonic() + 1
         for worker in self._workers:
             if worker.thread is not None and worker.thread.ident is not None:
-                worker.thread.join(timeout=1)
+                worker.thread.join(timeout=max(0.0, relay_deadline - time.monotonic()))
             worker.connection.close()
         self._collect_events()
         for worker in self._workers:
