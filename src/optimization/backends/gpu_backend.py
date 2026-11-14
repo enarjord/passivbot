@@ -5,6 +5,8 @@ Requests are replenished and full candidate records are persisted independently.
 The problem has no CPU evaluation path, including seed bootstrap and resumption.
 """
 
+from collections import deque
+from contextlib import ExitStack
 import logging
 import math
 import time
@@ -38,6 +40,23 @@ from optimization.gpu.search_budget import CudaMaxSearchBudget
 from optimization.gpu.search_sampling import max_starting_vectors
 
 
+def _open_cuda_preparation_workers(planner, lifetime, *, admission_slots, available_rows, interrupt_check):
+    from optimization.native_planner_capacity import cuda_plan_worker_count
+
+    interrupt_check()
+    workers = cuda_plan_worker_count(planner, admission_slots=admission_slots, available_rows=available_rows)
+    if not workers:
+        return None
+    from optimization.native_planner_workers import OrderedCandidateWorkers
+
+    pool = lifetime.enter_context(OrderedCandidateWorkers(
+        planner, workers=workers, max_pending=min(2 * workers, available_rows),
+        interrupt_check=interrupt_check,
+    ))
+    logging.info("CUDA max CPU preparation | workers=%d", workers)
+    return pool
+
+
 class NativeSearchProblem(Problem):
     def __init__(self, base):
         super().__init__(n_var=len(base.bounds), n_obj=len(base.scoring_specs),
@@ -52,7 +71,8 @@ class NativeSearchProblem(Problem):
 class _Search:
     def __init__(self, *, state, session, registry, recorder, template,
                  build_config_fn, overrides_fn, overrides_list, checkpoint_path,
-                 checkpoint_interval, interrupt_check, screening_policy):
+                 checkpoint_interval, interrupt_check, screening_policy,
+                 preparation_lifetime=None, preparation_admission_slots=0):
         self.state, self.session, self.registry = state, session, registry
         self.recorder, self.template = recorder, template
         self.build_config_fn, self.overrides_fn = build_config_fn, overrides_fn
@@ -68,6 +88,10 @@ class _Search:
         self._reuse_record_configs = build_config_fn is individual_to_config
         self._cadence = ResultCadence()
         self.screening_policy = screening_policy
+        self._preparation_lifetime = preparation_lifetime
+        self._preparation_admission_slots = preparation_admission_slots
+        self._preparation_workers = None
+        self._largest_preparation_window = 0
         self._progress = OptimizerProgress(lambda: dict(
             gen=self.state["algorithm"].n_iter or 0,
             completed=self.state["completed"], screened=self.state["screened"],
@@ -163,16 +187,41 @@ class _Search:
             finally:
                 diagnostics.finish(status)
 
+    def _workers_for_window(self, pending_count):
+        if self._preparation_lifetime is None:
+            return None
+        available_rows = min(self.session.max_candidates, pending_count)
+        if available_rows < 2:
+            return None
+        if self._preparation_workers is None and available_rows > self._largest_preparation_window:
+            self._largest_preparation_window = available_rows
+            self._preparation_workers = _open_cuda_preparation_workers(
+                self.registry.planner, self._preparation_lifetime,
+                admission_slots=self._preparation_admission_slots, available_rows=available_rows,
+                interrupt_check=self.interrupt_check,
+            )
+        workers = self._preparation_workers
+        return workers if workers is not None and available_rows >= workers.worker_count else None
+
     def _evaluate_population(self, datasets, diagnostics):
         population = self.state["population"]
         screening = self.state["phase"] == "screening"
-        waiting = iter(index for index, individual in enumerate(population)
-                       if (not hasattr(individual, "screening_payload") and not {"F", "G", "H"} <= individual.evaluated if screening else
-                           not {"F", "G", "H"} <= individual.evaluated))
-        exhausted = False
-        initial = True
+        waiting = (index for index, individual in enumerate(population)
+                   if not {"F", "G", "H"} <= individual.evaluated
+                   and (not screening or not hasattr(individual, "screening_payload")))
         self.checkpoint(force=True)
         self._progress.transition(self.state["phase"])
+        workers = None
+        if self._preparation_lifetime is not None:
+            indices = list(waiting)
+            workers = self._workers_for_window(len(indices))
+            waiting = iter(indices)
+        exhausted = False
+        initial = True
+        stages = self.screening_policy["scenarios"] if screening else None
+        prepared_indices = deque()
+        input_exhausted = False
+        speculative_sequence = self.state["sequence"]
         while self._pending or not exhausted:
             self.interrupt_check()
             self._progress.report()
@@ -208,18 +257,41 @@ class _Search:
             started = time.perf_counter()
             while not exhausted and len(self._pending) < self.session.max_candidates:
                 self.interrupt_check()
-                try:
-                    index = next(waiting)
-                except StopIteration:
-                    exhausted = True
-                    break
                 candidate_id = f"candidate:{self.state['sequence']}"
-                self.state["sequence"] += 1
-                with diagnostics.measure("prepare"):
-                    plan = self.registry.planner.prepare(
-                        candidate_id, population[index].X,
-                        scenarios=self.screening_policy["scenarios"] if screening else None,
-                    )
+                if workers is None:
+                    index = next(waiting, None)
+                    if index is None:
+                        exhausted = True
+                        break
+                    self.state["sequence"] += 1
+                    with diagnostics.measure("prepare"):
+                        plan = self.registry.planner.prepare(candidate_id, population[index].X, scenarios=stages)
+                else:
+                    while (not input_exhausted and workers.pending_count < workers.max_pending
+                           and len(self._pending) + workers.pending_count < self.session.max_candidates):
+                        self.interrupt_check()
+                        index = next(waiting, None)
+                        if index is None:
+                            input_exhausted = True
+                            break
+                        with diagnostics.measure("prepare"):
+                            workers.submit(f"candidate:{speculative_sequence}", population[index].X, scenarios=stages)
+                        speculative_sequence += 1
+                        prepared_indices.append(index)
+                    if not prepared_indices:
+                        exhausted = True
+                        break
+                    with diagnostics.measure("prepare"):
+                        plan = workers.poll(timeout=0.002 if self._pending else 0.02,
+                                            interrupt_check=self.interrupt_check)
+                    if plan is None:
+                        with diagnostics.measure("poll"):
+                            self.session.submit_ready()
+                        break
+                    index = prepared_indices.popleft()
+                    if plan.candidate_id != candidate_id:
+                        raise RuntimeError("Parallel CPU preparation changed native candidate order")
+                    self.state["sequence"] += 1
                 if plan.prefilter_payload is not None:
                     with diagnostics.measure("consume"):
                         self.apply_terminal(index, plan.prefilter_payload,
@@ -407,11 +479,14 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             service, registry.scorer,
             max_candidates=candidate_window,
         )
+        worker_lifetime = ExitStack()
         search = _Search(state=state, session=session, registry=registry, recorder=recorder,
                          template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
                          checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check,
-                         screening_policy=screening_policy)
+                         screening_policy=screening_policy,
+                         preparation_lifetime=worker_lifetime if max_throughput else None,
+                         preparation_admission_slots=min(candidate_limit, max(pending_count, iters)))
 
         def remember_accepted_width():
             if not max_throughput:
@@ -493,10 +568,15 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     remember_accepted_width()
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
+            worker_lifetime.close()
             service.close()
             search.checkpoint(force=True)
         except BaseException:
             session.stop_admission()
+            try:
+                worker_lifetime.close()
+            except BaseException:
+                logging.exception("CPU preparation worker cleanup failed after an earlier failure")
             try:
                 service.close(cancel_pending=True)
                 search.drain_after_stop()
