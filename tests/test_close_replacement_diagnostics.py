@@ -8,6 +8,7 @@ import pytest
 import passivbot
 from live import close_replacement_diagnostics, executor
 from live.freshness import FreshnessLedger
+from live.order_churn_gate import OrderChurnGateState
 from live.reconciler import annotate_order_deltas
 from passivbot import Passivbot
 
@@ -230,3 +231,47 @@ async def test_real_plan_records_cancel_first_blocker_without_submitting_a_creat
 
     assert actions == [("cancel", [old])]
     assert "last_create_defer=account_cancel_first_barrier" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "distance, reason",
+    [
+        (0.02, "order_churn_allowance_exhausted"),
+        (None, "order_churn_market_data_unavailable"),
+    ],
+)
+async def test_churn_admission_reports_current_blocker_for_delayed_close(
+    distance, reason, scenario, monkeypatch, caplog
+):
+    bot, old, new, wave = scenario
+    close_replacement_diagnostics.observe_plan(bot, wave, [old], [new], 900)
+    await _cancel(bot, old, wave, monkeypatch)
+    executor._observe_close_create_defer(bot, [new], "account_cancel_first_barrier")
+
+    settings = {
+        "order_replacement_churn_gate_activation_count": 1,
+        "order_replacement_churn_gate_window_minutes": 10,
+        "order_replacement_churn_gate_market_distance_fraction": 0.005,
+    }
+    bot.live_value = settings.__getitem__
+    bot._is_market_execution_order = lambda order: order["type"] == "market"
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.action_attempt_timestamps.append(executor.time.monotonic())
+    monkeypatch.setattr(Passivbot, "_emit_execution_create_filter_event", lambda *a, **kw: None)
+    close = {**new, "_churn_evidence": True}
+    other_scope = {**new, "side": "buy", "position_side": "short", "_churn_evidence": True}
+    if distance is None:
+        other_scope["_churn_gate_market_distance"] = 0.02
+    else:
+        close["_churn_gate_market_distance"] = distance
+    unaffected = {**new, "symbol": "ETH/USDT:USDT"}
+
+    assert executor._apply_order_churn_admission(
+        bot, [close, other_scope, unaffected]
+    ) == [unaffected]
+    _observe(bot, monkeypatch, now_ms=61_000)
+
+    assert "close replacement delayed" in caplog.text
+    assert f"last_create_defer={reason}" in caplog.text
+    assert "last_create_defer=account_cancel_first_barrier" not in caplog.text

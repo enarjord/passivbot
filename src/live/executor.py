@@ -369,11 +369,13 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
                 for order in deferred
                 if str(order.get("_churn_gate_reason")) == reason
             ]
+            reason_code = reason_codes.get(reason, ReasonCodes.ORDER_CHURN_ADMISSION)
+            _observe_close_create_defer(bot, grouped, reason_code)
             _pb_attr("Passivbot")._emit_execution_create_filter_event(
                 bot,
                 event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
                 status="deferred",
-                reason_code=reason_codes.get(reason, ReasonCodes.ORDER_CHURN_ADMISSION),
+                reason_code=reason_code,
                 order_count=len(grouped),
                 symbols=_symbols_from_orders(grouped),
                 wave=getattr(bot, "_order_wave_in_progress", None),
