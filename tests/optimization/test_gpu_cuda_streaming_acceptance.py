@@ -50,14 +50,15 @@ def cuda_streaming_runtime(monkeypatch):
     return torch
 
 
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("sides,hsl,block_size", [
     ("long", "disabled", 1),
     ("short", "coin", 1),
     ("both", "portfolio", 1),
     ("both", "portfolio", 8),
 ])
-def test_cuda_tm_global_replay_preserves_candidate_packets_and_reuse(
-    cuda_streaming_runtime, monkeypatch, sides, hsl, block_size,
+def test_cuda_global_replay_preserves_candidate_packets_and_reuse(
+    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, block_size,
 ):
     from optimization.gpu import mps_kernel, residency, service
     from optimization.gpu.executor import BacktestRequest
@@ -89,10 +90,11 @@ def test_cuda_tm_global_replay_preserves_candidate_packets_and_reuse(
     monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: False)
     monkeypatch.setattr(service.SharedAccountReplay, "_construct_runner", construct)
     monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", capture)
-    inputs = _cuda_tick_window_fixture(sides, hsl)
+    inputs = _cuda_tick_window_fixture(sides, hsl, strategy)
     width = 9  # Exercise more than one block and a partially populated block.
     sides_count = 2 if sides == "both" else 1
     param_side = "short" if sides == "short" else "long"
+    quantity = "base_qty_fraction" if strategy == "ema_anchor" else "entry_initial_qty_fraction"
     results = []
     with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
         for use_global in (False, True):
@@ -103,7 +105,7 @@ def test_cuda_tm_global_replay_preserves_candidate_packets_and_reuse(
                 worker.register_dataset("market", dataset)
                 for cycle in range(2):
                     futures = [worker.submit(BacktestRequest(
-                        f"{cycle}-{i}", "market", {f"{param_side}_entry_initial_qty_fraction": .04 + i * .004},
+                        f"{cycle}-{i}", "market", {f"{param_side}_{quantity}": .04 + i * .004},
                     )) for i in range(width)]
                     results.append([future.result(timeout=180) for future in futures])
 

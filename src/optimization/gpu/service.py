@@ -1630,7 +1630,7 @@ class SharedAccountReplay:
             if max_throughput:
                 runner.initial_cuda_chunk_bars = CUDA_MAX_INITIAL_CHUNK_BARS
                 runner.cuda_max_scratch_policy = True
-                if (getattr(self, "strategy_kind", None) == "trailing_martingale"
+                if (getattr(self, "strategy_kind", None) in {"trailing_martingale", "ema_anchor"}
                         and runner.max_dispatch_candidate_bars is not None):
                     runner.cuda_global_replay_side_state = True
                 # `_pack_params` can expand the input shape. The runner updates

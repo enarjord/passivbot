@@ -37,11 +37,13 @@ def test_unknown_shader_dialect_is_rejected(source):
         cuda_source(source)
 
 
-def test_cuda_global_side_state_disables_shared_storage_only_for_explicit_replay():
-    source = """#define PASSIVBOT_HSL_FACTUAL_ONLY 1
-#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1
-kernel void replay(uint b [[thread_position_in_grid]]) {}
-"""
+@pytest.mark.parametrize("strategy", ["TM", "EMA"])
+def test_cuda_global_side_state_disables_shared_storage_only_for_explicit_replay(strategy):
+    source = (
+        "#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n"
+        f"#define PASSIVBOT_{strategy}_MULTICOIN_CHUNKED 1\n"
+        "kernel void replay(uint b [[thread_position_in_grid]]) {}\n"
+    )
     shared_storage = "PBReplaySideStorage<TYPE, SLOT> NAME##_storage"
     assert shared_storage in cuda_source(source)
     assert shared_storage in cuda_source("#define PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE 0\n" + source)

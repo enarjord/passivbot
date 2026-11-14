@@ -768,12 +768,18 @@ def _ema_anchor_multicoin_shader_library(
     core_ew_half_life_days: float = 180.0,
     cuda_tick_windows: bool = False,
     compact_hourly_ranges: bool = False,
+    cuda_global_replay_side_state: bool = False,
 ):
     device = gpu_device(torch)
     if cuda_tick_windows and (device != "cuda" or not temporal_chunking):
         raise ValueError("EMA Anchor tick windows require temporal CUDA replay")
     if compact_hourly_ranges and not cuda_tick_windows:
         raise ValueError("Compact hourly shaders require streamed tick windows")
+    if cuda_global_replay_side_state and (
+        device != "cuda" or not temporal_chunking or not hsl_factual_only
+        or hsl_fact_capacity or hsl_native_cache_capacity
+    ):
+        raise ValueError("Global side state requires temporal CUDA forward-risk replay")
     import passivbot_rust
 
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
@@ -790,6 +796,8 @@ def _ema_anchor_multicoin_shader_library(
         if "#if PASSIVBOT_EMA_MULTICOIN_CHUNKED" not in source:
             raise RuntimeError("GPU source is missing the EMA replay-state contract")
         source = "#define PASSIVBOT_EMA_MULTICOIN_CHUNKED 1\n" + source
+    if cuda_global_replay_side_state:
+        source = _with_cuda_global_replay_side_state(source)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -813,6 +821,14 @@ def _ema_anchor_multicoin_shader_library(
             mps_coin_capacity=mps_coin_capacity,
         )
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
+
+
+def _with_cuda_global_replay_side_state(source):
+    from optimization.gpu.cuda_kernel import CUDA_GLOBAL_REPLAY_SIDE_STATE
+
+    if f"#if {CUDA_GLOBAL_REPLAY_SIDE_STATE}\n" not in source:
+        raise RuntimeError("GPU source is missing the global replay side-state contract")
+    return f"#define {CUDA_GLOBAL_REPLAY_SIDE_STATE} 1\n" + source
 
 
 @lru_cache(maxsize=32)
@@ -876,11 +892,7 @@ def _trailing_martingale_multicoin_shader_library(
             )
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
     if cuda_global_replay_side_state:
-        from optimization.gpu.cuda_kernel import CUDA_GLOBAL_REPLAY_SIDE_STATE
-
-        if f"#if {CUDA_GLOBAL_REPLAY_SIDE_STATE}\n" not in source:
-            raise RuntimeError("GPU source is missing the global replay side-state contract")
-        source = f"#define {CUDA_GLOBAL_REPLAY_SIDE_STATE} 1\n" + source
+        source = _with_cuda_global_replay_side_state(source)
     if hsl_capacity:
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
@@ -2327,6 +2339,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self.core_metric_mask, self.core_ew_half_life_days,
             bool(getattr(self, "_streamed_tick_paths", {})),
             bool(getattr(self, "compact_hourly_ranges", False)),
+            self.cuda_global_replay_side_state,
         )
 
 

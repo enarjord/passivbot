@@ -2900,6 +2900,9 @@ inline bool force_close_ema_multicoin_delisted_fused(
 
 // A temporal dispatch boundary preserves the entire candidate replay. Output
 // finalization runs only at its actual end step; partial chunks never become scores.
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE && (!PASSIVBOT_EMA_MULTICOIN_CHUNKED || !PASSIVBOT_HSL_FACTUAL_ONLY)
+#error CUDA global replay state requires factual temporal EMA Anchor replay
+#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
 struct EmaMulticoinReplayState {
     EmaMulticoinSideState side;
@@ -2997,10 +3000,20 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_fraction = config.allowance_fraction;
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    // CUDA keeps each candidate's side state in its existing temporal row.
+    // HSL binds the current chunk's transient context before it is used.
+    device EmaMulticoinSideState& side = replay_states[b].side;
+    if (begin_k == 1) {
+#else
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, side, 0);
+#endif
     init_ema_multicoin_side_state(
         side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
     );
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    }
+#endif
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
@@ -3065,7 +3078,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         side = replay_states[b].side;
+#endif
         account = replay_states[b].account;
         fills = replay_states[b].fills;
 
@@ -3429,7 +3444,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].side = side;
+#endif
         replay_states[b].account = account;
         replay_states[b].fills = fills;
 
@@ -3774,8 +3791,14 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         return;
     }
 
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    device EmaMulticoinSideState& long_side = replay_states[b].common.side;
+    device EmaMulticoinSideState& short_side = replay_states[b].short_side;
+    if (begin_k == 1) {
+#else
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, long_side, 0);
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, short_side, 1);
+#endif
     init_ema_multicoin_side_state(
         long_side, long_config, coin_settings ORGANILLO_PASS,
         long_coin_overrides, C
@@ -3784,6 +3807,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         short_side, short_config, coin_settings ORGANILLO_PASS,
         short_coin_overrides, C
     );
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    }
+#endif
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -3833,8 +3859,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         long_side = replay_states[b].common.side;
         short_side = replay_states[b].short_side;
+#endif
         account = replay_states[b].common.account;
         fills = replay_states[b].common.fills;
 
@@ -4362,8 +4390,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].common.side = long_side;
         replay_states[b].short_side = short_side;
+#endif
         replay_states[b].common.account = account;
         replay_states[b].common.fills = fills;
 
