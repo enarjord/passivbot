@@ -184,6 +184,10 @@ def cuda_max_vram_reserve_bytes(total):
     return max(512 * 2**20, int(total * 0.10))
 
 
+class CudaReplayMemoryPressure(MemoryError):
+    """Live max-mode admission failed before candidate replay or allocations."""
+
+
 def check_cuda_invariant_memory(
     torch, invariant_bytes, *, working_set=None, require_free=True, input_memory_budget=None,
 ):
@@ -208,7 +212,7 @@ def check_cuda_invariant_memory(
     if require_free and max_throughput:
         reserve = cuda_max_vram_reserve_bytes(total)
         if invariant_bytes > free - reserve:
-            raise MemoryError(
+            raise CudaReplayMemoryPressure(
                 f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
                 f"with {free / 2**30:.2f} GiB currently free and a {reserve / 2**30:.2f} GiB reserve"
             )
@@ -488,9 +492,45 @@ class CudaSuiteResidency:
     def owns(self, data):
         return any(entry["data"] is data for entry in self._entries.values())
 
+    def _entry(self, proxy):
+        return next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
+
     def register(self, proxy):
-        entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
-        entry["owners"].append(weakref.ref(proxy))
+        self._entry(proxy)["owners"].append(weakref.ref(proxy))
+
+    def _streamed_fallback_bytes(self, proxy):
+        data = proxy.data
+        if (self.device != "cuda" or not getattr(proxy, "_max_throughput", False)
+                or not proxy.temporal_chunking or not supports_streamed_ticks(proxy.strategy_kind, self.device)
+                or data["stream_tick_inputs"]):
+            return None
+        entry = self._entry(proxy)
+        if not METAL_STREAMED_TICK_FIELDS <= entry["files"].keys():
+            return None
+        streamed = multicoin_resident_bytes(data["n"], data["n_coins"], device=self.device,
+                                           stream_tick_inputs=True)
+        return streamed if streamed < data["resident_bytes"] else None
+
+    def can_stream_on_pressure(self, proxy):
+        return self._streamed_fallback_bytes(proxy) is not None
+
+    def stream_on_pressure(self, proxy):
+        """Switch packed tick files to windowed inputs after a live admission failure."""
+        import torch
+
+        streamed = self._streamed_fallback_bytes(proxy)
+        if streamed is None:
+            raise RuntimeError("CUDA packed input cannot switch to streamed ticks")
+        if self._active is self._entry(proxy):
+            self._release(torch)
+        data = proxy.data
+        logging.info("GPU max input pressure | transport=streamed_ticks coins=%d bars=%d "
+                     "previous_mib=%.1f resident_mib=%.1f", data["n_coins"], data["n"],
+                     data["resident_bytes"] / 2**20, streamed / 2**20)
+        # Dense and streamed packers write identical tick files. Keep the
+        # existing dense hourly table and cache identity for every owner.
+        data.update(stream_tick_inputs=True, resident_bytes=streamed)
+        self._activate(proxy, torch)
 
     @staticmethod
     def _clear_runners(entry):
@@ -518,7 +558,17 @@ class CudaSuiteResidency:
     def activate(self, proxy):
         import torch
 
-        entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
+        try:
+            self._activate(proxy, torch)
+        except CudaReplayMemoryPressure:
+            if not self.can_stream_on_pressure(proxy):
+                raise
+        else:
+            return
+        self.stream_on_pressure(proxy)
+
+    def _activate(self, proxy, torch):
+        entry = self._entry(proxy)
         if self._active is not entry:
             self._release(torch)
             # Driver and kernel allocations can remain resident after tensors
@@ -546,6 +596,12 @@ class CudaSuiteResidency:
         if not proxy.runners and proxy.fused_runner is None:
             try:
                 proxy._create_runners()
+            except CudaReplayMemoryPressure:
+                if not self.can_stream_on_pressure(proxy):
+                    _cleanup_after_failure(self._release, torch)
+                # The fallback releases this entry after the failed constructor
+                # and its device references have left the traceback.
+                raise
             except BaseException:
                 _cleanup_after_failure(self._release, torch)
                 raise

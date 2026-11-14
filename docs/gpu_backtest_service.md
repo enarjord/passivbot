@@ -203,7 +203,10 @@ other tick fields remain int32. Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured
 device or host allowance. The preference is frozen before history preparation and
 reused by cache-header admission and the owning replay worker. CUDA still checks
-actual free VRAM when activating each dataset. Streaming does not split the account
+actual free VRAM when activating each dataset. When live memory pressure prevents
+resident inputs or minimum replay scratch from fitting, CUDA `max` can release
+resident tick tensors and stream the same packed tick files for the rest of the
+run. The existing hourly table stays in its original layout. Streaming does not split the account
 into separate date scenarios: positions, balances, indicators and metric state
 continue across temporal replay chunks. Other strategy layouts are unchanged.
 Validation uses bounded conversion and mask buffers without changing

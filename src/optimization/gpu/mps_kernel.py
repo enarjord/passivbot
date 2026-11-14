@@ -1603,7 +1603,7 @@ class _MulticoinReplayRunner:
         self._scratch_shape = None
 
     def _refresh_max_mode_scratch_budget(self, requested_width):
-        from optimization.gpu.residency import cuda_max_vram_reserve_bytes
+        from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
 
         device = self.bars.device
         free, total = map(int, torch.cuda.mem_get_info(device))
@@ -1638,10 +1638,12 @@ class _MulticoinReplayRunner:
                 free, total = map(int, torch.cuda.mem_get_info(device))
                 reserve = cuda_max_vram_reserve_bytes(total)
         if free < reserve:
-            raise MemoryError("CUDA free VRAM fell below the max-mode replay reserve")
+            raise CudaReplayMemoryPressure("CUDA free VRAM fell below the max-mode replay reserve")
         allowance = min(self._max_mode_scratch_ceiling_bytes, free - reserve + replaceable)
         if self._history_batch_bytes(1) > allowance:
-            raise MemoryError("CUDA replay state and workspace exceed free VRAM above the max-mode reserve")
+            raise CudaReplayMemoryPressure(
+                "CUDA replay state and workspace exceed free VRAM above the max-mode reserve"
+            )
         if release_scratch or requested_bytes > allowance < self.hsl_scratch_budget_bytes:
             logging.info(
                 "GPU max scratch pressure | requested_candidates=%d prior_scratch_released=%s "

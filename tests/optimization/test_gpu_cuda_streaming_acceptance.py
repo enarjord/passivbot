@@ -14,10 +14,10 @@ from test_gpu_metal_tick_windows import (
 )
 
 
-def _cuda_tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale"):
+def _cuda_tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bars=2737):
     # A tail longer than one day forces the delisted coin's remaining positions
     # closed on its last valid candle. Keep the original non-hour-aligned start.
-    return _tick_window_fixture(sides, hsl, strategy_kind, bars=2737)
+    return _tick_window_fixture(sides, hsl, strategy_kind, bars=bars)
 
 
 def test_cuda_tick_window_fixture_has_a_delisting_tail():
@@ -148,6 +148,72 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     assert all(item["tick_window_bytes"] == (chunk_bars + 2) * 2 * bytes_per_coin
                for item in dispatches[2:])
     assert all(not Path(directory).exists() for directory in spill_directories)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin"])
+def test_cuda_max_pressure_reuses_dense_packing_and_preserves_replay(
+    cuda_streaming_runtime, monkeypatch, strategy, hsl,
+):
+    from optimization.gpu import mps_kernel, residency, service
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    torch = cuda_streaming_runtime
+    original_mem_info = torch.cuda.mem_get_info
+    original_prepare = service._prepared_multicoin_data
+    original_run = mps_kernel._MulticoinReplayRunner.run
+    captures, packed = [], []
+    pressure = False
+    pressure_reads = 0
+
+    def mem_get_info(*args, **kwargs):
+        nonlocal pressure_reads
+        free, total = original_mem_info(*args, **kwargs)
+        if pressure and len(captures) == 1:
+            owner = residency.current_cuda_residency()
+            entry = owner._active
+            if entry is not None and not entry["data"]["stream_tick_inputs"]:
+                pressure_reads += 1
+                return 0, total
+        return free, total
+
+    def prepare(*args, **kwargs):
+        data = original_prepare(*args, **kwargs)
+        packed.append(data)
+        assert not data["stream_tick_inputs"] and not data["compact_hourly_ranges"]
+        return data
+
+    def capture(runner, *args, **kwargs):
+        raw = original_run(runner, *args, **kwargs)
+        captures.append((bool(runner._streamed_tick_paths), runner.compact_hourly_ranges,
+                         {key: (value.detach().cpu().clone() if isinstance(value, torch.Tensor)
+                                else deepcopy(value)) for key, value in raw.items()}))
+        return raw
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: False)
+    monkeypatch.setattr(service, "_prepared_multicoin_data", prepare)
+    monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", capture)
+    # A shorter history cannot release tick-input capacity because the maximum
+    # streamed window already covers it. Retain the non-hour phase and delist.
+    inputs = _cuda_tick_window_fixture("both", hsl, strategy, bars=9_217)
+    with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
+        with CudaBacktestService(batch_size=1, max_pending=1, tuning_mode="max",
+                                 max_dispatch_candidate_bars=128 * 2 * 2) as worker:
+            worker.register_dataset("market", dataset)
+            first = worker.submit(BacktestRequest("resident", "market", {})).result(timeout=180)
+            pressure = True
+            second = worker.submit(BacktestRequest("pressure", "market", {})).result(timeout=180)
+            third = worker.submit(BacktestRequest("sticky", "market", {})).result(timeout=180)
+
+    assert pressure_reads >= 1 and len(packed) == 1
+    assert [(streamed, compact) for streamed, compact, _ in captures] == [(False, False), (True, False), (True, False)]
+    for result, (_, _, raw) in zip((second, third), captures[1:], strict=True):
+        _assert_tick_window_output_exact(torch, captures[0][2], raw)
+        assert result.metrics == first.metrics
+        assert result.liquidated is first.liquidated and result.metadata == first.metadata
 
 
 @pytest.mark.parametrize("tuning_mode", ["off", "max"])

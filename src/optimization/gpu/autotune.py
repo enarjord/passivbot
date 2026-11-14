@@ -391,7 +391,7 @@ def cuda_history_budget(runner, free, total, *, owners=1, max_throughput=False):
     Directional owners share the allowance because both can retain scratch.
     """
     if max_throughput:
-        from optimization.gpu.residency import cuda_max_vram_reserve_bytes
+        from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
 
         reserve = cuda_max_vram_reserve_bytes(total)
     else:
@@ -402,7 +402,9 @@ def cuda_history_budget(runner, free, total, *, owners=1, max_throughput=False):
     if max_throughput:
         allowance = (free - reserve) // owners
         if minimum > allowance:
-            raise MemoryError("CUDA replay history and workspace exceed available VRAM above the max-mode reserve")
+            raise CudaReplayMemoryPressure(
+                "CUDA replay history and workspace exceed available VRAM above the max-mode reserve"
+            )
         return allowance
     if minimum > free // owners:
         raise MemoryError("CUDA replay history and workspace exceed available VRAM")

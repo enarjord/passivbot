@@ -26,6 +26,7 @@ from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import CudaReplayScratchLimit, history_dispatch_ceiling
+from optimization.gpu.residency import CudaReplayMemoryPressure
 from optimization.gpu.metric_registry import UTILIZATION_METRICS, requested_metric_features
 from optimization.gpu.core_metrics import metric_mask, finalize_observations
 
@@ -1765,21 +1766,34 @@ class SharedAccountReplay:
         """Preserve actual simulator terminal status for authoritative consumers."""
         return self._evaluate(candidates, include_status=True)
 
+    def _refresh_dispatch_memory(self, requested_width, residency):
+        try:
+            runner = self.fused_runner or self.runners[self.sides[0]]
+            runner._refresh_max_mode_scratch_budget(requested_width)
+        except CudaReplayMemoryPressure:
+            if residency is None or not residency.can_stream_on_pressure(self):
+                raise
+        else:
+            return
+        # Keep no old runner references or traceback across the release.
+        del runner
+        residency.stream_on_pressure(self)
+        self.last_evaluation_split = True
+
     def _evaluate(self, candidates: list[dict], *, include_status: bool):
         results = []
         self.last_evaluation_split = False
-        torch = self._torch
-        if getattr(self, "_cuda_residency", None) is not None:
+        residency = getattr(self, "_cuda_residency", None)
+        if residency is not None:
             if not candidates:
                 self.last_profile = {}
                 return results
-            self._cuda_residency.activate(self)
-        fused_runner = getattr(self, "fused_runner", None)
+            residency.activate(self)
         max_throughput = getattr(self, "_max_throughput", False)
         dispatch_batch_size = getattr(self, "dispatch_batch_size", self.batch_size)
         if max_throughput and candidates:
-            runner = fused_runner or self.runners[self.sides[0]]
-            runner._refresh_max_mode_scratch_budget(min(dispatch_batch_size, len(candidates)))
+            self._refresh_dispatch_memory(min(dispatch_batch_size, len(candidates)), residency)
+        fused_runner = getattr(self, "fused_runner", None)
         profile_runners = (
             (fused_runner,)
             if fused_runner is not None
@@ -1800,6 +1814,7 @@ class SharedAccountReplay:
             if self.profile_enabled
             else None
         )
+        del fused_runner, profile_runners
         self.last_profile = {}
         width = history_dispatch_ceiling(self, dispatch_batch_size)
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
@@ -1826,14 +1841,15 @@ class SharedAccountReplay:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
-            if fused_runner is not None:
+            runner = getattr(self, "fused_runner", None)
+            if runner is not None:
                 parameters = np.concatenate((parameter_matrices["long"], parameter_matrices["short"]), axis=1)
-                runner = fused_runner
             else:
                 if len(self.sides) != 1:
                     raise RuntimeError("Core GPU metrics require shared-account fused replay for both sides")
                 runner = self.runners[self.sides[0]]
                 parameters = parameter_matrices[self.sides[0]]
+            pressure = False
             try:
                 raw_output = runner.run(parameters, profile=self.profile_enabled)
             except CudaReplayScratchLimit as error:
@@ -1845,6 +1861,19 @@ class SharedAccountReplay:
                 )
                 width = error.limit
                 narrowed = True
+                continue
+            except CudaReplayMemoryPressure:
+                if not max_throughput or residency is None or not residency.can_stream_on_pressure(self):
+                    raise
+                pressure = True
+            if pressure:
+                # No candidate in this slice reached the device. Earlier
+                # slices were already reduced and keep their result offsets.
+                del runner
+                residency.stream_on_pressure(self)
+                self.last_evaluation_split = True
+                width = history_dispatch_ceiling(self, dispatch_batch_size)
+                narrowed = False
                 continue
             if profile is not None:
                 _add_gpu_runner_profile(profile, runner, side_count=len(self.sides))

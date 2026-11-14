@@ -2413,3 +2413,70 @@ def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkey
     finally:
         release.set()
         executor.close(cancel_pending=True)
+
+
+@pytest.mark.parametrize("pressure", ["precheck", "compiled", "streamed_fails"])
+def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypatch, pressure):
+    from optimization.gpu import service
+    from optimization.gpu.residency import CudaReplayMemoryPressure
+
+    attempts, reduced = [], []
+    streamed = False
+    switches = 0
+
+    def refresh(_width):
+        if pressure == "precheck" and not streamed:
+            raise CudaReplayMemoryPressure("dense reserve")
+
+    def run(parameters, *, profile):
+        rows = tuple(row[0] for row in parameters)
+        attempts.append((streamed, rows))
+        if rows[0] == 2 and (not streamed or pressure == "streamed_fails"):
+            raise CudaReplayMemoryPressure("streamed reserve" if streamed else "dense reserve")
+        return {"core_observations": rows}
+
+    def finalize(packet, metric_names, **_kwargs):
+        assert metric_names == ["value"]
+        reduced.extend(packet)
+        return [{"value": row, "liquidated": False} for row in packet]
+
+    def switch(owner):
+        nonlocal streamed, switches
+        assert not streamed
+        streamed = True
+        switches += 1
+        owner.fused_runner = SimpleNamespace(run=run, _refresh_max_mode_scratch_budget=refresh,
+                                             _history_batch_limit=lambda: 3)
+
+    replay = object.__new__(SharedAccountReplay)
+    replay._cuda_residency = SimpleNamespace(activate=lambda _owner: None,
+                                             can_stream_on_pressure=lambda _owner: not streamed,
+                                             stream_on_pressure=switch)
+    replay._max_throughput = True
+    replay.batch_size = 7
+    replay.profile_enabled = False
+    replay.sides = ["long", "short"]
+    replay.fused_runner = SimpleNamespace(run=run, _refresh_max_mode_scratch_budget=refresh,
+                                         _history_batch_limit=lambda: 2)
+    replay.metrics_data = {"ts0": 0, "n": 2}
+    replay.run = SimpleNamespace(interval_ms=60_000)
+    replay.core_ew_half_life_days = 180.0
+    replay.needed_metrics = {"value"}
+    replay._parameter_matrix = lambda chunk, _side: np.asarray([[row["value"]] for row in chunk])
+    replay._core_hsl_configured_enablement = lambda chunk: [False] * len(chunk)
+    monkeypatch.setattr(service, "finalize_observations", finalize)
+
+    candidates = [{"value": number} for number in range(7)]
+    if pressure == "streamed_fails":
+        with pytest.raises(CudaReplayMemoryPressure, match="streamed reserve"):
+            replay.evaluate_results(candidates)
+        assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4))]
+        assert reduced == [0, 1]
+    else:
+        assert [row.metrics["value"] for row in replay.evaluate_results(candidates)] == list(range(7))
+        assert reduced == list(range(7))
+        if pressure == "precheck":
+            assert attempts == [(True, (0, 1, 2)), (True, (3, 4, 5)), (True, (6,))]
+        else:
+            assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4)), (True, (5, 6))]
+    assert replay.last_evaluation_split and switches == 1

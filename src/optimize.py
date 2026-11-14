@@ -3447,13 +3447,13 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
     import torch
     from optimization.gpu.runtime import gpu_device
     from optimization.gpu.residency import (
-        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
+        CudaReplayMemoryPressure, check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
         prefer_streamed_ticks, supports_streamed_ticks,
     )
     device = gpu_device(torch)
+    can_stream = supports_streamed_ticks(strategy_kind, device)
     stream_tick_inputs = (
-        input_memory_budget is not None
-        and supports_streamed_ticks(strategy_kind, device)
+        input_memory_budget is not None and can_stream
         and prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
                                   interval_ms=60_000, device=device)
     )
@@ -3462,8 +3462,17 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
         compact_hourly_ranges=stream_tick_inputs)
     if device == "mps":
         check_mps_invariant_memory(torch, required)
-    else:
+        return
+    try:
         check_cuda_invariant_memory(torch, required, input_memory_budget=input_memory_budget)
+    except CudaReplayMemoryPressure:
+        if stream_tick_inputs or not can_stream:
+            raise
+        streamed = multicoin_resident_bytes(shape[0], shape[1], device=device, stream_tick_inputs=True)
+        if streamed >= required:
+            raise
+        # Only the replay owner can choose transport after releasing old inputs.
+        check_cuda_invariant_memory(torch, streamed, input_memory_budget=input_memory_budget)
 
 
 def _materialize_resolved_suite_dates(
