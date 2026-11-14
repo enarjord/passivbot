@@ -230,6 +230,30 @@ contain only the harness, synthetic recipes, tests and procedure; do not publish
 operator configs, absolute local paths, raw reports or machine-specific provenance
 without case-specific approval.
 
+### Complete-suite CUDA timing
+
+Use `passivbot optimize` to include data setup, scenario switching and result
+persistence in the measurement. Prepare and verify the inputs once using the
+[offline preparation procedure](backtesting.md#offline-preparation). Use the same checkout,
+CUDA device, prepared data, scenario suite, seed, scoring, limits, population
+size, and iteration count. In both configs, leave `optimize.gpu.batch_size` null
+and turn off screening and prefilter checks. Enable `optimize.write_all_results`.
+Set `optimize.gpu.tuning_mode` to `"conservative"` in one config and `"max"` in
+the other. Use a fresh result directory on each invocation and keep all result
+and cache files on the benchmark machine.
+
+```sh
+time passivbot optimize conservative.json --offline y --suite y
+time passivbot optimize max.json --offline y --suite y
+```
+
+Warm each mode once, then run at least three timed pairs and alternate their
+order. Count distinct persisted candidates with all requested scenarios and
+complete histories. Compare completed suites per wall hour for runs with equal
+completed work. Check the logs for actual replay widths and memory fallback.
+Use frozen candidates for result parity, since the larger seed and offspring
+cohorts in `max` can change which candidates the search evaluates.
+
 ## Ordinary-account economics and useful discoveries
 
 The Python APIs in `tools.optimizer_benchmark.account_metrics`, `replay_account`
