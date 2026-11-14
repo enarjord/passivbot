@@ -838,12 +838,18 @@ def _trailing_martingale_multicoin_shader_library(
     compact_hourly_ranges: bool = False,
     core_metric_mask: int = 0,
     core_ew_half_life_days: float = 180.0,
+    cuda_global_replay_side_state: bool = False,
 ):
     device = gpu_device(torch)
     if metal_tick_windows and (device not in {"mps", "cuda"} or not temporal_chunking):
         raise ValueError("Tick-window shaders require temporal GPU replay")
     if compact_hourly_ranges and not metal_tick_windows:
         raise ValueError("Compact hourly shaders require streamed tick windows")
+    if cuda_global_replay_side_state and (
+        device != "cuda" or not temporal_chunking or not hsl_factual_only
+        or hsl_fact_capacity or hsl_native_cache_capacity or hsl_native_coin_cache
+    ):
+        raise ValueError("Global side state requires temporal CUDA forward-risk replay")
     import passivbot_rust
 
     source = _with_tm_loss_gate_disabled(
@@ -869,6 +875,12 @@ def _trailing_martingale_multicoin_shader_library(
                 "MPS source is missing the multicoin replay-state contract"
             )
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
+    if cuda_global_replay_side_state:
+        from optimization.gpu.cuda_kernel import CUDA_GLOBAL_REPLAY_SIDE_STATE
+
+        if f"#if {CUDA_GLOBAL_REPLAY_SIDE_STATE}\n" not in source:
+            raise RuntimeError("GPU source is missing the global replay side-state contract")
+        source = f"#define {CUDA_GLOBAL_REPLAY_SIDE_STATE} 1\n" + source
     if hsl_capacity:
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
@@ -1170,6 +1182,8 @@ class _MulticoinReplayRunner:
     organillo_buffers = ()
     side_specialization = True
     cuda_whole_group_size = None
+    cuda_global_replay_side_state = False
+    cuda_global_replay_block_size = 1
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
@@ -1896,9 +1910,14 @@ class _MulticoinReplayRunner:
         replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=initial_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
-        # Serial candidates need independent CUDA blocks to spread across SMs.
-        # Preserve the existing Apple SIMD-width scheduling.
-        threads_per_threadgroup = 1 if self.bars.device.type == "cuda" else min(batch_size, 32)
+        # Shared replay state has one candidate owner per CUDA block. The
+        # global replay specialization can group independent candidates.
+        if self.bars.device.type == "cuda":
+            threads_per_threadgroup = (
+                self.cuda_global_replay_block_size if self.cuda_global_replay_side_state else 1
+            )
+        else:
+            threads_per_threadgroup = min(batch_size, 32)
         if profile_pipeline:
             launch_profile = _replay_launch_profile(
                 kernel, self.replay_kernel_name, (batch_size, 1, 1),
@@ -2650,6 +2669,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             bool(getattr(self, "_streamed_tick_paths", {})),
             bool(getattr(self, "compact_hourly_ranges", False)),
             self.core_metric_mask, self.core_ew_half_life_days,
+            self.cuda_global_replay_side_state,
         )
         return _trailing_martingale_multicoin_shader_library, args
 

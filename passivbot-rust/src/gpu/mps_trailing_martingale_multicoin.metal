@@ -15,6 +15,10 @@ using namespace metal;
 #define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) TYPE NAME
 #endif
 
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE && (!PASSIVBOT_TM_MULTICOIN_CHUNKED || !PASSIVBOT_HSL_FACTUAL_ONLY || PASSIVBOT_HSL_FACTS_ENABLED || PASSIVBOT_HSL_NATIVE_CACHE_ENABLED || PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED)
+#error CUDA global side state requires temporal forward-risk replay without retained histories
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 89;
 constant int OVERRIDE_COLS = 75;
@@ -5295,6 +5299,20 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
 
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    device TrailingMartingaleMulticoinSideState& long_side = replay_states[b].common.side;
+    device TrailingMartingaleMulticoinSideState& short_side = replay_states[b].short_side;
+    if (begin_k == 1) {
+        init_trailing_martingale_multicoin_side_state(
+            long_side, long_config, coin_settings ORGANILLO_PASS,
+            long_coin_overrides, C
+        );
+        init_trailing_martingale_multicoin_side_state(
+            short_side, short_config, coin_settings ORGANILLO_PASS,
+            short_coin_overrides, C
+        );
+    }
+#else
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
@@ -5305,6 +5323,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         short_side, short_config, coin_settings ORGANILLO_PASS,
         short_coin_overrides, C
     );
+#endif
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -5355,8 +5374,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         long_side = replay_states[b].common.side;
         short_side = replay_states[b].short_side;
+#endif
         account = replay_states[b].common.account;
         fills = replay_states[b].common.fills;
 
@@ -5907,8 +5928,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].common.side = long_side;
         replay_states[b].short_side = short_side;
+#endif
         replay_states[b].common.account = account;
         replay_states[b].common.fills = fills;
 
@@ -6143,10 +6166,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_fraction = config.allowance_fraction;
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    device TrailingMartingaleMulticoinSideState& side = replay_states[b].side;
+    if (begin_k == 1) {
+        init_trailing_martingale_multicoin_side_state(
+            side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
+        );
+    }
+#else
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
     );
+#endif
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
@@ -6210,7 +6242,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         side = replay_states[b].side;
+#endif
         account = replay_states[b].account;
         fills = replay_states[b].fills;
 
@@ -6576,7 +6610,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].side = side;
+#endif
         replay_states[b].account = account;
         replay_states[b].fills = fills;
 

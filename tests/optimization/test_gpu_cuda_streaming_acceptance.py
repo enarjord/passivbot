@@ -50,6 +50,73 @@ def cuda_streaming_runtime(monkeypatch):
     return torch
 
 
+@pytest.mark.parametrize("sides,hsl,block_size", [
+    ("long", "disabled", 1),
+    ("short", "coin", 1),
+    ("both", "portfolio", 1),
+    ("both", "portfolio", 8),
+])
+def test_cuda_tm_global_replay_preserves_candidate_packets_and_reuse(
+    cuda_streaming_runtime, monkeypatch, sides, hsl, block_size,
+):
+    from optimization.gpu import mps_kernel, residency, service
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    torch = cuda_streaming_runtime
+    construct_runner = service.SharedAccountReplay._construct_runner
+    run = mps_kernel._MulticoinReplayRunner.run
+    use_global = False
+    captures = []
+
+    def construct(replay, *args, **kwargs):
+        runner = construct_runner(replay, *args, **kwargs)
+        assert runner.cuda_global_replay_side_state
+        runner.cuda_global_replay_side_state = use_global
+        runner.cuda_global_replay_block_size = block_size
+        return runner
+
+    def capture(runner, *args, **kwargs):
+        assert runner.bars.device.type == "cuda"
+        raw = run(runner, *args, **kwargs)
+        assert runner._last_temporal_dispatch["dispatch_count"] > 1
+        assert runner._last_temporal_dispatch["threads_per_threadgroup"] == (block_size if use_global else 1)
+        captures.append({key: (value.detach().cpu().clone() if isinstance(value, torch.Tensor)
+                               else deepcopy(value)) for key, value in raw.items()})
+        return raw
+
+    monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: False)
+    monkeypatch.setattr(service.SharedAccountReplay, "_construct_runner", construct)
+    monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", capture)
+    inputs = _cuda_tick_window_fixture(sides, hsl)
+    width = 9  # Exercise more than one block and a partially populated block.
+    sides_count = 2 if sides == "both" else 1
+    param_side = "short" if sides == "short" else "long"
+    results = []
+    with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
+        for use_global in (False, True):
+            with CudaBacktestService(
+                batch_size=width, max_pending=width, tuning_mode="max", max_batch_delay=1,
+                max_dispatch_candidate_bars=61 * width * 2 * sides_count,
+            ) as worker:
+                worker.register_dataset("market", dataset)
+                for cycle in range(2):
+                    futures = [worker.submit(BacktestRequest(
+                        f"{cycle}-{i}", "market", {f"{param_side}_entry_initial_qty_fraction": .04 + i * .004},
+                    )) for i in range(width)]
+                    results.append([future.result(timeout=180) for future in futures])
+
+    assert len(captures) == 4
+    for raw in captures[1:]:
+        _assert_tick_window_output_exact(torch, captures[0], raw)
+        for key, value in captures[0].items():
+            if isinstance(value, torch.Tensor):
+                assert value.contiguous().numpy().tobytes() == raw[key].contiguous().numpy().tobytes(), key
+    for other in results[1:]:
+        assert other == results[0]
+
+
 @pytest.mark.parametrize("strategy,sides,hsl,chunk_bars", [
     ("trailing_martingale", "long", "disabled", 17),
     ("trailing_martingale", "short", "disabled", 61),

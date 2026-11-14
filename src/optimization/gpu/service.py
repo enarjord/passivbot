@@ -1630,6 +1630,9 @@ class SharedAccountReplay:
             if max_throughput:
                 runner.initial_cuda_chunk_bars = CUDA_MAX_INITIAL_CHUNK_BARS
                 runner.cuda_max_scratch_policy = True
+                if (getattr(self, "strategy_kind", None) == "trailing_martingale"
+                        and runner.max_dispatch_candidate_bars is not None):
+                    runner.cuda_global_replay_side_state = True
                 # `_pack_params` can expand the input shape. The runner updates
                 # this floor with the exact packed columns before allocating.
                 runner._max_mode_parameter_cols = len(runner.parameter_keys) * runner.replay_sides
