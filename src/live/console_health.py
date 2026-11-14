@@ -25,6 +25,7 @@ _ORDINARY_DEFER_REASONS = {
     "hsl_fill_receipt_replaced",
     "market_inputs_unavailable",
     "ordinary_plan_retired",
+    "ordinary_transport_unavailable",
     "prepared_market_inputs_unavailable",
     "prepared_strategy_inputs_expired",
     "raw_balance_changed",

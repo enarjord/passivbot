@@ -1,12 +1,19 @@
 import asyncio
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from ccxt.base.errors import DDoSProtection, NetworkError, OnMaintenance, RateLimitExceeded
+from ccxt.base.errors import (
+    DDoSProtection,
+    InvalidNonce,
+    NetworkError,
+    OnMaintenance,
+    RateLimitExceeded,
+)
 
 from live import hsl_live
+from live.market_snapshot import MarketSnapshotUnavailable
 
 
 @pytest.mark.asyncio
@@ -29,6 +36,105 @@ async def test_cycle_preserves_transport_category_and_retry_delay(error_type):
         "current_io_unavailable": True,
         "transport_failure": (category, error_type.__name__, 45.0),
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "reason", "missing"),
+    [
+        (NetworkError, "ordinary_transport_unavailable", ()),
+        (
+            MarketSnapshotUnavailable,
+            "prepared_market_inputs_unavailable",
+            ("market_snapshot",),
+        ),
+    ],
+)
+async def test_completed_ordinary_input_failure_still_services_protection(
+    error_type, reason, missing,
+):
+    bot = SimpleNamespace(
+        config={"live": {}},
+        refresh_protective_authoritative_state=AsyncMock(return_value=True),
+        execute_order_plan_to_exchange=AsyncMock(),
+        _begin_live_event_cycle=lambda **kwargs: None,
+        _handle_staged_execution_precondition_error=lambda exc: (False, {}),
+    )
+    owner = hsl_live.owner(bot)
+    owner.remember_position = Mock()
+    owner.schedule_history = owner.schedule_sources = Mock()
+    owner.protect = AsyncMock(return_value=True)
+    owner._defer_ordinary = Mock()
+    owner._ordinary_plan = AsyncMock(return_value=None)
+    failed = asyncio.get_running_loop().create_future()
+    failed.set_exception(error_type("ordinary input unavailable"))
+    owner._ordinary = failed
+
+    try:
+        result = await owner.cycle()
+
+        assert result == {
+            "updated": True,
+            "ordinary_completed": True,
+            "ordinary_executed": False,
+            "protective_work": True,
+        }
+        owner._defer_ordinary.assert_called_once_with(
+            reason, phase="preparation", **({"missing": missing} if missing else {})
+        )
+        bot.refresh_protective_authoritative_state.assert_awaited_once_with(
+            require_balance=True
+        )
+        owner.protect.assert_awaited_once()
+        bot.execute_order_plan_to_exchange.assert_not_awaited()
+        assert owner._ordinary is not failed and owner._ordinary is not None
+        await owner._ordinary
+        owner._ordinary_plan.assert_awaited_once()
+    finally:
+        owner.cancel_inputs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "retry_after", "category"),
+    [(NetworkError, 45.0, "network"), (RateLimitExceeded, 0.0, "exchange_backpressure")],
+)
+async def test_completed_ordinary_input_failure_preserves_backpressure(
+    error_type, retry_after, category,
+):
+    failure = error_type("ordinary request rejected")
+    failure.retry_after_seconds = retry_after
+    bot = SimpleNamespace(
+        refresh_protective_authoritative_state=AsyncMock(),
+        _begin_live_event_cycle=lambda **kwargs: None,
+    )
+    owner = hsl_live.owner(bot)
+    owner.protect = AsyncMock()
+    failed = asyncio.get_running_loop().create_future()
+    failed.set_exception(failure)
+    owner._ordinary = failed
+
+    assert await owner.cycle() == {
+        "updated": False,
+        "current_io_unavailable": True,
+        "transport_failure": (category, error_type.__name__, retry_after),
+    }
+    bot.refresh_protective_authoritative_state.assert_not_awaited()
+    owner.protect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_completed_ordinary_input_nonce_failure_reaches_owner_recovery():
+    bot = SimpleNamespace(_begin_live_event_cycle=lambda **kwargs: None)
+    owner = hsl_live.owner(bot)
+    failed = asyncio.get_running_loop().create_future()
+    failure = InvalidNonce("invalid nonce")
+    failed.set_exception(failure)
+    owner._ordinary = failed
+
+    with pytest.raises(InvalidNonce) as raised:
+        await owner.cycle()
+    assert raised.value is failure
 
 
 @pytest.mark.asyncio
