@@ -98,6 +98,8 @@ def connector_write(action):
                                             result
                                         )
                                     )
+                                    if not batch.needs_refresh:
+                                        batch.acknowledged_cancels.add(id(order))
                             return result
                         except position_fill_sync.WriteDeferred:
                             needs_confirmation = False
@@ -204,9 +206,11 @@ class Wave:
 class ProtectiveBatch:
     """The exact risk-reducing operations owned by one protection dispatch."""
 
-    cancels: tuple
-    creates: tuple
+    wave: Wave
+    cancels: tuple[dict, ...]
+    creates: tuple[dict, ...]
     confirmations: set[str] = field(default_factory=set)
+    acknowledged_cancels: set[int] = field(default_factory=set)
     needs_refresh: bool = False
 
     def contains(self, order, action=None):
@@ -710,7 +714,7 @@ class Owner:
             ):
                 raise runtime.InvalidHslOutput("non-protective creation in HSL batch")
             token = self.bind(wave, cancels, creates)
-            batch = self._protective_batch = ProtectiveBatch(tuple(cancels), tuple(creates))
+            batch = self._protective_batch = ProtectiveBatch(wave, tuple(cancels), tuple(creates))
             try:
                 await bot.execute_order_plan_to_exchange(
                     cancels, creates, configure_creations=False

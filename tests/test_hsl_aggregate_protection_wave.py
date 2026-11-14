@@ -20,7 +20,9 @@ import tools.run_fake_live as runner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["portfolio", "position_side"])
-@pytest.mark.parametrize("interrupt", [None, "fill_hint", "ambiguous_cancel"])
+@pytest.mark.parametrize(
+    "interrupt", [None, "fill_hint", "ambiguous_cancel", "cancel_capacity"]
+)
 async def test_aggregate_red_flattens_before_next_account_refresh(
     tmp_path, monkeypatch, mode, interrupt
 ):
@@ -142,6 +144,12 @@ async def test_aggregate_red_flattens_before_next_account_refresh(
                 monkeypatch.setattr(bot.cca, "create_order", create_with_fill_hint)
             elif interrupt == "ambiguous_cancel":
                 monkeypatch.setattr(bot.cca, "cancel_order", cancel_with_uncertain_ack)
+            elif interrupt == "cancel_capacity":
+                live_value = bot.live_value
+                monkeypatch.setattr(
+                    bot, "live_value",
+                    lambda key: 1 if key == "max_n_cancellations_per_batch" else live_value(key),
+                )
             reports = []
             assert await asyncio.wait_for(
                 owner.protect(deferred_reports=reports), 3.0
@@ -160,12 +168,18 @@ async def test_aggregate_red_flattens_before_next_account_refresh(
             assert set(bot._authoritative_pending_confirmations) >= {
                 "balance", "positions", "open_orders"
             }
-            if interrupt == "ambiguous_cancel":
+            if interrupt in {"ambiguous_cancel", "cancel_capacity"}:
                 assert [write["method"] for write in writes] == ["cancel_order"]
                 assert len(bot.cca.export_positions()) == 2
                 assert len(bot.cca.open_orders) == 1
                 completed.append(True)
-                return {"ambiguous_cancel_requires_confirmation": True}
+                if interrupt == "ambiguous_cancel":
+                    return {"ambiguous_cancel_requires_confirmation": True}
+                assert await bot.refresh_protective_authoritative_state(require_balance=True)
+                assert await owner.protect(deferred_reports=reports)
+                assert not bot.cca.open_orders
+                assert bot.cca.export_positions() == []
+                return {"panic_waited_for_resting_entry_cancel": True}
             if interrupt == "fill_hint":
                 assert create_attempts == 2
                 assert [write["method"] for write in writes] == [

@@ -695,6 +695,50 @@ async def execute_order_plan(
             )
     elif not prioritize_panic:
         await execute_cancels()
+    if protective_batch is not None:
+        unacknowledged_cancels = [
+            order for order in to_cancel
+            if id(order) not in protective_batch.acknowledged_cancels
+        ]
+        pending_cancel_scopes = {
+            _cancel_first_scope(bot, order) for order in unacknowledged_cancels
+        }
+        pending_entry_risk_scopes = {
+            decision.scope
+            for decision in protective_batch.wave.decisions
+            if any(
+                not _order_is_reduce_only(order)
+                and hsl_live.matches(decision.scope, order["symbol"], order["position_side"])
+                for order in unacknowledged_cancels
+            )
+        }
+
+        def waits_for_protective_cancel(order):
+            scope = _cancel_first_scope(bot, order)
+            return (
+                None in pending_cancel_scopes
+                or scope is None and bool(pending_cancel_scopes)
+                or scope in pending_cancel_scopes
+                or any(
+                    hsl_live.matches(risk_scope, order["symbol"], order["position_side"])
+                    for risk_scope in pending_entry_risk_scopes
+                )
+            )
+
+        waiting = [order for order in to_create if waits_for_protective_cancel(order)]
+        if waiting:
+            to_create = _orders_removed_by_identity(to_create, waiting)
+            if order_wave is not None:
+                order_wave["deferred_create"] += len(waiting)
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FIRST_BARRIER,
+                status="deferred",
+                reason_code=ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER,
+                order_count=len(waiting),
+                symbols=_symbols_from_orders(waiting),
+                wave=order_wave,
+            )
     if cancel_first_barrier:
         cancel_scopes = {_cancel_first_scope(bot, order) for order in to_cancel}
         has_unscoped_cancel = None in cancel_scopes
