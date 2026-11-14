@@ -27,7 +27,8 @@ from optimization.gpu.decimal import (
 )
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import (
-    CudaReplayScratchLimit, ReplayDurationController, record_compilation, record_replay_chunk,
+    CudaReplayScratchLimit, ReplayDurationController, cuda_max_initial_chunk_bars,
+    record_compilation, record_replay_chunk,
 )
 from optimization.gpu.runtime import (
     gpu_device,
@@ -1866,12 +1867,14 @@ class _MulticoinReplayRunner:
         submission_seconds = synchronization_wait_seconds = 0.0
         initial_bars = chunk_bars
         controller = None
+        trading_start = None
         if adaptive:
             if self.initial_cuda_chunk_bars is None:
                 controller = ReplayDurationController(chunk_bars)
             else:
-                initial_bars = min(chunk_bars, self.initial_cuda_chunk_bars)
+                initial_bars = cuda_max_initial_chunk_bars(chunk_bars, self.initial_cuda_chunk_bars, batch_size)
                 controller = ReplayDurationController(chunk_bars, initial_bars=initial_bars)
+                trading_start = max(self.requested_start_idx, max(self.run_config.warmup_bars, 1) + 1)
         adaptive_adjustments = 0
         min_processed_bars, max_processed_bars = chunk_bars, 0
         replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=initial_bars)
@@ -1950,7 +1953,11 @@ class _MulticoinReplayRunner:
             if completed_k >= stop_k:
                 break
             if controller is not None:
-                controller.observe(processed_bars, dispatch_seconds)
+                if trading_start is None:
+                    controller.observe(processed_bars, dispatch_seconds)
+                else:
+                    # Faster pre-trade work cannot grow the first active dispatch.
+                    controller.observe(processed_bars, dispatch_seconds, allow_growth=begin_k >= trading_start)
                 adaptive_adjustments += int(controller.bars != dispatch_bars)
             begin_k = completed_k
         self.interrupt_check()

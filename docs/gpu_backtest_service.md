@@ -438,6 +438,8 @@ CPU optimizer's pool rather than creating GPU preparation workers.
 Native CUDA temporal replay separately adapts history-chunk length from completed command
 durations, targeting one second within existing candle/work/history ceilings. It shrinks
 slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
+CUDA `max` starts with up to 128 candles at widths of 256 or below and reduces the initial
+range for wider launches. Fast warmup commands cannot increase the first trading chunk.
 The controller resets for each physical replay and submits no extra simulations. Replay
 state survives each boundary, and only complete accepted simulations produce results.
 This internal duration control remains active with `tuning_mode: "off"`; that setting fixes

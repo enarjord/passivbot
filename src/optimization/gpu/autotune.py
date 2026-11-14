@@ -73,19 +73,26 @@ class ReplayDurationController:
         self.target_seconds = target_seconds
         self.fast_chunks = 0
 
-    def observe(self, bars, seconds):
+    def observe(self, bars, seconds, *, allow_growth=True):
         if bars != self.bars or not math.isfinite(seconds) or seconds <= 0:
             return
         if seconds > self.target_seconds * 1.25:
             self.bars = max(1, int(bars * self.target_seconds * 0.9 / seconds))
             self.fast_chunks = 0
-        elif seconds < self.target_seconds * 0.5:
+        elif allow_growth and seconds < self.target_seconds * 0.5:
             self.fast_chunks += 1
             if self.fast_chunks >= 3:
                 self.bars = min(self.ceiling, self.bars * 2)
                 self.fast_chunks = 0
         else:
             self.fast_chunks = 0
+
+
+def cuda_max_initial_chunk_bars(ceiling, startup_bars, width):
+    """Keep the first launch's candidate-bar work within the startup reference."""
+    from optimization.gpu.model import CUDA_MAX_INITIAL_BATCH_CANDIDATES
+
+    return min(ceiling, startup_bars, max(1, startup_bars * CUDA_MAX_INITIAL_BATCH_CANDIDATES // width))
 
 
 class ReplayEvidence(deque):
