@@ -428,6 +428,14 @@ def test_missing_flat_quote_uses_historical_close_but_never_for_held_exposure():
     assert not result and unavailable[0].reason == "current_mark_unavailable"
 
 
+@pytest.mark.parametrize("age_ms, event_offset", [(10_000, 1), (0, -1)])
+def test_held_quote_outside_native_capture_clock_is_unavailable(age_ms, event_offset):
+    marks = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=NOW - age_ms)}
+    decisions, unavailable = run(bot(), marks, now_ms=NOW + event_offset)
+    assert not decisions
+    assert [item.reason for item in unavailable] == ["current_mark_unavailable"]
+
+
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     events = [

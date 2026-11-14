@@ -47,6 +47,8 @@ its own version heading. See [release status](docs/releases.md).
 - Distinguish HSL observation freshness from unavailable scopes in the console and suppress
   obsolete freshness changes already replaced by an equivalent current observation.
 
+- Preserve live HSL marks through transient quote refresh failures until their original freshness limit.
+
 - Run `passivbot backtest` and `passivbot optimize` without a config path using the refreshed
   long-only Trailing Martingale starter. The shipped example and in-code starter share a
   40-coin universe, adaptive cooldowns, and explicit CPU search ranges. Suite mode remains
