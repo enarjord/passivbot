@@ -77,6 +77,10 @@ def _authoritative_full_confirmation_surfaces(bot, passivbot_cls) -> set[str]:
 
 
 def _request_authoritative_confirmation(bot, passivbot_cls, surfaces) -> None:
+    batch = hsl_live.active_protective_batch(bot)
+    if batch is not None:
+        batch.confirmations.update(surfaces)
+        return
     requester = getattr(bot, "_request_authoritative_confirmation", None)
     if callable(requester):
         requester(surfaces)
@@ -574,6 +578,25 @@ async def execute_order_plan(
         and not bot.debug_mode
         and connector_supports_order_churn_gate(bot)
     )
+    protective_batch = (
+        hsl_live.active_protective_batch(bot) if not configure_creations else None
+    )
+    market_panics = [
+        order
+        for order in to_create
+        if protective_batch is not None and _is_dedicated_protective_market_panic(
+            bot, order, configure_creations=configure_creations
+        )
+    ]
+    panic_scopes = {_cancel_first_scope(bot, order) for order in market_panics}
+    # A fill can invalidate the wave. Cancel entries and resting orders that
+    # could reserve the panic's close quantity before submitting the close.
+    prioritize_panic = bool(market_panics) and None not in panic_scopes and all(
+        _order_is_reduce_only(order)
+        and (scope := _cancel_first_scope(bot, order)) is not None
+        and scope not in panic_scopes
+        for order in to_cancel
+    )
 
     seen = set()
     for elm in to_cancel:
@@ -648,18 +671,13 @@ async def execute_order_plan(
                     len(to_cancel),
                     len(to_create),
                 )
-    if bot.debug_mode:
-        if to_cancel:
-            logging.info(
-                "[order] debug mode would cancel orders | count=%d", len(to_cancel)
-            )
-    else:
+    async def execute_cancels():
         cancel_started_ms = _utc_ms()
         bot._order_wave_in_progress = order_wave
         try:
             res = await bot.execute_cancellations_parent(to_cancel)
         finally:
-            if cancel_first_barrier:
+            if cancel_first_barrier and protective_batch is None:
                 _request_authoritative_confirmation(
                     bot,
                     passivbot_cls,
@@ -669,6 +687,14 @@ async def execute_order_plan(
         if order_wave is not None:
             order_wave["cancel_ms"] = int(max(0, _utc_ms() - cancel_started_ms))
             order_wave["cancel_posted"] = len(res or [])
+
+    if bot.debug_mode:
+        if to_cancel:
+            logging.info(
+                "[order] debug mode would cancel orders | count=%d", len(to_cancel)
+            )
+    elif not prioritize_panic:
+        await execute_cancels()
     if cancel_first_barrier:
         cancel_scopes = {_cancel_first_scope(bot, order) for order in to_cancel}
         has_unscoped_cancel = None in cancel_scopes
@@ -963,6 +989,8 @@ async def execute_order_plan(
                 len(before_churn_admission) - len(to_create_mod),
             )
         before_capacity = len(to_create_mod)
+        if market_panics:
+            to_create_mod.sort(key=lambda order: not bot._is_market_execution_order(order))
         to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
         if order_wave is not None:
             order_wave["deferred_create"] += max(
@@ -1040,6 +1068,8 @@ async def execute_order_plan(
                 await bot.restart_bot_on_too_many_errors()
         if pending_config_error_budget:
             await bot.restart_bot_on_too_many_errors()
+        if prioritize_panic:
+            await execute_cancels()
     _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
     if to_cancel or to_create:
         bot.execution_scheduled = True
@@ -1049,6 +1079,12 @@ async def execute_order_plan(
         )
         if callable(schedule_forager_refresh):
             schedule_forager_refresh()
+    if protective_batch is not None:
+        bot._order_wave_in_progress = order_wave
+        try:
+            protective_batch.confirm(bot)
+        finally:
+            bot._order_wave_in_progress = None
     passivbot_cls._track_order_wave_confirmation(bot, order_wave)
     passivbot_cls._log_order_wave_summary(bot, order_wave)
     if bot.debug_mode:
@@ -1128,7 +1164,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
     requested_orders = list(orders)
-    orders = [order for order in orders if position_fill_sync.permits(bot, order)]
+    orders = [order for order in orders if position_fill_sync.permits(bot, order, "create")]
     _record_fresh_entry_orders(
         bot,
         "record_blocked_orders",
@@ -1381,21 +1417,24 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of cancellations, prioritising reduce-only orders."""
     passivbot_cls = _pb_attr("Passivbot")
     max_cancellations = int(bot.live_value("max_n_cancellations_per_batch"))
-    orders = [order for order in orders if position_fill_sync.permits(bot, order)]
+    orders = [order for order in orders if position_fill_sync.permits(bot, order, "cancel")]
     if not orders:
         return []
+    protective_batch = hsl_live.active_protective_batch(bot)
+    if protective_batch is not None:
+        orders.sort(key=_order_is_reduce_only)
     requested_orders = list(orders)
     if len(orders) > max_cancellations:
-        try:
-            reduce_only_orders = [x for x in orders if _order_is_reduce_only(x)]
-            rest = [x for x in orders if not _order_is_reduce_only(x)]
-            orders = (reduce_only_orders + rest)[:max_cancellations]
-        except Exception as exc:
-            logging.error(
-                "[order] cancellation priority filtering failed; using input order | error_type=%s",
-                bounded_exception_type(exc),
-            )
-            orders = orders[:max_cancellations]
+        if protective_batch is None:
+            try:
+                orders.sort(key=lambda order: not _order_is_reduce_only(order))
+            except Exception as exc:
+                logging.error(
+                    "[order] cancellation priority filtering failed; using input order | error_type=%s",
+                    bounded_exception_type(exc),
+                )
+                orders = requested_orders
+        orders = orders[:max_cancellations]
         deferred = _orders_removed_by_identity(requested_orders, orders)
         emitter = getattr(bot, "_emit_execution_cancel_filter_event", None)
         if callable(emitter):
