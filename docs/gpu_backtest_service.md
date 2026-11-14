@@ -432,9 +432,6 @@ parent population size. The optimizer checkpoints the pending population and the
 last accepted cohort target at search boundaries. An unfinished width trial keeps
 its pending population on resume while new observations start at the accepted target.
 The `conservative`, `refresh` and `max` modes all start with fresh observations.
-Persistent advisory calibration, richer workload classes, residency budgets and
-further CPU/evolution cadence experiments remain development work. This policy does not
-claim a globally optimal width or a representative optimizer speedup.
 
 Native CPU preparation retains canonical policy validation and lowering. Its optional
 static-identity projection compares the same top-level input boundary as the full key,
@@ -444,8 +441,11 @@ when every registered variant for a scenario and exchange selects one coin.
 GPU parameter compilation omits only the recording snapshots `_raw`,
 `_raw_effective` and `_transform_log` for ordinary dictionary inputs; execution fields and
 prepared source owners remain intact. Unsupported input shapes use canonical lowering.
-The GPU path still prepares candidates on one CPU producer; `optimize.n_cpus` controls the
-CPU optimizer's pool rather than creating GPU preparation workers.
+CUDA `max` can prepare an eligible cohort in multiple CPU processes. Workers verify the
+same Rust artifact and return canonical candidate plans in order. The optimizer owns
+the pending cohort, scenario admission, scoring and checkpoints. It limits the worker
+pool using usable CPU capacity, available RAM, input packing and the candidate window.
+Other GPU modes prepare candidates serially. `optimize.n_cpus` controls the CPU optimizer pool.
 
 Native CUDA temporal replay separately adapts history-chunk length from completed command
 durations, targeting one second within existing candle/work/history ceilings. It shrinks
