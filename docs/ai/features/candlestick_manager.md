@@ -643,6 +643,14 @@ Selections retain complete outage bounds and the existing owned-record revision,
 external-index replacement and conservative unowned-list behavior. No retry or
 trading permission is cached, and payload/index durability ordering is unchanged.
 
+The present-candle refresh decision reads the last refresh and last finalized
+timestamps from one checked index. Final candle gap classification shares one
+index between metadata and physical-hole checks. Each historical missing-span
+pass and each synchronous present gap fetch decision use one checked gap index.
+Batched one-minute EMA spans share one newly checked index after fetching candles
+and retain each span's coverage bounds. Each physical-hole check still reads
+proof over the full hole.
+
 Unknown-gap coverage checks build one contiguous timestamp index after copying,
 sorting and excluding provisional synthetic candles. All gap slices in that
 synchronous cohort share the index, avoiding NumPy's repeated materialization of

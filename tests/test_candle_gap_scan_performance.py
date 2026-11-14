@@ -63,12 +63,12 @@ async def test_present_and_historical_sparse_scan_normalizes_metadata_once(tmp_p
                  added_at=now, last_retry_at=now) for i in range(1, 2*n, 2)]
     cm._save_known_gaps_enhanced(symbol, gaps)
     monkeypatch.setattr(cm, '_load_from_disk', lambda *a, **kw: arr)
-    original = cm._get_known_gaps_enhanced
+    original = cm._ensure_symbol_index
     calls = []
-    def counted(*args):
-        calls.append(1)
-        return original(*args)
-    monkeypatch.setattr(cm, '_get_known_gaps_enhanced', counted)
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(cm, '_ensure_symbol_index', counted)
     result = await cm.get_candles(symbol, start_ts=0, end_ts=2*n*ONE_MIN_MS, max_age_ms=None,
                                   standardize=standardize)
     assert len(calls) < 12  # independent of thousands of missing spans

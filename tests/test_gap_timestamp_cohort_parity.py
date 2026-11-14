@@ -4,7 +4,7 @@ All candles, clocks and metadata are synthetic. No exchange calls or live files.
 """
 import copy
 import random
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -23,6 +23,8 @@ class StridedSearchReference(CandlestickManager):
         symbol: str,
         start_ts: int,
         end_ts: int,
+        *,
+        index: Optional[dict] = None,
     ) -> List[Tuple[int, int]]:
         """Return full still-missing spans from unknown gaps overlapping a range.
 
