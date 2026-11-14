@@ -692,7 +692,8 @@ class Owner:
                 try:
                     result = task.result()
                 except (NetworkError, MarketSnapshotUnavailable):
-                    self.quotes.pop(symbol, None)
+                    # A transient refresh failure does not invalidate a prior
+                    # observation or change its fetch time.
                     continue
                 if not discarded:
                     quotes.update(result)
@@ -726,8 +727,7 @@ class Owner:
                     task.cancel()
         collect()
         self.quotes.update(quotes)
-        # Earlier factual quotes remain usable only until their original TTL;
-        # capture validates each fetched time, including held marks.
+        # Capture and admission enforce the original TTL for held marks.
         return {
             symbol: quote for symbol, quote in self.quotes.items() if symbol in symbols
         }

@@ -625,8 +625,8 @@ def capture(
             )
             if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
                 mark, mark_at = quote.last, fact_time("quote", quote, quote.fetched_ms)
-                if (fact_clock_projector is not None and size != 0
-                        and now_ms - mark_at > max_current_age_ms):
+                # A held mark must still be current at the native capture time.
+                if size != 0 and not 0 <= now_ms - mark_at <= max_current_age_ms:
                     pair_problems[key] = "current_mark_unavailable"
                     continue
                 mark_observations[key] = quote.fetched_ms
