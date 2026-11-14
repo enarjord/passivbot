@@ -53,3 +53,9 @@ def test_packing_and_wide_admission_keep_headroom_for_cuda_owner(monkeypatch):
     small = capacity.cuda_plan_worker_count(planner, admission_slots=512, available_rows=512)
     assert wide == 0
     assert small == 4
+
+
+@pytest.mark.parametrize("host,expected", [(None, False), ((9, 30), False), ((20, 19), False), ((10, 20), True)])
+def test_resident_pool_reserves_remaining_parent_headroom_without_double_charging_workers(monkeypatch, host, expected):
+    monkeypatch.setattr(capacity, "_host_capacity", lambda: host)
+    assert capacity.cuda_plan_pool_fits(parent_bytes=20, workers=8) is expected

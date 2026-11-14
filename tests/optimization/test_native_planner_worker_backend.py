@@ -51,15 +51,17 @@ def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
 
 
 def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
+    from optimization import native_planner_capacity
+
     search = object.__new__(gpu_backend._Search)
     search._preparation_lifetime = object()
     search._preparation_admission_slots = 256
     search._preparation_workers = None
     search._largest_preparation_window = 0
     search.session = SimpleNamespace(max_candidates=12)
-    search.registry = SimpleNamespace(planner=object())
+    search.registry = SimpleNamespace(planner=SimpleNamespace(bindings=()))
     search.interrupt_check = lambda: None
-    pool = SimpleNamespace(worker_count=4)
+    pool = SimpleNamespace(worker_count=4, pending_count=0)
     chosen = []
 
     def select(_planner, _lifetime, *, admission_slots, available_rows, interrupt_check):
@@ -67,12 +69,56 @@ def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
         return pool
 
     monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", select)
+    monkeypatch.setattr(native_planner_capacity, "cuda_plan_pool_fits", lambda *args, **kwargs: True)
     assert search._workers_for_window(0) is None
     assert search._workers_for_window(1) is None
     assert search._workers_for_window(32) is pool
     assert search._workers_for_window(3) is None
     assert search._workers_for_window(4) is pool
     assert chosen == [(256, 12)]
+
+
+def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkeypatch):
+    from optimization import native_planner_capacity
+
+    search = object.__new__(gpu_backend._Search)
+    search._preparation_admission_slots = 256
+    search._preparation_workers = None
+    search._largest_preparation_window = 0
+    search.session = SimpleNamespace(max_candidates=128)
+    planner = object()
+    search.registry = SimpleNamespace(planner=planner)
+    search.interrupt_check = lambda: None
+    phases = []
+    search._preparation_lifetime = SimpleNamespace(close=lambda: phases.append("retired"))
+    pool = SimpleNamespace(worker_count=4, pending_count=0)
+
+    def open_pool(*_args, **_kwargs):
+        phases.append("open")
+        return pool
+
+    def estimate(candidate_planner, admission_slots):
+        assert candidate_planner is planner and admission_slots == 256
+        phases.append("estimate")
+        return 123, 45
+
+    def fits(*, parent_bytes, workers):
+        assert parent_bytes == 123 and workers == 4
+        return False
+
+    monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", open_pool)
+    monkeypatch.setattr(native_planner_capacity, "cuda_plan_preparation_memory", estimate)
+    monkeypatch.setattr(native_planner_capacity, "cuda_plan_pool_fits", fits)
+
+    assert search._workers_for_window(128) is pool
+    pool.pending_count = 1
+    with pytest.raises(RuntimeError, match="pending rows across cohorts"):
+        search._workers_for_window(128)
+    assert search._preparation_workers is pool and phases == ["open", "estimate"]
+    pool.pending_count = 0
+    assert search._workers_for_window(128) is None
+    assert search._workers_for_window(256) is None
+    assert search._preparation_workers is None and phases == ["open", "estimate", "retired"]
 
 
 def test_cuda_worker_startup_is_interruptible_before_admission(monkeypatch, tmp_path, file_backed_planner):
@@ -143,6 +189,7 @@ def test_ordered_workers_preserve_gpu_request_plans_records_and_resume(
         parallel_rows.append(row)
 
     monkeypatch.setattr(native_planner_capacity, "cuda_plan_worker_count", worker_count)
+    monkeypatch.setattr(native_planner_capacity, "cuda_plan_pool_fits", lambda *args, **kwargs: True)
     assert execute(base, SimpleNamespace(record=serial_rows.append), serial_path) == {
         "pool": None, "pool_terminated": False,
     }

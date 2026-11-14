@@ -114,7 +114,7 @@ def _host_capacity():
         return None
 
 
-def _preparation_memory(planner, admission_slots):
+def cuda_plan_preparation_memory(planner, admission_slots):
     # Input packing is owned by one CUDA worker. Use the largest input span,
     # including its source pages and full packed view, across registered datasets.
     packing = 0
@@ -143,9 +143,20 @@ def cuda_plan_worker_count(planner, *, admission_slots, available_rows):
     if capacity is None:
         return 0
     cpus, available = capacity
-    parent_bytes, worker_bytes = _preparation_memory(planner, admission_slots)
+    parent_bytes, worker_bytes = cuda_plan_preparation_memory(planner, admission_slots)
     memory_workers = max(0, available - parent_bytes) // worker_bytes
     cpu_workers = max(0, cpus - _CPU_RESERVE)
     demand_workers = available_rows // _MINIMUM_CANDIDATES_PER_WORKER
     feasible = min(memory_workers, cpu_workers, demand_workers)
     return next((workers for workers in _WORKER_COUNTS if workers <= feasible), 0)
+
+
+def cuda_plan_pool_fits(*, parent_bytes, workers):
+    """Check an existing idle pool before submitting work for the next cohort."""
+    capacity = _host_capacity()
+    if capacity is None:
+        return False
+    cpus, available = capacity
+    # Available memory already excludes resident worker pages. Reserve the
+    # remaining parent/replay budget without charging those pages a second time.
+    return workers <= cpus - _CPU_RESERVE and available >= parent_bytes

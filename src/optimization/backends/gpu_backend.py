@@ -90,6 +90,7 @@ class _Search:
         self.screening_policy = screening_policy
         self._preparation_lifetime = preparation_lifetime
         self._preparation_admission_slots = preparation_admission_slots
+        self._preparation_parent_bytes = 0
         self._preparation_workers = None
         self._largest_preparation_window = 0
         self._progress = OptimizerProgress(lambda: dict(
@@ -190,6 +191,18 @@ class _Search:
     def _workers_for_window(self, pending_count):
         if self._preparation_lifetime is None:
             return None
+        workers = self._preparation_workers
+        if workers is not None:
+            from optimization.native_planner_capacity import cuda_plan_pool_fits
+
+            if workers.pending_count:
+                raise RuntimeError("CUDA CPU preparation left pending rows across cohorts")
+            if not cuda_plan_pool_fits(parent_bytes=self._preparation_parent_bytes, workers=workers.worker_count):
+                self._preparation_lifetime.close()
+                self._preparation_workers = None
+                self._preparation_lifetime = None
+                logging.info("CUDA max CPU preparation | retiring workers under host pressure; continuing serially")
+                return None
         available_rows = min(self.session.max_candidates, pending_count)
         if available_rows < 2:
             return None
@@ -200,6 +213,12 @@ class _Search:
                 admission_slots=self._preparation_admission_slots, available_rows=available_rows,
                 interrupt_check=self.interrupt_check,
             )
+            if self._preparation_workers is not None:
+                from optimization.native_planner_capacity import cuda_plan_preparation_memory
+
+                self._preparation_parent_bytes, _ = cuda_plan_preparation_memory(
+                    self.registry.planner, self._preparation_admission_slots,
+                )
         workers = self._preparation_workers
         return workers if workers is not None and available_rows >= workers.worker_count else None
 
