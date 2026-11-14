@@ -89,6 +89,7 @@ class NativeBacktestService:
                 headroom=self._max_headroom if self._max_throughput else self._headroom,
                 diagnostics=diagnostics,
                 expandable_producer=max_cohort_width is not None,
+                max_throughput=self._max_throughput,
             ) if automatic else None
         )
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)

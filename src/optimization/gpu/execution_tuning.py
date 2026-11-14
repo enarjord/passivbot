@@ -19,7 +19,7 @@ LONG_EVIDENCE_SECONDS = 30.0
 
 class ExecutionBatchTuner:
     def __init__(self, *, initial=64, headroom=lambda: True, enabled=True, diagnostics=False,
-                 expandable_producer=False):
+                 expandable_producer=False, max_throughput=False):
         self.initial = initial
         self.headroom = headroom
         self.enabled = enabled
@@ -31,6 +31,7 @@ class ExecutionBatchTuner:
         self._split_observation = None
         self._allow_trial = False
         self._expandable_producer = expandable_producer
+        self._max_throughput = max_throughput or expandable_producer
         # The device owner publishes trial demand separately from the baseline
         # that the optimizer can use to restart with fresh observations.
         self.cohort_width = initial
@@ -72,7 +73,7 @@ class ExecutionBatchTuner:
             # completion is observed. Its old allocation-shape evidence expires.
             controller = self.controllers.pop(dataset_id, None)
             self._demand.pop(dataset_id, None)
-            if transport_changed and controller is not None:
+            if controller is not None and (transport_changed or self._max_throughput):
                 self._restart_widths[dataset_id] = self._accepted_width(controller)
         self._ceilings[dataset_id] = ceiling
         if dataset_id in self._restart_widths:
@@ -112,12 +113,14 @@ class ExecutionBatchTuner:
                 min_seconds=EVIDENCE_SECONDS,
                 long_window_samples=LONG_EVIDENCE_SAMPLES,
                 long_window_seconds=LONG_EVIDENCE_SECONDS,
-                rate_aggregation="largest_count",
+                rate_aggregation="per_count" if self._max_throughput else "largest_count",
                 shrink_min_rate_ratio=1.0,
                 growth_min_rate_ratio=1.03 if self._expandable_producer else 1.0,
+                require_repeatable_width=self._max_throughput,
                 growth_limit=lambda: (
                     controller.ceiling
-                    if self._expandable_producer and controller.last_comparison_count == controller.width
+                    if (self._expandable_producer and controller.last_comparison_count == controller.width
+                        and controller.last_comparison_frequency >= 2)
                     else self._demand[dataset_id]
                 ),
                 can_grow=lambda: self.headroom(),

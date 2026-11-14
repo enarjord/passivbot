@@ -125,7 +125,8 @@ class BatchController:
     A long window can finish with fewer sustained, expensive observations;
     callers that omit it retain the normal sample and duration requirements.
     Largest-count comparisons require a measured change in dispatch capacity
-    before accepting a new width.
+    before accepting a new width. Repeatable-width trials require at least two
+    warm observations at their proposed width.
     """
 
     def __init__(
@@ -145,6 +146,7 @@ class BatchController:
         long_window_seconds=None,
         shrink_min_rate_ratio=0.98,
         growth_min_rate_ratio=1.05,
+        require_repeatable_width=False,
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -155,6 +157,8 @@ class BatchController:
             raise ValueError("batch evidence duration must be finite and non-negative")
         if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count", "largest_count"}:
             raise ValueError("batch rate aggregation must be median, per_count or largest_count")
+        if require_repeatable_width and rate_aggregation != "per_count":
+            raise ValueError("repeatable batch widths require per-count rate aggregation")
         for ratio in (shrink_min_rate_ratio, growth_min_rate_ratio):
             if (isinstance(ratio, bool) or not isinstance(ratio, (int, float))
                     or not math.isfinite(ratio) or ratio <= 0):
@@ -182,6 +186,7 @@ class BatchController:
         self.window_samples = window_samples
         self.min_seconds = min_seconds
         self.rate_aggregation = rate_aggregation
+        self.require_repeatable_width = require_repeatable_width
         self.shrink_min_rate_ratio = float(shrink_min_rate_ratio)
         self.growth_min_rate_ratio = float(growth_min_rate_ratio)
         self.long_window_samples = long_window_samples
@@ -200,14 +205,15 @@ class BatchController:
         self.seconds = 0.0
         self.seen = set()
         self.baseline = None
+        self._retry_growth_width = None
         self.direction = -1 if self.width == self.ceiling else 1
         self.cooldown = 0
 
     def _comparison_tokens(self, prefix=""):
-        if self.rate_aggregation != "largest_count":
+        if self.rate_aggregation != "largest_count" and not self.require_repeatable_width:
             return []
         return [
-            "rate_aggregation=largest_count",
+            f"rate_aggregation={self.rate_aggregation}",
             f"{prefix}comparison_count={self.last_comparison_count}",
             f"{prefix}comparison_samples={self.last_comparison_samples}",
             f"{prefix}comparison_frequency={self.last_comparison_frequency}",
@@ -254,14 +260,13 @@ class BatchController:
                                  for count, frequency in self._count_frequencies.items())
             actual_rate = candidates / duration
             rate = actual_rate
-            if self.rate_aggregation == "largest_count":
-                # Compare the fullest shape that actually ran. A configured
-                # ceiling is not the throughput of a mix of startup/tail fills.
-                # Partial-only workloads still supply a measured shape; no
-                # missing full-width timing is extrapolated or manufactured.
+            if self.rate_aggregation == "largest_count" or self.require_repeatable_width:
+                # Keep the fullest actual shape visible even when the decision
+                # rate combines the measured counts across the window.
                 count = max(self._durations_by_count)
                 durations = self._durations_by_count[count]
-                rate = count / statistics.median(durations)
+                if self.rate_aggregation == "largest_count":
+                    rate = count / statistics.median(durations)
                 self.last_comparison_count = count
                 self.last_comparison_samples = len(durations)
                 self.last_comparison_frequency = self._count_frequencies[count]
@@ -270,10 +275,11 @@ class BatchController:
         self.last_window_rate = rate
         self.last_window_actual_rate = actual_rate
         evidence_seconds = self.seconds
+        count_frequencies = self._count_frequencies
         self.samples.clear()
         self._replay_durations.clear()
         self._durations_by_count.clear()
-        self._count_frequencies.clear()
+        self._count_frequencies = {}
         self.seconds = 0.0
         if self.baseline is not None:
             old_width, old_rate = self.baseline
@@ -283,7 +289,17 @@ class BatchController:
             # generic tuning retains its legacy plateau/growth thresholds.
             ratio = self.shrink_min_rate_ratio if shrinking else self.growth_min_rate_ratio
             effective = True
-            if self.rate_aggregation == "largest_count":
+            if self.require_repeatable_width:
+                effective = count_frequencies.get(self.width, 0) >= 2
+                if not effective and not shrinking:
+                    # An underfilled trial can identify a feasible intermediate
+                    # probe. Accept it only after it has its own warm window.
+                    self._retry_growth_width = max(
+                        (count for count, frequency in count_frequencies.items()
+                         if old_width < count < self.width and frequency >= 2),
+                        default=None,
+                    )
+            elif self.rate_aggregation == "largest_count":
                 # A narrower trial must actually reach its new cap. A wider
                 # trial must dispatch more rows than the old cap allowed.
                 effective = (self.last_comparison_count == self.width if shrinking
@@ -320,6 +336,8 @@ class BatchController:
         trial = (
             min(self.ceiling, self.width * 2) if self.direction > 0 else max(1, self.width // 2)
         )
+        if trial > self.width and self._retry_growth_width is not None:
+            trial = min(trial, self._retry_growth_width)
         if trial == self.width:
             self.direction *= -1
             self.cooldown = 1
@@ -339,7 +357,7 @@ class BatchController:
             # A bounded producer may never queue enough work for growth. Try a
             # smaller allocation using subsequent real requests instead.
             trial = max(1, self.width // 2)
-        if (self.rate_aggregation == "largest_count"
+        if ((self.rate_aggregation == "largest_count" or self.require_repeatable_width)
                 and self.last_comparison_count <= trial < self.width):
             # Wait for a warm batch that the narrower width would split.
             # Below the ceiling, give returning demand a chance to grow.
@@ -348,6 +366,7 @@ class BatchController:
         self.direction = -1 if trial < self.width else 1
         self.baseline = (self.width, rate)
         self.width = trial
+        self._retry_growth_width = None
         log_tokens("GPU auto-tune trial |", [
             f"batch={trial}", f"previous={self.baseline[0]}",
             f"rolling_candidates/s={rate:.3f}", "reason=throughput_probe",

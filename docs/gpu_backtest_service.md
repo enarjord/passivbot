@@ -398,8 +398,8 @@ A window requires six successful warm
 observations and three seconds of completed work, or three observations totaling at least
 30 seconds with a median replay duration of at least ten seconds. The median requirement
 prevents an isolated stall from shortening a fast workload's smoothing window. Timing
-samples are grouped by actual candidate count. Each group retains up to six durations;
-the fullest observed shape supplies the decision rate from its median duration. Small
+samples are grouped by actual candidate count. Each group retains up to six durations.
+Outside CUDA `max`, the fullest observed shape supplies the decision rate from its median duration. Small
 startup or cohort-tail batches therefore cannot dilute the measured capacity of a fuller
 batch. Partial-only workloads still provide their largest measured shape; missing full-width
 timings are never extrapolated. Window eligibility still counts all warm observations, so
@@ -407,6 +407,7 @@ the selected shape can have fewer supporting samples than the complete window.
 Diagnostics report the comparison count, retained samples, occurrence frequency and whether
 it filled the configured width. They separately retain the whole-window rate: total actual
 candidates divided by the sum of per-count median durations weighted by warm occurrences.
+CUDA `max` uses this whole-window rate to account for the throughput of partial launches.
 These are conditional replay-capacity estimates, not measured end-to-end optimizer
 throughput or confidence bounds. Execution-width trials must preserve or improve the
 comparison rate in either direction; they do not prefer a slower smaller allocation or
@@ -417,13 +418,14 @@ RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Mi
 or invalid OS telemetry denies a growth trial without failing completed replay work.
 A growth trial normally uses the largest compatible demand observed in that evidence
 window, so it can try an intermediate width when demand is less than twice the current
-width. A full-width warm observation in the CUDA `max` optimizer can propose a wider
+width. Repeated full-width warm observations in the CUDA `max` optimizer can propose a wider
 cohort to supply the next trial. Growth in this mode requires a three-percent increase
 in measured replay throughput. The prepared physical ceiling
 still applies. The service probes a smaller width only after a warm batch exceeded the
-proposed width. To earn acceptance, the smaller trial must fill its width, or the larger
-trial must dispatch more candidates than the previous width could hold. An underfilled
-trial that cannot demonstrate the width change rolls back and can retry after cooldown.
+proposed width. The existing conservative evidence rule requires a smaller trial to fill
+its width or a larger trial to exceed the previous width. CUDA `max` requires at least two
+warm completed replays at the trial width. An underfilled trial rolls back and can retry
+after cooldown. CUDA `max` can use a repeatedly observed intermediate width for its next trial.
 Tuning uses completed production work and preserves simulation precision. CUDA `max`
 can increase the initial and subsequent evaluation cohorts while preserving the selected
 parent population size. The optimizer checkpoints the pending population and the
