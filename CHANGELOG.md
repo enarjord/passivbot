@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Ship a long-only EMA Anchor example with an opt-in five-scenario suite and CPU optimizer bounds.
+
 - Reduce copying when assembling candle history from cached shards.
 
 - Reuse saved optimizer results as base configs for `passivbot optimize` and

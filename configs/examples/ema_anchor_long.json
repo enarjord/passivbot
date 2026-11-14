@@ -1,0 +1,289 @@
+{
+    "config_version": "v9.0.0",
+    "bot": {
+        "portfolio": {
+            "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": false},
+            "hedge_mode": false,
+            "hsl": {"scope": "coin"},
+            "loss_gate": {"max_drawdown_fraction": 1, "memory_ema_span_minutes": 43200},
+            "strategy_kind": "ema_anchor",
+            "unstuck": {"memory_ema_span_minutes": 43200},
+            "warmup": {"activation_span_fraction": 0.3, "max_minutes": null}
+        },
+        "global": {
+            "entry_cooldown": {
+                "base_duration_minutes": 70.4,
+                "max_duration_minutes": 600,
+                "min_duration_minutes": 1,
+                "weights_minutes": {"adverse_directionality": 33, "exposure_ratio": 25.8}
+            },
+            "forager": {
+                "always_include": [],
+                "log_range_ema_span_minutes": 2788,
+                "rms_directionality_ema_span_minutes": 270,
+                "score_hysteresis_margin": 0.02,
+                "score_weights": {
+                    "ema_readiness": 0.265,
+                    "log_range": 0.22,
+                    "rms_directionality": 0.21,
+                    "volume": 0.22499999999999998
+                },
+                "volume_ema_span_minutes": 1450.5
+            },
+            "hsl": {
+                "cooldown_after_red_minutes": 2160,
+                "drawdown_fraction_ema_span_minutes": 720,
+                "drawdown_threshold_fraction": 0.15,
+                "enabled": false,
+                "memory_ema_span_minutes": 43200,
+                "panic_close_order_type": "limit",
+                "scale_budget_with_excess_allowance": false
+            },
+            "risk": {
+                "max_positions": 2,
+                "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1},
+                "total_exposure_enforcer": {"enabled": false, "policy": "reduce_overweight", "threshold_ratio": 1},
+                "total_wallet_exposure_limit_ratio": 1.5,
+                "we_excess_allowance_fraction": 1.18
+            },
+            "strategy": {
+                "ema_anchor": {
+                    "base_qty_fraction": 0.12885,
+                    "ema_span_0_minutes": 553.5,
+                    "ema_span_1_minutes": 334,
+                    "entry_qty_exposure_coefficient": 1.58,
+                    "inventory_offset_exposure_coefficient": 0.11405,
+                    "offset_fraction": 0.01625,
+                    "offset_log_range_1h_coefficient": 47.85,
+                    "offset_log_range_1m_coefficient": 41.1,
+                    "offset_log_range_ema_span_1h_candles": 2153,
+                    "offset_log_range_ema_span_minutes": 2284.5
+                }
+            },
+            "universe": {
+                "approved_coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "APT",
+                    "ARB",
+                    "ASTER",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "BTC",
+                    "BTW",
+                    "CC",
+                    "DOGE",
+                    "DOT",
+                    "ENA",
+                    "ETH",
+                    "FIL",
+                    "GRAM",
+                    "HBAR",
+                    "HYPE",
+                    "INJ",
+                    "KAS",
+                    "LINK",
+                    "LTC",
+                    "MORPHO",
+                    "NEAR",
+                    "ONDO",
+                    "POL",
+                    "QNT",
+                    "RENDER",
+                    "SOL",
+                    "SUI",
+                    "TAO",
+                    "UNI",
+                    "WLD",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "filter_by_min_effective_cost": true,
+                "ignored_coins": [],
+                "minimum_coin_age_days": 60
+            },
+            "unstuck": {
+                "close_fraction": 0.01,
+                "ema_distance_fraction": 0,
+                "ema_gating_enabled": false,
+                "ema_span_0_minutes": 1440,
+                "ema_span_1_minutes": 1440,
+                "enabled": false,
+                "exposure_trigger_ratio": 0.7,
+                "loss_allowance_fraction": 0.005
+            }
+        },
+        "long": {"enabled": true},
+        "short": {"enabled": false}
+    },
+    "backtest": {
+        "exchanges": ["binance", "bybit"],
+        "start_date": "2021-04-01",
+        "end_date": "now",
+        "starting_balance": 100000,
+        "candle_interval_minutes": 1,
+        "dynamic_wel_by_tradability": true,
+        "filter_by_min_effective_cost": false,
+        "limit_order_fill_buffer_fraction": 0.00025,
+        "maker_fee_override_fraction": 0.0004,
+        "taker_fee_override_fraction": 0.00055,
+        "volume_normalization": true,
+        "reducer": {"default": "mean"},
+        "suite_enabled": false,
+        "scenarios": [
+            {"label": "base"},
+            {
+                "coins": [
+                    "AAVE",
+                    "APT",
+                    "ATOM",
+                    "BNB",
+                    "CC",
+                    "ENA",
+                    "GRAM",
+                    "INJ",
+                    "LTC",
+                    "ONDO",
+                    "RENDER",
+                    "TAO",
+                    "XLM",
+                    "ZEC"
+                ],
+                "label": "subset_1"
+            },
+            {
+                "coins": [
+                    "ADA",
+                    "ARB",
+                    "AVAX",
+                    "BTC",
+                    "DOGE",
+                    "ETH",
+                    "HBAR",
+                    "KAS",
+                    "MORPHO",
+                    "POL",
+                    "SOL",
+                    "UNI",
+                    "XMR"
+                ],
+                "label": "subset_2"
+            },
+            {
+                "coins": [
+                    "ALGO",
+                    "ASTER",
+                    "BCH",
+                    "BTW",
+                    "DOT",
+                    "FIL",
+                    "HYPE",
+                    "LINK",
+                    "NEAR",
+                    "QNT",
+                    "SUI",
+                    "WLD",
+                    "XRP"
+                ],
+                "label": "subset_3"
+            },
+            {
+                "label": "cost_stress",
+                "overrides": {
+                    "backtest.limit_order_fill_buffer_fraction": 0.001,
+                    "backtest.maker_fee_override_fraction": 0.0006
+                }
+            }
+        ]
+    },
+    "optimize": {
+        "backend": "pymoo",
+        "iters": 2048,
+        "n_cpus": 4,
+        "population_size": 128,
+        "write_all_results": false,
+        "round_to_n_significant_digits": 3,
+        "scoring": [
+            {"goal": "max", "metric": "cagr_fraction_strategy_equity_ew", "reducer": "mean"},
+            {"goal": "min", "metric": "ulcer_index_fraction_strategy_equity", "reducer": "max"},
+            {"goal": "min", "metric": "peak_recovery_max_days_strategy_equity", "reducer": "max"}
+        ],
+        "limits": [
+            {
+                "enabled": true,
+                "metric": "backtest_completion_fraction",
+                "penalize_if": "less_than",
+                "reducer": "min",
+                "value": 1.0
+            }
+        ],
+        "bounds": {
+            "global": {
+                "entry_cooldown": {
+                    "base_duration_minutes": [46.4, 120, 0.1],
+                    "min_duration_minutes": [1, 1],
+                    "weights_minutes": {
+                        "adverse_directionality": [15.55, 46.650000000000006],
+                        "exposure_ratio": [15.8, 47.400000000000006]
+                    }
+                },
+                "forager": {
+                    "log_range_ema_span_minutes": [1478, 3000, 1],
+                    "rms_directionality_ema_span_minutes": [238.5, 715.5],
+                    "score_weights": {
+                        "ema_readiness": [0.145, 0.43499999999999994, 0.01],
+                        "log_range": [0.11, 0.33, 0.01],
+                        "rms_directionality": [0.12, 0.36, 0.01],
+                        "volume": [0.075, 0.22499999999999998, 0.01]
+                    },
+                    "volume_ema_span_minutes": [984.5, 2953.5, 1]
+                },
+                "hsl": {
+                    "cooldown_after_red_minutes": [2160, 2160, 10],
+                    "drawdown_fraction_ema_span_minutes": [720, 720, 1],
+                    "drawdown_threshold_fraction": [0.15, 0.15, 0.001],
+                    "memory_ema_span_minutes": [43200, 43200]
+                },
+                "risk": {
+                    "max_positions": [1.5, 4.5, 1],
+                    "position_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
+                    "total_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
+                    "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
+                    "we_excess_allowance_fraction": [0.43, 1.29, 0.01]
+                },
+                "strategy": {
+                    "ema_anchor": {
+                        "base_qty_fraction": [0.07205, 0.21615, 0.0001],
+                        "ema_span_0_minutes": [354.5, 1063.5, 1],
+                        "ema_span_1_minutes": [256, 768, 1],
+                        "entry_qty_exposure_coefficient": [0.77, 2.31, 0.01],
+                        "inventory_offset_exposure_coefficient": [0.09245, 0.27735, 0.0001],
+                        "offset_fraction": [0.00645, 0.01935, 0.0001],
+                        "offset_log_range_1h_coefficient": [33.35, 80, 0.1],
+                        "offset_log_range_1m_coefficient": [28.5, 80, 0.1],
+                        "offset_log_range_ema_span_1h_candles": [1355, 3000, 1],
+                        "offset_log_range_ema_span_minutes": [1377.5, 3000, 1]
+                    }
+                },
+                "unstuck": {
+                    "close_fraction": [0.01, 0.01],
+                    "ema_distance_fraction": [0, 0],
+                    "ema_span_0_minutes": [1440, 1440],
+                    "ema_span_1_minutes": [1440, 1440],
+                    "exposure_trigger_ratio": [0.7, 0.7],
+                    "loss_allowance_fraction": [0.005, 0.005]
+                }
+            },
+            "portfolio": {
+                "loss_gate": {"memory_ema_span_minutes": [43200, 43200]},
+                "unstuck": {"memory_ema_span_minutes": [43200, 43200]}
+            }
+        }
+    },
+    "live": {"account": {"user": ""}}
+}
