@@ -545,14 +545,17 @@ def test_invalid_factory_output_is_fatal_and_entered_context_is_released(context
         assert errors[0] is future.exception()
 
 
-@pytest.mark.parametrize("producer_fails", [False, True])
-def test_factory_cleanup_failure_is_reported_without_replacing_producer_error(producer_fails, caplog):
-    producer_error = MemoryError("simulation failed")
+@pytest.mark.parametrize("producer_outcome", ["complete", "error", "interrupt"])
+def test_factory_cleanup_failure_is_reported_without_replacing_producer_error(producer_outcome, caplog):
+    from optimization.interrupts import OptimizerInterruptRequested
+
+    producer_error = (OptimizerInterruptRequested() if producer_outcome == "interrupt"
+                      else MemoryError("simulation failed"))
     cleanup_error = RuntimeError("device cleanup failed")
 
     class BrokenReplay(Replay):
         def evaluate(self, candidates):
-            if producer_fails:
+            if producer_outcome != "complete":
                 raise producer_error
             return super().evaluate(candidates)
 
@@ -566,17 +569,17 @@ def test_factory_cleanup_failure_is_reported_without_replacing_producer_error(pr
     service = GpuBacktestService(batch_size=1)
     service.register_dataset_factory("market", factory)
     result = service.submit(request(0))
-    if producer_fails:
+    if producer_outcome != "complete":
         assert result.exception(timeout=3) is producer_error
     else:
         assert result.result(timeout=3).metrics == {"gain_multiplier": 0}
-    expected = producer_error if producer_fails else cleanup_error
+    expected = producer_error if producer_outcome == "error" else cleanup_error
     with pytest.raises(type(expected)) as raised:
         service.close()
     assert raised.value is expected
-    assert service._failure is expected
+    assert service._failure is (cleanup_error if producer_outcome == "complete" else producer_error)
     assert not service._replays and not service._factories
-    if producer_fails:
+    if producer_outcome != "complete":
         assert "cleanup failed after execution failure" in caplog.text
 
 

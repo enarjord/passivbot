@@ -13,6 +13,7 @@ import math
 from queue import Empty, SimpleQueue
 
 from optimization.gpu.executor import BacktestQueueFull, BacktestRequest, BacktestResult
+from optimization.interrupts import OptimizerInterruptRequested
 from optimization.native_results import CandidateCompletion
 
 
@@ -127,6 +128,8 @@ class NativeEvaluationSession:
 
     def _pump(self):
         if self._submission_failure is not None:
+            if self._stopped and isinstance(self._submission_failure, OptimizerInterruptRequested):
+                return
             if not self._futures and not self._ready:
                 raise self._submission_failure
             return
@@ -153,6 +156,14 @@ class NativeEvaluationSession:
                     raise RuntimeError("borrowed backtest service is full without session-owned work")
                 return
             except Exception as failure:
+                # A failed executor wraps the original error when a later
+                # request reaches submit. Retain the latch signal's meaning.
+                cause = failure.__cause__
+                if isinstance(failure, RuntimeError) and isinstance(cause, OptimizerInterruptRequested):
+                    if not self._futures:
+                        raise cause
+                    self._submission_failure = cause
+                    return
                 if not self._futures:
                     raise
                 # A fast worker can fail while we are replenishing the queue.
@@ -177,6 +188,9 @@ class NativeEvaluationSession:
             raise RuntimeError("CPU evaluation session failed") from self._failure
         try:
             self._pump()
+        except OptimizerInterruptRequested:
+            self.stop_admission()
+            raise
         except BaseException as failure:
             self._failure = failure
             self.stop_admission()
@@ -229,6 +243,10 @@ class NativeEvaluationSession:
                     if not self._stopped:
                         raise RuntimeError("an admitted backtest was cancelled unexpectedly")
                     continue
+                except OptimizerInterruptRequested:
+                    if not self._stopped:
+                        raise
+                    continue
                 if not isinstance(row, BacktestResult) or (
                     row.request_id, row.dataset_id
                 ) != (_request.request_id, _request.dataset_id):
@@ -254,6 +272,9 @@ class NativeEvaluationSession:
                 ready.append(complete)
                 self._diagnostics["delivered_attempts"] += 1
             return ready
+        except OptimizerInterruptRequested:
+            self.stop_admission()
+            raise
         except BaseException as failure:
             self._failure = failure
             self.stop_admission()

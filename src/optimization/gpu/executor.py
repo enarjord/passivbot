@@ -27,6 +27,7 @@ from typing import ContextManager, Protocol
 
 from optimization.gpu.coalescing import BatchCoalescer
 from optimization.gpu.autotune import collect_compilation
+from optimization.interrupts import OptimizerInterruptRequested
 
 
 class BatchReplay(Protocol):
@@ -546,6 +547,8 @@ class GpuBacktestService:
         self._replays.clear()
         self._factories.clear()
         if self._cleanup_failure is not None:
+            if isinstance(self._failure, OptimizerInterruptRequested) and isinstance(self._cleanup_failure, Exception):
+                raise self._cleanup_failure
             raise self._failure
 
     def __enter__(self) -> GpuBacktestService:

@@ -27,7 +27,7 @@ from optimization.backends.pymoo_backend import (
 )
 from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
-from optimization.interrupts import no_interrupt_requested
+from optimization.interrupts import OptimizerInterruptRequested, no_interrupt_requested
 from optimization.native_checkpoint import CHECKPOINT_VERSION, checkpoint_config, load_checkpoint, save_checkpoint
 from optimization.native_datasets import NativeDatasetRegistry
 from optimization.native_pipeline import ResultCadence
@@ -583,7 +583,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             worker_lifetime.close()
             service.close()
             search.checkpoint(force=True)
-        except BaseException:
+        except BaseException as failure:
             try:
                 session.stop_admission()
             except BaseException:
@@ -592,16 +592,26 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 worker_lifetime.close()
             except BaseException:
                 logging.exception("CPU preparation worker cleanup failed after an earlier failure")
+            shutdown_failure = None
             try:
                 service.close(cancel_pending=True)
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    shutdown_failure = error
+                logging.exception("GPU native service close failed after an earlier failure")
+            try:
                 search.drain_after_stop()
-            except BaseException:
+            except BaseException as error:
+                if shutdown_failure is None and isinstance(error, Exception):
+                    shutdown_failure = error
                 logging.exception("GPU native drain failed after an earlier failure")
             try:
                 remember_accepted_width()
                 search.checkpoint(force=True)
             except BaseException:
                 logging.exception("GPU native checkpoint failed after an earlier failure")
+            if isinstance(failure, OptimizerInterruptRequested) and shutdown_failure is not None:
+                raise shutdown_failure
             raise
         finally:
             search._record_configs.clear()
