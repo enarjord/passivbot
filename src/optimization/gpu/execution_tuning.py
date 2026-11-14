@@ -25,6 +25,8 @@ class ExecutionBatchTuner:
         self.enabled = enabled
         self.controllers = {}
         self._ceilings = {}
+        self._transports = {}
+        self._restart_widths = {}
         self._demand = {}
         self._split_observation = None
         self._allow_trial = False
@@ -58,18 +60,39 @@ class ExecutionBatchTuner:
         return {name: dict(item) if isinstance(item, dict) else item
                 for name, item in value.items()}
 
-    def constrain(self, dataset_id, ceiling, *, split=False):
+    def constrain(self, dataset_id, ceiling, *, split=False, transport=None):
         """Apply the prepared replay's dispatch bound on its owning worker."""
-        if self._ceilings.get(dataset_id) != ceiling:
+        transport_changed = self.enabled and transport is not None and (
+            self._transports.get(dataset_id, transport) != transport
+        )
+        if self.enabled and transport is not None:
+            self._transports[dataset_id] = transport
+        if transport_changed or self._ceilings.get(dataset_id) != ceiling:
             # Preparation/retry may change capacity before this replay's
             # completion is observed. Its old allocation-shape evidence expires.
-            self.controllers.pop(dataset_id, None)
+            controller = self.controllers.pop(dataset_id, None)
             self._demand.pop(dataset_id, None)
+            if transport_changed and controller is not None:
+                self._restart_widths[dataset_id] = self._accepted_width(controller)
         self._ceilings[dataset_id] = ceiling
-        if split and self.enabled:
-            # The reported completion size spans multiple physical replays.
-            # Leave the current controller intact and omit this timing sample.
+        if dataset_id in self._restart_widths:
+            self._restart_widths[dataset_id] = min(ceiling, self._restart_widths[dataset_id])
+            if self._expandable_producer:
+                self._update_cohort_widths()
+        if self.enabled and (split or transport_changed):
+            # Transition and split timings cannot train a single replay shape.
             self._split_observation = dataset_id
+
+    @staticmethod
+    def _accepted_width(controller):
+        return controller.width if controller.baseline is None else controller.baseline[0]
+
+    def _update_cohort_widths(self):
+        restarting = max(self._restart_widths.values(), default=0)
+        self.cohort_width = max(restarting, max((value.width for value in self.controllers.values()), default=0))
+        self.accepted_cohort_width = max(
+            restarting, max((self._accepted_width(value) for value in self.controllers.values()), default=0),
+        )
 
     def width(self, dataset_id, ceiling):
         # Claim one initial request, prepare on its owner, then discover the
@@ -83,7 +106,7 @@ class ExecutionBatchTuner:
         if controller is None or controller.ceiling != limit:
             self._demand[dataset_id] = 0
             controller = BatchController(
-                limit, min(self.initial, limit),
+                limit, min(self._restart_widths.pop(dataset_id, self.initial), limit),
                 allow_partial_batches=True,
                 window_samples=EVIDENCE_SAMPLES,
                 min_seconds=EVIDENCE_SECONDS,
@@ -131,11 +154,7 @@ class ExecutionBatchTuner:
         if completed_window:
             self._demand[dataset_id] = 0
         if self._expandable_producer:
-            self.cohort_width = max(value.width for value in self.controllers.values())
-            self.accepted_cohort_width = max(
-                value.width if value.baseline is None else value.baseline[0]
-                for value in self.controllers.values()
-            )
+            self._update_cohort_widths()
         if diagnostic is not None:
             self._record_diagnostics(dataset_id, count, seconds, controller, before,
                                      bool(completed_window), diagnostic, peak_demand, backlog, closing, cold)

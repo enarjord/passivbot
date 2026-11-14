@@ -400,3 +400,104 @@ def test_split_batch_counts_completed_rows_without_training_on_logical_width():
     assert not controller.samples and policy.controllers["a"] is controller
     policy.observe("a", 4, 2, backlog=0, closing=False, cold=False)
     assert controller.samples and policy.diagnostics_snapshot()["rows"] == 8
+
+
+@pytest.mark.parametrize("ceiling,expected", [(16, 8), (5, 5)])
+def test_transport_change_discards_live_trial_and_restarts_at_accepted_width(ceiling, expected):
+    policy = prepared_policy(initial=4, expandable_producer=True, diagnostics=True)
+    policy.constrain("a", 16, transport=(False, False))
+    evidence(policy, seconds=1, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    assert policy.accepted_cohort_width == 8
+    # Consume cooldown, then start a trial and retain part of its evidence.
+    evidence(policy, seconds=1.5, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    controller = policy.controllers["a"]
+    assert controller.width == 16 and controller.baseline == (8, 8 / 1.5)
+    policy.observe("a", 16, 2, backlog=100, closing=False, cold=False)
+    assert controller.samples and policy.cohort_width == 16
+
+    policy.constrain("a", ceiling, transport=(True, False))
+    assert policy.cohort_width == policy.accepted_cohort_width == expected
+    assert policy.width("a", 16) == expected
+    restarted = policy.controllers["a"]
+    assert restarted is not controller and restarted.baseline is None
+    assert not restarted.samples and not restarted.seen and restarted.cooldown == 0
+    policy.observe("a", expected, 2, backlog=100, closing=False, cold=False)
+    assert not restarted.samples and not policy.diagnostics_snapshot()["latest"]["evidence_available"]
+    policy.constrain("a", ceiling, transport=(True, False))
+    policy.observe("a", expected, 2, backlog=100, closing=False, cold=False)
+    assert restarted.samples and policy.controllers["a"] is restarted
+
+
+def test_compact_transport_change_resets_only_the_dataset_that_observes_it():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    shared = {"transport": (True, False)}
+    for dataset in ("a", "b", "unrelated"):
+        policy.constrain(dataset, 16, transport=shared["transport"])
+        policy.width(dataset, 16)
+        policy.observe(dataset, 4, 2, backlog=0, closing=False, cold=False)
+    before = dict(policy.controllers)
+
+    shared["transport"] = (True, True)
+    for dataset, still_unchanged in (("a", ("b", "unrelated")), ("b", ("unrelated",))):
+        policy.constrain(dataset, 16, transport=shared["transport"])
+        assert policy.width(dataset, 16) == 4
+        assert policy.controllers[dataset] is not before[dataset]
+        for other in still_unchanged:
+            assert policy.controllers[other] is before[other] and policy.controllers[other].samples
+
+
+def test_cuda_facade_reports_transport_from_an_already_registered_sibling(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from optimization.gpu import service as replay_module
+    from optimization.gpu.datasets import PreparedGpuDataset
+
+    packed = {"stream_tick_inputs": False, "compact_hourly_ranges": False}
+
+    class Replay:
+        data = packed
+        last_evaluation_split = False
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def evaluate_results(self, candidates):
+            if candidates[0].get("pressure"):
+                self.data["stream_tick_inputs"] = True
+            return candidates
+
+        def _remember_factual_capacities(self):
+            pass
+
+    @contextmanager
+    def attach(*_args):
+        yield None, None, None
+
+    monkeypatch.setattr(replay_module, "SharedAccountReplay", Replay)
+    monkeypatch.setattr(CudaBacktestService, "_dispatch_ceiling", staticmethod(lambda replay: 16))
+    monkeypatch.setattr(PreparedGpuDataset, "attach", attach)
+    monkeypatch.setattr(PreparedGpuDataset, "attach_selection", attach)
+    monkeypatch.setattr(PreparedGpuDataset, "execution_config", lambda _dataset: {})
+    dataset = object.__new__(PreparedGpuDataset)
+    for key, value in {"hlcvs": SimpleNamespace(shape=(1, 1, 4)), "coin_indices": (0,),
+                       "markets_json": "{}", "exchange": "binance", "metrics": ()}.items():
+        object.__setattr__(dataset, key, value)
+
+    with CudaBacktestService(batch_size=None, tuning_mode="max", max_pending=16) as service:
+        service._residency = SimpleNamespace(activate=lambda _replay: None)
+        policy = service._batch_tuner
+        for identity in ("a", "b"):
+            service.register_dataset(identity, dataset)
+        # Drive the registered factory callbacks directly with no GPU or wall-clock training.
+        with service._executor._factories["a"]() as first, service._executor._factories["b"]() as sibling:
+            controllers = dict(policy.controllers)
+            first.evaluate([{"pressure": True}])
+            assert "a" not in policy.controllers and policy.controllers["b"] is controllers["b"]
+            policy.observe("a", 1, 1, backlog=0, closing=False, cold=False)
+            sibling.evaluate([{}])
+            assert "b" not in policy.controllers
+            policy.observe("b", 1, 1, backlog=0, closing=False, cold=False)
+            assert all(policy.width(identity, 16) == 16 for identity in ("a", "b"))

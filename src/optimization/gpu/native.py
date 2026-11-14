@@ -250,13 +250,20 @@ class NativeBacktestService:
                     max_throughput=self._max_throughput,
                 )
                 try:
+                    def constrain(*, split=False):
+                        transport = None
+                        if self._max_throughput and self._batch_tuner is not None:
+                            transport = (replay.data["stream_tick_inputs"], replay.data["compact_hourly_ranges"])
+                        self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay),
+                                                     split=split, transport=transport)
+
                     if self._on_inputs_prepared is not None:
                         self._on_inputs_prepared()
                     # Discover physical limits after claiming one ownership request.
                     # The executor fills the first dispatch up to the prepared
                     # ceiling before simulation. Runners remain worker-owned.
                     self._residency.activate(replay)
-                    self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                    constrain()
                     self._batch_policy.width(dataset_id, self._batch_size)
                     def evaluate(candidates):
                         results = replay.evaluate_results(candidates)
@@ -264,10 +271,7 @@ class NativeBacktestService:
                         # Successful replay may have learned a larger factual
                         # history, or switched effective HSL policies off/on.
                         # Apply its current physical limit before another claim.
-                        self._batch_policy.constrain(
-                            dataset_id, self._dispatch_ceiling(replay),
-                            split=self._max_throughput and replay.last_evaluation_split,
-                        )
+                        constrain(split=self._max_throughput and replay.last_evaluation_split)
                         return results
                     yield SimpleNamespace(evaluate=evaluate)
                 finally:
