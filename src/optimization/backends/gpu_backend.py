@@ -40,11 +40,11 @@ from optimization.gpu.search_budget import CudaMaxSearchBudget
 from optimization.gpu.search_sampling import max_starting_vectors
 
 
-def _open_cuda_preparation_workers(planner, lifetime, *, admission_slots, available_rows, interrupt_check):
+def _open_cuda_preparation_workers(planner, lifetime, *, available_rows, interrupt_check):
     from optimization.native_planner_capacity import cuda_plan_worker_count
 
     interrupt_check()
-    workers = cuda_plan_worker_count(planner, admission_slots=admission_slots, available_rows=available_rows)
+    workers = cuda_plan_worker_count(planner, admission_slots=available_rows, available_rows=available_rows)
     if not workers:
         return None
     from optimization.native_planner_workers import OrderedCandidateWorkers
@@ -72,7 +72,7 @@ class _Search:
     def __init__(self, *, state, session, registry, recorder, template,
                  build_config_fn, overrides_fn, overrides_list, checkpoint_path,
                  checkpoint_interval, interrupt_check, screening_policy,
-                 preparation_lifetime=None, preparation_admission_slots=0):
+                 preparation_lifetime=None):
         self.state, self.session, self.registry = state, session, registry
         self.recorder, self.template = recorder, template
         self.build_config_fn, self.overrides_fn = build_config_fn, overrides_fn
@@ -89,8 +89,6 @@ class _Search:
         self._cadence = ResultCadence()
         self.screening_policy = screening_policy
         self._preparation_lifetime = preparation_lifetime
-        self._preparation_admission_slots = preparation_admission_slots
-        self._preparation_parent_bytes = 0
         self._preparation_workers = None
         self._largest_preparation_window = 0
         self._progress = OptimizerProgress(lambda: dict(
@@ -191,34 +189,30 @@ class _Search:
     def _workers_for_window(self, pending_count):
         if self._preparation_lifetime is None:
             return None
+        # Speculative and admitted candidates share this phase's window.
+        # Recheck live headroom against the new width before a pool can reuse it.
+        available_rows = min(self.session.max_candidates, pending_count)
         workers = self._preparation_workers
         if workers is not None:
-            from optimization.native_planner_capacity import cuda_plan_pool_fits
+            from optimization.native_planner_capacity import cuda_plan_pool_fits, cuda_plan_preparation_memory
 
             if workers.pending_count:
                 raise RuntimeError("CUDA CPU preparation left pending rows across cohorts")
-            if not cuda_plan_pool_fits(parent_bytes=self._preparation_parent_bytes, workers=workers.worker_count):
+            parent_bytes, _ = cuda_plan_preparation_memory(self.registry.planner, available_rows)
+            if not cuda_plan_pool_fits(parent_bytes=parent_bytes, workers=workers.worker_count):
                 self._preparation_lifetime.close()
                 self._preparation_workers = None
                 self._preparation_lifetime = None
                 logging.info("CUDA max CPU preparation | retiring workers under host pressure; continuing serially")
                 return None
-        available_rows = min(self.session.max_candidates, pending_count)
         if available_rows < 2:
             return None
         if self._preparation_workers is None and available_rows > self._largest_preparation_window:
             self._largest_preparation_window = available_rows
             self._preparation_workers = _open_cuda_preparation_workers(
                 self.registry.planner, self._preparation_lifetime,
-                admission_slots=self._preparation_admission_slots, available_rows=available_rows,
-                interrupt_check=self.interrupt_check,
+                available_rows=available_rows, interrupt_check=self.interrupt_check,
             )
-            if self._preparation_workers is not None:
-                from optimization.native_planner_capacity import cuda_plan_preparation_memory
-
-                self._preparation_parent_bytes, _ = cuda_plan_preparation_memory(
-                    self.registry.planner, self._preparation_admission_slots,
-                )
         workers = self._preparation_workers
         return workers if workers is not None and available_rows >= workers.worker_count else None
 
@@ -504,8 +498,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
                          checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check,
                          screening_policy=screening_policy,
-                         preparation_lifetime=worker_lifetime if max_throughput else None,
-                         preparation_admission_slots=min(candidate_limit, max(pending_count, iters)))
+                         preparation_lifetime=worker_lifetime if max_throughput else None)
 
         def remember_accepted_width():
             if not max_throughput:

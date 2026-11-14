@@ -26,7 +26,7 @@ def file_backed_planner(monkeypatch):
 @pytest.mark.parametrize("mode,iters,expected_capacity", [
     ("conservative", 8, []),
     ("max", 1, []),
-    ("max", 8, [(8, 4)]),
+    ("max", 8, [4]),
 ])
 def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
     monkeypatch, tmp_path, file_backed_planner, mode, iters, expected_capacity,
@@ -36,8 +36,8 @@ def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
     base.config["optimize"]["gpu"].update(tuning_mode=mode, batch_size=4)
     observed = []
 
-    def no_capacity(planner, lifetime, *, admission_slots, available_rows, interrupt_check):
-        observed.append((admission_slots, available_rows))
+    def no_capacity(planner, lifetime, *, available_rows, interrupt_check):
+        observed.append(available_rows)
         assert callable(planner.prepare)
         assert callable(lifetime.enter_context)
         assert callable(interrupt_check)
@@ -50,12 +50,50 @@ def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
     assert len(rows) == iters
 
 
+def test_large_search_budget_does_not_inflate_cpu_preparation_headroom(
+    monkeypatch, tmp_path, file_backed_planner,
+):
+    from optimization import native_planner_capacity as capacity
+    from optimization.gpu import native
+
+    class WorkersCanStart(Exception):
+        pass
+
+    base = file_backed_planner
+    base.config["optimize"]["iters"] = 65536
+    base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
+    monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: 512)
+    monkeypatch.setattr(native, "NativeBacktestService",
+                        lambda **kwargs: FakeService(**{**kwargs, "batch_size": 512}))
+
+    # The registered metadata is small, so each candidate reserves 256 KiB.
+    # The live allocation admits at least four workers for 512 plans, but
+    # charging the entire 8192-slot service ceiling would admit no pool.
+    monkeypatch.setattr(capacity, "_host_capacity", lambda: (20, 3 * 2**30))
+    select_count = capacity.cuda_plan_worker_count
+
+    def stop_after_selection(planner, *, admission_slots, available_rows):
+        assert admission_slots == available_rows == 512
+        assert select_count(planner, admission_slots=8192, available_rows=available_rows) == 0
+        assert select_count(planner, admission_slots=admission_slots, available_rows=available_rows) == 4
+        raise WorkersCanStart
+
+    monkeypatch.setattr(capacity, "cuda_plan_worker_count", stop_after_selection)
+    checkpoint = tmp_path / "wide-budget.pkl"
+    recorder = SimpleNamespace(record=lambda row: pytest.fail("stopped before evaluation"))
+    with pytest.raises(WorkersCanStart):
+        execute(base, recorder, checkpoint)
+    state = load_checkpoint(checkpoint, base.config)
+    assert state["phase"] == "seeds"
+    assert state["completed"] == 0
+    assert state["max_search_allocated"] == len(state["population"]) == 512
+
+
 def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
     from optimization import native_planner_capacity
 
     search = object.__new__(gpu_backend._Search)
     search._preparation_lifetime = object()
-    search._preparation_admission_slots = 256
     search._preparation_workers = None
     search._largest_preparation_window = 0
     search.session = SimpleNamespace(max_candidates=12)
@@ -64,8 +102,8 @@ def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
     pool = SimpleNamespace(worker_count=4, pending_count=0)
     chosen = []
 
-    def select(_planner, _lifetime, *, admission_slots, available_rows, interrupt_check):
-        chosen.append((admission_slots, available_rows))
+    def select(_planner, _lifetime, *, available_rows, interrupt_check):
+        chosen.append(available_rows)
         return pool
 
     monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", select)
@@ -75,14 +113,13 @@ def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
     assert search._workers_for_window(32) is pool
     assert search._workers_for_window(3) is None
     assert search._workers_for_window(4) is pool
-    assert chosen == [(256, 12)]
+    assert chosen == [12]
 
 
 def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkeypatch):
     from optimization import native_planner_capacity
 
     search = object.__new__(gpu_backend._Search)
-    search._preparation_admission_slots = 256
     search._preparation_workers = None
     search._largest_preparation_window = 0
     search.session = SimpleNamespace(max_candidates=128)
@@ -98,13 +135,13 @@ def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkey
         return pool
 
     def estimate(candidate_planner, admission_slots):
-        assert candidate_planner is planner and admission_slots == 256
-        phases.append("estimate")
-        return 123, 45
+        assert candidate_planner is planner
+        phases.append(("estimate", admission_slots))
+        return admission_slots, 45
 
     def fits(*, parent_bytes, workers):
-        assert parent_bytes == 123 and workers == 4
-        return False
+        assert workers == 4
+        return parent_bytes <= 128
 
     monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", open_pool)
     monkeypatch.setattr(native_planner_capacity, "cuda_plan_preparation_memory", estimate)
@@ -114,11 +151,15 @@ def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkey
     pool.pending_count = 1
     with pytest.raises(RuntimeError, match="pending rows across cohorts"):
         search._workers_for_window(128)
-    assert search._preparation_workers is pool and phases == ["open", "estimate"]
+    assert search._preparation_workers is pool and phases == ["open"]
     pool.pending_count = 0
+    # A nominal wider phase is still safe if resumption has only 128 pending.
+    search.session.max_candidates = 512
+    assert search._workers_for_window(128) is pool
+    assert search._workers_for_window(512) is None
     assert search._workers_for_window(128) is None
-    assert search._workers_for_window(256) is None
-    assert search._preparation_workers is None and phases == ["open", "estimate", "retired"]
+    assert search._preparation_workers is None
+    assert phases == ["open", ("estimate", 128), ("estimate", 512), "retired"]
 
 
 def test_cuda_worker_startup_is_interruptible_before_admission(monkeypatch, tmp_path, file_backed_planner):
@@ -207,7 +248,7 @@ def test_ordered_workers_preserve_gpu_request_plans_records_and_resume(
     else:
         execute(base, SimpleNamespace(record=record), parallel_path)
         assert FakeService.rows == expected_vectors
-    assert launches == [(8, 4)] * (2 if interrupt else 1)
+    assert launches == [(4, 4)] * (2 if interrupt else 1)
     assert load_checkpoint(parallel_path, base.config)["phase"] == "idle"
     assert len(parallel_rows) == len(serial_rows) == 8
     assert Counter(json.dumps(row, sort_keys=True) for row in parallel_rows) == Counter(
