@@ -10,7 +10,9 @@ its own version heading. See [release status](docs/releases.md).
   of available RAM and VRAM. The default policy is
   now named `"conservative"`, and existing `"auto"` configs still work.
 
-- Keep prepared suite membership in a stable order across optimizer restarts.\n\n- Let dedicated live HSL protection cancel resting entries and submit reduce-only
+- Keep prepared suite membership in a stable order across optimizer restarts.
+
+- Let dedicated live HSL protection cancel resting entries and submit reduce-only
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.
 
