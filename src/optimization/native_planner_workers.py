@@ -116,16 +116,6 @@ def _failure(error):
     return type(error).__name__, str(error), traceback.format_exc()
 
 
-def _process_metrics():
-    import psutil
-
-    try:
-        rss = psutil.Process().memory_info().rss
-    except (OSError, psutil.Error):
-        rss = None  # Optional observation cannot fail a canonical plan.
-    return time.process_time(), rss
-
-
 def _prepare_worker(connection):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     os.environ.pop("CUPY_CACHE_DIR", None)
@@ -135,7 +125,7 @@ def _prepare_worker(connection):
             planner = pickle.loads(packed_snapshot).build_planner()
             del packed_snapshot
             _check_cpu_only()
-            connection.send((True, _process_metrics()))
+            connection.send((True, None))
         except Exception as error:
             connection.send((False, _failure(error)))
             return
@@ -152,9 +142,9 @@ def _prepare_worker(connection):
                 _check_cpu_only()
                 wire = _plan_parameters(plan, freeze=False)
                 payload = pickle.dumps(wire, protocol=pickle.HIGHEST_PROTOCOL)
-                connection.send((True, payload, _process_metrics()))
+                connection.send((True, payload))
             except Exception as error:
-                connection.send((False, _failure(error), _process_metrics()))
+                connection.send((False, _failure(error)))
                 return
 
 
@@ -202,20 +192,10 @@ class OrderedCandidateWorkers:
         self._started = False
         self._failed = False
         self._ordered_failure = False
-        self._metrics = {}
 
     @property
     def pending_count(self):
         return len(self._ordered)
-
-    @property
-    def snapshot_bytes(self):
-        return len(self._snapshot)
-
-    def resource_snapshot(self):
-        """Return measured per-worker CPU/RSS and the peak serialized plan size."""
-        self._collect_events()
-        return {pid: dict(stats) for pid, stats in self._metrics.items()}
 
     def __enter__(self):
         if self._started or self._stopping.is_set():
@@ -263,7 +243,6 @@ class OrderedCandidateWorkers:
                 raise CandidatePreparationError(None, detail)
             if kind != "ready" or worker not in pending:
                 raise RuntimeError("Invalid CPU planner startup acknowledgment")
-            self._handle_event(worker, kind, detail)
             pending.remove(worker)
             if not pending:
                 return
@@ -308,8 +287,8 @@ class OrderedCandidateWorkers:
                     worker.connection.send(None)
                     return
                 worker.connection.send(job)
-                success, payload, metrics = worker.connection.recv()
-                self._events.put((worker, "result", (success, payload, metrics)))
+                success, payload = worker.connection.recv()
+                self._events.put((worker, "result", (success, payload)))
                 if not success:
                     return
         except Exception as error:
@@ -318,21 +297,7 @@ class OrderedCandidateWorkers:
         finally:
             worker.connection.close()
 
-    def _record_metrics(self, worker, metrics, *, plan_bytes=None):
-        cpu, rss = metrics
-        stats = self._metrics.setdefault(worker.process.pid, dict(cpu_seconds=0.0, peak_sampled_rss_bytes=None,
-                                                                 plans=0, peak_plan_bytes=0))
-        stats["cpu_seconds"] = cpu
-        if rss is not None:
-            stats["peak_sampled_rss_bytes"] = max(stats["peak_sampled_rss_bytes"] or 0, rss)
-        if plan_bytes is not None:
-            stats["plans"] += 1
-            stats["peak_plan_bytes"] = max(stats["peak_plan_bytes"], plan_bytes)
-
     def _handle_event(self, worker, kind, detail):
-        if kind == "ready":
-            self._record_metrics(worker, detail)
-            return
         row, worker.row = worker.row, None
         if kind == "failed":
             worker.dead = True
@@ -341,8 +306,7 @@ class OrderedCandidateWorkers:
                 row.done, row.error = True, detail
                 self._ordered_failure = True
             return
-        success, payload, metrics = detail
-        self._record_metrics(worker, metrics, plan_bytes=len(payload) if success else None)
+        success, payload = detail
         row.done = True
         if success:
             row.payload = payload

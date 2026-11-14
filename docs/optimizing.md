@@ -316,6 +316,11 @@ the cohort when the budget and search space allow. Without supplied seeds it sam
 the configured bounds. The initial target comes from the selected CUDA device. Warm
 per-scenario replay trials can move the target during the run.
 
+CUDA `max` can prepare candidates in several CPU processes while the GPU
+replays queued work. The optimizer applies plans in candidate order and retains
+scoring and checkpoint ownership. Worker admission depends on the cohort,
+usable CPU capacity and available host RAM.
+
 `optimize.iters` budgets generated startup candidates and subsequent offspring
 attempts. Supplied seeds are evaluated in addition to that budget. The last cohort
 uses the remaining attempts. Duplicate elimination and scenario screening can

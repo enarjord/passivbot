@@ -1573,7 +1573,7 @@ class _MulticoinReplayRunner:
 
     def _history_bytes_per_candidate(self):
         max_mode_io_bytes = 0
-        if self.cuda_max_scratch_policy:
+        if getattr(self, "cuda_max_scratch_policy", False):
             # Besides the state and reduction packet, include the scalar/fill
             # outputs, parameter upload and the end word in the replay control.
             max_mode_io_bytes = 4 * (self.scalar_cols + self._max_mode_parameter_cols + 1)
@@ -1589,7 +1589,7 @@ class _MulticoinReplayRunner:
         )
 
     def _history_workspace_bytes(self):
-        if self.cuda_max_scratch_policy:
+        if getattr(self, "cuda_max_scratch_policy", False):
             # The resident input allowance includes this full window, but the
             # live scratch budget sees free VRAM before it has been uploaded.
             window_bytes = min(self.n, self.temporal_chunk_bar_limit + 2) * self.n_coins * sum(

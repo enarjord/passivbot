@@ -572,7 +572,10 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             service.close()
             search.checkpoint(force=True)
         except BaseException:
-            session.stop_admission()
+            try:
+                session.stop_admission()
+            except BaseException:
+                logging.exception("GPU native admission cleanup failed after an earlier failure")
             try:
                 worker_lifetime.close()
             except BaseException:

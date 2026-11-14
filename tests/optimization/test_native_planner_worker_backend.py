@@ -100,6 +100,9 @@ def test_cuda_worker_startup_is_interruptible_before_admission(monkeypatch, tmp_
                 stop = True
                 self.interrupt_check()
 
+            def __exit__(self, *_args):
+                pytest.fail("A context that failed to start must not be entered")
+
         monkeypatch.setattr(native_planner_workers, "OrderedCandidateWorkers", InterruptingStartup)
         return 2
 

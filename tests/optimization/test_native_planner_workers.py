@@ -69,10 +69,6 @@ def test_spawned_plans_match_canonical_fields_and_shape_in_order(suite):
                 assert _plan_parameters(plan, freeze=False) == _plan_parameters(expected[index - 2], freeze=False)
         assert [workers.poll(timeout=20) for _ in range(2)] == expected[-2:]
         assert workers.pending_count == 0 and workers.poll() is None
-        stats = workers.resource_snapshot()
-        assert len(stats) == 2 and sum(item["plans"] for item in stats.values()) == len(expected)
-        assert all(item["cpu_seconds"] > 0 and item["peak_sampled_rss_bytes"] > 0
-                   and item["peak_plan_bytes"] > 0 for item in stats.values())
 
 
 def test_ordered_failure_discards_future_rows_without_masking_planner_error():
@@ -153,7 +149,6 @@ def test_every_worker_is_verified_before_admission(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("SKIP_RUST_COMPILE", raising=False)
     with workers:
-        assert len(workers.resource_snapshot()) == 2
         assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
         assert "SKIP_RUST_COMPILE" not in os.environ
         workers.submit("ready", vector)
