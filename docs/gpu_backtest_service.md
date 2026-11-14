@@ -410,9 +410,9 @@ candidates divided by the sum of per-count median durations weighted by warm occ
 CUDA `max` uses this whole-window rate to account for the throughput of partial launches.
 These are conditional replay-capacity estimates, not measured end-to-end optimizer
 throughput or confidence bounds. Execution-width trials must preserve or improve the
-comparison rate in either direction; they do not prefer a slower smaller allocation or
-require a fixed percentage gain to grow. Generic tuning callers retain their own plateau
-and growth thresholds. Existing cooldown and rollback apply. Growth also requires
+comparison rate in either direction. Conservative and refresh accept a wider trial at
+the same comparison rate. Generic tuning callers retain their own plateau and growth
+thresholds. Existing cooldown and rollback apply. Growth also requires
 compatible work and device memory headroom. Metal growth also requires available
 RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Missing
 or invalid OS telemetry denies a growth trial without failing completed replay work.

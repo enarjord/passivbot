@@ -8,8 +8,8 @@ Optimizer resume reuses checkpoint fitness only when its fixed evaluation contra
 current run. This includes backtest execution and data policies, backtest-consumed live settings,
 fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
 vector values, `optimize.n_cpus`, and output paths are excluded. The shared resume check still
-compares the complete `optimize.gpu` mapping, including GPU worker and hardware-sizing controls;
-changing those controls currently requires a fresh run. Dataset selectors
+compares the complete `optimize.gpu` mapping, including tuning mode and dispatch sizing.
+Changing those settings requires a fresh run. Dataset selectors
 `backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
 are compared as configured. Moving input directories therefore requires a fresh run even when
 contents match; input paths are data selectors, not excluded output paths.
@@ -313,8 +313,8 @@ In `max`, `population_size` controls how many parents selection keeps. Startup a
 offspring cohorts can offer more candidates per generation. At startup the optimizer
 evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
 the cohort when the budget and search space allow. Without supplied seeds it samples
-the configured bounds. The initial target comes from the selected CUDA device. Warm
-per-scenario replay trials can move the target during the run.
+the configured bounds. With automatic batch sizing, the selected CUDA device supplies
+the initial target, and warm per-scenario trials can move it during the run.
 
 CUDA `max` can prepare candidates in several CPU processes while the GPU
 replays queued work. The optimizer applies plans in candidate order and retains
