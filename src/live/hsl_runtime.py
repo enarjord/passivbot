@@ -364,6 +364,9 @@ def capture(
     # between two clock reads is not a timebase offset. Synthetic harnesses
     # must provide their distinct observation projection explicitly.
     offset = observation_clock_offset_ms
+    # An offset-only synthetic capture keeps quote freshness in UTC. Live
+    # captures and individually projected receipts use the native clock too.
+    check_native_mark_age = offset == 0 or fact_clock_projector is not None
 
     def fact_time(kind, receipt, observed_utc):
         if fact_clock_projector is None:
@@ -626,7 +629,11 @@ def capture(
             if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
                 mark, mark_at = quote.last, fact_time("quote", quote, quote.fetched_ms)
                 # A held mark must still be current at the native capture time.
-                if size != 0 and not 0 <= now_ms - mark_at <= max_current_age_ms:
+                if (
+                    size != 0
+                    and check_native_mark_age
+                    and not 0 <= now_ms - mark_at <= max_current_age_ms
+                ):
                     pair_problems[key] = "current_mark_unavailable"
                     continue
                 mark_observations[key] = quote.fetched_ms
