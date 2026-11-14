@@ -71,6 +71,10 @@ readiness deferrals keep their existing cadence. An outage does not authorize ac
 expired cohort.
 During startup preparation the same deadline gates current-account refreshes for protection.
 The independent preparation task can complete while that deadline is pending.
+A completed ordinary preparation with missing quotes or a plain transport failure defers
+only that ordinary plan. Protection still refreshes its own inputs on schedule.
+Exchange backpressure, explicit request-local retry delays and nonce errors retain their
+owner-level recovery policies.
 
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
