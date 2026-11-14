@@ -18,14 +18,20 @@ LONG_EVIDENCE_SECONDS = 30.0
 
 
 class ExecutionBatchTuner:
-    def __init__(self, *, initial=64, headroom=lambda: True, enabled=True, diagnostics=False):
+    def __init__(self, *, initial=64, headroom=lambda: True, enabled=True, diagnostics=False,
+                 expandable_producer=False):
         self.initial = initial
         self.headroom = headroom
         self.enabled = enabled
         self.controllers = {}
         self._ceilings = {}
         self._demand = {}
+        self._split_observation = None
         self._allow_trial = False
+        self._expandable_producer = expandable_producer
+        # Single writer on the device owner. The search reads a complete
+        # snapshot between cohorts and can supply a pending wider trial.
+        self.cohort_width = initial
         self._diagnostic_started = self._diagnostics = None
         if diagnostics:
             try:
@@ -51,7 +57,7 @@ class ExecutionBatchTuner:
         return {name: dict(item) if isinstance(item, dict) else item
                 for name, item in value.items()}
 
-    def constrain(self, dataset_id, ceiling):
+    def constrain(self, dataset_id, ceiling, *, split=False):
         """Apply the prepared replay's dispatch bound on its owning worker."""
         if self._ceilings.get(dataset_id) != ceiling:
             # Preparation/retry may change capacity before this replay's
@@ -59,6 +65,10 @@ class ExecutionBatchTuner:
             self.controllers.pop(dataset_id, None)
             self._demand.pop(dataset_id, None)
         self._ceilings[dataset_id] = ceiling
+        if split and self.enabled:
+            # The reported completion size spans multiple physical replays.
+            # Leave the current controller intact and omit this timing sample.
+            self._split_observation = dataset_id
 
     def width(self, dataset_id, ceiling):
         # Claim one initial request, prepare on its owner, then discover the
@@ -80,8 +90,12 @@ class ExecutionBatchTuner:
                 long_window_seconds=LONG_EVIDENCE_SECONDS,
                 rate_aggregation="largest_count",
                 shrink_min_rate_ratio=1.0,
-                growth_min_rate_ratio=1.0,
-                growth_limit=lambda: self._demand[dataset_id],
+                growth_min_rate_ratio=1.03 if self._expandable_producer else 1.0,
+                growth_limit=lambda: (
+                    controller.ceiling
+                    if self._expandable_producer and controller.last_comparison_count == controller.width
+                    else self._demand[dataset_id]
+                ),
                 can_grow=lambda: self.headroom(),
                 can_trial=lambda: self._allow_trial,
             )
@@ -95,7 +109,10 @@ class ExecutionBatchTuner:
             cold = compilation_cold()
         controller = self.controllers.get(dataset_id)
         diagnostic = self._diagnostics
-        if controller is None:
+        split = self._split_observation == dataset_id
+        if split:
+            self._split_observation = None
+        if controller is None or split:
             if diagnostic is not None:
                 self._record_diagnostics(dataset_id, count, seconds, None, None, False,
                                          diagnostic, 0, backlog, closing, cold)
@@ -112,6 +129,8 @@ class ExecutionBatchTuner:
         completed_window = controller.observe(count, seconds, cold=cold)
         if completed_window:
             self._demand[dataset_id] = 0
+        if self._expandable_producer:
+            self.cohort_width = max(value.width for value in self.controllers.values())
         if diagnostic is not None:
             self._record_diagnostics(dataset_id, count, seconds, controller, before,
                                      bool(completed_window), diagnostic, peak_demand, backlog, closing, cold)

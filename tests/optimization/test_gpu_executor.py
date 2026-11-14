@@ -230,6 +230,68 @@ def test_first_dispatch_uses_prepared_capacity_without_repeating_or_reordering_w
     assert cancelled.cancelled()
 
 
+@pytest.mark.parametrize("finish", ["full", "sealed", "expired", "unrelated", "cancel", "capacity"])
+def test_first_adaptive_batch_can_continue_under_its_original_producer_deadline(monkeypatch, finish):
+    from optimization.gpu import executor
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    clock, deadline_reads, replay = [100.0], Queue(), Replay()
+    monkeypatch.setattr(executor, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=time.perf_counter,
+    ))
+    policy = ExecutionBatchTuner(initial=3, enabled=False)
+    capacity = 3 if finish == "capacity" else 8
+    service = GpuBacktestService(batch_size=3, max_pending=capacity, max_batch_delay=None,
+                                 batch_policy=policy, accumulate_after_preparation=True)
+    @contextmanager
+    def factory():
+        assert clock[0] == 100.0
+        clock[0] = 101.0
+        policy.constrain("market", 3)
+        yield replay
+    service.register_dataset_factory("market", factory)
+    other = Replay()
+    service.register_dataset("other", other)
+    policy.constrain("other", 1)
+    preparing_deadline = service._coalescing.preparing_deadline
+    def deadline(dataset, started):
+        result = preparing_deadline(dataset, started)
+        deadline_reads.put(result)
+        return result
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market", "other"} if finish == "capacity" else {"market"})
+    try:
+        first = service.submit(request(1))
+        assert deadline_reads.get(timeout=3) == 160  # 100 + 60, not 101 + 60.
+        assert first.running() and not replay.calls
+        second = service.submit(request(2))
+        assert deadline_reads.get(timeout=3) == 160
+        assert not first.done() and not second.running()
+        if finish == "full":
+            third = service.submit(request(3))
+            assert third.result(timeout=3).request_id == "3"
+        elif finish == "sealed":
+            service.set_preparing(())
+        elif finish == "expired":
+            clock[0] = 161
+            with service._condition:
+                service._condition.notify_all()
+        elif finish == "cancel":
+            service.close(cancel_pending=True)
+        else:
+            third = service.submit(request(3, "other"))
+            assert third.result(timeout=3).request_id == "3"
+        assert first.result(timeout=3).request_id == "1"
+        if finish == "cancel":
+            assert second.cancelled()
+        else:
+            assert second.result(timeout=3).request_id == "2"
+        expected = [1, 2, 3] if finish == "full" else [1] if finish == "cancel" else [1, 2]
+        assert replay.calls == [[{"value": value} for value in expected]]
+    finally:
+        service.close(cancel_pending=True)
+
+
 def test_cancel_pending_during_preparation_does_not_fill_first_dispatch():
     from optimization.gpu.execution_tuning import ExecutionBatchTuner
 
@@ -686,6 +748,38 @@ def test_automatic_coalescing_tracks_accepted_arrivals_and_successful_work():
         service.close(cancel_pending=True)
 
 
+def test_dataset_demand_tracks_claimed_cancelled_and_completed_requests(monkeypatch):
+    replay = GatedReplay()
+    observed = []
+    with GpuBacktestService(batch_size=1, max_pending=4, max_batch_delay=None) as service:
+        service.register_dataset("market", replay)
+        service.register_dataset("other", Replay())
+        arrived = service._coalescing.arrived
+
+        def observe(dataset_id, now, *, active):
+            observed.append((dataset_id, active))
+            arrived(dataset_id, now, active=active)
+
+        monkeypatch.setattr(service._coalescing, "arrived", observe)
+        try:
+            first = service.submit(request(1))
+            assert replay.started.wait(3)
+            cancelled = service.submit(request(2, "other"))
+            assert cancelled.cancel()
+            replacement = service.submit(request(2, "other"))
+            second = service.submit(request(3))
+            assert service._queued_by_dataset == {"market": 1, "other": 1}
+            assert service._outstanding_by_dataset == {"market": 2, "other": 1}
+        finally:
+            replay.release.set()
+        for item in (first, replacement, second):
+            item.result(timeout=3)
+        service.submit(request(1)).result(timeout=3)
+        assert not service._queued_by_dataset and not service._outstanding_by_dataset
+        assert observed == [("market", False), ("other", False), ("other", False),
+                            ("market", True), ("market", False)]
+
+
 def test_invalid_producer_output_does_not_train_automatic_coalescing():
     class BrokenReplay(Replay):
         def evaluate(self, candidates):
@@ -867,6 +961,7 @@ def test_producer_failure_reaches_running_and_queued_requests():
     assert first.exception() is failure
     assert queued.exception() is failure
     assert len(replay.calls) == 1
+    assert not service._queued_by_dataset and not service._outstanding_by_dataset
 
 
 def test_cancel_pending_close_preserves_running_completion_and_joins():
@@ -885,6 +980,7 @@ def test_cancel_pending_close_preserves_running_completion_and_joins():
     closer.join(timeout=3)
     assert not closer.is_alive()
     assert first.result().metrics == {"gain_multiplier": 1.0}
+    assert not service._queued_by_dataset and not service._outstanding_by_dataset
     with pytest.raises(RuntimeError, match="closed"):
         service.submit(request(3))
 
@@ -1081,6 +1177,7 @@ def test_failed_thread_start_rolls_back_admission_and_can_retry(monkeypatch):
     with pytest.raises(RuntimeError) as raised:
         service.submit(request(1))
     assert raised.value is error
+    assert not service._queued_by_dataset and not service._outstanding_by_dataset
     monkeypatch.setattr(executor, "Thread", real_thread)
     assert service.submit(request(1)).result(timeout=3).request_id == "1"
     service.close()

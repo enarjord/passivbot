@@ -12,6 +12,7 @@ import math
 import sys
 from types import MappingProxyType
 
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
 from config.param_paths import iter_optimizer_key_paths
 from config.strategy_spec import get_strategy_param_keys, get_strategy_spec, get_supported_strategy_kinds
 from config_utils import clean_config
@@ -357,6 +358,8 @@ class NativeCandidatePlanner:
         self._variants = {}
         self._execution_projections = {}
         self._projection_eligible = {}
+        tuning_mode = self.base.config["optimize"].get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT)
+        max_throughput = resolve_gpu_tuning_mode(tuning_mode) == "max"
         for binding in self.bindings:
             pair = (binding.scenario, binding.dataset.exchange)
             variants = self._variants.setdefault(pair, {})
@@ -365,12 +368,11 @@ class NativeCandidatePlanner:
             if key in variants:
                 raise ValueError("scenario/exchange execution variants must be unique")
             variants[key] = binding
-            # Preparation cadence affects request grouping. Limit reuse to
-            # single-coin views; source arrays may contain more coins.
-            # Every variant in a pair must qualify independently.
+            # Max can reuse a guarded identity for multiple selected coins.
+            # Other modes retain their existing preparation cadence.
             self._projection_eligible[pair] = (
                 self._projection_eligible.get(pair, True)
-                and len(binding.dataset.coin_indices) == 1
+                and (max_throughput or len(binding.dataset.coin_indices) == 1)
             )
         self.scorer.validate_coverage(list(self._variants), "full")
         if len({binding.dataset_id for binding in self.bindings}) != len(self.bindings):

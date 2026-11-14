@@ -70,7 +70,11 @@ class FakeService(GpuBacktestService):
         kwargs.pop("interrupt_check")
         kwargs.pop("tuning_mode")
         kwargs.pop("auto_request_capacity")
+        kwargs.pop("auto_batch_size_limit", None)
+        kwargs.pop("max_cohort_width", None)
         super().__init__(**kwargs)
+
+    cohort_width = None
 
     def register_dataset(self, dataset_id, dataset):
         assert dataset.candle_coins == ("COIN00", "COIN01", "COIN02")
@@ -214,6 +218,67 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         base.config["optimize"]["iters"] = 12
         execute(base, recorder, checkpoint, resume=True)
         assert len(records) == 12
+
+
+@pytest.mark.parametrize("authored", [False, True])
+def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path, authored):
+    import optimization.backends.gpu_backend as backend
+
+    guard_cpu(monkeypatch)
+    phases = []
+    evaluate = backend._Search.evaluate_population
+
+    def observe(self):
+        phases.append((self.state["phase"], len(self.state["population"]), self.session.max_candidates))
+        return evaluate(self)
+
+    monkeypatch.setattr(backend._Search, "evaluate_population", observe)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 21
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=8)
+        vector = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
+        starts = [vector] if authored else []
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+
+        execute(base, recorder, checkpoint, starts=starts)
+        state = load_checkpoint(checkpoint, base.config)
+        assert state["max_search_allocated"] == 21
+        assert len(state["algorithm"].pop) == base.config["optimize"]["population_size"] == 4
+        assert phases[:3] == [("seeds", 8, 8), ("generation", 4, 8), ("generation", 8, 8)]
+        assert phases[3:] == [("generation", 6 if authored else 5, 6 if authored else 5)]
+        assert len(records) == 21 + authored
+        assert len(FakeService.rows) == len(records)
+
+        execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 21 + authored
+        base.config["optimize"]["iters"] = 20
+        with pytest.raises(ValueError, match="iters below already allocated search attempts"):
+            execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 21 + authored
+        base.config["optimize"]["iters"] = 24
+        execute(base, recorder, checkpoint, resume=True)
+        assert phases[-1] == ("generation", 3, 3)
+        assert len(records) == 24 + authored
+
+
+def test_cuda_max_tiny_budget_never_pads_evaluated_parents(monkeypatch, tmp_path):
+    guard_cpu(monkeypatch)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 1
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=8)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+        execute(base, recorder, checkpoint)
+        assert len(records) == len(FakeService.rows) == 1
+        state = load_checkpoint(checkpoint, base.config)
+        assert len(state["algorithm"].pop) == state["max_search_allocated"] == 1
+        execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 1
 
 
 def test_cohort_diagnostics_exclude_restored_attempts_and_preserve_result_lineage(monkeypatch, tmp_path, caplog):
@@ -557,9 +622,11 @@ def test_normal_window_submits_ready_rows_before_sealing_with_backpressure(monke
         assert load_checkpoint(checkpoint, base.config)["completed"] == 4
 
 
-@pytest.mark.parametrize("seed_count,expected_window", [(12, 12), (1100, 1024)])
+@pytest.mark.parametrize("tuning_mode,seed_count,expected_window", [
+    ("conservative", 12, 12), ("conservative", 1100, 1024), ("max", 1100, 1100),
+])
 def test_seed_admission_uses_available_cohort_on_fresh_and_resumed_runs(
-    monkeypatch, tmp_path, seed_count, expected_window,
+    monkeypatch, tmp_path, tuning_mode, seed_count, expected_window,
 ):
     import optimization.backends.gpu_backend as backend
 
@@ -575,6 +642,7 @@ def test_seed_admission_uses_available_cohort_on_fresh_and_resumed_runs(
 
     with managed_arrays() as manager:
         base = inputs(manager)
+        base.config["optimize"]["gpu"]["tuning_mode"] = tuning_mode
         vector = optimize.config_to_individual(
             base.config, base.bounds, optimization_shape=base.optimization_shape,
         )

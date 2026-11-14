@@ -6422,7 +6422,16 @@
                 },
                 "tuning_mode": {
                   "type": "string",
-                  "default": "auto",
+                  "default": "conservative",
+                  "description": "GPU resource tuning policy. Max is CUDA-only. Auto aliases conservative.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[cC][oO][nN][sS][eE][rR][vV][aA][tT][iI][vV][eE]|[mM][aA][xX]|[rR][eE][fF][rR][eE][sS][hH]|[oO][fF][fF]|[aA][uU][tT][oO])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "conservative",
+                    "max",
+                    "refresh",
+                    "off",
+                    "auto"
+                  ],
                   "x-passivbot-consumers": [
                     "optimize"
                   ]

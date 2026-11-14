@@ -17,7 +17,7 @@ from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
-from config.gpu import resolve_gpu_screening, resolve_gpu_sizing
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_screening, resolve_gpu_sizing, resolve_gpu_tuning_mode
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -32,7 +32,10 @@ from optimization.native_pipeline import ResultCadence
 from optimization.native_session import NativeEvaluationSession
 from optimization.progress import CohortDiagnostics, OptimizerProgress, search_boundary
 from optimization.scenario_screening import screening_survivor_indices, screening_survivor_count
-from optimization.fine_tune_anchors import get_anchor_plan
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
+from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES
+from optimization.gpu.search_budget import CudaMaxSearchBudget
+from optimization.gpu.search_sampling import max_starting_vectors
 
 
 class NativeSearchProblem(Problem):
@@ -280,16 +283,22 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 configs_to_individuals_streaming=None, optimization_shape=None,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
-    from optimization.gpu.native import NativeBacktestService
+    from optimization.gpu.native import NativeBacktestService, cuda_initial_candidate_width
 
     base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
     problem = NativeSearchProblem(base)
     population_plan = _resolve_pymoo_population_plan(config, n_obj=problem.n_obj)
     population_size = population_plan["actual_population_size"]
-    ngen = max(1, int(config["optimize"]["iters"] / population_size))
+    options = config["optimize"]
+    iters = options["iters"]
+    seed = options.get("seed")
+    gpu = options.get("gpu", {})
+    tuning_mode = resolve_gpu_tuning_mode(gpu.get("tuning_mode", GPU_TUNING_DEFAULT))
+    max_throughput = tuning_mode == "max"
+    # Max budgets candidate proposals directly. This is an upper bound for
+    # pymoo's bookkeeping generations, including initialization from evaluated parents.
+    ngen = iters + 1 if max_throughput else max(1, int(iters / population_size))
     termination = get_termination("n_gen", ngen)
-    seed = config["optimize"].get("seed")
-    gpu = config["optimize"].get("gpu", {})
     screening_policy = resolve_gpu_screening(gpu.get("screening"))
     if screening_policy["scenarios"] and not callable(getattr(evaluator_for_pool, "score_scenario_results", None)):
         raise ValueError("GPU screening.scenarios requires a prepared scenario suite")
@@ -314,17 +323,46 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=optimization_shape, bounds=base.bounds, sig_digits=base.sig_digits,
         )
-        algorithm = _build_algorithm(config=config, sampling=_build_random_sampling(base.bounds, population_size),
+        authored_seed_count = len(starts)
+        if max_throughput:
+            target_width = (cuda_initial_candidate_width() if batch_size is None
+                            else min(batch_size, CUDA_MAX_BATCH_CANDIDATES))
+            plan = CudaMaxSearchBudget(population_size, target_width)
+            generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
+            key_paths = getattr(optimization_shape, "key_paths", ())
+            anchors = tuple(i for i, (key, _path) in enumerate(key_paths) if key == ANCHOR_GENE_KEY)
+            starts = max_starting_vectors(
+                starts, bounds=base.bounds, sig_digits=base.sig_digits,
+                width=authored_seed_count + generated, random_state=np.random.default_rng(seed),
+                preserve_indices=anchors,
+            )
+        sampling = (np.asarray(starts[:population_size]) if max_throughput
+                    else _build_random_sampling(base.bounds, population_size))
+        algorithm = _build_algorithm(config=config, sampling=sampling,
                                      bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan)
         from session_artifacts import record_optimizer_search
-        record_optimizer_search(config, algorithm, population_plan, starting_individuals=len(starts))
+        record_optimizer_search(
+            config, algorithm, population_plan, starting_individuals=authored_seed_count,
+            cuda_max_search=(
+                {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
+                 "generated_attempt_budget": iters} if max_throughput else None
+            ),
+        )
         algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
         state = dict(backend="gpu", version=CHECKPOINT_VERSION, algorithm=algorithm,
                      phase="seeds" if starts else "idle", sequence=0, completed=0,
                      screened=0, population=Population.new("X", np.asarray(starts)) if starts else None)
+        if max_throughput:
+            state.update(max_search_budget=plan, max_search_allocated=len(starts) - authored_seed_count)
+            logging.info(
+                "CUDA max search | survivors=%d cohort_target=%d bootstrap_seeds=%d "
+                "bootstrap_generated=%d proposal_budget=%d",
+                population_size, plan.cohort_width, authored_seed_count, state["max_search_allocated"], iters,
+            )
         state[CONTRACT_KEY] = build_evaluation_contract(config)
         state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
         state["anchor_plan"] = deepcopy(get_anchor_plan(config))
+    max_search_budget = state.get("max_search_budget")
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:
@@ -346,14 +384,21 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         # Seed survival waits for the complete seed cohort, so its available
         # work is independent of the later evolutionary population size. Keep
         # admission bounded while allowing the service to fill wider batches.
-        population_window = max(2, min(population_size, 1024))
-        seed_count = len(state["population"]) if state["phase"] == "seeds" else 0
-        candidate_window = max(population_window, min(seed_count, 1024))
+        candidate_limit = CUDA_MAX_BATCH_CANDIDATES if max_throughput else 1024
+        cohort_width = max_search_budget.cohort_width if max_search_budget is not None else population_size
+        population_window = max(2, min(cohort_width, candidate_limit))
+        pending_count = len(state["population"]) if (
+            state["phase"] == "seeds" or (max_throughput and state["phase"] != "idle")
+        ) else 0
+        candidate_window = max(population_window, min(pending_count, candidate_limit))
+        if max_throughput and batch_size is None:
+            memory_options["max_cohort_width"] = max_search_budget.target_width
         service = NativeBacktestService(
             batch_size=batch_size, **memory_options,
             max_dispatch_candidate_bars=dispatch_budget,
-            interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"),
-            auto_request_capacity=candidate_window * registry.requests_per_candidate,
+            interrupt_check=interrupt_check, tuning_mode=tuning_mode,
+            auto_request_capacity=(candidate_limit if max_throughput else candidate_window)
+                                  * registry.requests_per_candidate,
         )
         session = NativeEvaluationSession(
             service, registry.scorer,
@@ -374,6 +419,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     starting_individuals=seeds.get("X").tolist(),
                     payloads=[dict(F=individual.F, G=individual.G) for individual in seeds],
                     population_size=population_size, bounds=base.bounds, rng_seed=seed,
+                    pad_sampling=not max_throughput,
                 )
                 session.max_candidates = population_window
                 state.update(phase="idle", population=None)
@@ -382,18 +428,34 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             # n_iter is the next generation after tell. A freshly configured
             # resume termination has no progress yet; also check that next index
             # so a completed checkpoint does not run an extra generation.
+            algorithm = state["algorithm"]
             while state["phase"] in {"screening", "generation"} or (
-                (state["algorithm"].n_iter or 1) <= ngen and state["algorithm"].has_next()
+                (algorithm.n_iter or 1) <= ngen and algorithm.has_next()
             ):
                 interrupt_check()
                 if state["phase"] == "idle":
-                    with search_boundary(state["algorithm"].n_iter or 0, "ask"):
-                        population = state["algorithm"].ask()
-                    if population is None and state["algorithm"].termination.force_termination:
+                    if max_throughput and algorithm.is_initialized:
+                        target_width = service.cohort_width
+                        if target_width is not None and target_width != max_search_budget.target_width:
+                            max_search_budget = replace(max_search_budget, target_width=target_width)
+                            state["max_search_budget"] = max_search_budget
+                            logging.info("CUDA max cohort target | width=%d", max_search_budget.cohort_width)
+                        slots = max_search_budget.offspring_size(iters=iters, allocated=state["max_search_allocated"])
+                        if not slots:
+                            break
+                        algorithm.n_offsprings = slots
+                        session.max_candidates = max(2, min(slots, candidate_limit))
+                    else:
+                        slots = 0
+                    with search_boundary(algorithm.n_iter or 0, "ask"):
+                        population = algorithm.ask()
+                    if population is None and algorithm.termination.force_termination:
                         break
                     if population is None or not len(population):
                         raise RuntimeError("GPU native evolutionary algorithm returned no candidates")
-                    parents = state["algorithm"].pop
+                    if max_throughput:
+                        state["max_search_allocated"] += slots
+                    parents = algorithm.pop
                     screening = bool(labels) and parents is not None and len(parents) > 0
                     # All-label selection is already a full evaluation, with no
                     # partial search stage or survivor reduction.
@@ -402,11 +464,16 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     state.update(phase="screening" if screening else "generation", population=population)
                 if state["phase"] == "screening":
                     search.evaluate_population()
-                    with search_boundary(state["algorithm"].n_iter or 0, "promotion"):
+                    with search_boundary(algorithm.n_iter or 0, "promotion"):
                         search.promote_screening()
                 search.evaluate_population()
-                with search_boundary(state["algorithm"].n_iter or 0, "tell"):
-                    state["algorithm"].tell(infills=state["population"])
+                with search_boundary(algorithm.n_iter or 0, "tell"):
+                    algorithm.tell(infills=state["population"])
+                if max_throughput:
+                    # pymoo keeps the last offspring independently of survivors.
+                    # It is not consumed by future mating, so avoid retaining a
+                    # full wide cohort in every subsequent checkpoint.
+                    algorithm.off = None
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
             service.close()

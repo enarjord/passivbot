@@ -77,6 +77,15 @@ def test_empty_history_does_not_reduce_dispatch_width():
     assert cuda_history_budget(value, GIB, 12 * GIB) == 512 * MIB
 
 
+def test_max_can_use_more_scratch_but_keeps_its_reserve_under_pressure():
+    value = runner(row=2**20, workspace=0)
+    assert cuda_history_budget(value, 2 * GIB, 8 * GIB, max_throughput=True) == (
+        2 * GIB - int(8 * GIB * 0.10)
+    )
+    with pytest.raises(MemoryError, match="max-mode reserve"):
+        cuda_history_budget(value, 512 * MIB, 8 * GIB, max_throughput=True)
+
+
 @pytest.mark.parametrize("automatic,device", [(True, "cuda"), (False, "cuda"), (True, "mps")])
 @pytest.mark.parametrize("fused", [False, True])
 def test_new_owner_policy_preserves_fixed_and_metal_and_ignores_retired_facts(automatic, device, fused):
@@ -160,6 +169,95 @@ def scratch_runner():
     for name in SCRATCH_CACHES:
         setattr(value, name, {})
     return value
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_counts_reclaimable_scratch_and_preserves_saved_ceiling(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    value._core_buffers = {5: SimpleNamespace(nbytes=64 * MIB)}
+    value._buffers = {5: (SimpleNamespace(nbytes=64 * MIB),)}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB + 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = GIB
+    unused = 0
+    queries = []
+    def mem_get_info(device):
+        assert device == "cuda"
+        return free_bytes, 8 * GIB
+    def empty_cache():
+        queries.append(True)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _device: unused)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _device: 0)
+    value._refresh_max_mode_scratch_budget(7)
+    assert value.hsl_scratch_budget_bytes == GIB - int(8 * GIB * .10) + 128 * MIB
+    free_bytes = 7 * GIB
+    value._refresh_max_mode_scratch_budget(7)
+    assert value.hsl_scratch_budget_bytes == 2 * GIB
+    unused = 64 * MIB
+    free_bytes = 256 * MIB
+    with pytest.raises(MemoryError, match="fell below the max-mode replay reserve"):
+        value._refresh_max_mode_scratch_budget(1)
+    assert queries == [True]
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_reclaims_allocator_reservations_before_reducing_width(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    value._core_buffers = {}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB + 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = GIB
+    calls = []
+    def mem_get_info(_device):
+        calls.append(free_bytes)
+        return free_bytes, 8 * GIB
+    def empty_cache():
+        nonlocal free_bytes
+        free_bytes += 512 * MIB
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _device: 768 * MIB)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _device: 256 * MIB)
+    value._refresh_max_mode_scratch_budget(7)
+    assert calls == [GIB, GIB + 512 * MIB]
+    assert value.hsl_scratch_budget_bytes >= value._history_batch_bytes(7)
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_drops_old_scratch_if_needed_to_restore_reserve(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    old_output = SimpleNamespace(nbytes=128 * MIB)
+    value._core_output = old_output
+    value._core_buffers = {5: old_output}
+    value._replay_states = {5: SimpleNamespace(nbytes=128 * MIB)}
+    value._scratch_shape = (5, 0, 0, 16)
+    value.cuda_max_scratch_policy = True
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = 768 * MIB
+    def empty_cache():
+        nonlocal free_bytes
+        assert not value._replay_states and not value._core_buffers
+        assert value._scratch_shape is value._core_output is None
+        free_bytes += 256 * MIB
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", lambda _device: (free_bytes, 8 * GIB))
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    for name in ("memory_reserved", "memory_allocated"):
+        monkeypatch.setattr(mps_kernel.torch.cuda, name, lambda _device: 256 * MIB)
+    value._refresh_max_mode_scratch_budget(5)
+    assert free_bytes == GIB
+    assert value.hsl_scratch_budget_bytes == GIB - int(8 * GIB * .10)
 
 
 @pytest.mark.parametrize("change", ["grow", "shrink", "state"])

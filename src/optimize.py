@@ -85,6 +85,7 @@ from config import (
 )
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -936,6 +937,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
+    gpu = normalized.get("gpu")
+    if isinstance(gpu, dict) and "tuning_mode" in gpu:
+        gpu["tuning_mode"] = resolve_gpu_tuning_mode(gpu["tuning_mode"])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -3459,8 +3463,7 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
     if device == "mps":
         check_mps_invariant_memory(torch, required)
     else:
-        check_cuda_invariant_memory(torch, required, working_set=(
-            None if input_memory_budget is None else input_memory_budget.initial_free_bytes))
+        check_cuda_invariant_memory(torch, required, input_memory_budget=input_memory_budget)
 
 
 def _materialize_resolved_suite_dates(
@@ -3979,9 +3982,17 @@ async def main():
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
             # Freeze a run-level preference before file-cache pages are read.
-            capture = (capture_mps_input_memory_budget if gpu_device(torch) == "mps"
-                       else capture_cuda_input_memory_budget)
-            gpu_input_memory_budget = capture(torch)
+            tuning_mode = resolve_gpu_tuning_mode(
+                config["optimize"].get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT)
+            )
+            if gpu_device(torch) == "cuda":
+                gpu_input_memory_budget = capture_cuda_input_memory_budget(
+                    torch, max_throughput=tuning_mode == "max",
+                )
+            elif tuning_mode == "max":
+                raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
+            else:
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
 
         # A header describes the actual replay only for unsliced, unaggregated
         # ordinary caches. Suites and explicit dataset overrides admit after

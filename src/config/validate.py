@@ -9,6 +9,7 @@ from .bot import (
     validate_forager_config,
 )
 from .coerce import normalize_hsl_signal_mode
+from .gpu import resolve_gpu_tuning_mode
 from .param_paths import require_existing_config_path
 from .shared_bot import get_grouped_bot_value
 from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
@@ -115,6 +116,12 @@ def validate_config(
     if backend not in {"pymoo", "gpu"}:
         raise ValueError("optimize.backend must be one of ['pymoo', 'gpu']")
     config["optimize"]["backend"] = backend
+    gpu = config["optimize"]["gpu"]
+    mode = gpu["tuning_mode"]
+    canonical_mode = resolve_gpu_tuning_mode(mode)
+    gpu["tuning_mode"] = canonical_mode
+    if tracker is not None and mode != canonical_mode:
+        tracker.update("optimize.gpu.tuning_mode", mode, canonical_mode)
     policy = resolve_prefilter(config["optimize"].get("prefilter"))
     if prefilter_enabled(policy) and config['bot']["portfolio"]['strategy_kind'] != "trailing_martingale":
         raise ValueError("enabled config prefilters currently require trailing_martingale")

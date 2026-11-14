@@ -98,6 +98,33 @@ def test_cuda_preparation_uses_original_budget_while_activation_checks_live_free
         manager.check_preparation_memory(torch, 4 * 2**30)
 
 
+def test_max_resident_ceiling_threads_through_header_preflight_and_activation(monkeypatch):
+    gib = 2**30
+    torch, observations = _cuda(monkeypatch, free=7 * gib, available=8 * gib)
+    conservative = residency.capture_cuda_input_memory_budget(torch)
+    maximum = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    assert maximum.device_bytes == int(7 * gib * 0.70)
+    assert maximum.host_bytes == int(8 * gib * 0.85)
+    shape = (2_000_000, 40, 4)  # 3.95 GiB dense, inside the new resident limit.
+    assert residency.prefer_streamed_ticks(*shape[:2], conservative, device="cuda")
+    assert not residency.prefer_streamed_ticks(*shape[:2], maximum, device="cuda")
+    _gpu_cached_input_preflight(None, shape, np.float64, input_memory_budget=maximum)
+    resident = residency.multicoin_resident_bytes(*shape[:2], device="cuda")
+    manager = residency.CudaSuiteResidency(input_memory_budget=maximum)
+    observations["free"] = 4 * gib
+    manager.check_preparation_memory(torch, resident)
+    with pytest.raises(MemoryError, match="currently free.*reserve"):
+        manager._check_memory(torch, resident)
+    with pytest.raises(MemoryError, match="max-mode input budget"):
+        manager.check_preparation_memory(torch, 5 * gib)
+
+
+def test_max_cannot_spend_vram_needed_by_the_reserve_and_replay(monkeypatch):
+    torch, _ = _cuda(monkeypatch, free=2**30, available=2**28)
+    budget = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    assert budget.device_bytes == budget.host_bytes == 0
+
+
 def test_cuda_compact_packing_preserves_dense_inputs_and_int8_relation(monkeypatch, tmp_path):
     _cuda(monkeypatch)
     n, coins, minute = 185, 3, 23

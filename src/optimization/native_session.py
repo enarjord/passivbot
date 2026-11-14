@@ -30,6 +30,9 @@ class NativeEvaluationSession:
         self._active, self._primary, self._aliases = {}, {}, {}
         self._queued = deque()
         self._futures = {}
+        # IDs live from primary row admission through collection. Whole-plan
+        # cache hits and aliases never own queued rows or futures.
+        self._outstanding_request_ids = set()
         self._notifications = SimpleQueue()
         self._ready = deque()
         self._cache = OrderedDict()
@@ -89,9 +92,7 @@ class NativeEvaluationSession:
         requests = {request.request_id: request.dataset_id for request in plan.requests}
         if requests != slots or len(requests) != len(plan.requests):
             raise ValueError("candidate requests must exactly match its result slots")
-        other_ids = {request.request_id for _owner, request in self._queued}
-        other_ids.update(request.request_id for _owner, request, _reused in self._futures.values())
-        if other_ids & requests.keys():
+        if any(request_id in self._outstanding_request_ids for request_id in requests):
             raise ValueError("request identities collide with admitted work")
         snapshots = tuple(BacktestRequest(request.request_id, request.dataset_id,
                                           deepcopy(dict(request.parameters)))
@@ -109,6 +110,7 @@ class NativeEvaluationSession:
         else:
             self._primary[key] = plan.candidate_id
             self._queued.extend((plan.candidate_id, request) for request in snapshots)
+            self._outstanding_request_ids.update(requests)
 
     @staticmethod
     def _reuse(plan, payload):
@@ -220,6 +222,7 @@ class NativeEvaluationSession:
                     break
                 processed += 1
                 candidate_id, _request, reused = self._futures.pop(future)
+                self._outstanding_request_ids.remove(_request.request_id)
                 try:
                     row = future.result()
                 except CancelledError:
@@ -265,6 +268,7 @@ class NativeEvaluationSession:
         """
         self._stopped = True
         self.set_preparing(())
+        self._outstanding_request_ids.difference_update(request.request_id for _, request in self._queued)
         self._queued.clear()
         for future in tuple(self._futures):
             future.cancel()

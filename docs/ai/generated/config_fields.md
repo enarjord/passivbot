@@ -441,7 +441,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.gpu.screening.min_survivors` | integer | `64` | — | —; optimize | — | — | — | python |
 | `optimize.gpu.screening.scenarios` | array | `[]` | — | —; optimize | — | — | — | python |
 | `optimize.gpu.screening.survival_fraction` | float | `0.1` | — | —; optimize | — | — | — | python |
-| `optimize.gpu.tuning_mode` | string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.tuning_mode` | string | `"conservative"` | — | —; optimize | — | — | `conservative`, `max`, `refresh`, `off`, `auto`; authored string pattern; choices show canonical examples | python |
 | `optimize.iters` | integer | `2048` | — | —; optimize | — | — | — | python |
 | `optimize.limits` | array | 3 items (see template) | — | —; optimize | — | — | — | python |
 | `optimize.limits.*.enabled` | boolean | Not declared | — | —; optimize | — | — | — | python |

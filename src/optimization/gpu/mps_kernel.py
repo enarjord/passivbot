@@ -26,7 +26,9 @@ from optimization.gpu.decimal import (
     _tm_modifier_masks,
 )
 from optimization.gpu.replay_progress import TemporalReplayProgress
-from optimization.gpu.autotune import record_compilation, record_replay_chunk, ReplayDurationController
+from optimization.gpu.autotune import (
+    CudaReplayScratchLimit, ReplayDurationController, record_compilation, record_replay_chunk,
+)
 from optimization.gpu.runtime import (
     gpu_device,
     compile_shader,
@@ -1173,6 +1175,8 @@ class _MulticoinReplayRunner:
     supports_metal_tick_windows = False
     supports_cuda_tick_windows = False
     windowed_tick_fields = _METAL_WINDOWED_TICKS
+    initial_cuda_chunk_bars = None
+    cuda_max_scratch_policy = False
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -1541,16 +1545,32 @@ class _MulticoinReplayRunner:
 
 
     def _history_bytes_per_candidate(self):
+        max_mode_io_bytes = 0
+        if self.cuda_max_scratch_policy:
+            # Besides the state and reduction packet, include the scalar/fill
+            # outputs, parameter upload and the end word in the replay control.
+            max_mode_io_bytes = 4 * (self.scalar_cols + self._max_mode_parameter_cols + 1)
+            if self.collect_coin_fill_counts:
+                max_mode_io_bytes += 4 * self.n_coins
         return (
             4  # Fresh packed per-candidate end_steps word.
             + 4 * getattr(self, "core_packet_cols", 0)
             + self._hsl_history_bytes_per_candidate()
             + 4 * BOOTSTRAP_COUNT_COLS * self.replay_sides * self.n_coins
             + (int(self._replay_state_bytes or 0) if self._temporal_replay_enabled() else 0)
-
+            + max_mode_io_bytes
         )
 
     def _history_workspace_bytes(self):
+        if self.cuda_max_scratch_policy:
+            # The resident input allowance includes this full window, but the
+            # live scratch budget sees free VRAM before it has been uploaded.
+            window_bytes = min(self.n, self.temporal_chunk_bar_limit + 2) * self.n_coins * sum(
+                (1 if name == "touch_min_qty_relation" else 4) * columns
+                for name, columns in _METAL_WINDOWED_TICKS if name in self._streamed_tick_paths
+            )
+            # Include control headers, the per-command launch range and stubs.
+            return 64 + window_bytes
         return 4 * 8
 
     def _history_batch_bytes(self, batch_size):
@@ -1567,12 +1587,67 @@ class _MulticoinReplayRunner:
         # Clearing one buffer at its allocator still overlaps the new tensor
         # with every other old history. Release the complete prior dispatch
         # before params, outputs or any replacement histories are allocated.
+        self._clear_scratch()
+        self._scratch_shape = shape
+
+    def _clear_scratch(self):
         for name in (
             "_buffers", "_hsl_scratch_buffers",
             "_replay_states", "_sizes", "_full_end_steps",
         ):
             getattr(self, name).clear()
-        self._scratch_shape = shape
+        if self.cuda_max_scratch_policy:
+            self._core_buffers.clear()
+            self._core_output = None
+        self._scratch_shape = None
+
+    def _refresh_max_mode_scratch_budget(self, requested_width):
+        from optimization.gpu.residency import cuda_max_vram_reserve_bytes
+
+        device = self.bars.device
+        free, total = map(int, torch.cuda.mem_get_info(device))
+        reserve = cuda_max_vram_reserve_bytes(total)
+        # Allow reuse of this owner's existing tensors and keep the original
+        # allowance as a ceiling. A pressure change can shrink a batch before
+        # any of its replacement tensors are allocated.
+        replaceable = sum(
+            tensor.nbytes
+            for outputs in (*self._buffers.values(), *self._hsl_scratch_buffers.values())
+            for tensor in outputs
+        ) + sum(
+            tensor.nbytes
+            for buffers in (self._replay_states, self._sizes, self._full_end_steps, self._core_buffers)
+            for tensor in buffers.values()
+        )
+        requested_bytes = min(self._max_mode_scratch_ceiling_bytes, self._history_batch_bytes(requested_width))
+        release_scratch = False
+        if free < reserve or free - reserve + replaceable < requested_bytes:
+            unused = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
+            release_scratch = (free < reserve and replaceable > 0
+                               and free + unused + replaceable >= reserve + self._history_batch_bytes(1))
+            if release_scratch:
+                # The preceding results have already been reduced to host
+                # values. Release owned replay workspaces to restore headroom.
+                self._clear_scratch()
+                replaceable = 0
+            if unused > 0 or release_scratch:
+                # A previous shape can leave unused allocator reservations.
+                # Release them once before clamping or refusing this replay.
+                torch.cuda.empty_cache()
+                free, total = map(int, torch.cuda.mem_get_info(device))
+                reserve = cuda_max_vram_reserve_bytes(total)
+        if free < reserve:
+            raise MemoryError("CUDA free VRAM fell below the max-mode replay reserve")
+        allowance = min(self._max_mode_scratch_ceiling_bytes, free - reserve + replaceable)
+        if self._history_batch_bytes(1) > allowance:
+            raise MemoryError("CUDA replay state and workspace exceed free VRAM above the max-mode reserve")
+        if release_scratch or requested_bytes > allowance < self.hsl_scratch_budget_bytes:
+            logging.info(
+                "GPU max scratch pressure | requested_candidates=%d prior_scratch_released=%s "
+                "free_mib=%.1f allowance_mib=%.1f",
+                requested_width, release_scratch, free / 2**20, allowance / 2**20,
+            )
+        self.hsl_scratch_budget_bytes = allowance
 
     def _history_batch_limit(self):
         resident = self._history_bytes_per_candidate()
@@ -1789,10 +1864,17 @@ class _MulticoinReplayRunner:
         dispatch_count = 0
         max_dispatch_seconds = 0.0
         submission_seconds = synchronization_wait_seconds = 0.0
-        controller = ReplayDurationController(chunk_bars) if adaptive else None
+        initial_bars = chunk_bars
+        controller = None
+        if adaptive:
+            if self.initial_cuda_chunk_bars is None:
+                controller = ReplayDurationController(chunk_bars)
+            else:
+                initial_bars = min(chunk_bars, self.initial_cuda_chunk_bars)
+                controller = ReplayDurationController(chunk_bars, initial_bars=initial_bars)
         adaptive_adjustments = 0
         min_processed_bars, max_processed_bars = chunk_bars, 0
-        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
+        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=initial_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
         # Serial candidates need independent CUDA blocks to spread across SMs.
@@ -1951,8 +2033,15 @@ class _MulticoinReplayRunner:
             library, scalar_cold = _cached_library_with_miss(loader, *library_args)
             cold |= scalar_cold
             self._prepare_replay_state_layout(library, library_args)
+        if self.cuda_max_scratch_policy:
+            self._max_mode_parameter_cols = matrix.shape[1]
+            self._refresh_max_mode_scratch_budget(len(matrix))
         compiled = time.perf_counter() if profile else 0.0
-        if self._history_bytes_per_candidate():
+        if self.cuda_max_scratch_policy:
+            limit = self._history_batch_limit()
+            if len(matrix) > limit:
+                raise CudaReplayScratchLimit(len(matrix), limit)
+        elif self._history_bytes_per_candidate():
             split = self._run_history_batches(
                 params, profile=profile, end_steps=end_steps
             )

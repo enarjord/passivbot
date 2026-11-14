@@ -212,7 +212,8 @@ def instrument_replay(replay, dispatches, *, profiles=None):
         replay._construct_runner = observed_construct
 
 
-def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget, phase_profile=False):
+def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget,
+             phase_profile=False, *, tuning_mode=None):
     # Instrumentation belongs to this measurement, including failed setup. Keep
     # repeated in-process runs from accumulating wrappers and old observations.
     from optimization.gpu.autotune import BatchController
@@ -221,13 +222,14 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
     original_init = SharedAccountReplay.__init__
     try:
         return _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds,
-                         dispatch_budget, phase_profile)
+                         dispatch_budget, phase_profile, tuning_mode=tuning_mode)
     finally:
         BatchController.observe = original_observe
         SharedAccountReplay.__init__ = original_init
 
 
-def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget, phase_profile=False):
+def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget,
+              phase_profile=False, *, tuning_mode=None):
     config = entry['configs'][0]
     try:
         from optimization.gpu.native import NativeBacktestService
@@ -270,7 +272,12 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
     manager = SharedArrayManager()
     specs = [manager.create_from(a)[0] for a in arrays]
     dataset = PreparedGpuDataset(config=config, markets=markets, exchange=exchange, hlcvs=specs[0], btc=specs[1], timestamps=specs[2], candle_coins=config['backtest']['coins'][exchange], metrics=metrics)
-    service = NativeBacktestService(batch_size=None if width == 'auto' else int(width), max_pending=max(1024, len(parameters)), tuning_mode='refresh' if width == 'auto' else 'off', max_dispatch_candidate_bars=dispatch_budget)
+    tuning_mode = tuning_mode or ("refresh" if width == "auto" else "off")
+    service = NativeBacktestService(
+        batch_size=None if width == "auto" else int(width),
+        max_pending=max(1024, len(parameters)), tuning_mode=tuning_mode,
+        max_dispatch_candidate_bars=dispatch_budget,
+    )
     import optimization.gpu.service as module
     original_init = module.SharedAccountReplay.__init__
 
@@ -340,7 +347,7 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
         finally:
             module.SharedAccountReplay.__init__ = original_init
             manager.cleanup()
-    return dict(samples=samples, first_use=cold, parameter_seconds=parameter_seconds, setup_seconds=setup_seconds, device=device, device_memory=memory, engine='native_service', phase_profile_enabled=phase_profile, tuning_observations=tuning, tuning_windows=tuning_windows, first_tuning_window_seconds=tuning_windows[0]['elapsed_seconds'] if tuning_windows else None, tuning_assessment='requires completed evidence windows and matched fixed-width sweep' if width == 'auto' else None, isolated_requests=width == '1', latency_scope='isolated serial requests' if width == '1' else 'request completion including queueing')
+    return dict(samples=samples, first_use=cold, parameter_seconds=parameter_seconds, setup_seconds=setup_seconds, device=device, device_memory=memory, engine='native_service', phase_profile_enabled=phase_profile, tuning_mode=tuning_mode, tuning_observations=tuning, tuning_windows=tuning_windows, first_tuning_window_seconds=tuning_windows[0]['elapsed_seconds'] if tuning_windows else None, tuning_assessment='requires completed evidence windows and matched fixed-width sweep' if width == 'auto' and tuning_mode != 'off' else None, isolated_requests=width == '1', latency_scope='isolated serial requests' if width == '1' else 'request completion including queueing')
 
 
 @contextmanager
@@ -397,8 +404,9 @@ def search_run(entry, arrays, args):
                                         dict(metric="ulcer_index_fraction_strategy_equity", goal="min")]
     config["optimize"]["limits"] = []
     config["optimize"]["pymoo"]["algorithm"] = "nsga2"
+    tuning_mode = getattr(args, "gpu_tuning_mode", None) or ("refresh" if args.width == "auto" else "off")
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
-        tuning_mode="refresh" if args.width == "auto" else "off", max_dispatch_candidate_bars=args.dispatch_budget,
+        tuning_mode=tuning_mode, max_dispatch_candidate_bars=args.dispatch_budget,
         exact_workers=args.workers)
     from config.load import prepare_config
     from config_utils import clean_config
@@ -481,6 +489,7 @@ def search_run(entry, arrays, args):
              "ulcer_index_fraction_strategy_equity": dict(absolute=1e-5, relative=1e-4)})
         verification["seconds_outside_search_timing"] = time.perf_counter() - reference_start
         return dict(engine="prepared_production_optimizer", backend=backend,
+            tuning_mode=config["optimize"]["gpu"]["tuning_mode"] if backend == "gpu" else None,
             samples=[dict(seconds=seconds, completed=len(records), results=records)],
             first_result_seconds=records[0]["elapsed_seconds"] if records else None,
             persisted_bytes=disk_bytes, requested_iterations=args.search_iters,
@@ -540,7 +549,8 @@ def run(args):
                           latency_scope="payload preparation plus simulation")
         else:
             result = gpu_runs(entry, arrays, args.width, args.repeats, args.warmup,
-                              args.tune_seconds, args.dispatch_budget, args.phase_profile)
+                              args.tune_seconds, args.dispatch_budget, args.phase_profile,
+                              tuning_mode=getattr(args, "gpu_tuning_mode", None))
     import importlib.metadata
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "pymoo", "psutil")}
     try:
@@ -573,6 +583,7 @@ def main():
     parser.add_argument("--engine", choices=("cpu", "gpu", "search-cpu", "search-gpu"), required=True)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--width", default="8")
+    parser.add_argument("--gpu-tuning-mode", choices=("auto", "conservative", "refresh", "off", "max"))
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--tune-seconds", type=float, default=0)

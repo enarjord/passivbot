@@ -61,12 +61,15 @@ class ReplayDurationController:
     invalid timing samples do not train the controller. No extra replay is run.
     """
 
-    def __init__(self, ceiling, *, target_seconds=1.0):
+    def __init__(self, ceiling, *, target_seconds=1.0, initial_bars=None):
         if type(ceiling) is not int or ceiling < 1:
             raise ValueError("replay chunk ceiling must be a positive integer")
         if not math.isfinite(target_seconds) or target_seconds <= 0:
             raise ValueError("replay duration target must be positive and finite")
-        self.ceiling = self.bars = ceiling
+        if initial_bars is not None and (type(initial_bars) is not int or not 1 <= initial_bars <= ceiling):
+            raise ValueError("initial replay chunk must be within its safety ceiling")
+        self.ceiling = ceiling
+        self.bars = ceiling if initial_bars is None else initial_bars
         self.target_seconds = target_seconds
         self.fast_chunks = 0
 
@@ -346,6 +349,16 @@ class BatchController:
         return True
 
 
+class CudaReplayScratchLimit(MemoryError):
+    """An admitted shape can be narrowed before candidate allocation or replay."""
+
+    def __init__(self, attempted, limit):
+        self.limit = limit
+        super().__init__(
+            f"CUDA replay scratch admits {limit} of {attempted} candidates after compilation"
+        )
+
+
 def history_dispatch_ceiling(proxy, ceiling):
     """Bound replay plus reduction history before claiming an outer request batch."""
     single = getattr(proxy, "runner", None)
@@ -364,16 +377,26 @@ def history_dispatch_ceiling(proxy, ceiling):
     return ceiling
 
 
-def cuda_history_budget(runner, free, total, *, owners=1):
+def cuda_history_budget(runner, free, total, *, owners=1, max_throughput=False):
     """Bound one new replay owner's histories and shared reduction workspace.
 
     Immutable market tensors are already resident when free VRAM is sampled.
     Directional owners share the allowance because both can retain scratch.
     """
-    reserve = max(1024**3, int(total * 0.2))
+    if max_throughput:
+        from optimization.gpu.residency import cuda_max_vram_reserve_bytes
+
+        reserve = cuda_max_vram_reserve_bytes(total)
+    else:
+        reserve = max(1024**3, int(total * 0.2))
     minimum = runner._history_batch_bytes(1)
     if minimum == 0:
         return runner.hsl_scratch_budget_bytes
+    if max_throughput:
+        allowance = (free - reserve) // owners
+        if minimum > allowance:
+            raise MemoryError("CUDA replay history and workspace exceed available VRAM above the max-mode reserve")
+        return allowance
     if minimum > free // owners:
         raise MemoryError("CUDA replay history and workspace exceed available VRAM")
     allowance = (free - reserve if free - reserve >= minimum * owners

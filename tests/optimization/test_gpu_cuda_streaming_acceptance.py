@@ -46,8 +46,9 @@ def cuda_streaming_runtime(monkeypatch):
     ("ema_anchor", "short", "coin", 61),
     ("ema_anchor", "both", "portfolio", 17),
 ])
+@pytest.mark.parametrize("tuning_mode", ["off", "max"])
 def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
-    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, chunk_bars,
+    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, chunk_bars, tuning_mode,
 ):
     from optimization.gpu import mps_kernel, residency, service as replay_module
     from optimization.gpu.executor import BacktestRequest
@@ -100,7 +101,7 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
         for streamed in (False, True):
             mode["streamed"] = streamed
             with CudaBacktestService(
-                batch_size=1, max_pending=1, tuning_mode="off",
+                batch_size=1, max_pending=1, tuning_mode=tuning_mode,
                 max_dispatch_candidate_bars=chunk_bars * 2 * sides_count,
             ) as worker:
                 worker.register_dataset("market", dataset)
@@ -133,8 +134,9 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     assert all(not Path(directory).exists() for directory in spill_directories)
 
 
+@pytest.mark.parametrize("tuning_mode", ["off", "max"])
 def test_cuda_streaming_interruption_preserves_completed_result_and_releases_owner(
-    cuda_streaming_runtime, monkeypatch,
+    cuda_streaming_runtime, monkeypatch, tuning_mode,
 ):
     from optimization.gpu import mps_kernel, residency
     from optimization.gpu.executor import BacktestRequest
@@ -166,7 +168,7 @@ def test_cuda_streaming_interruption_preserves_completed_result_and_releases_own
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
         worker = CudaBacktestService(
-            batch_size=1, max_pending=1, tuning_mode="off", max_batch_delay=0,
+            batch_size=1, max_pending=1, tuning_mode=tuning_mode, max_batch_delay=0,
             max_dispatch_candidate_bars=17 * 2 * 2, interrupt_check=interrupt_check,
         )
         try:

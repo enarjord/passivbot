@@ -273,9 +273,10 @@ cannot supply minute drawdowns. Device precision can also affect candidate score
 constraint outcomes and Pareto membership. Compare representative candidates using
 the intended data, cadence and execution policy. See [GPU/CPU parity checks](gpu_parity.md).
 
-CPU orchestration reuses `optimize.pymoo`, `optimize.population_size` and the existing
-cohort meaning of `optimize.iters`. All deduplicated starting configs and initial parents
-receive complete GPU evaluations. Within each cohort, requests are replenished and full
+CPU orchestration reuses `optimize.pymoo` and `optimize.population_size`. The default GPU
+policy uses the same generation budget derived from `optimize.iters` as the CPU optimizer.
+All deduplicated starting configs and initial parents receive complete GPU evaluations.
+Within each cohort, requests are replenished and full
 results/Pareto members are written as completions arrive. Evolution advances when the
 required complete offspring are collected. Fine-tune anchors and supported optimizer
 runtime overrides use canonical CPU preparation; fixed policies remove ineffective genes.
@@ -296,34 +297,52 @@ retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md)
     "survival_fraction": 0.1,
     "min_survivors": 64
   },
-  "tuning_mode": "auto"
+  "tuning_mode": "conservative"
 }
 ```
 
-An omitted, null or `"auto"` batch width lets the service tune from completed production
-work. A positive explicit width fixes its ceiling. `tuning_mode: "off"` disables batch-width
-and request-accumulation tuning and uses width 64 if none is supplied. `"refresh"` currently
-starts fresh like `"auto"`; advisory measurements are run-local. Prepared work/history
-budgets can reduce physical widths further. Automatic width changes require warm replay
-evidence that the new width affected the actual number of candidates dispatched.
-Native CUDA history chunks still adapt in
-`"off"` mode, targeting bounded command durations without a preemption guarantee.
-CPU consumption cadence also adapts independently. These controls change execution only;
-they never tune simulation precision or search policy.
+`"conservative"` uses the default resource policy for CUDA and Metal. Existing configs
+can keep the `"auto"` alias. `"refresh"` uses the same policy and starts with fresh
+observations, as measurements are run-local.
 
-Automatic native CUDA sessions size replay scratch when a dataset's replay owner is
-created, after its market tensors are resident. The budget includes per-candidate
-history and shared metric workspace, and reserves the
-larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it uses 35% of free
-VRAM, with room for one candidate if that candidate fits. Directional owners share
-the allowance. Before a physical batch changes width or factual storage shape,
-automatic CUDA owners release all completed scratch so replacement histories do
-not overlap retained histories. Unchanged shapes reuse their buffers. Switching
-datasets releases the old owner's scratch and samples free VRAM again; active owners are never resized. Explicit batch widths, tuning mode
-`"off"`, and Metal retain their existing scratch budgets. Increased capacity does
-not eagerly allocate scratch or force a wider batch: dispatch limits and completed
-throughput evidence still govern actual widths. The allowance leaves room for
-factual histories to grow during a resident owner's lifetime.
+`"max"` is a CUDA-only opt-in for unattended runs. It allows wider automatic batches
+and more use of available host RAM and VRAM. Desktop graphics can become sluggish.
+The service bounds work by compatible demand, memory and dispatch limits.
+
+In `max`, `population_size` controls how many parents selection keeps. Startup and
+offspring cohorts can offer more candidates per generation. At startup the optimizer
+evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
+the cohort when the budget and search space allow. Without supplied seeds it samples
+the configured bounds. The initial target comes from the selected CUDA device. Warm
+per-scenario replay trials can move the target during the run.
+
+`optimize.iters` budgets generated startup candidates and subsequent offspring
+attempts. Supplied seeds are evaluated in addition to that budget. The last cohort
+uses the remaining attempts. Duplicate elimination and scenario screening can
+reduce the number of complete suite results. Resume restores the pending cohort
+and its fitness, the current target and the number of allocated attempts. A resumed
+budget must cover all attempts already allocated.
+
+An omitted, null or `"auto"` `batch_size` lets the service tune from completed
+production work. A positive width sets a ceiling and disables width tuning. `"max"`
+uses an explicit width as its initial CUDA target alongside the retained population
+size and still applies its memory policy. A positive
+`max_dispatch_candidate_bars` also constrains dispatched work. Automatic width changes
+require warm replay evidence that the change affected the actual number of dispatched
+candidates.
+
+`"off"` fixes the batch width and request accumulation, with a width ceiling of 64
+when `batch_size` is automatic. Native CUDA history chunks still adapt to completed
+command durations. CPU consumption cadence adapts independently. These changes
+to replay scheduling preserve simulation precision.
+
+CUDA sizes replay scratch after market tensors are resident when width tuning is
+enabled or the mode is `"max"`. The budget includes replay state, per-candidate
+history and shared metric workspace. With `"conservative"` or `"refresh"`, it
+reserves the larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it
+uses 35% of free VRAM, with room for one candidate if that candidate fits. `"max"`
+can admit more useful work with a smaller reserve. See [GPU service memory and
+admission](gpu_backtest_service.md#input-memory-and-admission).
 
 Legacy CPU exact-worker, validation-count, drift-probe and screened-seed controls have
 been removed. Population size belongs to `optimize.population_size`. Old screening/
@@ -346,8 +365,8 @@ Suite-aggregated EW objectives and limits reduce the selected scenarios during s
 full evaluation still requires all scenarios and available EW samples from every source.
 
 Empty screening labels disable the partial stage. Selecting all scenarios or retaining
-all offspring bypasses it. Screening reduces full evaluations within `iters`; it does
-not extend the generation budget. Single-scenario runs cannot use suite screening.
+all offspring bypasses it. Screening reduces full evaluations within the configured
+budget. Single-scenario runs require empty screening labels.
 
 The [prepared service guide](gpu_backtest_service.md) documents the request boundary,
 residency, tuning and interruption contract. [Service benchmarks](gpu_service_benchmark.md)

@@ -28,6 +28,14 @@ def test_growth_requires_sustained_fast_work_and_stays_inside_envelope():
     assert controller.bars == controller.ceiling
 
 
+def test_short_initial_command_can_grow_to_the_same_bound():
+    controller = ReplayDurationController(512, initial_bars=128)
+    assert controller.bars == 128
+    for _ in range(6):
+        controller.observe(controller.bars, 0.1)
+    assert controller.bars == controller.ceiling == 512
+
+
 def test_one_bar_cannot_promise_preemption_or_make_progress_zero():
     controller = ReplayDurationController(1)
     for seconds in (20.0, 1000.0, 0.001):

@@ -5,7 +5,12 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Let dedicated live HSL protection cancel resting entries and submit reduce-only
+- Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations,
+  with wider GPU batches, larger seed and offspring evaluation cohorts, and more use
+  of available RAM and VRAM. The default policy is
+  now named `"conservative"`, and existing `"auto"` configs still work.
+
+- Keep prepared suite membership in a stable order across optimizer restarts.\n\n- Let dedicated live HSL protection cancel resting entries and submit reduce-only
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.
 

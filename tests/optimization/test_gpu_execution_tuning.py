@@ -118,6 +118,22 @@ def test_growth_remains_available_after_an_underfilled_window_skips_shrinking():
     assert policy.width("a", 512) == 512
 
 
+def test_expandable_cuda_producer_can_supply_a_trial_then_retain_the_throughput_plateau():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    evidence(policy, seconds=1, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 8
+    evidence(policy, seconds=1.98, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 4
+
+
+def test_expandable_cuda_producer_keeps_a_faster_warm_width():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    evidence(policy, seconds=1, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 8
+    assert policy.controllers["a"].baseline is None
+
+
 def test_non_power_of_two_growth_requires_headroom_and_never_changes_other_dataset():
     queries = []
     policy = ExecutionBatchTuner(initial=256, headroom=lambda: queries.append(1) or False)
@@ -233,6 +249,8 @@ def test_unprepared_dataset_claims_one_request_then_honors_known_capacity():
 @pytest.mark.parametrize("setting,mode,automatic,width", [
     (None, "auto", True, 128), ("auto", "refresh", True, 128),
     (None, "off", False, 64), (4, "auto", False, 4),
+    (None, "max", True, 128), (4, "max", False, 4),
+    (None, "conservative", True, 128),
 ])
 def test_cuda_facade_tuning_is_lazy_and_explicit_width_disables_it(setting, mode, automatic, width):
     with CudaBacktestService(batch_size=setting, tuning_mode=mode, max_pending=128) as service:
@@ -242,8 +260,25 @@ def test_cuda_facade_tuning_is_lazy_and_explicit_width_disables_it(setting, mode
 
 
 def test_cuda_facade_rejects_invalid_tuning_mode():
-    with pytest.raises(ValueError, match="tuning mode"):
+    with pytest.raises(ValueError, match="tuning_mode"):
         CudaBacktestService(tuning_mode="invalid")
+
+
+@pytest.mark.parametrize("setting,expected", [(None, 32), (64, 64)])
+def test_cuda_max_automatic_width_limit_is_independent_of_admission(setting, expected):
+    with CudaBacktestService(
+            batch_size=setting, tuning_mode="max", max_pending=128,
+            auto_request_capacity=192, auto_batch_size_limit=32,
+    ) as service:
+        assert service._executor.batch_size == expected
+        assert service._executor.max_pending == 192
+        assert service._executor._accumulate_after_preparation
+
+
+@pytest.mark.parametrize("mode,delay", [("conservative", None), ("max", 0.005)])
+def test_initial_reaccumulation_is_only_enabled_in_max_with_adaptive_delay(mode, delay):
+    with CudaBacktestService(tuning_mode=mode, max_batch_delay=delay) as service:
+        assert not service._executor._accumulate_after_preparation
 
 
 @pytest.mark.parametrize("mode,delay,automatic", [
@@ -340,3 +375,16 @@ def test_diagnostics_count_completed_rows_when_capacity_change_discards_tuner_ev
     assert snapshot["latest"]["ceiling"] == 2
     assert policy.width("a", 16) == 2
     assert not policy.controllers["a"].seen
+
+
+def test_split_batch_counts_completed_rows_without_training_on_logical_width():
+    policy = prepared_policy(initial=4, diagnostics=True)
+    policy.width("a", 16)
+    controller = policy.controllers["a"]
+    policy.constrain("a", 16, split=True)
+    policy.observe("a", 4, 2, backlog=0, closing=False, cold=False)
+    snapshot = policy.diagnostics_snapshot()
+    assert snapshot["rows"] == 4 and snapshot["untrained_observations"] == 1
+    assert not controller.samples and policy.controllers["a"] is controller
+    policy.observe("a", 4, 2, backlog=0, closing=False, cold=False)
+    assert controller.samples and policy.diagnostics_snapshot()["rows"] == 8

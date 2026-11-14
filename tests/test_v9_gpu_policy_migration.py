@@ -38,7 +38,8 @@ def test_public_released_gpu_controls_are_reported_and_current_knobs_preserved(b
     gpu=result.config["optimize"]["gpu"]
     assert set(gpu)=={"tuning_mode","batch_size","max_dispatch_candidate_bars",
                      "checkpoint_interval_seconds","screening"}
-    assert gpu=={key:value for key,value in RELEASED_GPU.items()if key in gpu}
+    assert gpu=={**{key:value for key,value in RELEASED_GPU.items()if key in gpu},
+                 "tuning_mode":"conservative"}
     assert result.config["optimize"]["backend"]==backend
     expected={"optimize.gpu."+key for key in RETIRED}
     expected|={"optimize.gpu.seed_bootstrap.max_exact","optimize.gpu.seed_bootstrap.mode"}

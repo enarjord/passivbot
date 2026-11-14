@@ -12,7 +12,9 @@ from optimization.gpu.executor import BacktestRequest, ReplayResult
 from optimization.gpu.native import CudaBacktestService, NativeBacktestService
 
 
-@pytest.mark.parametrize("setting,mode", [(None, "auto"), ("auto", "refresh"), (4, "auto"), (None, "off")])
+@pytest.mark.parametrize("setting,mode", [
+    (None, "auto"), ("auto", "refresh"), (4, "auto"), (None, "off"), (None, "max"),
+])
 def test_native_construction_never_imports_device_runtime(monkeypatch, setting, mode):
     original = builtins.__import__
     def cpu_only(name, *args, **kwargs):
@@ -36,6 +38,9 @@ def test_native_construction_never_imports_device_runtime(monkeypatch, setting, 
         (NativeBacktestService, "mps", None, "auto", 1024, 173, 173),
         (NativeBacktestService, "cuda", None, "auto", 320, 512, 64),
         (CudaBacktestService, "cuda", None, "auto", 320, 512, 64),
+        (NativeBacktestService, "cuda", None, "max", 320, 512, 256),
+        (CudaBacktestService, "cuda", None, "max", 320, 85, 85),
+        (CudaBacktestService, "cuda", 4, "max", 320, 512, 4),
         (NativeBacktestService, "mps", None, "auto", 2, 512, 2),
         (NativeBacktestService, "mps", None, "auto", 1, 512, 1),
         (NativeBacktestService, "mps", None, "auto", 320, 3, 3),
@@ -65,7 +70,7 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         yield None
     @contextmanager
     def cuda_scope(*, input_memory_budget):
-        assert input_memory_budget == residency.CudaInputMemoryBudget(1, 1, 3)
+        assert input_memory_budget == residency.CudaInputMemoryBudget(1, 1, 3, mode == "max")
         ownership.append(("cuda", get_ident()))
         yield None
     monkeypatch.setattr(runtime, "gpu_device", owner_device)
@@ -73,7 +78,8 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
     monkeypatch.setattr(residency, "capture_mps_input_memory_budget",
                         lambda _torch: residency.MpsInputMemoryBudget(1, 1))
     monkeypatch.setattr(residency, "capture_cuda_input_memory_budget",
-                        lambda _torch: residency.CudaInputMemoryBudget(1, 1, 3))
+                        lambda _torch, *, max_throughput=False:
+                        residency.CudaInputMemoryBudget(1, 1, 3, max_throughput))
     monkeypatch.setattr(residency, "metal_residency_scope", metal_scope)
     monkeypatch.setattr(residency, "cuda_residency_scope", cuda_scope)
     service = service_class(batch_size=setting, tuning_mode=mode, max_pending=max_pending,
@@ -90,7 +96,9 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         assert service._batch_policy.width("market", service._batch_size) == 1
         assert not service._batch_policy.controllers
         if service._batch_tuner is not None:
-            assert service._batch_tuner.initial == (1024 if device == "mps" else 64)
+            assert service._batch_tuner.initial == (
+                1024 if device == "mps" else 256 if mode == "max" else 64
+            )
         preparing.set()
         assert release.wait(3)
         service._batch_policy.constrain("market", prepared_ceiling)
@@ -112,3 +120,44 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         service.close(cancel_pending=True)
     assert ownership == [("device", ownership[0][1]), (device, ownership[0][1])]
     assert calls == [list(range(expected))]
+
+
+def test_max_uses_automatic_width_without_explicit_sizing():
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_INITIAL_BATCH_CANDIDATES
+
+    with NativeBacktestService(tuning_mode="max") as service:
+        assert service._batch_tuner.initial == CUDA_MAX_INITIAL_BATCH_CANDIDATES
+        assert service._executor.batch_size == service._executor.max_pending == CUDA_MAX_BATCH_CANDIDATES
+    with NativeBacktestService() as service:
+        assert service._batch_tuner is None
+        assert service._executor.batch_size == 64
+        assert service._executor.max_pending == 1024
+
+
+def test_max_explicit_width_keeps_multi_scenario_transport_capacity():
+    with NativeBacktestService(batch_size=512, tuning_mode="max", auto_request_capacity=20_000) as service:
+        assert service._executor.batch_size == 512
+        assert service._executor.max_pending == 20_000
+        assert service.cohort_width is None
+
+
+def test_max_rejects_metal_before_capturing_memory(monkeypatch):
+    from optimization.gpu import runtime
+
+    monkeypatch.setattr(runtime, "gpu_device", lambda: "mps")
+    with NativeBacktestService(tuning_mode="max") as service:
+        with pytest.raises(RuntimeError, match="max.*NVIDIA CUDA"):
+            with service._worker_scope():
+                pytest.fail("max must reject Metal before opening resources")
+
+
+def test_cuda_max_rejects_a_mismatched_supplied_budget(monkeypatch):
+    from optimization.gpu import residency, runtime
+
+    monkeypatch.setattr(runtime, "gpu_device", lambda: "cuda")
+    with NativeBacktestService(
+        tuning_mode="max", input_memory_budget=residency.CudaInputMemoryBudget(1, 1, 3),
+    ) as service:
+        with pytest.raises(ValueError, match="input memory budget.*tuning mode"):
+            with service._worker_scope():
+                pytest.fail("wrong budget must not open resources")

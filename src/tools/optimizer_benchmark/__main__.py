@@ -30,6 +30,19 @@ def modes(values):
     return result
 
 
+def gpu_tuning_overrides(values, backend_labels):
+    result = {}
+    for label, mode in values:
+        if label not in backend_labels:
+            raise ValueError(f"GPU tuning override refers to unknown backend {label}")
+        if label in result:
+            raise ValueError(f"multiple GPU tuning overrides for backend {label}")
+        if mode not in {"auto", "conservative", "refresh", "off", "max"}:
+            raise ValueError(f"unknown GPU tuning mode {mode}")
+        result[label] = mode
+    return result
+
+
 def bounded_process(command, *, cwd, environment, log, timeout, max_rss, min_available):
     import psutil
     reason = None
@@ -107,6 +120,8 @@ def run(args):
         raise ValueError("case or seed selection is empty")
     if len(args.backend) != 2 or len({item[0] for item in args.backend}) != 2:
         raise ValueError("supply two uniquely labelled --backend LABEL CHECKOUT PYTHON arguments")
+    gpu_tuning = gpu_tuning_overrides(getattr(args, "gpu_tuning_mode", ()),
+                                      {item[0] for item in args.backend})
     preflight = {}
     for label, root, python in args.backend:
         check = subprocess.run([str(Path(python).absolute()), "-c",
@@ -136,6 +151,7 @@ def run(args):
         backends={label: dict(checkout=str(Path(root).resolve()), python=str(Path(python).absolute()),
                              commit=subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip())
                   for label, root, python in args.backend},
+        gpu_tuning_overrides=gpu_tuning,
         runtime_preflight=preflight,
         hardware=dict(platform=platform.platform(), machine=platform.machine(), processor=platform.processor(),
                       logical_cpus=os.cpu_count()), policies=policies, runs=[],
@@ -165,6 +181,8 @@ def run(args):
                     "--tune-seconds", str(args.tune_seconds), "--search-iters", str(args.search_iters),
                     "--dispatch-budget", str(args.dispatch_budget), "--output", str(output)]
                 command += ["--harness-sha256", fingerprint]
+                if engine.endswith("gpu") and label in gpu_tuning:
+                    command.extend(["--gpu-tuning-mode", gpu_tuning[label]])
                 if args.phase_profile:
                     command.append("--phase-profile")
                 if getattr(args, "host_profile", False):
@@ -210,6 +228,8 @@ def main(argv=None):
     execute.add_argument("--backend", nargs=3, action="append", required=True, metavar=("LABEL", "CHECKOUT", "PYTHON"))
     execute.add_argument("--output", required=True)
     execute.add_argument("--modes", nargs="+", default=["cpu:1", "cpu:4", "gpu:1", "gpu:8", "gpu:auto"])
+    execute.add_argument("--gpu-tuning-mode", nargs=2, action="append", default=[],
+                         metavar=("LABEL", "MODE"), help="Override GPU tuning for one backend label")
     execute.add_argument("--warmup", type=int, default=1)
     execute.add_argument("--repeats", type=int, default=3)
     execute.add_argument("--timeout", type=float, default=180)

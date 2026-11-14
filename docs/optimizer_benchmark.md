@@ -217,6 +217,14 @@ Automatic runs stop after at most 10,000 cohorts. The sweep finds the best measu
 safe setting, not a globally optimal GPU configuration. Use separate runs with
 `--dispatch-budget` to compare dispatch work budgets.
 
+Use `--gpu-tuning-mode LABEL MODE` to compare CUDA policies on the same frozen
+workload. For example, add `--gpu-tuning-mode baseline auto` and
+`--gpu-tuning-mode candidate max` to compare an older checkout against `max`.
+The overrides apply to `gpu` and `search-gpu` runs for the named labels. An
+explicit width still reaches the backend as a width ceiling. Without an override,
+the harness uses `refresh` for automatic width and `off` for explicit widths.
+The report records each override and the mode passed to each GPU worker.
+
 Workloads, results and logs are private by default. Public contributions should
 contain only the harness, synthetic recipes, tests and procedure; do not publish
 operator configs, absolute local paths, raw reports or machine-specific provenance

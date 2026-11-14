@@ -179,16 +179,40 @@ def _cleanup_after_failure(cleanup, *args, **kwargs):
         logging.exception("GPU suite cleanup failed while handling an earlier exception")
 
 
-def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None, require_free=True):
-    free = int(torch.cuda.mem_get_info()[0]) if require_free or working_set is None else None
+def cuda_max_vram_reserve_bytes(total):
+    """Leave room for CUDA allocations outside Passivbot's replay estimates."""
+    return max(512 * 2**20, int(total * 0.10))
+
+
+def check_cuda_invariant_memory(
+    torch, invariant_bytes, *, working_set=None, require_free=True, input_memory_budget=None,
+):
+    max_throughput = input_memory_budget is not None and input_memory_budget.max_throughput
+    if input_memory_budget is not None:
+        working_set = input_memory_budget.initial_free_bytes
+    if require_free or working_set is None:
+        free, total = map(int, torch.cuda.mem_get_info())
     budget = free if working_set is None else working_set
-    if invariant_bytes > int(budget * 0.45):
+    allowance = input_memory_budget.device_bytes if max_throughput else int(budget * 0.45)
+    if invariant_bytes > allowance:
+        if max_throughput:
+            raise MemoryError(
+                f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB, "
+                f"above the max-mode input budget of {allowance / 2**30:.2f} GiB"
+            )
         raise MemoryError(
             f"CUDA multicoin invariant tensors would consume {invariant_bytes / 2**30:.2f} "
             f"GiB, above the 45% safety limit of {budget / 2**30:.2f} GiB "
             f"{'free VRAM' if working_set is None else 'initial free VRAM'}"
         )
-    if require_free and invariant_bytes > free:
+    if require_free and max_throughput:
+        reserve = cuda_max_vram_reserve_bytes(total)
+        if invariant_bytes > free - reserve:
+            raise MemoryError(
+                f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
+                f"with {free / 2**30:.2f} GiB currently free and a {reserve / 2**30:.2f} GiB reserve"
+            )
+    elif require_free and invariant_bytes > free:
         raise MemoryError(
             f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
             f"but only {free / 2**30:.2f} GiB VRAM is currently free"
@@ -281,14 +305,20 @@ class CudaInputMemoryBudget:
     device_bytes: int
     host_bytes: int
     initial_free_bytes: int
+    max_throughput: bool = False
 
 
-def capture_cuda_input_memory_budget(torch):
+def capture_cuda_input_memory_budget(torch, *, max_throughput=False):
     """Capture CUDA and host headroom before history preparation touches pages."""
     import psutil
 
-    free = int(torch.cuda.mem_get_info()[0])
+    free, total = map(int, torch.cuda.mem_get_info())
     available = int(psutil.virtual_memory().available)
+    if max_throughput:
+        # The rest is available for replay state, workspaces and upload staging.
+        device_bytes = max(0, min(int(free * 0.70), free - cuda_max_vram_reserve_bytes(total) - 512 * 2**20))
+        host_bytes = max(0, min(int(available * 0.85), available - 512 * 2**20))
+        return CudaInputMemoryBudget(device_bytes, host_bytes, free, max_throughput=True)
     return CudaInputMemoryBudget(
         device_bytes=int(free * 0.45),
         host_bytes=max(0, min(int(available * 0.7), available - 2**30)),
@@ -391,12 +421,13 @@ class CudaSuiteResidency:
         # device. Activation releases it before checking live availability.
         check_cuda_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
-            require_free=False,
+            require_free=False, input_memory_budget=self._input_memory_budget,
         )
 
     def _check_memory(self, torch, invariant_bytes):
         check_cuda_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
+            input_memory_budget=self._input_memory_budget,
         )
 
     def _synchronize(self, torch):
@@ -412,6 +443,7 @@ class CudaSuiteResidency:
         self._entries = {}
         self._active = None
         self._active_owner = None
+        self._input_memory_budget = input_memory_budget
         self._working_set = (None if input_memory_budget is None
                              else input_memory_budget.initial_free_bytes)
         self._subset_arrays = []
@@ -489,8 +521,8 @@ class CudaSuiteResidency:
         entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
         if self._active is not entry:
             self._release(torch)
-            # CUDA driver/kernel workspace can remain resident after tensors are
-            # released. It belongs to the reserved 55%, not a shrinking budget.
+            # Driver and kernel allocations can remain resident after tensors
+            # are released. Keep the original allowance and check live free space.
             self._check_memory(torch, entry["data"].get("resident_bytes", entry["data"]["invariant_bytes"]))
             self._active = entry
             try:

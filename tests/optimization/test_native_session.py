@@ -126,6 +126,35 @@ def test_bounded_admission_refills_service_and_scores_on_cpu_poller(monkeypatch)
     assert session.pending_request_count == 0
 
 
+def test_request_ids_are_reserved_until_collection_and_not_by_whole_plan_reuse():
+    service = Service(capacity=1)
+    session = NativeEvaluationSession(service, scorer())
+    original = plan(0)
+    alias = plan(1, key=original.effective_key)
+    colliding = replace(original, candidate_id="collision", effective_key="collision")
+    session.admit(original)
+    session.admit(alias)
+    session.admit(replace(alias, candidate_id="alias-ids-free", effective_key="different"))
+    # Check the original plan first with both requests queued, then with the
+    # service owning one row while the other remains queued under backpressure.
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    session.submit_ready()
+    assert set(service.requests) == {"0:binance"}
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    service.complete("0:binance")
+    # A completed future still owns its ID until its notification is collected.
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    assert session.poll(max_results=1) == []
+    service.complete("0:bybit")
+    assert [row.candidate_id for row in session.poll(max_results=1, max_completions=2)] == ["0", "1"]
+    session.admit(colliding)
+    assert session.active_candidate_ids == ("alias-ids-free", "collision")
+    session.stop_admission()
+
+
 def test_effective_duplicates_share_pending_work_and_bounded_snapshot_cache():
     service = Service()
     session = NativeEvaluationSession(service, scorer(), cache_size=1)
