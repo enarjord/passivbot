@@ -137,17 +137,18 @@ async def test_pending_history_cannot_starve_real_protective_execution(
                 )
                 assert await bot.execute_orders_parent([order]) == []
                 assert await bot.execute_cancellations_parent([order]) == []
-                await owner.protect()
-                assert (
-                    len(
-                        [
-                            c
-                            for c in bot.cca.export_request_log()
-                            if c["method"] == "create_order"
-                        ]
-                    )
-                    == before
+            # Fresh current facts authorize protection before fill settling.
+            assert sync.blocked((symbol, side))
+            await asyncio.wait_for(owner.protect(), 3.0)
+            assert (
+                len(
+                    [c for c in bot.cca.export_request_log() if c["method"] == "create_order"]
                 )
+                == before + 1
+            )
+            assert any(f.get("reduceOnly") for f in bot.cca.fills)
+            # Keep the local pre-close observation to exercise the history gate
+            # independently of the protective write and its confirmation.
             clock[0] = 5.0
             task = asyncio.create_task(owner._refresh_history({"since_ms": 0}))
             if failure == "never_returns":
@@ -169,37 +170,19 @@ async def test_pending_history_cannot_starve_real_protective_execution(
                 for t in (6.0, 10.0, 14.999):
                     clock[0] = t
                     if failure == "continuous_changes":
-                        bot.cca.positions[(symbol, side)]["size"] += 0.1
-                    await bot.refresh_protective_authoritative_state(
-                        require_balance=True
-                    )
-                    await owner.protect()
-                    assert (
-                        len(
-                            [
-                                c
-                                for c in bot.cca.export_request_log()
-                                if c["method"] == "create_order"
-                            ]
+                        bot.cca._apply_manual_fill(
+                            dict(
+                                symbol=symbol, position_side=side,
+                                side="buy" if side == "long" else "sell",
+                                qty=0.1, price=100.0,
+                            )
                         )
-                        == before
-                    )
+                        await bot.refresh_protective_authoritative_state(
+                            require_balance=True
+                        )
+                    assert sync.blocked((symbol, side))
                 clock[0] = 15.0
-            await bot.refresh_protective_authoritative_state(require_balance=True)
-            await asyncio.wait_for(owner.protect(), 3.0)
-            assert (
-                len(
-                    [
-                        c
-                        for c in bot.cca.export_request_log()
-                        if c["method"] == "create_order"
-                    ]
-                )
-                > before
-            )
-            await bot.refresh_protective_authoritative_state(require_balance=True)
-            assert bot.positions[symbol][side]["size"] == 0.0
-            assert any(f.get("reduceOnly") for f in bot.cca.fills)
+                assert not sync.blocked((symbol, side))
             completed.append(True)
         finally:
             release.set()

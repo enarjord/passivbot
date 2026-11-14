@@ -59,9 +59,14 @@ Account-critical surfaces are required before any exchange action:
 
 The reduced Rust full-position close API does not need balance to size a close: it
 accepts signed size, book, tick size and execution policy. This numerical API does
-not waive live admission requirements. HSL must derive its current decision from
-fresh account facts, including balance, before each protective write. Malformed
-or incomplete close batches are fatal.
+not waive live admission requirements. All writes need fresh account facts,
+including balance. A dedicated HSL protection batch can submit its bound
+cancellations and reduce-only panic closes against the same confirmed account
+observation. Recheck that observation and current Rust permission before each
+submission. If a changed fact or permission is observed, defer affected actions. An
+unacknowledged or ambiguous outcome stops the batch and requires a fresh account
+read, as does completion of a submitted batch. Malformed or incomplete close
+batches are fatal.
 
 The live execution owner backs off transport failures, including exchange backpressure,
 with an interruptible bounded schedule and logs persistent outages. A valid request-local

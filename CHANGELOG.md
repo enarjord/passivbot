@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Let dedicated live HSL protection cancel resting entries and submit reduce-only
+  panic closes while fill history settles. A protective batch can share one fresh
+  account read, with current permission checked at each submission.
+
 - Reduce copying when assembling candle history from cached shards.
 
 - Reuse saved optimizer results as base configs for `passivbot optimize` and

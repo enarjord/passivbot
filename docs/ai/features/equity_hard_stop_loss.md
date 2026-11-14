@@ -77,8 +77,20 @@ approximations. An empty flat pair needs no invented mark or contract multiplier
 
 Fresh account balance, complete positions, orders and acted-on quotes remain mandatory
 before writes. Historical uncertainty does not create a second fallback controller or
-preserve old permission. Keep protection-first scheduling, shutdown checks, plan receipts,
-bounded position/fill settling and connector admission. Routine account-change reporting
+preserve old permission. Keep protection-first scheduling, shutdown checks, plan receipts
+and connector admission. Bounded position/fill settling applies to history acquisition
+and ordinary writes. Dedicated HSL cancels and reduce-only panic closes use the latest
+confirmed account observation without waiting for retrospective fill history. Confirm
+account state after the batch. Keep current account and permission checks at submission.
+An acknowledged close may already have reduced the exchange position. The remaining
+bound actions may use the same confirmed observation until a newer account fact,
+invalidation or uncertain response is observed. No ordinary order shares that allowance.
+Cancel resting entries and same-position orders before market panic creates.
+If an entry cancellation remains unacknowledged, including when the batch
+cap defers it, wait before flattening its risk scope. A still-resting
+same-position reduce-only order also blocks the affected market create.
+Same-position limit replacements still wait for cancellation confirmation.
+Routine account-change reporting
 runs after protection in one owned background task with one coalesced pending receipt;
 slow or failed diagnostics cannot become a protective prerequisite. Ordinary strategy, auto-unstuck
 and the realized-loss gate retain their own readiness requirements. Unstuck and
