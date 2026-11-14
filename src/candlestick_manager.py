@@ -105,6 +105,36 @@ warnings.filterwarnings(
 
 ONE_MIN_MS = 60_000
 
+# High-volume storage and fetch diagnostics are emitted at TRACE.
+_CANDLE_TRACE_EVENTS = frozenset({
+    "disk_load_done",
+    "disk_load_plan",
+    "disk_load_progress",
+    "get_candles_check_refresh",
+    "get_candles_present_decision",
+    "ccxt_fetch_ohlcv",
+    "ccxt_fetch_ohlcv_ok",
+    "ccxt_fetch_paginated_done",
+    "ccxt_fetch_progress",
+    "fetch_lock_acquired",
+    "fetch_lock_reentrant",
+    "get_candles_present_inner",
+    "historical_missing_spans",
+    "historical_missing_spans_coalesced",
+    "index_cached",
+    "index_rebuild_range",
+    "index_reload",
+    "large_span_check",
+    "large_span_needs_gap_fill",
+    "legacy_index_built",
+    "load_from_disk",
+    "refresh_fetch",
+    "refresh_skip_since",
+    "runtime_synthetic_gap_materialized",
+    "ttl_bypass_missing_coverage",
+    "ttl_skip_trailing_present_gap",
+})
+
 _LOCK_TIMEOUT_SECONDS = 10.0
 _REMOTE_FETCH_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _REMOTE_FETCH_SENSITIVE_ERROR_TYPE_RE = re.compile(
@@ -1886,6 +1916,29 @@ class CandlestickManager:
             return str(ms)
 
     def _log(self, level: str, event: str, **fields) -> None:
+        if level == "debug":
+            # Levels 0–3 select disabled, network, debug, or trace diagnostics.
+            if self.debug_level <= 0:
+                return
+            if self.debug_level == 1 and not (
+                isinstance(event, str) and event.startswith(("ccxt_", "archive_"))
+            ):
+                return
+            if event in _CANDLE_TRACE_EVENTS:
+                if self.debug_level < 3:
+                    return
+                log_level = int(getattr(logging, "TRACE", 5))
+            else:
+                log_level = logging.DEBUG
+        elif level == "info":
+            log_level = logging.INFO
+        elif level == "warning":
+            log_level = logging.WARNING
+        else:
+            log_level = logging.ERROR
+        if not self.log.isEnabledFor(log_level):
+            return
+
         try:
             ex = getattr(self, "_ex_id", self.exchange_name)
         except Exception:
@@ -1908,59 +1961,7 @@ class CandlestickManager:
                 parts.append(f"{k}={_log_symbol(v)}")
             else:
                 parts.append(f"{k}={v}")
-        msg = " ".join(base + parts)
-        if level == "debug":
-            # Apply filtering: level 0 -> drop; level 1 -> network summaries;
-            # level 2 -> actionable debug; level 3 -> trace/firehose.
-            if self.debug_level <= 0:
-                return
-            is_network = isinstance(event, str) and (
-                event.startswith("ccxt_") or event.startswith("archive_")
-            )
-            if self.debug_level == 1 and not is_network:
-                return
-            # Storage/cache hot paths are useful only when explicitly running TRACE-level
-            # candle diagnostics. At normal DEBUG they can dominate live logs.
-            high_volume_events = {
-                "disk_load_done",
-                "disk_load_plan",
-                "disk_load_progress",
-                "get_candles_check_refresh",
-                "get_candles_present_decision",
-                "ccxt_fetch_ohlcv",
-                "ccxt_fetch_ohlcv_ok",
-                "ccxt_fetch_paginated_done",
-                "ccxt_fetch_progress",
-                "fetch_lock_acquired",
-                "fetch_lock_reentrant",
-                "get_candles_present_inner",
-                "historical_missing_spans",
-                "historical_missing_spans_coalesced",
-                "index_cached",
-                "index_rebuild_range",
-                "index_reload",
-                "large_span_check",
-                "large_span_needs_gap_fill",
-                "legacy_index_built",
-                "load_from_disk",
-                "refresh_fetch",
-                "refresh_skip_since",
-                "runtime_synthetic_gap_materialized",
-                "ttl_bypass_missing_coverage",
-                "ttl_skip_trailing_present_gap",
-            }
-            if event in high_volume_events:
-                if self.debug_level < 3:
-                    return
-                self.log.log(int(getattr(logging, "TRACE", 5)), msg)
-                return
-            self.log.debug(msg)
-        elif level == "info":
-            self.log.info(msg)
-        elif level == "warning":
-            self.log.warning(msg)
-        else:
-            self.log.error(msg)
+        self.log.log(log_level, " ".join(base + parts))
 
     def _progress_log(self, key: Tuple[str, str, str], event: str, **fields) -> None:
         """Emit throttled DEBUG progress logs when enabled."""

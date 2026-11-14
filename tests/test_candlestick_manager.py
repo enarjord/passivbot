@@ -916,6 +916,74 @@ def test_candle_manager_emits_high_volume_cache_debug_at_trace(tmp_path, caplog)
     assert records[0].levelno == int(getattr(logging, "TRACE", 5))
 
 
+@pytest.mark.parametrize(
+    "debug,event,logger_level",
+    [
+        (0, "archive_requested", logging.DEBUG),
+        (1, "saved_range", logging.DEBUG),
+        (1, "ccxt_fetch_ohlcv", logging.DEBUG),
+        (2, "index_cached", logging.DEBUG),
+        (2, "saved_range", logging.INFO),
+        (3, "index_cached", logging.DEBUG),
+    ],
+)
+def test_suppressed_candle_debug_skips_message_work(
+    tmp_path, monkeypatch, caplog, debug, event, logger_level
+):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    cm.debug_level = debug
+    caplog.set_level(logger_level, logger=cm.log.name)
+    formatted = []
+
+    def record_format(value):
+        formatted.append(value)
+        return "formatted"
+
+    monkeypatch.setattr(candlestick_manager, "get_caller_name", lambda: record_format("caller"))
+    monkeypatch.setattr(candlestick_manager, "_log_symbol", record_format)
+    monkeypatch.setattr(cm, "_fmt_ts", record_format)
+    caplog.clear()
+
+    cm._log("debug", event, symbol="BTC/USDT:USDT", start_ts=np.int64(0))
+
+    assert not caplog.records
+    assert not formatted
+
+
+@pytest.mark.parametrize(
+    "debug,severity,event,expected_level,include_caller",
+    [
+        (0, "info", "saved_range", logging.INFO, False),
+        (1, "debug", "archive_requested", logging.DEBUG, True),
+        (2, "debug", "saved_range", logging.DEBUG, True),
+        (3, "debug", "index_cached", int(getattr(logging, "TRACE", 5)), True),
+        (3, "debug", "saved_range", logging.DEBUG, True),
+        (1, "warning", "ccxt_fetch_ohlcv_failed", logging.WARNING, False),
+        (1, "error", "index_failed", logging.ERROR, True),
+    ],
+)
+def test_admitted_candle_log_keeps_message_and_level(
+    tmp_path, monkeypatch, caplog, debug, severity, event, expected_level, include_caller
+):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    cm.debug_level = debug
+    caplog.set_level(1, logger=cm.log.name)
+    monkeypatch.setattr(candlestick_manager, "get_caller_name", lambda: "sample_caller")
+    monkeypatch.setattr(candlestick_manager, "_log_symbol", lambda symbol: "BTC")
+    caplog.clear()
+
+    cm._log(severity, event, symbol="BTC/USDT:USDT", start_ts=np.int64(0), rows=2)
+
+    caller = " called_by=sample_caller" if include_caller else ""
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (
+            expected_level,
+            f"[candle] event={event}{caller} exchange=ex symbol=BTC "
+            "start_ts=1970-01-01T00:00:00 rows=2",
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_get_candles_aborts_when_stop_requested(tmp_path):
     cm = CandlestickManager(
