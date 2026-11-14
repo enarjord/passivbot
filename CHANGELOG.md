@@ -95,6 +95,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
 
+- Skip formatting and caller lookup for suppressed candle logs.
+
 - Keep live HSL protection scheduled when an ordinary planning task encounters missing
   quotes or a transient connection failure.
 
