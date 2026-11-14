@@ -1602,12 +1602,13 @@ class _MulticoinReplayRunner:
             self._core_output = None
         self._scratch_shape = None
 
-    def _refresh_max_mode_scratch_budget(self, requested_width):
+    def _refresh_max_mode_scratch_budget(self, requested_width, *, pending_stack_bytes=0):
         from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
 
         device = self.bars.device
         free, total = map(int, torch.cuda.mem_get_info(device))
         reserve = cuda_max_vram_reserve_bytes(total)
+        free_after_stack = free - pending_stack_bytes
         # Allow reuse of this owner's existing tensors and keep the original
         # allowance as a ceiling. A pressure change can shrink a batch before
         # any of its replacement tensors are allocated.
@@ -1620,35 +1621,48 @@ class _MulticoinReplayRunner:
             for buffers in (self._replay_states, self._sizes, self._full_end_steps, self._core_buffers)
             for tensor in buffers.values()
         )
+        minimum_bytes = self._history_batch_bytes(1)
         requested_bytes = min(self._max_mode_scratch_ceiling_bytes, self._history_batch_bytes(requested_width))
         release_scratch = False
-        if free < reserve or free - reserve + replaceable < requested_bytes:
+        reusable_scratch = 0 if pending_stack_bytes else replaceable
+        if free_after_stack < reserve or free_after_stack - reserve + reusable_scratch < requested_bytes:
             unused = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
-            release_scratch = (free < reserve and replaceable > 0
-                               and free + unused + replaceable >= reserve + self._history_batch_bytes(1))
+            release_scratch = ((pending_stack_bytes or free_after_stack < reserve) and replaceable > 0
+                               and free_after_stack + unused + replaceable
+                               >= reserve + minimum_bytes)
             if release_scratch:
                 # The preceding results have already been reduced to host
-                # values. Release owned replay workspaces to restore headroom.
+                # values. During stack growth, measure what the allocator can
+                # actually return before crediting prior Torch workspaces.
                 self._clear_scratch()
-                replaceable = 0
+                reusable_scratch = 0
             if unused > 0 or release_scratch:
                 # A previous shape can leave unused allocator reservations.
                 # Release them once before clamping or refusing this replay.
                 torch.cuda.empty_cache()
                 free, total = map(int, torch.cuda.mem_get_info(device))
                 reserve = cuda_max_vram_reserve_bytes(total)
-        if free < reserve:
+                free_after_stack = free - pending_stack_bytes
+        physical_allowance = free_after_stack - reserve + reusable_scratch
+        if pending_stack_bytes and (free_after_stack < reserve or minimum_bytes > physical_allowance):
+            raise CudaReplayMemoryPressure(
+                f"CUDA replay needs an estimated {pending_stack_bytes / 2**20:.1f} MiB of additional "
+                f"driver stack and {minimum_bytes / 2**20:.1f} MiB of scratch for one candidate. "
+                f"Free VRAM is {free / 2**20:.1f} MiB with a required "
+                f"{reserve / 2**20:.1f} MiB max-mode reserve."
+            )
+        if free_after_stack < reserve:
             raise CudaReplayMemoryPressure("CUDA free VRAM fell below the max-mode replay reserve")
-        allowance = min(self._max_mode_scratch_ceiling_bytes, free - reserve + replaceable)
-        if self._history_batch_bytes(1) > allowance:
+        allowance = min(self._max_mode_scratch_ceiling_bytes, physical_allowance)
+        if minimum_bytes > allowance:
             raise CudaReplayMemoryPressure(
                 "CUDA replay state and workspace exceed free VRAM above the max-mode reserve"
             )
         if release_scratch or requested_bytes > allowance < self.hsl_scratch_budget_bytes:
             logging.info(
                 "GPU max scratch pressure | requested_candidates=%d prior_scratch_released=%s "
-                "free_mib=%.1f allowance_mib=%.1f",
-                requested_width, release_scratch, free / 2**20, allowance / 2**20,
+                "free_mib=%.1f pending_stack_mib=%.1f allowance_mib=%.1f",
+                requested_width, release_scratch, free / 2**20, pending_stack_bytes / 2**20, allowance / 2**20,
             )
         self.hsl_scratch_budget_bytes = allowance
 
@@ -2044,12 +2058,18 @@ class _MulticoinReplayRunner:
             self._prepare_replay_state_layout(library, library_args)
         if self.cuda_max_scratch_policy:
             self._max_mode_parameter_cols = matrix.shape[1]
-            self._refresh_max_mode_scratch_budget(len(matrix))
+            pending_stack = library.pending_stack_bytes(self.replay_kernel_name, self.bars.device.index)
+            self._refresh_max_mode_scratch_budget(len(matrix), pending_stack_bytes=pending_stack)
         compiled = time.perf_counter() if profile else 0.0
         if self.cuda_max_scratch_policy:
             limit = self._history_batch_limit()
             if len(matrix) > limit:
                 raise CudaReplayScratchLimit(len(matrix), limit)
+            if pending_stack:
+                logging.info(
+                    "GPU max CUDA stack | kernel=%s pending_stack_mib=%.1f admitted_candidates=%d",
+                    self.replay_kernel_name, pending_stack / 2**20, len(matrix),
+                )
         elif self._history_bytes_per_candidate():
             split = self._run_history_batches(
                 params, profile=profile, end_steps=end_steps

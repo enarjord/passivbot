@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 import numpy as np
 
+_CUDA_LIMIT_STACK_SIZE = 0  # cudaLimitStackSize
+
 _CUDA_PREAMBLE = r"""
 #include <cuda_runtime.h>
 #define INFINITY __int_as_float(0x7f800000)
@@ -192,6 +194,20 @@ class CudaShaderLibrary:
             options=("--std=c++17", "--fmad=false"),
         )
         self._module.compile()
+
+    def pending_stack_bytes(self, name, device_index):
+        """Estimate context backing still needed by the selected replay symbol."""
+        device = self._cupy.cuda.Device(device_index)
+        with device:
+            local_bytes = int(self._module.get_function(name).attributes["local_size_bytes"])
+            stack_bytes = int(self._cupy.cuda.runtime.deviceGetLimit(_CUDA_LIMIT_STACK_SIZE))
+            if local_bytes <= stack_bytes:
+                return 0
+            attrs = device.attributes
+            # The driver can expand local memory for all hardware thread slots
+            # even for a width-one dispatch. The context retains previous growth.
+            hardware_threads = attrs["MultiProcessorCount"] * attrs["MaxThreadsPerMultiProcessor"]
+            return (local_bytes - stack_bytes) * hardware_threads
 
     def __getattr__(self, name: str):
         kernel = self._module.get_function(name)

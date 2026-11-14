@@ -198,7 +198,10 @@ release completed source pages, avoiding an additional active copy of the packed
 Startup upload waits bound source lifetime. The default invariant admission allowance is 45% of
 the initial available working set. CUDA `max` uses a larger allowance for resident inputs, a
 higher host-RAM threshold when choosing between resident and streamed inputs, and a smaller
-reserve when sizing candidate scratch. CUDA retains its signed-byte relation table, while
+reserve when sizing candidate scratch. After compiling the selected replay kernel, CUDA
+`max` deducts estimated context stack growth from free VRAM before allocating candidate scratch.
+The estimate uses the compiled kernel's local memory, the context's current per-thread stack
+limit, and the device's maximum resident threads. CUDA retains its signed-byte relation table, while
 other tick fields remain int32. Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured
 device or host allowance. The preference is frozen before history preparation and

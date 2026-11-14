@@ -2415,7 +2415,7 @@ def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkey
         executor.close(cancel_pending=True)
 
 
-@pytest.mark.parametrize("pressure", ["precheck", "compiled", "streamed_fails"])
+@pytest.mark.parametrize("pressure", ["precheck", "compiled", "streamed_fails", "cold_stack_fails"])
 def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypatch, pressure):
     from optimization.gpu import service
     from optimization.gpu.residency import CudaReplayMemoryPressure
@@ -2431,6 +2431,9 @@ def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypat
     def run(parameters, *, profile):
         rows = tuple(row[0] for row in parameters)
         attempts.append((streamed, rows))
+        if pressure == "cold_stack_fails":
+            transport = "streamed" if streamed else "dense"
+            raise CudaReplayMemoryPressure(f"{transport} additional driver stack")
         if rows[0] == 2 and (not streamed or pressure == "streamed_fails"):
             raise CudaReplayMemoryPressure("streamed reserve" if streamed else "dense reserve")
         return {"core_observations": rows}
@@ -2467,7 +2470,12 @@ def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypat
     monkeypatch.setattr(service, "finalize_observations", finalize)
 
     candidates = [{"value": number} for number in range(7)]
-    if pressure == "streamed_fails":
+    if pressure == "cold_stack_fails":
+        with pytest.raises(CudaReplayMemoryPressure, match="streamed additional driver stack"):
+            replay.evaluate_results(candidates)
+        assert attempts == [(False, (0, 1)), (True, (0, 1, 2))]
+        assert reduced == []
+    elif pressure == "streamed_fails":
         with pytest.raises(CudaReplayMemoryPressure, match="streamed reserve"):
             replay.evaluate_results(candidates)
         assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4))]
