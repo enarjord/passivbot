@@ -5,7 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Ship a long-only EMA Anchor example with an opt-in five-scenario suite and CPU optimizer bounds.
+- Let dedicated live HSL protection cancel resting entries and submit reduce-only
+  panic closes while fill history settles. A protective batch can share one fresh
+  account read, with current permission checked at each submission.
 
 - Reduce copying when assembling candle history from cached shards.
 
@@ -53,6 +55,8 @@ its own version heading. See [release status](docs/releases.md).
   approval for new entries. The changed native fingerprint requires reevaluation of saved optimizer
   fitness.
 
+- Ship a long-only EMA Anchor example with an opt-in five-scenario suite and CPU optimizer bounds.
+
 - Measure the backtest and GPU replay delisting cutoff in elapsed time. Tails longer than 24
   hours trigger the existing final-candle close policy across candle intervals.
 
@@ -88,6 +92,9 @@ its own version heading. See [release status](docs/releases.md).
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
+
+- Keep live HSL protection scheduled when an ordinary planning task encounters missing
+  quotes or a transient connection failure.
 
 - Let ordinary planning with HSL disabled rejoin an in-flight account refresh once if
   it overlaps final input preparation, with the existing freshness and protection checks.

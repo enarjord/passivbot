@@ -4,12 +4,21 @@ Nothing in this module persists a permission: a wave carries an immutable observ
 must be admitted again from current facts immediately before a connector write.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import wraps
 import logging
 from random import uniform
 import weakref
 from uuid import uuid4
+
+from ccxt.base.errors import (
+    DDoSProtection,
+    ExchangeError,
+    InvalidNonce,
+    NetworkError,
+    OnMaintenance,
+    RateLimitExceeded,
+)
 
 from live import hsl_runtime as runtime
 from live import position_fill_sync
@@ -18,6 +27,9 @@ from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.ordinary_diagnostics import describe_ordinary_admission
+
+
+_EXCHANGE_BACKPRESSURE_ERRORS = (DDoSProtection, OnMaintenance, RateLimitExceeded)
 
 
 def policy(bot, side, symbol=None):
@@ -42,13 +54,12 @@ def owner(bot):
     return instance
 
 
-def connector_write(action):
-    """Serialize hsl admission and writes, including adapter batch overrides.
+def active_protective_batch(bot):
+    return getattr(getattr(bot, "_hsl_live", None), "_protective_batch", None)
 
-    A write may change aggregate risk before its REST result is reflected locally.
-    The next write needs a newer complete account read, even after an ambiguous
-    failure. All writes share bounded position/fill settling.
-    """
+
+def connector_write(action):
+    """Serialize connector admission, using a fresh cohort for each ordinary write."""
 
     def decorate(operation):
         @wraps(operation)
@@ -60,24 +71,64 @@ def connector_write(action):
                 if action == "create"
                 else executor.DeferredOrderCancellation
             )
-            if not position_fill_sync.permits(bot, order):
+            if not position_fill_sync.permits(bot, order, action):
                 return deferred()
+            instance = owner(bot)
             try:
-                with position_fill_sync.connector_context(bot, order):
-                    instance = owner(bot)
-                    async with instance._write_lock:
-                        if not instance.admit(order):
-                            return deferred()
+                async with instance._write_lock:
+                    batch = getattr(instance, "_protective_batch", None)
+                    if batch is not None and (
+                        batch.needs_refresh or not batch.contains(order, action)
+                    ):
+                        return deferred()
+                    if not instance.admit(order):
+                        return deferred()
+                    def recheck(order):
+                        return (
+                            active_protective_batch(bot) is batch and instance.admit(order)
+                        )
+
+                    with position_fill_sync.connector_context(
+                        bot,
+                        order,
+                        action,
+                        recheck=recheck if batch is not None else None,
+                    ):
                         if action == "cancel":
                             executor.record_cancel_connector_admission(bot, order)
+                        surfaces = {"balance", "positions", "open_orders"}
+                        needs_confirmation = True
                         try:
-                            return await operation(bot, order)
+                            result = await operation(bot, order)
+                            if batch is not None:
+                                if action == "create":
+                                    batch.needs_refresh = not bot.did_create_order(result)
+                                else:
+                                    batch.needs_refresh = (
+                                        not bot.did_cancel_order(result, order)
+                                        or bot._cancel_result_requires_full_authoritative_confirmation(
+                                            result
+                                        )
+                                    )
+                                    if not batch.needs_refresh:
+                                        batch.acknowledged_cancels.add(id(order))
+                            return result
+                        except position_fill_sync.WriteDeferred:
+                            needs_confirmation = False
+                            raise
+                        except BaseException:
+                            if batch is not None:
+                                batch.needs_refresh = True
+                            raise
                         finally:
-                            # Reads completed while the call was pending cannot
-                            # confirm its final outcome.
-                            bot._request_authoritative_confirmation(
-                                {"balance", "positions", "open_orders"}
-                            )
+                            # A read made during submission cannot confirm its result.
+                            if batch is None:
+                                bot._request_authoritative_confirmation(surfaces)
+                            elif needs_confirmation:
+                                if active_protective_batch(bot) is batch:
+                                    batch.confirmations.update(surfaces)
+                                else:
+                                    bot._request_authoritative_confirmation(surfaces)
             except position_fill_sync.WriteDeferred:
                 return deferred()
 
@@ -164,6 +215,28 @@ class Wave:
 
 
 @dataclass
+class ProtectiveBatch:
+    """The exact risk-reducing operations owned by one protection dispatch."""
+
+    wave: Wave
+    cancels: tuple[dict, ...]
+    creates: tuple[dict, ...]
+    confirmations: set[str] = field(default_factory=set)
+    acknowledged_cancels: set[int] = field(default_factory=set)
+    needs_refresh: bool = False
+
+    def contains(self, order, action=None):
+        if action in (None, "cancel") and any(order is o for o in self.cancels):
+            return True
+        return action in (None, "create") and any(order is o for o in self.creates)
+
+    def confirm(self, bot):
+        if self.confirmations:
+            bot._request_authoritative_confirmation(self.confirmations)
+            self.confirmations.clear()
+
+
+@dataclass
 class CurrentIoRetry:
     """Transport retry state shared by replacement bots in one live process."""
 
@@ -224,6 +297,7 @@ class Owner:
         self.sources = {}
         self.quotes = {}
         self._waves = {}
+        self._protective_batch = None
         self._retired_ordinary_receipts = weakref.WeakSet()
         self._quote_tasks = {}
         self._quote_started = {}
@@ -571,6 +645,7 @@ class Owner:
             del self._waves[next(iter(self._waves))]
         for order in (*cancels, *creates):
             order["_hsl_wave"] = token
+        return token
 
     async def protect(self, *, deferred_reports=None):
         """One finite wave over all currently evaluable RED scopes.
@@ -583,6 +658,8 @@ class Owner:
         if self._shutdown_requested():
             return False
         if not runtime.enabled(bot):
+            return False
+        if self._protective_batch is not None:
             return False
         symbols = {
             symbol
@@ -640,12 +717,26 @@ class Owner:
                     )
                 )
             cancels.extend(retired)
-            if self._shutdown_requested():
+            if self._shutdown_requested() or self._protective_batch is not None:
                 return False
-            self.bind(wave, cancels, creates)
-            await bot.execute_order_plan_to_exchange(
-                cancels, creates, configure_creations=False
-            )
+            if any(
+                order.get("reduce_only") is not True
+                or order.get("pb_order_type") != f"close_panic_{order['position_side']}"
+                for order in creates
+            ):
+                raise runtime.InvalidHslOutput("non-protective creation in HSL batch")
+            token = self.bind(wave, cancels, creates)
+            batch = self._protective_batch = ProtectiveBatch(wave, tuple(cancels), tuple(creates))
+            try:
+                await bot.execute_order_plan_to_exchange(
+                    cancels, creates, configure_creations=False
+                )
+            finally:
+                self._protective_batch = None
+                self._waves.pop(token, None)
+                # The normal executor records confirmations with its wave.
+                # Flush any remaining debt on error or cancellation too.
+                batch.confirm(bot)
             return bool(cancels or creates)
         finally:
             # Synchronous projection/logging must not age a wave before its
@@ -1252,6 +1343,24 @@ class Owner:
         except OrdinaryPlanDeferred as exc:
             self._defer_ordinary(exc.reason, phase="preparation", missing=exc.missing)
             return None, elapsed_ms
+        except MarketSnapshotUnavailable:
+            self._defer_ordinary(
+                "prepared_market_inputs_unavailable",
+                phase="preparation",
+                missing=("market_snapshot",),
+            )
+            return None, elapsed_ms
+        except InvalidNonce:
+            raise
+        except NetworkError as exc:
+            # Preserve exchange-request backoff and time-sync recovery.
+            if (
+                isinstance(exc, _EXCHANGE_BACKPRESSURE_ERRORS)
+                or getattr(exc, "retry_after_seconds", 0.0) > 0.0
+            ):
+                raise
+            self._defer_ordinary("ordinary_transport_unavailable", phase="preparation")
+            return None, elapsed_ms
         except RuntimeError as exc:
             handled, details = self.bot._handle_staged_execution_precondition_error(exc)
             if not handled:
@@ -1298,13 +1407,6 @@ class Owner:
         """
         import asyncio
         from live.state_refresh import AuthoritativeSurfaceUnavailable
-        from ccxt.base.errors import (
-            DDoSProtection,
-            InvalidNonce,
-            NetworkError,
-            OnMaintenance,
-            RateLimitExceeded,
-        )
 
         if self._cycle_running:
             raise RuntimeError("HSL execution cycle is already running")
@@ -1508,7 +1610,7 @@ class Owner:
         except NetworkError as exc:
             category = (
                 "exchange_backpressure"
-                if isinstance(exc, (DDoSProtection, OnMaintenance, RateLimitExceeded))
+                if isinstance(exc, _EXCHANGE_BACKPRESSURE_ERRORS)
                 else "network"
             )
             return dict(
@@ -1580,7 +1682,6 @@ class Owner:
                     await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
                     continue
                 started = int(utc_ms())
-                from ccxt.base.errors import ExchangeError, InvalidNonce
 
                 try:
                     result = await self.cycle()

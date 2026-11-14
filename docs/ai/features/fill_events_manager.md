@@ -2,8 +2,9 @@
 
 ## Contract
 
-All trading writes also share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#budgets-history-and-admission).
-It schedules tail fetches after position changes and temporarily defers affected coin-sides;
+Ordinary writes share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#budgets-history-and-admission).
+Dedicated HSL protection uses fresh account observations while fill history settles.
+The gate schedules tail fetches after position changes and temporarily defers affected coin-sides;
 it is not the trailing reconstruction or historical-PnL proof described below. A successful
 qualifying fetch need not contain the expected fill. Its 15-second maximum cannot be renewed by
 repeated changes, failures or a hung request. Expiry releases the settling gate, not required
