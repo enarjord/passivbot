@@ -445,7 +445,9 @@ CUDA `max` can prepare an eligible cohort in multiple CPU processes. Workers ver
 same Rust artifact and return canonical candidate plans in order. The optimizer owns
 the pending cohort, scenario admission, scoring and checkpoints. It limits the worker
 pool using usable CPU capacity, available RAM, input packing and the candidate window.
-Other GPU modes prepare candidates serially. `optimize.n_cpus` controls the CPU optimizer pool.
+If headroom falls below the required allowance between cohorts, it retires the pool
+and continues serially. Other GPU modes prepare candidates serially.
+`optimize.n_cpus` controls the CPU optimizer pool.
 
 Native CUDA temporal replay separately adapts history-chunk length from completed command
 durations, targeting one second within existing candle/work/history ceilings. It shrinks

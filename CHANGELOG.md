@@ -5,10 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations,
-  with wider GPU batches, larger seed and offspring evaluation cohorts, and more use
-  of available RAM and VRAM. The default policy is
-  now named `"conservative"`, and existing `"auto"` configs still work.
+- Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations.
+  It uses wider GPU batches, larger seed and offspring cohorts, and more available
+  RAM and VRAM. It prepares candidates in parallel when host capacity allows.
+  The default is now `"conservative"`,
+  and existing `"auto"` configs still work.
 
 - Keep prepared suite membership in a stable order across optimizer restarts.
 
