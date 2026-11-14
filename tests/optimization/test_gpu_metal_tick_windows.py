@@ -346,21 +346,20 @@ def metal_runtime():
     return torch
 
 
-def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale"):
+def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bars=1537):
     from tools.gpu_parity import build_parser, fixture_inputs
 
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy_kind, "--coins", "2", "--sides", sides,
-        "--bars", "1537", "--seed", "43", "--hsl", hsl, "--unstuck",
+        "--bars", str(bars), "--seed", "43", "--hsl", hsl, "--unstuck",
         "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "120", "--hsl-memory-ema-span-minutes", "1440",
         "--price-shock", "0", "701", ".7", "--price-shock", "1", "911", "1.3",
     ]))
     config, candles, markets, _btc, _timestamps = inputs
     config["backtest"]["ew_half_life_days"] = 1.5
-    # The span crosses a UTC-day boundary and many completed hours. The second
-    # coin lists later and delists before the replay ends, exercising both halos
-    # and distant clamped marks, which deliberately remain full resident.
+    # The second coin lists later and finishes before the replay ends,
+    # exercising tick-window halos and distant clamped marks.
     markets["COIN01"].update(first_valid_index=103, last_valid_index=1231)
     candles[:103, 1] = np.nan
     candles[1232:, 1] = np.nan

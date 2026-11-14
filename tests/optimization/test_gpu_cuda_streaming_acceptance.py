@@ -14,6 +14,22 @@ from test_gpu_metal_tick_windows import (
 )
 
 
+def _cuda_tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale"):
+    # A tail longer than one day forces the delisted coin's remaining positions
+    # closed on its last valid candle. Keep the original non-hour-aligned start.
+    return _tick_window_fixture(sides, hsl, strategy_kind, bars=2737)
+
+
+def test_cuda_tick_window_fixture_has_a_delisting_tail():
+    _config, candles, markets, _btc, timestamps = _cuda_tick_window_fixture("both", "coin")
+    market = markets["COIN01"]
+    assert market["first_valid_index"] == 103 and np.isnan(candles[:103, 1]).all()
+    last = market["last_valid_index"]
+    assert np.isfinite(candles[last, 1]).all() and np.isnan(candles[last + 1:, 1]).all()
+    assert int(timestamps[-1] - timestamps[last]) > 24 * 60 * 60_000
+    assert int(timestamps[0] // 60_000 % 60) == 23
+
+
 @pytest.fixture
 def cuda_streaming_runtime(monkeypatch):
     torch = pytest.importorskip("torch")
@@ -56,7 +72,7 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     from tools.gpu_parity import _native_dataset
 
     torch = cuda_streaming_runtime
-    inputs = _tick_window_fixture(sides, hsl, strategy)
+    inputs = _cuda_tick_window_fixture(sides, hsl, strategy)
     assert int(inputs[4][0] // 60_000 % 60) != 0
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     original_prepare = replay_module._prepared_multicoin_data
@@ -164,7 +180,7 @@ def test_cuda_streaming_interruption_preserves_completed_result_and_releases_own
 
     monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: True)
     monkeypatch.setattr(mps_kernel, "record_replay_chunk", observe)
-    inputs = _tick_window_fixture("both", "portfolio")
+    inputs = _cuda_tick_window_fixture("both", "portfolio")
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
         worker = CudaBacktestService(
