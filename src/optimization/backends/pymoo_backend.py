@@ -451,6 +451,7 @@ def _build_algorithm(
     bounds,
     sig_digits: int | None,
     population_plan: dict[str, Any],
+    bounded_duplicates: bool = False,
 ):
     if NSGA2 is None:  # pragma: no cover
         raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
@@ -467,6 +468,10 @@ def _build_algorithm(
         eta=float(shared["mutation_distribution_index"]),
     )
     eliminate_duplicates = bool(shared["eliminate_duplicates"])
+    if eliminate_duplicates and bounded_duplicates:
+        from optimization.gpu.duplicate_elimination import BoundedDuplicateElimination
+
+        eliminate_duplicates = BoundedDuplicateElimination()
 
     algorithm_name = population_plan["algorithm_name"]
     requested_population_size = population_plan["requested_population_size"]

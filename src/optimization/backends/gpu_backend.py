@@ -295,6 +295,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     gpu = options.get("gpu", {})
     tuning_mode = resolve_gpu_tuning_mode(gpu.get("tuning_mode", GPU_TUNING_DEFAULT))
     max_throughput = tuning_mode == "max"
+    if max_throughput:
+        iters = CudaMaxSearchBudget.remaining(iters=iters, allocated=0)
     # Max budgets candidate proposals directly. This is an upper bound for
     # pymoo's bookkeeping generations, including initialization from evaluated parents.
     ngen = iters + 1 if max_throughput else max(1, int(iters / population_size))
@@ -339,7 +341,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         sampling = (np.asarray(starts[:population_size]) if max_throughput
                     else _build_random_sampling(base.bounds, population_size))
         algorithm = _build_algorithm(config=config, sampling=sampling,
-                                     bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan)
+                                     bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan,
+                                     bounded_duplicates=max_throughput)
         from session_artifacts import record_optimizer_search
         record_optimizer_search(
             config, algorithm, population_plan, starting_individuals=authored_seed_count,

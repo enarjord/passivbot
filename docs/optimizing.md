@@ -322,6 +322,8 @@ uses the remaining attempts. Duplicate elimination and scenario screening can
 reduce the number of complete suite results. Resume restores the pending cohort,
 its fitness and the number of allocated attempts. Width tuning restarts from the
 last accepted target. A resumed budget must cover all attempts already allocated.
+Duplicate elimination keeps pymoo's usual distance tolerance and candidate order
+while limiting the memory used for distance calculations on wide cohorts.
 
 An omitted, null or `"auto"` `batch_size` lets the service tune from completed
 production work. A positive width sets a ceiling and disables width tuning. `"max"`
