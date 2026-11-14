@@ -319,9 +319,9 @@ per-scenario replay trials can move the target during the run.
 `optimize.iters` budgets generated startup candidates and subsequent offspring
 attempts. Supplied seeds are evaluated in addition to that budget. The last cohort
 uses the remaining attempts. Duplicate elimination and scenario screening can
-reduce the number of complete suite results. Resume restores the pending cohort
-and its fitness, the current target and the number of allocated attempts. A resumed
-budget must cover all attempts already allocated.
+reduce the number of complete suite results. Resume restores the pending cohort,
+its fitness and the number of allocated attempts. Width tuning restarts from the
+last accepted target. A resumed budget must cover all attempts already allocated.
 
 An omitted, null or `"auto"` `batch_size` lets the service tune from completed
 production work. A positive width sets a ceiling and disables width tuning. `"max"`

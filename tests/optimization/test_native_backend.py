@@ -75,6 +75,7 @@ class FakeService(GpuBacktestService):
         super().__init__(**kwargs)
 
     cohort_width = None
+    accepted_cohort_width = None
 
     def register_dataset(self, dataset_id, dataset):
         assert dataset.candle_coins == ("COIN00", "COIN01", "COIN02")
@@ -262,6 +263,63 @@ def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path,
         execute(base, recorder, checkpoint, resume=True)
         assert phases[-1] == ("generation", 3, 3)
         assert len(records) == 24 + authored
+
+
+def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_width(monkeypatch, tmp_path):
+    import optimization.backends.gpu_backend as backend
+    import optimization.gpu.native as native
+
+    guard_cpu(monkeypatch)
+    monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: 8)
+    requested_baselines = []
+
+    class Service(FakeService):
+        def __init__(self, *, max_cohort_width, **kwargs):
+            requested_baselines.append(max_cohort_width)
+            self.accepted_cohort_width = self.cohort_width = max_cohort_width
+            kwargs["batch_size"] = 8
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(native, "NativeBacktestService", Service)
+    evaluate = backend._Search.evaluate_population
+    cohorts = []
+
+    def observed_population(self):
+        population = self.state["population"].get("X").copy()
+        cohorts.append(population)
+        if len(cohorts) == 3:
+            assert len(population) == 16
+            self.checkpoint(force=True)
+            raise KeyboardInterrupt
+        evaluate(self)
+        if len(cohorts) == 1:
+            self.session.service.accepted_cohort_width = 12
+            self.session.service.cohort_width = 16
+
+    monkeypatch.setattr(backend._Search, "evaluate_population", observed_population)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 40
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+
+        with pytest.raises(KeyboardInterrupt):
+            execute(base, recorder, checkpoint)
+        paused = load_checkpoint(checkpoint, base.config)
+        assert paused["phase"] == "generation" and paused["max_search_allocated"] == 24
+        assert paused["max_search_budget"].target_width == 12
+        np.testing.assert_array_equal(paused["population"].get("X"), cohorts[2])
+
+        execute(base, recorder, checkpoint, resume=True)
+        done = load_checkpoint(checkpoint, base.config)
+        assert requested_baselines == [8, 12]
+        np.testing.assert_array_equal(cohorts[3], cohorts[2])
+        assert [len(cohort) for cohort in cohorts[4:]] == [12, 4]
+        assert done["phase"] == "idle" and done["max_search_allocated"] == 40
+        assert done["max_search_budget"].target_width == 12
+        assert len(records) == 40 and len(done["algorithm"].pop) == 4
 
 
 def test_cuda_max_tiny_budget_never_pads_evaluated_parents(monkeypatch, tmp_path):

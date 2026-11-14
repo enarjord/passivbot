@@ -122,16 +122,28 @@ def test_expandable_cuda_producer_can_supply_a_trial_then_retain_the_throughput_
     policy = prepared_policy(initial=4, expandable_producer=True)
     evidence(policy, seconds=1, backlog=0)
     assert policy.cohort_width == policy.width("a", 16) == 8
+    assert policy.accepted_cohort_width == 4
     evidence(policy, seconds=1.98, backlog=0)
     assert policy.cohort_width == policy.width("a", 16) == 4
+    assert policy.accepted_cohort_width == 4
 
 
 def test_expandable_cuda_producer_keeps_a_faster_warm_width():
     policy = prepared_policy(initial=4, expandable_producer=True)
     evidence(policy, seconds=1, backlog=0)
+    assert policy.accepted_cohort_width == 4
     evidence(policy, seconds=1.5, backlog=0)
     assert policy.cohort_width == policy.width("a", 16) == 8
+    assert policy.accepted_cohort_width == 8
     assert policy.controllers["a"].baseline is None
+
+
+def test_expandable_cuda_producer_persists_a_physical_clamp_without_a_trial():
+    policy = prepared_policy(initial=8, expandable_producer=True)
+    policy.constrain("a", 5)
+    assert policy.width("a", 16) == 5
+    policy.observe("a", 3, 1, backlog=0, closing=False, cold=True)
+    assert policy.cohort_width == policy.accepted_cohort_width == 5
 
 
 def test_non_power_of_two_growth_requires_headroom_and_never_changes_other_dataset():

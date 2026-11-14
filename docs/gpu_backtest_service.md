@@ -417,8 +417,9 @@ trial must dispatch more candidates than the previous width could hold. An under
 trial that cannot demonstrate the width change rolls back and can retry after cooldown.
 Tuning uses completed production work and preserves simulation precision. CUDA `max`
 can increase the initial and subsequent evaluation cohorts while preserving the selected
-parent population size. The optimizer checkpoints the chosen cohort target and pending
-population at search boundaries.
+parent population size. The optimizer checkpoints the pending population and the
+last accepted cohort target at search boundaries. An unfinished width trial keeps
+its pending population on resume while new observations start at the accepted target.
 The `conservative`, `refresh` and `max` modes all start with fresh observations.
 Persistent advisory calibration, richer workload classes, residency budgets and
 further CPU/evolution cadence experiments remain development work. This policy does not

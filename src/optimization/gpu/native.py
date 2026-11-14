@@ -142,6 +142,10 @@ class NativeBacktestService:
     def cohort_width(self):
         return self._batch_tuner.cohort_width if self._batch_tuner is not None else None
 
+    @property
+    def accepted_cohort_width(self):
+        return self._batch_tuner.accepted_cohort_width if self._batch_tuner is not None else None
+
     @staticmethod
     def _headroom():
         # Queried on the GPU owner, only before a growth trial. Producer errors

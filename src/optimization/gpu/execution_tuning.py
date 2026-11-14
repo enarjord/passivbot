@@ -29,9 +29,10 @@ class ExecutionBatchTuner:
         self._split_observation = None
         self._allow_trial = False
         self._expandable_producer = expandable_producer
-        # Single writer on the device owner. The search reads a complete
-        # snapshot between cohorts and can supply a pending wider trial.
+        # The device owner publishes trial demand separately from the baseline
+        # that the optimizer can use to restart with fresh observations.
         self.cohort_width = initial
+        self.accepted_cohort_width = initial
         self._diagnostic_started = self._diagnostics = None
         if diagnostics:
             try:
@@ -131,6 +132,10 @@ class ExecutionBatchTuner:
             self._demand[dataset_id] = 0
         if self._expandable_producer:
             self.cohort_width = max(value.width for value in self.controllers.values())
+            self.accepted_cohort_width = max(
+                value.width if value.baseline is None else value.baseline[0]
+                for value in self.controllers.values()
+            )
         if diagnostic is not None:
             self._record_diagnostics(dataset_id, count, seconds, controller, before,
                                      bool(completed_window), diagnostic, peak_demand, backlog, closing, cold)

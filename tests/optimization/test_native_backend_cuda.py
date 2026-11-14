@@ -31,6 +31,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from config.param_paths import resolve_optimizer_key_path
     from config_utils import clean_config
     from optimization.evaluation_contract import CONTRACT_KEY
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES
     from optimization.gpu.search_budget import CudaMaxSearchBudget
     from suite_runner import ExchangeDataset
     from tools.gpu_parity import build_parser, fixture_inputs
@@ -284,7 +285,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         with (directory / "checkpoint.pkl").open("rb") as source:
             bootstrapped = pickle.load(source)
         assert bootstrapped["phase"] == "idle" and bootstrapped["population"] is None
-        assert bootstrapped["max_search_budget"] == budget
+        assert bootstrapped["max_search_budget"].population_size == budget.population_size
+        assert 1 <= bootstrapped["max_search_budget"].target_width <= CUDA_MAX_BATCH_CANDIDATES
         assert bootstrapped["max_search_allocated"] == 8
         assert bootstrapped["completed"] == 10
         assert len(bootstrapped["algorithm"].pop) == 4
@@ -306,7 +308,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         with (directory / "checkpoint.pkl").open("rb") as source:
             final = pickle.load(source)
         assert final["phase"] == "idle" and final["population"] is None
-        assert final["max_search_budget"] == budget
+        assert final["max_search_budget"].population_size == budget.population_size
+        assert 1 <= final["max_search_budget"].target_width <= CUDA_MAX_BATCH_CANDIDATES
         assert final["max_search_allocated"] == 12
         assert final["completed"] == 14
         assert len(final["algorithm"].pop) == 4

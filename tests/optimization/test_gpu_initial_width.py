@@ -139,6 +139,7 @@ def test_max_explicit_width_keeps_multi_scenario_transport_capacity():
         assert service._executor.batch_size == 512
         assert service._executor.max_pending == 20_000
         assert service.cohort_width is None
+        assert service.accepted_cohort_width is None
 
 
 def test_max_rejects_metal_before_capturing_memory(monkeypatch):

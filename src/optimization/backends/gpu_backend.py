@@ -409,6 +409,16 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
                          checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check,
                          screening_policy=screening_policy)
+
+        def remember_accepted_width():
+            if not max_throughput:
+                return
+            width = service.accepted_cohort_width
+            budget = state["max_search_budget"]
+            if width is not None and width != budget.target_width:
+                state["max_search_budget"] = replace(budget, target_width=width)
+                logging.info("CUDA max cohort target | width=%d", state["max_search_budget"].cohort_width)
+
         try:
             registry.register(service)
             if state["phase"] == "seeds":
@@ -422,6 +432,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     pad_sampling=not max_throughput,
                 )
                 session.max_candidates = population_window
+                remember_accepted_width()
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
             logging.info("Starting GPU native optimization...")
@@ -436,11 +447,12 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 if state["phase"] == "idle":
                     if max_throughput and algorithm.is_initialized:
                         target_width = service.cohort_width
-                        if target_width is not None and target_width != max_search_budget.target_width:
-                            max_search_budget = replace(max_search_budget, target_width=target_width)
-                            state["max_search_budget"] = max_search_budget
-                            logging.info("CUDA max cohort target | width=%d", max_search_budget.cohort_width)
-                        slots = max_search_budget.offspring_size(iters=iters, allocated=state["max_search_allocated"])
+                        budget = state["max_search_budget"]
+                        # A live trial can use a wider cohort without becoming
+                        # the baseline when the process restarts mid-trial.
+                        if target_width is not None and target_width != budget.target_width:
+                            budget = replace(budget, target_width=target_width)
+                        slots = budget.offspring_size(iters=iters, allocated=state["max_search_allocated"])
                         if not slots:
                             break
                         algorithm.n_offsprings = slots
@@ -464,6 +476,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     state.update(phase="screening" if screening else "generation", population=population)
                 if state["phase"] == "screening":
                     search.evaluate_population()
+                    remember_accepted_width()
                     with search_boundary(algorithm.n_iter or 0, "promotion"):
                         search.promote_screening()
                 search.evaluate_population()
@@ -474,6 +487,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     # It is not consumed by future mating, so avoid retaining a
                     # full wide cohort in every subsequent checkpoint.
                     algorithm.off = None
+                    remember_accepted_width()
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
             service.close()
@@ -486,6 +500,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             except BaseException:
                 logging.exception("GPU native drain failed after an earlier failure")
             try:
+                remember_accepted_width()
                 search.checkpoint(force=True)
             except BaseException:
                 logging.exception("GPU native checkpoint failed after an earlier failure")
