@@ -73,6 +73,8 @@ class FullScanReference(CandlestickManager):
         symbol: str,
         start_ts: int,
         end_ts: int,
+        *,
+        index: Optional[dict] = None,
     ) -> List[Tuple[int, int]]:
         """Return unresolved unknown gaps that must remain unavailable."""
         ranges: List[Tuple[int, int]] = []
@@ -93,6 +95,8 @@ class FullScanReference(CandlestickManager):
         symbol: str,
         start_ts: int,
         end_ts: int,
+        *,
+        index: Optional[dict] = None,
     ) -> List[Tuple[int, int]]:
         """Return full still-missing spans from unknown gaps overlapping a range.
 

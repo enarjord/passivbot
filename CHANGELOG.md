@@ -107,6 +107,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Avoid a duplicate shard index scan when checking deferred candle gaps in a read cohort.
 
+- Reduce repeated candle index checks within EMA preparation and candle reads.
+
 - Clarify partial order-wave outcomes and move routine order-plan and websocket refresh detail to debug logs.
 
 - Preserve tagged v8.0 and v8.1 defaults and search domains during explicit v9 migration.

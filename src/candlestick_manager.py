@@ -3684,10 +3684,13 @@ class CandlestickManager:
         gaps = idx.get("meta", {}).get("known_gaps", [])
         return self._normalize_gap_entries(gaps)
 
-    def _get_known_gaps_in_range(self, symbol: str, start_ts: int, end_ts: int) -> List[GapEntry]:
+    def _get_known_gaps_in_range(
+        self, symbol: str, start_ts: int, end_ts: int, *, index: Optional[dict] = None
+    ) -> List[GapEntry]:
         """Normalize only relevant records; defaults and retry clocks stay current."""
-        idx = self._ensure_symbol_index(symbol)
-        return self._normalize_gap_entries(self._gap_records_in_range(idx, start_ts, end_ts))
+        if index is None:
+            index = self._ensure_symbol_index(symbol)
+        return self._normalize_gap_entries(self._gap_records_in_range(index, start_ts, end_ts))
 
     @staticmethod
     def _gap_records_in_range(idx: dict, start_ts: int, end_ts: int):
@@ -4256,7 +4259,7 @@ class CandlestickManager:
         return None if fetch_start > fetch_end else fetch_start
 
     def _unverified_internal_candle_gaps(
-        self, symbol: str, start_ts: int, end_ts: int
+        self, symbol: str, start_ts: int, end_ts: int, *, index: Optional[dict] = None
     ) -> List[Tuple[int, int]]:
         """Physical cache holes are unknown until an explicit no-trade proof.
 
@@ -4283,13 +4286,13 @@ class CandlestickManager:
         last = int(timestamps[holes[-1] + 1]) - ONE_MIN_MS
         proofs = sorted(
             (int(gap["start_ts"]), int(gap["end_ts"]))
-            for gap in self._get_known_gaps_in_range(symbol, first, last)
+            for gap in self._get_known_gaps_in_range(symbol, first, last, index=index)
             if str(gap.get("reason", GAP_REASON_AUTO)) == GAP_REASON_NO_TRADES
         )
         unknown = []
-        for index in holes:
-            gap_start = int(timestamps[index]) + ONE_MIN_MS
-            gap_end = int(timestamps[index + 1]) - ONE_MIN_MS
+        for hole in holes:
+            gap_start = int(timestamps[hole]) + ONE_MIN_MS
+            gap_end = int(timestamps[hole + 1]) - ONE_MIN_MS
             cursor = gap_start
             for proof_start, proof_end in proofs:
                 if proof_end < cursor:
@@ -4315,10 +4318,12 @@ class CandlestickManager:
         symbol: str,
         start_ts: int,
         end_ts: int,
+        *,
+        index: Optional[dict] = None,
     ) -> List[Tuple[int, int]]:
         """Return unresolved unknown gaps that must remain unavailable."""
         ranges: List[Tuple[int, int]] = []
-        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts):
+        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts, index=index):
             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
                 GAP_REASON_AUTO,
                 GAP_REASON_FETCH_FAILED,
@@ -4331,12 +4336,16 @@ class CandlestickManager:
         return ranges
 
     def _unverified_candle_gap_ranges(
-        self, symbol: str, start_ts: int, end_ts: int
+        self, symbol: str, start_ts: int, end_ts: int, *, index: Optional[dict] = None
     ) -> List[Tuple[int, int]]:
         """Combine metadata availability with unrecorded physical internal holes."""
-        return self._unverified_gap_ranges(symbol, start_ts, end_ts) + [
+        if index is None:
+            index = self._ensure_symbol_index(symbol)
+        return self._unverified_gap_ranges(symbol, start_ts, end_ts, index=index) + [
             (max(int(start_ts), start), min(int(end_ts), end))
-            for start, end in self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
+            for start, end in self._unverified_internal_candle_gaps(
+                symbol, start_ts, end_ts, index=index
+            )
         ]
 
     def _unverified_uncovered_gap_ranges(
@@ -4344,6 +4353,8 @@ class CandlestickManager:
         symbol: str,
         start_ts: int,
         end_ts: int,
+        *,
+        index: Optional[dict] = None,
     ) -> List[Tuple[int, int]]:
         """Return full still-missing spans from unknown gaps overlapping a range.
 
@@ -4354,7 +4365,7 @@ class CandlestickManager:
         """
         gaps = [
             gap
-            for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts)
+            for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts, index=index)
             if str(gap.get("reason", GAP_REASON_AUTO))
             in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
             and int(gap["start_ts"]) <= int(end_ts)
@@ -8540,13 +8551,9 @@ class CandlestickManager:
                     raise_on_partial_empty_page=True,
                 )
             elif max_age_ms is not None and max_age_ms > 0:
-                last_ref = self._get_last_refresh_ms(symbol)
-                last_final = 0
-                try:
-                    idx = self._ensure_symbol_index(symbol, tf="1m")
-                    last_final = int(idx.get("meta", {}).get("last_final_ts", 0) or 0)
-                except Exception:
-                    last_final = 0
+                idx = self._ensure_symbol_index(symbol)
+                last_ref = self._index_timestamp(idx, "last_refresh_ms")
+                last_final = self._index_timestamp(idx, "last_final_ts")
                 self._log(
                     "debug",
                     "get_candles_check_refresh",
@@ -8781,16 +8788,20 @@ class CandlestickManager:
                 # Skip fetch if all missing spans are already known persistent gaps
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
 
-                def span_in_persistent_gap(s: int, e: int) -> bool:
+                def fetchable_missing_spans(spans):
+                    if not spans:
+                        return []
+                    checked_gaps = current_gap_index()
                     # Adjacent records retain independent retry epochs but may
                     # jointly cover one physically missing candle span.
-                    return self._fetch_start_after_deferred_gap_prefix(
-                        symbol, s, e, now_ms=now, gap_index=current_gap_index()
-                    ) is None
+                    return [
+                        (s, e) for s, e in spans
+                        if self._fetch_start_after_deferred_gap_prefix(
+                            symbol, s, e, now_ms=now, gap_index=checked_gaps
+                        ) is not None
+                    ]
 
-                unknown_missing = [
-                    (s, e) for (s, e) in missing_before if not span_in_persistent_gap(s, e)
-                ]
+                unknown_missing = fetchable_missing_spans(missing_before)
 
                 if unknown_missing:
                     end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
@@ -8805,9 +8816,7 @@ class CandlestickManager:
                             )
                             sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                             missing_after = self._missing_spans(sub, start_ts, end_ts)
-                            unknown_after = [
-                                (s, e) for (s, e) in missing_after if not span_in_persistent_gap(s, e)
-                            ]
+                            unknown_after = fetchable_missing_spans(missing_after)
                             if unknown_after:
                                 # Only attempt archive prefetch for genuinely missing full days.
                                 await self._prefetch_archives_for_range(symbol, adj_start_ts, end_ts)
@@ -8820,11 +8829,7 @@ class CandlestickManager:
                                 )
                                 sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                                 missing_after = self._missing_spans(sub, start_ts, end_ts)
-                                unknown_after = [
-                                    (s, e)
-                                    for (s, e) in missing_after
-                                    if not span_in_persistent_gap(s, e)
-                                ]
+                                unknown_after = fetchable_missing_spans(missing_after)
                             if unknown_after:
                                 persisted_batches = False
                                 deferred_index_any = False
@@ -8976,7 +8981,10 @@ class CandlestickManager:
                             # Re-fetch authoritative lower bound after archive prefetch.
                             authoritative_start_ts = self._get_authoritative_start_ts(symbol)
                             for s, e in still_missing:
-                                if not span_in_persistent_gap(s, e):
+                                # Each preceding gap write can update the index.
+                                if self._fetch_start_after_deferred_gap_prefix(
+                                    symbol, s, e, now_ms=now, gap_index=current_gap_index()
+                                ) is not None:
                                     # Only mark pre_inception when we know a real authoritative
                                     # lower bound for exchange-available history.
                                     if (
@@ -9258,12 +9266,6 @@ class CandlestickManager:
             inclusive_end = end_ts if historical else min(end_ts, end_current)
             missing = self._missing_spans(sub, start_ts, inclusive_end)
             if missing:
-                # Helper to test if a span is fully inside any persistent known gap
-                def span_in_persistent_gap_present(s: int, e: int) -> bool:
-                    return self._fetch_start_after_deferred_gap_prefix(
-                        symbol, s, e, now_ms=now, gap_index=current_gap_index()
-                    ) is None
-
                 def span_has_unverified_gap_present(s: int, e: int) -> bool:
                     return any(
                         int(gap["start_ts"]) <= int(e)
@@ -9274,14 +9276,14 @@ class CandlestickManager:
                     )
 
                 def contextual_gap_verification_due(
-                    s: int, e: int
+                    s: int, e: int, checked_gaps: _KnownGapIndex
                 ) -> bool:
                     # A contiguous omission can have several metadata records
                     # as its tail grows. Keep their retry clocks independent;
                     # one boundary request must be eligible over the whole span.
                     cursor = int(s)
                     has_unverified = False
-                    for gap in current_gap_index().overlapping(s, e):
+                    for gap in checked_gaps.overlapping(s, e):
                         if int(gap["end_ts"]) < cursor:
                             continue
                         if int(gap["start_ts"]) > cursor:
@@ -9297,7 +9299,7 @@ class CandlestickManager:
                     return False
 
                 def kucoin_verification_bounds(
-                    candles: np.ndarray, s: int, e: int
+                    candles: np.ndarray, s: int, e: int, checked_gaps: _KnownGapIndex
                 ) -> Optional[Tuple[int, int]]:
                     """Return real rows bracketing a KuCoin sparse 1m gap.
 
@@ -9312,7 +9314,7 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    if not contextual_gap_verification_due(s, e):
+                    if not contextual_gap_verification_due(s, e, checked_gaps):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
                     provisional = self._synthetic_timestamps.get(symbol, set())
@@ -9339,15 +9341,13 @@ class CandlestickManager:
                 attempts = 0
                 max_attempts = 10 if self._ccxt_since_exclusive else 3
                 attempted: List[Tuple[int, int]] = []
+                checked_gaps = None
                 for s, e in missing:
                     if attempts >= max_attempts:
                         break
-                    contextual_bounds = kucoin_verification_bounds(sub, s, e)
-                    if (
-                        span_in_persistent_gap_present(s, e)
-                        and contextual_bounds is None
-                    ):
-                        continue
+                    if checked_gaps is None:
+                        checked_gaps = current_gap_index()
+                    contextual_bounds = kucoin_verification_bounds(sub, s, e, checked_gaps)
                     if contextual_bounds is None:
                         adjusted_gap_start = (
                             self._fetch_start_after_deferred_gap_prefix(
@@ -9355,7 +9355,7 @@ class CandlestickManager:
                                 s,
                                 e,
                                 now_ms=now,
-                                gap_index=current_gap_index(),
+                                gap_index=checked_gaps,
                             )
                         )
                         if adjusted_gap_start is None:
@@ -9365,6 +9365,9 @@ class CandlestickManager:
                     else:
                         fetch_start = int(contextual_bounds[0])
                         end_excl_gap = int(contextual_bounds[1]) + ONE_MIN_MS
+                    # Even an early continue inside the lock must force the
+                    # next span to recheck after the possible suspension.
+                    checked_gaps = None
                     async with self._acquire_fetch_lock(symbol, "1m"):
                         # Lock acquisition can yield to another coroutine. Never
                         # retain a read-cohort index across that boundary.
@@ -9383,7 +9386,8 @@ class CandlestickManager:
                             for ms, me in missing_now
                         ):
                             continue
-                        contextual_bounds = kucoin_verification_bounds(arr, s, e)
+                        locked_gaps = current_gap_index()
+                        contextual_bounds = kucoin_verification_bounds(arr, s, e, locked_gaps)
                         if contextual_bounds is None:
                             adjusted_gap_start = (
                                 self._fetch_start_after_deferred_gap_prefix(
@@ -9391,7 +9395,7 @@ class CandlestickManager:
                                     s,
                                     e,
                                     now_ms=now,
-                                    gap_index=current_gap_index(),
+                                    gap_index=locked_gaps,
                                 )
                             )
                             if adjusted_gap_start is None:
@@ -9534,10 +9538,11 @@ class CandlestickManager:
             provisional_tolerance_ms = int(
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
             )
+            index = self._ensure_symbol_index(symbol)
             excluded_synthetic_ranges = []
             for full_gap_start, full_gap_end in (
-                self._unverified_uncovered_gap_ranges(symbol, start_ts, end_ts)
-                + self._unverified_internal_candle_gaps(symbol, start_ts, end_ts)
+                self._unverified_uncovered_gap_ranges(symbol, start_ts, end_ts, index=index)
+                + self._unverified_internal_candle_gaps(symbol, start_ts, end_ts, index=index)
             ):
                 overlap_start = max(int(start_ts), full_gap_start)
                 overlap_end = min(int(end_ts), full_gap_end)
@@ -10186,6 +10191,7 @@ class CandlestickManager:
         symbol: Optional[str] = None,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        index: Optional[dict] = None,
     ) -> bool:
         # WEEX's recent endpoint silently tail-anchors a 1,000-row response.
         # Requiring the whole window prevents a truncated warmup from looking
@@ -10199,7 +10205,7 @@ class CandlestickManager:
         ):
             timestamps = np.asarray(arr["ts"], dtype=np.int64)
             for gap_start, gap_end in self._unverified_candle_gap_ranges(
-                symbol, start_ts, end_ts
+                symbol, start_ts, end_ts, index=index
             ):
                 mask = (timestamps >= int(gap_start)) & (timestamps <= int(gap_end))
                 if not self._candle_range_has_full_coverage(
@@ -10808,6 +10814,11 @@ class CandlestickManager:
                 out[metric_key].update({span: float("nan") for span in spans})
             return out
 
+        # Validate once after the awaited candle load. Only these synchronous
+        # coverage checks share the index; every span still checks its own bounds.
+        index = None
+        if period_ms == ONE_MIN_MS and str(self.exchange_name or "").lower() != "fake":
+            index = self._ensure_symbol_index(symbol)
         for metric_key, spans in missing.items():
             cache_metric_key = (
                 metric_key
@@ -10831,6 +10842,7 @@ class CandlestickManager:
                     end_ts,
                     symbol=symbol,
                     timeframe=out_tf,
+                    index=index,
                 ):
                     out[metric_key][span] = float("nan")
                     continue
