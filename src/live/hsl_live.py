@@ -11,6 +11,15 @@ from random import uniform
 import weakref
 from uuid import uuid4
 
+from ccxt.base.errors import (
+    DDoSProtection,
+    ExchangeError,
+    InvalidNonce,
+    NetworkError,
+    OnMaintenance,
+    RateLimitExceeded,
+)
+
 from live import hsl_runtime as runtime
 from live import position_fill_sync
 from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
@@ -18,6 +27,9 @@ from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.ordinary_diagnostics import describe_ordinary_admission
+
+
+_EXCHANGE_BACKPRESSURE_ERRORS = (DDoSProtection, OnMaintenance, RateLimitExceeded)
 
 
 def policy(bot, side, symbol=None):
@@ -1252,6 +1264,24 @@ class Owner:
         except OrdinaryPlanDeferred as exc:
             self._defer_ordinary(exc.reason, phase="preparation", missing=exc.missing)
             return None, elapsed_ms
+        except MarketSnapshotUnavailable:
+            self._defer_ordinary(
+                "prepared_market_inputs_unavailable",
+                phase="preparation",
+                missing=("market_snapshot",),
+            )
+            return None, elapsed_ms
+        except InvalidNonce:
+            raise
+        except NetworkError as exc:
+            # Preserve exchange-request backoff and time-sync recovery.
+            if (
+                isinstance(exc, _EXCHANGE_BACKPRESSURE_ERRORS)
+                or getattr(exc, "retry_after_seconds", 0.0) > 0.0
+            ):
+                raise
+            self._defer_ordinary("ordinary_transport_unavailable", phase="preparation")
+            return None, elapsed_ms
         except RuntimeError as exc:
             handled, details = self.bot._handle_staged_execution_precondition_error(exc)
             if not handled:
@@ -1298,13 +1328,6 @@ class Owner:
         """
         import asyncio
         from live.state_refresh import AuthoritativeSurfaceUnavailable
-        from ccxt.base.errors import (
-            DDoSProtection,
-            InvalidNonce,
-            NetworkError,
-            OnMaintenance,
-            RateLimitExceeded,
-        )
 
         if self._cycle_running:
             raise RuntimeError("HSL execution cycle is already running")
@@ -1508,7 +1531,7 @@ class Owner:
         except NetworkError as exc:
             category = (
                 "exchange_backpressure"
-                if isinstance(exc, (DDoSProtection, OnMaintenance, RateLimitExceeded))
+                if isinstance(exc, _EXCHANGE_BACKPRESSURE_ERRORS)
                 else "network"
             )
             return dict(
@@ -1580,7 +1603,6 @@ class Owner:
                     await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
                     continue
                 started = int(utc_ms())
-                from ccxt.base.errors import ExchangeError, InvalidNonce
 
                 try:
                     result = await self.cycle()

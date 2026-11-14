@@ -87,6 +87,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
 
+- Keep live HSL protection scheduled when an ordinary planning task encounters missing
+  quotes or a transient connection failure.
+
 - Let ordinary planning with HSL disabled rejoin an in-flight account refresh once if
   it overlaps final input preparation, with the existing freshness and protection checks.
 
