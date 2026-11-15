@@ -529,7 +529,7 @@ async def test_exchange_specific_first_timestamps_uses_native_bitunix_client(
 @pytest.mark.parametrize("exchange", ["kucoin", "kucoinfutures"])
 @pytest.mark.parametrize("outcome", ["candles", "empty", "failure"])
 async def test_kucoin_first_timestamp_wire_range_and_age_gate(
-    monkeypatch, tmp_path, exchange, outcome
+    monkeypatch, tmp_path, exchange, outcome, caplog, capsys
 ):
     import ccxt.async_support as ccxt
     from passivbot import Passivbot
@@ -593,7 +593,12 @@ async def test_kucoin_first_timestamp_wire_range_and_age_gate(
     monkeypatch.setattr(procedures, "load_markets", load_markets)
     monkeypatch.setattr(procedures, "coin_to_symbol", lambda *_args: symbol)
 
-    result = await procedures.get_first_timestamps_unified([symbol], exchange=exchange)
+    with caplog.at_level("INFO"):
+        result = await procedures.get_first_timestamps_unified([symbol], exchange=exchange)
+    assert not capsys.readouterr().out
+    assert "listing batch cached" not in caplog.text
+    assert ("listing candle fetch failed" in caplog.text) is (outcome == "failure")
+    assert "fixture timeout" not in caplog.text
     expected = first_ts if outcome == "candles" else 0.0
     assert result == {symbol: expected}
     assert requests == [
@@ -610,7 +615,10 @@ async def test_kucoin_first_timestamp_wire_range_and_age_gate(
 
     # A valid result survives a reload; unknown results retry and recover.
     current_outcome = "candles"
-    recovered = await procedures.get_first_timestamps_unified([symbol], exchange=exchange)
+    caplog.clear()
+    with caplog.at_level("DEBUG"):
+        recovered = await procedures.get_first_timestamps_unified([symbol], exchange=exchange)
+    assert ("[age] listing batch cached | symbols=1" in caplog.text) is (outcome != "candles")
     assert recovered == {symbol: first_ts}
     assert len(requests) == (1 if outcome == "candles" else 2)
     assert all(client.session is None for client in clients)
