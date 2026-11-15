@@ -386,6 +386,8 @@ def search_run(entry, arrays, args):
     """Exercise the production backend, scoring, checkpoint and result persistence."""
     import optimize
     from optimization.backends import get_backend_runner
+    from optimization.bounds import enforce_bounds
+    from optimization.callback import build_pymoo_record_entry
     from optimization.random_seed import seed_rngs
     from shared_arrays import SharedArrayManager
     from config.optimize_bounds import set_flat_optimize_bound
@@ -477,16 +479,31 @@ def search_run(entry, arrays, args):
         names = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
         reference_rows, observed_rows = [], []
         completed_vectors = set()
-        authored_vectors = {
-            tuple(get_path(seed, path) for _key, path in base.key_paths)
-            for seed in entry["configs"]
-        }
+        completed_authored = {}
+        authored_vectors = set()
+        for seed in entry["configs"]:
+            raw = [get_path(seed, path) for _key, path in base.key_paths]
+            vector = enforce_bounds(raw, base.bounds, base.sig_digits)
+            canonical = optimize._canonicalize_optimizer_individual(
+                vector, base.config, base.bounds, base.sig_digits, base.key_paths, [],
+            )
+            # Compare the persisted projection, including normalized shared
+            # weights and canonical output rounding.
+            recorded = build_pymoo_record_entry(
+                vector=vector, metrics=None, template=base.config,
+                build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
+                prepared_config=canonical,
+            )
+            authored_vectors.add(tuple(get_path(recorded, path) for _key, path in base.key_paths))
         last_timestamp_ms = int(arrays[2][-1])
         for record_row in records:
             saved = record_row["result"]
             source = saved["metrics"].get("sources", {}).get(exchange, {})
             if source.get("actual_end_timestamp_ms") == source.get("intended_end_timestamp_ms") == last_timestamp_ms:
-                completed_vectors.add(tuple(get_path(saved, path) for _key, path in base.key_paths))
+                vector = tuple(get_path(saved, path) for _key, path in base.key_paths)
+                completed_vectors.add(vector)
+                if vector in authored_vectors:
+                    completed_authored[vector] = saved["metrics"]
             reference_rows.append(cpu_candidate((saved, arrays[0], entry["markets"], arrays[1], arrays[2],
                                                  exchange, names)))
             from metrics_schema import copy_metric_value
@@ -507,7 +524,8 @@ def search_run(entry, arrays, args):
             tuning_mode=config["optimize"]["gpu"]["tuning_mode"] if backend == "gpu" else None,
             samples=[dict(seconds=seconds, completed=len(records), results=records)],
             completed_distinct_candidates=len(completed_vectors),
-            completed_distinct_authored_candidates=len(authored_vectors & completed_vectors),
+            completed_distinct_authored_candidates=len(completed_authored),
+            completed_authored_metrics_sha256=digest(strict_json(sorted(completed_authored.items()))),
             search=search,
             first_result_seconds=records[0]["elapsed_seconds"] if records else None,
             persisted_bytes=disk_bytes, requested_iterations=args.search_iters,

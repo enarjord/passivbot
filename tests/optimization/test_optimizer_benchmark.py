@@ -735,11 +735,18 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
         worker.search_run(entry, arrays, args)
 
 
-@pytest.mark.parametrize("start_method", [None, "forkserver"])
-def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method):
+@pytest.mark.parametrize("start_method,case", [
+    (None, None),
+    ("forkserver", None),
+    (None, "trailing_martingale/both/forager/base/oscillating"),
+])
+def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method, case):
     if start_method is not None and start_method not in multiprocessing.get_all_start_methods():
         pytest.skip(f"{start_method} multiprocessing unavailable")
     directory, manifest = frozen
+    if case is not None:
+        directory = directory / "canonical-forager-seeds"
+        manifest = freeze(directory, patterns=[case], candidates=8, bars=128, coins=4)
     entry = manifest["entries"][0]
     # Network rejection belongs to the worker process, including the Rust
     # verification pass; it must not alter the pytest process's socket methods.
@@ -762,6 +769,7 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
     assert report["status"] == "completed", report
     assert report["samples"][0]["completed"] == report["completed_distinct_candidates"] == 12
     assert report["completed_distinct_authored_candidates"] == report["search"]["starting_individuals"] == 8
+    assert len(report["completed_authored_metrics_sha256"]) == 64
     assert report["search"]["population_size"] == 4
     assert report["persisted_bytes"] > 0
     assert report["rust_reference_verification"]["status"] == "passed"

@@ -296,7 +296,7 @@ from collections import defaultdict
 from pathlib import Path
 
 report = json.loads(Path(sys.argv[1]).read_text())
-pairs = defaultdict(set)
+pairs = defaultdict(dict)
 for run in report["runs"]:
     label, result = run["label"], run["result"]
     if result["status"] != "completed":
@@ -314,11 +314,13 @@ for run in report["runs"]:
         expected = 50 + min(48, max(0, bootstrap["initial_cohort_target"] - 50))
         if bootstrap["bootstrapped_individuals"] != expected:
             raise SystemExit("Metal max bootstrapped an unexpected candidate count")
-    pairs[run["entry"]].add(label)
+    pairs[run["entry"]][label] = result["completed_authored_metrics_sha256"]
     print(label, completed, result["samples"][0]["seconds"],
           result["rust_reference_verification"]["status"])
-if len(pairs) != 2 or any(labels != {"conservative", "max"} for labels in pairs.values()):
+if len(pairs) != 2 or any(set(modes) != {"conservative", "max"} for modes in pairs.values()):
     raise SystemExit("Expected both Metal modes for both synthetic strategy cases")
+if any(len(set(modes.values())) != 1 for modes in pairs.values()):
+    raise SystemExit("Metal metrics differed on matching canonical authored candidates")
 PY
 ```
 
