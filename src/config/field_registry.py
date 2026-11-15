@@ -376,7 +376,7 @@ def get_field_registry() -> FieldRegistry:
         add(path, (FieldType.INTEGER, FieldType.STRING), nullable=True)
     add("optimize.gpu.search_cohort_size", (FieldType.INTEGER, FieldType.STRING), nullable=True,
         domain=FieldDomain(minimum=1, string_pattern=case_insensitive_control_pattern(("auto",))),
-        description="CUDA max search cohort limit above the survivor population, independent of dispatch sizing.")
+        description="GPU max search cohort limit above the survivor population, independent of dispatch sizing.")
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))

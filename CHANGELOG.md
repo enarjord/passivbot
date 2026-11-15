@@ -9,6 +9,7 @@ its own version heading. See [release status](docs/releases.md).
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.
   It can prepare candidates in parallel when shared headroom permits.
+  Metal users can set an explicit search cohort limit independently of dispatch sizing.
 
 - Let CUDA max users cap generated search cohorts independently of GPU dispatch sizing.
 

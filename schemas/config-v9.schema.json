@@ -6427,7 +6427,7 @@
                     "null"
                   ],
                   "default": null,
-                  "description": "CUDA max search cohort limit above the survivor population, independent of dispatch sizing.",
+                  "description": "GPU max search cohort limit above the survivor population, independent of dispatch sizing.",
                   "minimum": 1,
                   "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[aA][uU][tT][oO])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "x-passivbot-consumers": [

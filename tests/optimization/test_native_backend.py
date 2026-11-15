@@ -335,7 +335,13 @@ def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_
         assert len(records) == 40 and len(done["algorithm"].pop) == 4
 
 
-def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatch, tmp_path):
+@pytest.mark.parametrize("cohort_limit,accepted_width,seed_width,offspring_widths", [
+    (None, 32, 64, [32, 32, 2]),
+    (56, 60, 56, [56, 18]),
+])
+def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(
+    monkeypatch, tmp_path, cohort_limit, accepted_width, seed_width, offspring_widths,
+):
     from optimization import native_planner_capacity
     from optimization.backends import gpu_backend
     from optimization.gpu import native, runtime
@@ -371,14 +377,16 @@ def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatc
         observed.append((self.state["phase"], len(self.state["population"]), self.session.max_candidates))
         evaluate(self)
         if self.state["phase"] == "seeds":
-            self.session.service.cohort_width = self.session.service.accepted_cohort_width = 32
+            self.session.service.cohort_width = self.session.service.accepted_cohort_width = accepted_width
 
     monkeypatch.setattr(gpu_backend._Search, "evaluate_population", observe)
     with managed_arrays() as manager:
         base = inputs(manager)
         base._gpu_input_memory_budget = budget
         base.config["optimize"]["iters"] = 80
-        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
+        base.config["optimize"]["gpu"].update(
+            tuning_mode="max", batch_size=None, search_cohort_size=cohort_limit,
+        )
         template = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
         keys = [key for key, _path in base.key_paths]
         quantity = keys.index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
@@ -394,11 +402,12 @@ def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatc
 
     assert lookups == ["mps"]
     assert capacities == [(64, 96, 96)]
-    assert observed == [("seeds", 64, 64), ("generation", 4, 64), ("generation", 32, 32), ("generation", 32, 32),
-                        ("generation", 2, 2)]
+    assert observed[:2] == [("seeds", seed_width, seed_width), ("generation", 4, seed_width)]
+    assert observed[2:] == [("generation", width, width) for width in offspring_widths]
     assert len(records) == 130
     assert state["max_search_allocated"] == 80
-    assert state["max_search_budget"].target_width == 32
+    assert state["max_search_budget"].target_width == accepted_width
+    assert state["max_search_budget"].cohort_limit == cohort_limit
     assert len(state["algorithm"].pop) == 4
 
 
