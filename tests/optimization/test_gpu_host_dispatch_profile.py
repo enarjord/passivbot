@@ -9,6 +9,37 @@ torch = pytest.importorskip("torch")
 from optimization.gpu import mps_kernel, service
 
 
+@pytest.mark.parametrize(
+    "global_state,max_mode,width,sm_count,override,expected",
+    [
+        (False, True, 8192, 46, 8, 1),
+        (True, False, 8192, 46, None, 1),
+        (True, True, 511, 46, None, 1),
+        (True, True, 512, 46, None, 4),
+        (True, True, 512, 80, None, 1),
+        (True, True, 640, 80, None, 4),
+        (True, True, 1023, 46, None, 4),
+        (True, True, 1024, 46, None, 8),
+        (True, True, 1024, 80, None, 4),
+        (True, True, 1280, 80, None, 8),
+        (True, True, 1024, 46, 1, 1),
+    ],
+)
+def test_cuda_temporal_block_size(monkeypatch, global_state, max_mode, width, sm_count, override, expected):
+    runner = mps_kernel._MulticoinReplayRunner.__new__(mps_kernel._MulticoinReplayRunner)
+    runner.bars = SimpleNamespace(device=torch.device("cuda", 1))
+    runner.cuda_max_scratch_policy = max_mode
+    runner.cuda_global_replay_side_state = global_state
+    runner.cuda_global_replay_block_size = override
+
+    def get_properties(device):
+        assert device == runner.bars.device
+        return SimpleNamespace(multi_processor_count=sm_count)
+
+    monkeypatch.setattr(torch.cuda, "get_device_properties", get_properties)
+    assert runner._cuda_temporal_block_size(width) == expected
+
+
 class Clock:
     def __init__(self):
         self.seconds = 0.0
