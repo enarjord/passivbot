@@ -11,7 +11,7 @@ from shared_arrays import attach_shared_array
 
 
 PREPARED_DATASET_KEY = "_optimizer_prepared_dataset_identity"
-PREPARED_DATASET_VERSION = 3
+PREPARED_DATASET_VERSION = 4
 _HASH_BUFFER_BYTES = 1024 * 1024
 
 # These are prepared market/bundle fields consumed by backtest payload construction,
@@ -22,7 +22,7 @@ _MARKET_FIELDS = (
     "qty_step", "price_step", "min_qty", "min_cost", "c_mult",
     "maker", "maker_fee", "taker", "taker_fee",
     "first_valid_index", "last_valid_index", "warmup_minutes", "trade_start_index",
-    "inception_timestamp_ms",
+    "inception_timestamp_ms", "asset_inception_policy_version", "asset_inception_asset_id",
 )
 _BUNDLE_FIELDS = (
     "data_interval_minutes", "candle_interval_offset_bars",

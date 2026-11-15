@@ -44,7 +44,7 @@ def valid_result(exchange):
 async def resolve(*, report, forced=None):
     return await hp._resolve_combined_coin(
         coin="NEW", sem=asyncio.Semaphore(1), base_start_ts=START, end_ts=END,
-        first_timestamps_unified={"NEW": START}, tradfi_for_stock_perps=False,
+        tradfi_for_stock_perps=False,
         forced_sources={} if forced is None else {"NEW": forced},
         market_settings_sources={}, exchanges_to_consider=VENUES,
         normalization_candidate_exchanges=VENUES, om_dict=managers(),

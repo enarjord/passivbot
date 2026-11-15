@@ -48,6 +48,7 @@ sys.argv = [sys.argv[0]] + _rust_remaining
 import numpy as np
 import math
 import pandas as pd
+import portalocker
 import json
 from passivbot_exceptions import SimulationConfigError
 import asyncio
@@ -76,6 +77,11 @@ from config.access import (
     require_live_value,
 )
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
+from asset_inception import (
+    ASSET_INCEPTION_POLICY_VERSION,
+    market_inception_identity,
+    resolve_asset_inception,
+)
 from config.risk_memory import (
     normalize_memory_ema_span_minutes,
 )
@@ -133,6 +139,7 @@ from hlcv_preparation import (
 from hlcvs_manifest import (
     HlcvsManifestError,
     build_hlcvs_manifest,
+    hash_json_value,
     load_hlcvs_manifest,
     manifest_has_required_schema,
     save_numpy_artifact_with_hash,
@@ -1692,8 +1699,8 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
     return HLCVS_CACHE_ROOT / dir_name
 
 
-def _automatic_cache_unresolved_inception_coins(config, coins, mss, *, inception_fact_coins=None):
-    """Retry unknown facts only for enabled positive-age prepared memberships.
+def _required_inception_coins(config, coins, mss, *, inception_fact_coins=None):
+    """Find enabled positive-age prepared memberships.
 
     Optimizer acquisition supplies its reachable-side sizing view, so sides that
     candidates can activate are included without querying permanently disabled
@@ -1726,14 +1733,89 @@ def _automatic_cache_unresolved_inception_coins(config, coins, mss, *, inception
         if not isinstance(inception_fact_coins, frozenset) or any(not isinstance(c, str) for c in inception_fact_coins):
             raise TypeError("inception_fact_coins must be a frozenset of coin identifiers or None")
         required = set(reconcile(inception_fact_coins))
-    return [coin for coin in coins if coin in required
-            if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
+    return [coin for coin in coins if coin in required]
+
+
+def _has_current_inception_policy(settings):
+    version = settings.get("asset_inception_policy_version")
+    return type(version) is int and version == ASSET_INCEPTION_POLICY_VERSION
+
+
+def _current_inception_timestamp(settings):
+    if _has_current_inception_policy(settings):
+        return inception_timestamp_ms(settings.get("inception_timestamp_ms"))
+    return None
+
+
+def _automatic_cache_unresolved_inception_coins(config, coins, mss, *, inception_fact_coins=None):
+    required = _required_inception_coins(config, coins, mss, inception_fact_coins=inception_fact_coins)
+    return [coin for coin in required if _current_inception_timestamp(mss[coin]) is None]
+
+
+def _discard_legacy_inception(mss, coins):
+    """Strip old age facts from a runtime view without changing the input dataset."""
+    legacy = [
+        coin for coin in coins
+        if not _has_current_inception_policy(mss[coin])
+        and mss[coin].get("inception_timestamp_ms") is not None
+    ]
+    if not legacy:
+        return mss
+    updated = dict(mss)
+    for coin in legacy:
+        updated[coin] = {**mss[coin], "inception_timestamp_ms": None}
+    return updated
+
+
+async def _resolve_prepared_inception(config, exchange, coins, mss, *, inception_fact_coins=None):
+    required = _required_inception_coins(config, coins, mss, inception_fact_coins=inception_fact_coins)
+    updated = _discard_legacy_inception(mss, coins)
+    pending = [
+        coin for coin in required
+        if _current_inception_timestamp(mss[coin]) is None
+        or mss[coin].get("asset_inception_provisional")
+    ]
+    if not pending:
+        return updated
+    markets = {
+        coin: [(mss[coin].get("exchange") or exchange, mss[coin])]
+        for coin in pending
+        if mss[coin].get("symbol") and (mss[coin].get("exchange") or exchange != "combined")
+    }
+    facts = await resolve_asset_inception(markets, allow_remote=not is_offline()) if markets else {}
+    updated = dict(updated)
+    for coin in pending:
+        settings = updated[coin]
+        evidence = facts.get(coin)
+        if evidence is None and _has_current_inception_policy(settings):
+            continue
+        previous = _current_inception_timestamp(settings)
+        if (
+            evidence is not None and previous is not None
+            and evidence.asset_id == settings.get("asset_inception_asset_id")
+            and evidence.timestamp_ms > previous
+        ):
+            continue  # The verified earlier observation is still evidence.
+        updated[coin] = {
+            **settings,
+            "asset_inception_policy_version": ASSET_INCEPTION_POLICY_VERSION,
+            "inception_timestamp_ms": evidence.timestamp_ms if evidence else None,
+            "asset_inception_source": evidence.source if evidence else None,
+            "asset_inception_asset_id": evidence.asset_id if evidence else None,
+            "asset_inception_provisional": evidence.is_provisional if evidence else False,
+        }
+    unresolved = sum(_current_inception_timestamp(updated[coin]) is None for coin in pending)
+    if unresolved:
+        logging.warning("[age] asset inception remains unknown | symbols=%d action=gate_initial_entries", unresolved)
+    return updated
 
 
 def _inception_market_identity_matches(previous, current):
-    return bool(current.get("exchange")) and all(
-        previous.get(key) == current.get(key)
-        for key in ("exchange", "symbol", "ohlcv_source")
+    return (
+        bool(current.get("exchange"))
+        and previous.get("exchange") == current.get("exchange")
+        and previous.get("ohlcv_source") == current.get("ohlcv_source")
+        and market_inception_identity(previous) == market_inception_identity(current)
     )
 
 
@@ -1746,7 +1828,7 @@ def _preserve_cached_inception_facts(config, exchange, mss):
     acquisition result or a caller-owned metadata dictionary.
     """
     unresolved = [coin for coin, settings in mss.items() if not coin.startswith("__")
-                  and inception_timestamp_ms(settings.get("inception_timestamp_ms")) is None]
+                  and _current_inception_timestamp(settings) is None]
     if not unresolved:
         return mss
     cache_hash = get_cache_hash(config, exchange)
@@ -1765,9 +1847,11 @@ def _preserve_cached_inception_facts(config, exchange, mss):
             new = mss[coin]
             if coin not in old_coins or not _inception_market_identity_matches(old, new):
                 continue
-            fact = inception_timestamp_ms(old.get("inception_timestamp_ms"))
-            if fact is not None:
-                retained[coin] = fact
+            if _current_inception_timestamp(old) is not None:
+                retained[coin] = {
+                    key: value for key, value in old.items()
+                    if key.startswith("asset_inception_") or key == "inception_timestamp_ms"
+                }
     except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
         logging.info("[hlcvs] cannot retain unverified inception facts from %s: %s", cache_dir, exc)
         return mss
@@ -1775,12 +1859,12 @@ def _preserve_cached_inception_facts(config, exchange, mss):
         return mss
     preserved = deepcopy(mss)
     for coin, fact in retained.items():
-        preserved[coin]["inception_timestamp_ms"] = fact
+        preserved[coin].update(fact)
     return preserved
 
 
 def load_coins_hlcvs_from_cache(
-    config, exchange, warmup_minutes=0, *, inception_fact_coins=None,
+    config, exchange, warmup_minutes=0, *, inception_fact_coins=None, allow_unresolved_inception=False,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
@@ -1819,12 +1903,13 @@ def load_coins_hlcvs_from_cache(
             return None
         coins = metadata["coins"]
         mss = metadata["market_specific_settings"]
-        unresolved = _automatic_cache_unresolved_inception_coins(
-            config, coins, mss, inception_fact_coins=inception_fact_coins,
-        )
-        if unresolved:
-            logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
-            return None
+        if not allow_unresolved_inception:
+            unresolved = _automatic_cache_unresolved_inception_coins(
+                config, coins, mss, inception_fact_coins=inception_fact_coins,
+            )
+            if unresolved:
+                logging.info("[hlcvs] cache has unresolved inception for %s", unresolved)
+                return None
         # Only reusable caches materialize arrays. Full integrity validation is
         # still required, and its arrays are reused instead of decompressed twice.
         verified_arrays: dict = {}
@@ -1892,8 +1977,8 @@ def save_coins_hlcvs_to_cache(
                     old, new = existing_mss[coin], mss.get(coin)
                     if new is None or not _inception_market_identity_matches(old, new):
                         continue
-                    previous = inception_timestamp_ms(old.get("inception_timestamp_ms"))
-                    incoming = inception_timestamp_ms(new.get("inception_timestamp_ms"))
+                    previous = _current_inception_timestamp(old)
+                    incoming = _current_inception_timestamp(new)
                     if previous is not None and incoming is not None and previous != incoming:
                         corrected.append(coin)
                 if not unresolved and not corrected:
@@ -1940,21 +2025,71 @@ def save_coins_hlcvs_to_cache(
             is_compressed=is_compressed,
         )
         raise_if_backtest_cancel_requested("cache publish")
-        if cache_dir.exists():
-            os.replace(cache_dir, backup_cache_dir)
-        try:
-            os.replace(tmp_cache_dir, cache_dir)
-        except BaseException:
-            if backup_cache_dir.exists() and not cache_dir.exists():
-                os.replace(backup_cache_dir, cache_dir)
-            raise
+        with _hlcvs_cache_publish_lock(cache_dir):
+            _replace_hlcvs_cache_directory(cache_dir, tmp_cache_dir, backup_cache_dir)
         published = True
     finally:
         if not published and tmp_cache_dir.exists():
             shutil.rmtree(tmp_cache_dir, ignore_errors=True)
-        if backup_cache_dir.exists():
+        if backup_cache_dir.exists() and cache_dir.exists():
             shutil.rmtree(backup_cache_dir, ignore_errors=True)
     return cache_dir
+
+
+def _hlcvs_cache_publish_lock(cache_dir):
+    return portalocker.Lock(cache_dir.with_name(f".{cache_dir.name}.publish.lock"), timeout=10)
+
+
+def _replace_hlcvs_cache_directory(cache_dir, tmp_cache_dir, backup_cache_dir):
+    if cache_dir.exists():
+        os.replace(cache_dir, backup_cache_dir)
+    try:
+        os.replace(tmp_cache_dir, cache_dir)
+    except BaseException:
+        if backup_cache_dir.exists() and not cache_dir.exists():
+            os.replace(backup_cache_dir, cache_dir)
+        raise
+
+
+def _publish_refreshed_inception(cache_dir, previous, updated):
+    """Publish a verified metadata refresh alongside the existing array artifacts."""
+    previous_hash = hash_json_value(previous)
+    updated_hash = hash_json_value(updated)
+    if previous_hash == updated_hash:
+        return
+    with _hlcvs_cache_publish_lock(cache_dir):
+        manifest = load_hlcvs_manifest(cache_dir)
+        if manifest is None:
+            return
+        entry = manifest["files"]["market_specific_settings"]
+        if entry["sha256"] != previous_hash:
+            return
+        verify_hlcvs_manifest_metadata(cache_dir, manifest)
+
+        generation = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        tmp_cache_dir = cache_dir.with_name(f".{cache_dir.name}.tmp-age-{generation}")
+        backup_cache_dir = cache_dir.with_name(f".{cache_dir.name}.backup-age-{generation}")
+        settings_file = Path(entry["path"])
+        if settings_file.is_absolute() or ".." in settings_file.parts or settings_file == Path("manifest.json"):
+            raise HlcvsManifestError("inception refresh requires a relative settings artifact path")
+        try:
+            # The staged directory shares immutable arrays with the verified input cache.
+            shutil.copytree(
+                cache_dir, tmp_cache_dir, ignore=shutil.ignore_patterns("manifest.json"),
+                copy_function=lambda src, dst: os.link(Path(src).resolve(), dst),
+            )
+            settings_path = tmp_cache_dir / settings_file
+            settings_path.unlink()
+            with settings_path.open("w") as f:
+                json.dump(updated, f)
+            entry["sha256"] = updated_hash
+            write_hlcvs_manifest(tmp_cache_dir, manifest)
+            raise_if_backtest_cancel_requested("inception metadata publish")
+            _replace_hlcvs_cache_directory(cache_dir, tmp_cache_dir, backup_cache_dir)
+        finally:
+            shutil.rmtree(tmp_cache_dir, ignore_errors=True)
+            if cache_dir.exists():
+                shutil.rmtree(backup_cache_dir, ignore_errors=True)
 
 
 def _save_coins_hlcvs_artifacts_to_cache_dir(
@@ -2269,6 +2404,10 @@ async def prepare_hlcvs_mss(
                 "(boundary proof version 3 required). "
                 "Prepare it once from raw caches using --offline y without --hlcvs-data-dir."
             )
+        legacy = _discard_legacy_inception(mss, coins)
+        if legacy is not mss:
+            logging.warning("[age] dataset override uses legacy inception metadata; age is unknown for affected assets")
+            mss = legacy
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
         _validate_hlcvs_valid_windows_from_mss(
             hlcvs,
@@ -2299,7 +2438,7 @@ async def prepare_hlcvs_mss(
             None
             if force_refetch_gaps
             else load_coins_hlcvs_from_cache(
-                config, exchange, backtest_warmup_minutes, **cache_requirements,
+                config, exchange, backtest_warmup_minutes, allow_unresolved_inception=True, **cache_requirements,
             )
         )
         if result:
@@ -2314,6 +2453,16 @@ async def prepare_hlcvs_mss(
                 raise OfflineDataError(
                     "Prepared cache lacks current offline boundary provenance; verifying raw caches"
                 )
+            refreshed = await _resolve_prepared_inception(config, exchange, coins, mss, **cache_requirements)
+            if refreshed is not mss:
+                try:
+                    _publish_refreshed_inception(cache_dir, mss, refreshed)
+                except (OSError, HlcvsManifestError, portalocker.exceptions.LockException) as exc:
+                    logging.warning(
+                        "[age] unable to publish prepared inception metadata | error_type=%s",
+                        type(exc).__name__,
+                    )
+                mss = refreshed
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
             _validate_hlcvs_valid_windows_from_mss(
@@ -2382,6 +2531,7 @@ async def prepare_hlcvs_mss(
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     mss = _preserve_cached_inception_facts(config, exchange, mss)
+    mss = await _resolve_prepared_inception(config, exchange, coins, mss, **cache_requirements)
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     _validate_hlcvs_valid_windows_from_mss(
         hlcvs,

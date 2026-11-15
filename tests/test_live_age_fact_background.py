@@ -74,10 +74,10 @@ async def test_slow_flat_inception_does_not_delay_held_planning_and_protection(
     started, release = asyncio.Event(), asyncio.Event()
 
     async def slow_lookup(symbols, **_kwargs):
-        assert symbols == [FLAT]
+        assert list(symbols) == [FLAT]
         started.set()
         await release.wait()
-        return {FLAT: FIRST}
+        return {FLAT: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
 
     async def slow_candles(symbol, **_kwargs):
         assert symbol == FLAT
@@ -86,7 +86,7 @@ async def test_slow_flat_inception_does_not_delay_held_planning_and_protection(
         return [[FIRST, 1, 1, 1, 1, 1]]
 
     lookup = AsyncMock(side_effect=slow_lookup)
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     bot.cca = SimpleNamespace(fetch_ohlcv=AsyncMock(side_effect=slow_candles))
     protective_plan = AsyncMock()
 
@@ -130,7 +130,7 @@ async def test_worker_timeout_retries_after_backoff_without_blocking_planning(mo
         await asyncio.Event().wait()
 
     lookup = AsyncMock(side_effect=stalled_lookup)
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     monkeypatch.setattr(live, "FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS", 0.01)
     try:
         with caplog.at_level(logging.WARNING):
@@ -147,7 +147,7 @@ async def test_worker_timeout_retries_after_backoff_without_blocking_planning(mo
 
         bot._first_timestamp_refresh_retry_after = 0.0
         lookup.side_effect = None
-        lookup.return_value = {FLAT: FIRST}
+        lookup.return_value = {FLAT: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
         await bot.prepare_planning_universe()
         await asyncio.wait_for(bot.maintainers[KEY], timeout=1.0)
         assert lookup.await_count == 2
@@ -161,7 +161,7 @@ async def test_failed_lookup_is_harvested_and_retry_is_bounded(monkeypatch, capl
     bot = _bot()
     secret = "token=private-age-fact https://private.invalid/inception"
     lookup = AsyncMock(side_effect=live.NetworkError(secret))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     try:
         with caplog.at_level(logging.WARNING):
             await bot.prepare_planning_universe()
@@ -178,7 +178,7 @@ async def test_failed_lookup_is_harvested_and_retry_is_bounded(monkeypatch, capl
         assert lookup.await_count == 1
         bot._first_timestamp_refresh_retry_after = 0.0
         lookup.side_effect = None
-        lookup.return_value = {FLAT: FIRST}
+        lookup.return_value = {FLAT: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
         await bot.prepare_planning_universe()
         await bot.maintainers[KEY]
         assert bot.is_old_enough("long", FLAT)
@@ -198,10 +198,10 @@ async def test_resistant_worker_remains_owned_through_replacement_and_restart(mo
                 await release.wait()
             except asyncio.CancelledError:
                 cancelled.set()
-        return {FLAT: FIRST}
+        return {FLAT: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
 
     lookup = AsyncMock(side_effect=resistant_lookup)
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     monkeypatch.setattr(live, "FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS", 0.01)
     bot.ws_enabled = False
     bot.maintain_hourly_cycle = AsyncMock()
@@ -243,16 +243,16 @@ async def test_resistant_expired_batch_cannot_dispatch_a_second_batch(monkeypatc
     cancelled, release = asyncio.Event(), asyncio.Event()
 
     async def resistant_lookup(symbols, **_kwargs):
-        assert symbols == [first]
+        assert list(symbols) == [first]
         while not release.is_set():
             try:
                 await release.wait()
             except asyncio.CancelledError:
                 cancelled.set()
-        return {first: FIRST}
+        return {first: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
 
     lookup = AsyncMock(side_effect=resistant_lookup)
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     monkeypatch.setattr(live, "FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(live, "FIRST_TIMESTAMP_REFRESH_BATCH_SIZE", 1)
     try:
@@ -262,7 +262,7 @@ async def test_resistant_expired_batch_cannot_dispatch_a_second_batch(monkeypatc
         assert not task.done()
         release.set()
         await asyncio.wait_for(task, timeout=1.0)
-        lookup.assert_awaited_once_with([first], exchange="binance")
+        lookup.assert_awaited_once_with({first: [("binance", bot.markets_dict[first])]})
         assert bot.first_timestamps[first] == FIRST
         assert not bot.is_old_enough("long", second)
     finally:
@@ -274,7 +274,7 @@ async def test_resistant_expired_batch_cannot_dispatch_a_second_batch(monkeypatc
 async def test_startup_account_configuration_defers_inception_to_tracked_maintainer(monkeypatch):
     bot = _bot()
     lookup = AsyncMock(side_effect=AssertionError("startup account preparation must not await inception"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     bot._exchange_config_write_ready = AsyncMock(return_value=True)
     bot.update_exchange_config = AsyncMock()
     bot.set_market_specific_settings = lambda: None
@@ -287,12 +287,12 @@ async def test_startup_account_configuration_defers_inception_to_tracked_maintai
     bot.ws_enabled = False
     bot.maintain_hourly_cycle = AsyncMock()
     lookup.side_effect = None
-    lookup.return_value = {FLAT: FIRST}
+    lookup.return_value = {FLAT: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
     try:
         await bot.start_data_maintainers()
         assert KEY in bot.maintainers
         await bot.maintainers[KEY]
-        lookup.assert_awaited_once_with([FLAT], exchange="binance")
+        lookup.assert_awaited_once_with({FLAT: [("binance", bot.markets_dict[FLAT])]})
     finally:
         await _stop(bot)
 
@@ -302,7 +302,7 @@ async def test_stopped_bot_never_starts_inception_work(monkeypatch):
     bot = _bot()
     bot.stop_signal_received = True
     lookup = AsyncMock(side_effect=AssertionError("stopped bot must not acquire facts"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     bot._schedule_first_timestamp_refresh()
     assert KEY not in bot.maintainers
     lookup.assert_not_awaited()
