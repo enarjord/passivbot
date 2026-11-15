@@ -2343,6 +2343,7 @@ def add_arguments_recursively(
             elif full_name in {
                 "optimize.gpu.batch_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
+                "optimize.gpu.search_cohort_size",
             }:
                 type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":

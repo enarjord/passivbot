@@ -13,16 +13,22 @@ class CudaMaxSearchBudget:
 
     population_size: int
     target_width: int
+    cohort_limit: int | None = None
 
     def __post_init__(self):
         if type(self.population_size) is not int or self.population_size < 1:
             raise ValueError("CUDA max population size must be a positive integer")
         if type(self.target_width) is not int or self.target_width < 1:
             raise ValueError("CUDA max cohort target width must be a positive integer")
+        if self.cohort_limit is not None and (type(self.cohort_limit) is not int or self.cohort_limit < 1):
+            raise ValueError("CUDA max search cohort limit must be a positive integer")
 
     @property
     def cohort_width(self) -> int:
-        return max(self.population_size, self.target_width)
+        target = self.target_width
+        if self.cohort_limit is not None:
+            target = min(target, self.cohort_limit)
+        return max(self.population_size, target)
 
     @staticmethod
     def remaining(*, iters: int, allocated: int) -> int:

@@ -374,6 +374,9 @@ def get_field_registry() -> FieldRegistry:
     # Union fields have one unambiguous numeric serialization type.
     for path in ("optimize.gpu.batch_size", "optimize.gpu.max_dispatch_candidate_bars"):
         add(path, (FieldType.INTEGER, FieldType.STRING), nullable=True)
+    add("optimize.gpu.search_cohort_size", (FieldType.INTEGER, FieldType.STRING), nullable=True,
+        domain=FieldDomain(minimum=1, string_pattern=case_insensitive_control_pattern(("auto",))),
+        description="CUDA max search cohort limit above the survivor population, independent of dispatch sizing.")
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))

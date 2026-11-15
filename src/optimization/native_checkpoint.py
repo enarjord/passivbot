@@ -6,7 +6,7 @@ import logging
 import math
 from copy import deepcopy
 
-from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.gpu.search_budget import CudaMaxSearchBudget
 
@@ -46,12 +46,16 @@ def validate_checkpoint(state, config):
         if isinstance(state.get(key), bool) or not isinstance(state.get(key), int) or state[key] < 0:
             raise ValueError(f"GPU native checkpoint has an invalid {key}")
     options = config["optimize"]
-    tuning_mode = resolve_gpu_tuning_mode(options.get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT))
+    gpu = options.get("gpu", {})
+    tuning_mode = resolve_gpu_tuning_mode(gpu.get("tuning_mode", GPU_TUNING_DEFAULT))
     if tuning_mode == "max":
         plan = state.get("max_search_budget")
         allocated = state.get("max_search_allocated")
+        cohort_limit = resolve_gpu_search_cohort_size(gpu.get("search_cohort_size"), tuning_mode=tuning_mode)
         if (not isinstance(plan, CudaMaxSearchBudget) or plan.population_size != state["algorithm"].pop_size
                 or type(plan.target_width) is not int or plan.target_width < 1
+                or type(plan.cohort_limit) is not type(cohort_limit)
+                or plan.cohort_limit != cohort_limit
                 or type(allocated) is not int or allocated < 0):
             raise ValueError("GPU native checkpoint has an invalid CUDA max search budget")
         if options["iters"] < allocated:
