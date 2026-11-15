@@ -1850,10 +1850,13 @@ class _MulticoinReplayRunner:
             return self.cuda_global_replay_block_size
         if not self.cuda_max_scratch_policy or batch_size < 512:
             return 1
-        # Packing candidates improves lane use, but a small grid leaves some
-        # SMs idle. Require enough candidates for a full wave of 8-thread blocks.
+        # Packed blocks improve lane use. Keep enough blocks to cover the
+        # device with two waves before choosing a wider block.
         sm_count = torch.cuda.get_device_properties(self.bars.device).multi_processor_count
-        return 8 if batch_size >= 8 * sm_count else 1
+        max_block_size = batch_size // max(128, 2 * sm_count)
+        if max_block_size >= 8:
+            return 8
+        return 4 if max_block_size >= 4 else 1
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
         self._last_temporal_dispatch = None
