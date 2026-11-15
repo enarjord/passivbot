@@ -208,6 +208,32 @@ async def test_venue_recheck_preserves_then_improves_provisional_age(tmp_path, m
     assert offline["TEST"].timestamp_ms == earliest
 
 
+async def test_later_provider_observation_keeps_earlier_provisional_age_refreshable(tmp_path, monkeypatch):
+    identity = AssetIdentity("Test", 11, "TEST", START)
+    monkeypatch.setattr(age, "resolve_asset_identity", lambda *_: identity)
+
+    async def provider(*args):
+        for fact in provider_facts:
+            yield fact
+
+    provider_facts = []
+    monkeypatch.setattr(age, "_resolve_cmc", provider)
+    observations = iter([START + DAY, START + age.MINUTE_MS])
+
+    async def fetch(*args):
+        return next(observations)
+
+    monkeypatch.setattr(age, "_fetch_venue_candle", fetch)
+    request = {"TEST": [("okx", okx_market())]}
+    old = await age.resolve_asset_inception(request, cache_dir=tmp_path)
+    assert old["TEST"].timestamp_ms == START + DAY
+    provider_facts.append(age.InceptionEvidence(START + 2 * DAY, "coinmarketcap:11", "coinmarketcap:11"))
+    improved = await age.resolve_asset_inception(request, cache_dir=tmp_path)
+    assert improved["TEST"] == age.InceptionEvidence(
+        START + age.MINUTE_MS, "venue_candle:okx", "coinmarketcap:11", True
+    )
+
+
 async def test_cross_venue_local_earlier_evidence_is_verified_and_fingerprinted(tmp_path, monkeypatch):
     ident = AssetIdentity("Test", 11, "TEST", START, START + 2 * DAY, "https://example.com/price")
     market = okx_market(preMktSwTime=str(START + age.MINUTE_MS))
