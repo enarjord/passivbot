@@ -336,6 +336,7 @@ def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_
 
 
 def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatch, tmp_path):
+    from optimization import native_planner_capacity
     from optimization.backends import gpu_backend
     from optimization.gpu import native, runtime
     from optimization.gpu.residency import MpsInputMemoryBudget
@@ -362,6 +363,7 @@ def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatc
     monkeypatch.setattr(native, "cuda_initial_candidate_width", forbidden)
     monkeypatch.setattr(runtime, "gpu_device", forbidden)
     monkeypatch.setattr(native, "NativeBacktestService", service)
+    monkeypatch.setattr(native_planner_capacity, "mps_plan_worker_count", lambda *_args, **_kwargs: 0)
     observed = []
     evaluate = gpu_backend._Search.evaluate_population
 

@@ -30,7 +30,7 @@ def cuda_initial_candidate_width():
     from optimization.gpu.runtime import gpu_device
 
     if gpu_device(torch) != "cuda":
-        raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
+        raise ValueError("CUDA wave sizing requires an NVIDIA CUDA device")
     attributes = cupy.cuda.Device(torch.cuda.current_device()).attributes
     blocks = attributes["MultiProcessorCount"] * attributes["MaxBlocksPerMultiprocessor"]
     return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (blocks.bit_length() - 1))

@@ -65,7 +65,6 @@ def test_metal_pool_uses_shared_headroom_and_existing_pool_reserves_only_parent_
     planner = SimpleNamespace(bindings=())
     parent_bytes, worker_bytes = capacity.mps_plan_preparation_memory(planner, 256)
     spare_bytes = parent_bytes + 2 * worker_bytes
-    monkeypatch.setattr(capacity, "_MPS_WORKER_COUNTS", (6, 4, 2))
     monkeypatch.setattr(capacity, "_host_capacity", lambda: (8, 16 * 2**30))
     monkeypatch.setattr(capacity, "mps_system_headroom_bytes", lambda **_kwargs: spare_bytes)
 

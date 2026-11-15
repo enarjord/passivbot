@@ -16,9 +16,8 @@ _MIB = 2**20
 # counts exercised in throughput qualification.
 _CPU_RESERVE = 2
 _WORKER_COUNTS = (8, 4)
-# Start with serial preparation before selecting a parallel Metal policy from
-# complete-suite measurements. CPU workers and MPS share this host's memory.
-_MPS_WORKER_COUNTS = ()
+# Metal tests these cohort sizes against shared host headroom before spawning.
+_MPS_WORKER_COUNTS = (6, 4, 2)
 _MINIMUM_CANDIDATES_PER_WORKER = 16
 
 

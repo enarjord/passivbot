@@ -393,8 +393,8 @@ tensors and mutable scratch.
 Conservative automatic Metal widths start at 1,024 candidates, clamped by the
 prepared memory/history ceiling and service admission limit. The default CUDA policy starts
 at 64. CUDA `max` in the optimizer starts near one hardware wave of single-candidate blocks,
-rounded down to a power of two. Metal `max` starts at 3,072 candidates before
-the prepared memory and dispatch bounds are applied. The GPU
+rounded down to a power of two. Metal `max` starts at 3,072 candidates with
+an upper bound of 4,096 before the prepared memory and dispatch bounds are applied. The GPU
 owner creates a controller for each prepared dataset. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
@@ -453,10 +453,11 @@ when every registered variant for a scenario and exchange selects one coin.
 GPU parameter compilation omits only the recording snapshots `_raw`,
 `_raw_effective` and `_transform_log` for ordinary dictionary inputs; execution fields and
 prepared source owners remain intact. Unsupported input shapes use canonical lowering.
-CUDA `max` can prepare an eligible cohort in multiple CPU processes. Workers verify the
+GPU `max` can prepare an eligible cohort in multiple CPU processes. Workers verify the
 same Rust artifact and return canonical candidate plans in order. The optimizer owns
 the pending cohort, scenario admission, scoring and checkpoints. It limits the worker
 pool using usable CPU capacity, available RAM, input packing and the candidate window.
+Metal probes admission for six, four, then two workers against shared system headroom.
 If headroom falls below the required allowance between cohorts, it retires the pool
 and continues serially. Other GPU modes prepare candidates serially.
 `optimize.n_cpus` controls the CPU optimizer pool.
