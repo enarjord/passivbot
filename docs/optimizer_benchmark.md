@@ -336,7 +336,7 @@ inspect the observed widths. A width in the command is a request.
 
 Use the [offline preparation procedure](backtesting.md#offline-preparation)
 for representative real data and run both configurations through
-`passivbot optimize --offline y --suite y`. Use the same verified data,
+`passivbot optimize "$CONFIG" --offline y --suite y`. Use the same verified data,
 strategy, bounds, scoring and seed files for both modes. Set
 `optimize.write_all_results` to true, disable prefilters and scenario screening,
 and keep `optimize.gpu.batch_size` null to measure automatic width. Adjust
@@ -350,11 +350,15 @@ Use a representative suite and a budget extending beyond the interruption
 point for the four-hour soak. Start one fresh process, prove it made durable
 progress throughout the run, and send SIGINT to that optimizer PID. Check for
 exit 130. Save a copy or hash and length of the durable result stream. Start a
-fresh `passivbot optimize` with the same policy and
-`--resume "$RUN_DIRECTORY" --offline y --suite y`. After it appends new complete
-candidate suites, SIGINT that PID and check for exit 130 again. Verify that the
-original result-stream prefix matches byte for byte and that the new rows cover
-all required scenarios and exchanges. Consult
+fresh process with the same config file and prepared inputs.
+
+```bash
+passivbot optimize "$CONFIG" --resume "$RUN_DIRECTORY" --offline y --suite y
+```
+
+After it appends new complete candidate suites, SIGINT that PID and check for
+exit 130 again. Verify the original result-stream prefix byte for byte and
+check that the new rows cover all required scenarios and exchanges. Consult
 [optimizer resume](optimizing.md#session-identity-and-output-names) for changes
 that invalidate the checkpoint.
 
