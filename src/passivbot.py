@@ -3457,7 +3457,7 @@ class Passivbot:
         markets = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
-        self._invalidate_replaced_inception_markets(markets)
+        Passivbot._invalidate_replaced_inception_markets(self, markets)
         self.markets_dict = markets
         if hasattr(self, "refresh_and_log_user_abstraction_state"):
             await self.refresh_and_log_user_abstraction_state()
