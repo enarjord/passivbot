@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Use more CUDA lanes for wide temporal replay batches in GPU optimizer max mode.
+
 - Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations.
   It uses wider GPU batches, larger seed and offspring cohorts, and more available
   RAM and VRAM. It prepares candidates in parallel when host capacity allows.

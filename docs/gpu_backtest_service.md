@@ -204,6 +204,9 @@ The estimate uses the compiled kernel's local memory, the context's current per-
 limit, and the device's maximum resident threads. Trailing Martingale and EMA Anchor in CUDA
 `max` reuse each candidate's persistent replay state for directional workspace across commands.
 This reduces driver stack use and preserves position, risk and metric calculations.
+CUDA `max` groups independent candidates in eight-thread blocks when a physical
+batch has at least 512 candidates and can fill a block per streaming multiprocessor.
+Smaller batches and kernels with block-owned replay state use one thread per block.
 CUDA retains its signed-byte relation table, while other tick fields remain int32.
 Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured

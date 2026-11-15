@@ -1195,7 +1195,7 @@ class _MulticoinReplayRunner:
     side_specialization = True
     cuda_whole_group_size = None
     cuda_global_replay_side_state = False
-    cuda_global_replay_block_size = 1
+    cuda_global_replay_block_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
@@ -1843,6 +1843,18 @@ class _MulticoinReplayRunner:
         if self._replay_state_bytes < 1:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
+    def _cuda_temporal_block_size(self, batch_size):
+        if not self.cuda_global_replay_side_state:
+            return 1
+        if self.cuda_global_replay_block_size is not None:
+            return self.cuda_global_replay_block_size
+        if not self.cuda_max_scratch_policy or batch_size < 512:
+            return 1
+        # Packing candidates improves lane use, but a small grid leaves some
+        # SMs idle. Require enough candidates for a full wave of 8-thread blocks.
+        sm_count = torch.cuda.get_device_properties(self.bars.device).multi_processor_count
+        return 8 if batch_size >= 8 * sm_count else 1
+
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
         self._last_temporal_dispatch = None
         tick_paths = getattr(self, "_streamed_tick_paths", {})
@@ -1925,9 +1937,7 @@ class _MulticoinReplayRunner:
         # Shared replay state has one candidate owner per CUDA block. The
         # global replay specialization can group independent candidates.
         if self.bars.device.type == "cuda":
-            threads_per_threadgroup = (
-                self.cuda_global_replay_block_size if self.cuda_global_replay_side_state else 1
-            )
+            threads_per_threadgroup = self._cuda_temporal_block_size(batch_size)
         else:
             threads_per_threadgroup = min(batch_size, 32)
         if profile_pipeline:
