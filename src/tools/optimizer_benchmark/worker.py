@@ -17,7 +17,7 @@ import threading
 import time
 import traceback
 
-from .workloads import array_digest, digest, harness_digest, load_manifest
+from .workloads import array_digest, digest, get_path, harness_digest, load_manifest
 
 _CPU_CONTEXT = None
 _SOCKET_CONNECT = socket.socket.connect
@@ -382,16 +382,37 @@ def profile_search_host(enabled):
         report["functions"] = sorted(rows, key=lambda row: row["self_seconds"], reverse=True)[:100]
 
 
+def _authored_result_vectors(configs, evaluator):
+    """Project frozen inputs through the target revision's result recorder."""
+    import optimize
+    from optimization.bounds import enforce_bounds
+    from optimization.callback import build_pymoo_record_entry
+
+    def build_config(vector, _overrides_fn, overrides_list, template):
+        return optimize._canonicalize_optimizer_individual(
+            vector, template, evaluator.bounds, evaluator.sig_digits, evaluator.key_paths, overrides_list,
+        )
+
+    vectors = set()
+    for seed in configs:
+        raw = [get_path(seed, path) for _key, path in evaluator.key_paths]
+        vector = enforce_bounds(raw, evaluator.bounds, evaluator.sig_digits)
+        # Use the callback signature shared by target revisions.
+        recorded = build_pymoo_record_entry(
+            vector=vector, metrics=None, template=evaluator.config,
+            build_config_fn=build_config, overrides_fn=optimize.optimizer_overrides,
+        )
+        vectors.add(tuple(get_path(recorded, path) for _key, path in evaluator.key_paths))
+    return vectors
+
+
 def search_run(entry, arrays, args):
     """Exercise the production backend, scoring, checkpoint and result persistence."""
     import optimize
     from optimization.backends import get_backend_runner
-    from optimization.bounds import enforce_bounds
-    from optimization.callback import build_pymoo_record_entry
     from optimization.random_seed import seed_rngs
     from shared_arrays import SharedArrayManager
     from config.optimize_bounds import set_flat_optimize_bound
-    from .workloads import get_path
 
     config = deepcopy(entry["configs"][0])
     backend = "gpu" if args.engine == "search-gpu" else "pymoo"
@@ -480,21 +501,7 @@ def search_run(entry, arrays, args):
         reference_rows, observed_rows = [], []
         completed_vectors = set()
         completed_authored = {}
-        authored_vectors = set()
-        for seed in entry["configs"]:
-            raw = [get_path(seed, path) for _key, path in base.key_paths]
-            vector = enforce_bounds(raw, base.bounds, base.sig_digits)
-            canonical = optimize._canonicalize_optimizer_individual(
-                vector, base.config, base.bounds, base.sig_digits, base.key_paths, [],
-            )
-            # Compare the persisted projection, including normalized shared
-            # weights and canonical output rounding.
-            recorded = build_pymoo_record_entry(
-                vector=vector, metrics=None, template=base.config,
-                build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
-                prepared_config=canonical,
-            )
-            authored_vectors.add(tuple(get_path(recorded, path) for _key, path in base.key_paths))
+        authored_vectors = _authored_result_vectors(entry["configs"], base)
         last_timestamp_ms = int(arrays[2][-1])
         for record_row in records:
             saved = record_row["result"]

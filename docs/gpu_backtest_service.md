@@ -424,9 +424,12 @@ throughput or confidence bounds. Execution-width trials must preserve or improve
 comparison rate in either direction. Conservative and refresh accept a wider trial at
 the same comparison rate. Generic tuning callers retain their own plateau and growth
 thresholds. Existing cooldown and rollback apply. Growth also requires
-compatible work and device memory headroom. Metal growth also requires available
-RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Missing
-or invalid OS telemetry denies a growth trial without failing completed replay work.
+compatible work and device memory headroom. Metal `conservative` and `refresh`
+require available system RAM of at least 256 MiB or 10% of physical RAM,
+whichever is greater. Metal `max` reserves the greater of 1 GiB and 10% of
+physical RAM in system memory and the greater of 256 MiB and 20% in the
+recommended MPS working set. Both remaining margins must be positive. Missing or invalid OS telemetry
+denies a growth trial without failing completed replay work.
 A growth trial normally uses the largest compatible demand observed in that evidence
 window, so it can try an intermediate width when demand is less than twice the current
 width. Repeated full-width warm observations in the GPU `max` optimizer can propose a wider

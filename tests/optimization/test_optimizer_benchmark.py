@@ -775,6 +775,32 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
     assert report["rust_reference_verification"]["status"] == "passed"
 
 
+def test_authored_projection_uses_the_legacy_result_builder_signature(monkeypatch):
+    import optimize
+    from optimization import callback
+    from optimization.bounds import Bound
+
+    evaluator = SimpleNamespace(
+        config={"bot": {}}, bounds=[Bound(0, 1)], sig_digits=2,
+        key_paths=[("bot.param", ("bot", "param"))],
+    )
+    seeds = [{"bot": {"param": value}} for value in (1.5, 0.42)]
+
+    def canonicalize(vector, template, bounds, sig_digits, key_paths, overrides_list):
+        assert template is evaluator.config and bounds is evaluator.bounds
+        assert sig_digits == 2 and key_paths is evaluator.key_paths and not overrides_list
+        return {"bot": {"param": vector[0] / 2}}
+
+    def legacy_result_builder(*, vector, metrics, template, build_config_fn, overrides_fn, overrides_list=None):
+        assert metrics is None
+        prepared = build_config_fn(vector, overrides_fn, list(overrides_list or ()), template)
+        return {"bot": {"param": round(prepared["bot"]["param"], 1)}}
+
+    monkeypatch.setattr(optimize, "_canonicalize_optimizer_individual", canonicalize)
+    monkeypatch.setattr(callback, "build_pymoo_record_entry", legacy_result_builder)
+    assert worker._authored_result_vectors(seeds, evaluator) == {(0.5,), (0.2,)}
+
+
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
 def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
     from tools.optimizer_benchmark.report import compare

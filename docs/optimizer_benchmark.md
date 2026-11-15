@@ -267,7 +267,7 @@ This smoke uses 50 frozen authored seeds and a 16-candidate survivor population.
 `conservative` requests four generations including initial survival. Each of
 the next three generations can produce 16 candidates. `max` requests a budget
 of 48 additional proposals. Both arms target 98 complete distinct candidates.
-Duplicate repair or unavailable metrics can reduce the actual count. Check the
+Duplicate repair or early history termination can reduce the actual count. Check the
 observed count before using either timing. Divide the completed distinct count
 by elapsed seconds for suite throughput. The generic search summary counts
 persisted result records, which can include duplicates and incomplete histories.
