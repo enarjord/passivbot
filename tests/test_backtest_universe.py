@@ -141,8 +141,8 @@ async def test_combined_sources_refresh_before_hlcvs_cache_lookup(monkeypatch):
         refreshed = True
         return {"A": "bitget"}, {"A": "kucoinfutures"}
 
-    def cache_lookup(config, exchange, warmup_minutes):
-        assert refreshed
+    def cache_lookup(config, exchange, warmup_minutes, *, allow_unresolved_inception):
+        assert refreshed and allow_unresolved_inception
         assert config["backtest"]["coin_sources"] == {"A": "bitget"}
         assert config["backtest"]["market_settings_sources"] == {
             "A": "kucoinfutures"

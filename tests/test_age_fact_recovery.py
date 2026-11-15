@@ -34,8 +34,12 @@ async def test_live_unknown_inception_retries_then_admits_without_losing_known_f
     bot.markets_dict = {symbol: {}, known: {}}
     bot.coin_to_symbol = lambda value, **_kwargs: symbol if value == coin else value
     bot.get_exchange_time = lambda: BASE + 61 * DAY
-    lookup = AsyncMock(side_effect=[{coin: 0.0}, {coin: BASE, known: sibling_response}])
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    lookup = AsyncMock(side_effect=[
+        {},
+        {coin: SimpleNamespace(timestamp_ms=BASE, is_provisional=False),
+         known: SimpleNamespace(timestamp_ms=sibling_response, is_provisional=False)},
+    ])
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     bot.cca = SimpleNamespace(fetch_ohlcv=AsyncMock(side_effect=[[], [[BASE, 1, 1, 1, 1, 1]]]))
 
     assert not bot.is_old_enough("long", symbol)
@@ -50,7 +54,7 @@ async def test_live_unknown_inception_retries_then_admits_without_losing_known_f
         assert bot.cca.fetch_ohlcv.await_count == 2
     else:
         assert lookup.await_count == 2
-        assert all(call.args[0] == [coin] for call in lookup.await_args_list)
+        assert all(list(call.args[0]) == [coin] for call in lookup.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -68,7 +72,7 @@ async def test_live_resolved_alias_repairs_unknown_symbol_without_refetch(monkey
     bot.coin_to_symbol = lambda value, **_kwargs: symbol if value == coin else value
     bot.get_exchange_time = lambda: BASE + 61 * DAY
     lookup = AsyncMock(side_effect=AssertionError("resolved aliases do not need a fetch"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     assert not bot.is_old_enough("long", symbol)
     await bot.update_first_timestamps()
     assert bot.is_old_enough("long", symbol)
@@ -89,13 +93,16 @@ def _cache_config(tmp_path, ages):
     return config
 
 
-def _save_cache(bt, config, inception):
-    mss = {"AAA": {"exchange": "binance", "first_valid_index": 0,
-                   "last_valid_index": 2, "inception_timestamp_ms": inception}}
+def _save_cache(bt, config, inception, *, legacy=False, exchange="binance"):
+    mss = {"AAA": {"exchange": "binance", "symbol": "AAA/USDT:USDT", "base": "AAA",
+                   "id": "AAAUSDT", "first_valid_index": 0, "last_valid_index": 2,
+                   "inception_timestamp_ms": inception}}
+    if not legacy:
+        mss["AAA"]["asset_inception_policy_version"] = bt.ASSET_INCEPTION_POLICY_VERSION
     arrays = (np.ones((3, 1, 4), dtype=np.float64), np.ones(3),
               np.array([BASE, BASE + 60_000, BASE + 120_000], dtype=np.int64))
     directory = bt.save_coins_hlcvs_to_cache(
-        config, ["AAA"], arrays[0], "binance", mss, arrays[1], arrays[2],
+        config, ["AAA"], arrays[0], exchange, mss, arrays[1], arrays[2],
         warmup_minutes=7,
     )
     return directory, arrays, mss

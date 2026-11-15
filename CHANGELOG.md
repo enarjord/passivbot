@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Use the earliest verified price history for the asset when applying minimum coin age in live
+  trading, backtests, and optimization. Recognize reviewed token migrations and exclude pre-launch
+  prices. Refresh old automatic age metadata while reusing cached candles.
+
 - Let CUDA max users cap generated search cohorts independently of GPU dispatch sizing.
 
 - Use more CUDA lanes for wide temporal replay batches in GPU optimizer max mode.

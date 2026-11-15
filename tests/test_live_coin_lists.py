@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import logging
 
 import pytest
@@ -10,19 +12,20 @@ from utils import AmbiguousMarketIdentifier, UnknownMarketIdentifier
 
 
 @pytest.mark.asyncio
-async def test_update_first_timestamps_scopes_discovery_to_live_exchange(monkeypatch):
+async def test_update_first_timestamps_passes_exact_market_to_asset_resolver(monkeypatch):
     captured = {}
 
-    async def fake_get_first_timestamps(symbols, exchange=None, exchanges=None):
-        captured["symbols"] = list(symbols)
-        captured["exchange"] = exchange
-        captured["exchanges"] = exchanges
-        return {symbol: 1710115200000 for symbol in symbols}
+    async def fake_resolve_asset_inception(markets):
+        captured.update(markets)
+        return {
+            symbol: SimpleNamespace(timestamp_ms=1710115200000, is_provisional=False)
+            for symbol in markets
+        }
 
     monkeypatch.setattr(
         passivbot_module,
-        "get_first_timestamps_unified",
-        fake_get_first_timestamps,
+        "resolve_asset_inception",
+        fake_resolve_asset_inception,
     )
     symbol = "EDGE/USDT:USDT"
     bot = Passivbot.__new__(Passivbot)
@@ -33,11 +36,7 @@ async def test_update_first_timestamps_scopes_discovery_to_live_exchange(monkeyp
 
     await bot.update_first_timestamps([symbol])
 
-    assert captured == {
-        "symbols": [symbol],
-        "exchange": "kucoin",
-        "exchanges": None,
-    }
+    assert captured == {symbol: [("kucoin", bot.markets_dict[symbol])]}
     assert bot.first_timestamps[symbol] == 1710115200000
 
 
@@ -56,7 +55,7 @@ async def test_update_first_timestamps_uses_fake_harness_ohlcv(monkeypatch):
 
     monkeypatch.setattr(
         passivbot_module,
-        "get_first_timestamps_unified",
+        "resolve_asset_inception",
         unexpected_discovery,
     )
     symbol = "FAKE/USDT:USDT"

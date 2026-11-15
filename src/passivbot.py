@@ -236,7 +236,6 @@ from config_utils import (
 from procedures import (
     load_broker_code,
     load_user_info,
-    get_first_timestamps_unified,
 )
 from utils import get_file_mod_ms
 from warmup_utils import (
@@ -244,6 +243,7 @@ from warmup_utils import (
     compute_per_coin_warmup_minutes,
     live_warmup_cap_minutes,
 )
+from asset_inception import market_inception_identity, resolve_asset_inception
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.activation import side_activation
 from config.forager_hysteresis import forager_score_hysteresis
@@ -295,6 +295,8 @@ FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
 PENDING_PNL_AUTHORITATIVE_RETRY_BASE_SECONDS = 1.0
 FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS = 60.0
 FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS = 30.0
+FIRST_TIMESTAMP_REFRESH_MAX_RETRY_SECONDS = 15 * 60.0
+FIRST_TIMESTAMP_PROVISIONAL_RECHECK_SECONDS = 15 * 60.0
 FIRST_TIMESTAMP_REFRESH_BATCH_SIZE = 10
 PENDING_PNL_AUTHORITATIVE_RETRY_MAX_SECONDS = 60.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_BASE_SECONDS = 30.0
@@ -3452,9 +3454,11 @@ class Passivbot:
         """Initialize symbol and execution metadata without account/history refresh."""
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
-        self.markets_dict = await load_markets(
+        markets = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
+        Passivbot._invalidate_replaced_inception_markets(self, markets)
+        self.markets_dict = markets
         if hasattr(self, "refresh_and_log_user_abstraction_state"):
             await self.refresh_and_log_user_abstraction_state()
         # ineligible symbols cannot open new positions
@@ -5002,6 +5006,19 @@ class Passivbot:
             elapsed_s,
         )
 
+    def _invalidate_replaced_inception_markets(self, markets):
+        previous = getattr(self, "markets_dict", {}) or {}
+        timestamps = getattr(self, "first_timestamps", {})
+        provisional = getattr(self, "_provisional_first_timestamp_retry_after", {})
+        for symbol in list(timestamps):
+            current_market = markets.get(symbol)
+            if current_market is None or market_inception_identity(
+                current_market
+            ) != market_inception_identity(previous.get(symbol)):
+                timestamps.pop(symbol)
+                provisional.pop(symbol, None)
+                self._first_timestamp_refresh_retry_after = 0.0
+
     def _repair_first_timestamp_aliases(self):
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
@@ -5015,20 +5032,30 @@ class Passivbot:
             ):
                 self.first_timestamps[symbolf] = self.first_timestamps[symbol]
 
+    def _first_timestamp_needs_refresh(self, symbol, now):
+        if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None:
+            return True
+        provisional = getattr(self, "_provisional_first_timestamp_retry_after", {})
+        return symbol in provisional and now >= provisional[symbol]
+
     def _required_first_timestamp_symbols(self):
+        now = time.monotonic()
         return sorted({
             symbol
             for side in ("long", "short")
             if self.is_pside_enabled(side)
             and minimum_coin_age_days(self.config, side) > 0
             for symbol in self.approved_coins_minus_ignored_coins[side]
-            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+            if self._first_timestamp_needs_refresh(symbol, now)
         })
 
     async def _first_timestamp_refresh_task(self, *, deadline):
         """Acquire a bounded batch sequence without delaying protective planning."""
+        symbols = self._required_first_timestamp_symbols()
+        # Resume after the last dispatched batch if a previous run timed out.
+        cursor = bisect.bisect_right(symbols, getattr(self, "_last_first_timestamp_symbol", ""))
+        symbols = symbols[cursor:] + symbols[:cursor]
         try:
-            symbols = self._required_first_timestamp_symbols()
             for offset in range(0, len(symbols), FIRST_TIMESTAMP_REFRESH_BATCH_SIZE):
                 if (
                     Passivbot._shutdown_requested(self)
@@ -5043,6 +5070,7 @@ class Passivbot:
                     if symbol in required
                 ]
                 if batch:
+                    self._last_first_timestamp_symbol = batch[-1]
                     await self.update_first_timestamps(batch)
         except asyncio.CancelledError:
             raise
@@ -5052,9 +5080,15 @@ class Passivbot:
                 bounded_exception_type(exc),
             )
         finally:
-            self._first_timestamp_refresh_retry_after = (
-                asyncio.get_running_loop().time() + FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS
-            )
+            unresolved = set(self._required_first_timestamp_symbols())
+            delay = FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS
+            if unresolved and unresolved == set(symbols):
+                delay = min(
+                    FIRST_TIMESTAMP_REFRESH_MAX_RETRY_SECONDS,
+                    2 * getattr(self, "_first_timestamp_refresh_delay", delay / 2),
+                )
+            self._first_timestamp_refresh_delay = delay
+            self._first_timestamp_refresh_retry_after = asyncio.get_running_loop().time() + delay
 
     def _schedule_first_timestamp_refresh(self):
         """Keep at most one owned acquisition, including cancellation-resistant work."""
@@ -5103,15 +5137,15 @@ class Passivbot:
         self._repair_first_timestamp_aliases()
         if symbols is None:
             symbols = self._required_first_timestamp_symbols()
+        now = time.monotonic()
         symbols = [
-            symbol
-            for symbol in sorted(set(symbols))
-            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+            symbol for symbol in sorted(set(symbols))
+            if self._first_timestamp_needs_refresh(symbol, now)
         ]
         if not symbols:
-            first_timestamps = {}
-        elif self.exchange == "fake":
-            first_timestamps = {}
+            return
+        first_timestamps = {}
+        if self.exchange == "fake":
             for symbol in symbols:
                 symbolf = self.coin_to_symbol(symbol, verbose=False)
                 try:
@@ -5127,20 +5161,53 @@ class Passivbot:
                     candles = []
                 first_timestamps[symbol] = int(candles[0][0]) if candles else 0.0
         else:
-            first_timestamps = await get_first_timestamps_unified(
-                symbols, exchange=self.exchange
-            )
+            market_symbols = {
+                symbol: self.coin_to_symbol(symbol, verbose=False) for symbol in symbols
+            }
+            markets = {
+                symbol: [(self.exchange, self.markets_dict[market_symbol])]
+                for symbol, market_symbol in market_symbols.items()
+                if market_symbol in self.markets_dict
+            }
+            identities = {
+                symbol: market_inception_identity(venues[0][1])
+                for symbol, venues in markets.items()
+            }
+            evidence = await resolve_asset_inception(markets) if markets else {}
+            if not hasattr(self, "_provisional_first_timestamp_retry_after"):
+                self._provisional_first_timestamp_retry_after = {}
+            provisional = self._provisional_first_timestamp_retry_after
+            for symbol, fact in evidence.items():
+                if symbol not in markets:
+                    continue
+                market_symbol = market_symbols[symbol]
+                current_market = self.markets_dict.get(market_symbol)
+                if market_inception_identity(current_market) != identities[symbol]:
+                    continue
+                for key in {symbol, market_symbol}:
+                    first_timestamps[key] = fact.timestamp_ms
+                    prior = inception_timestamp_ms(self.first_timestamps.get(key))
+                    retains_earlier_provisional = (
+                        key in provisional and prior is not None and prior < fact.timestamp_ms
+                    )
+                    if fact.is_provisional or retains_earlier_provisional:
+                        provisional[key] = (
+                            time.monotonic() + FIRST_TIMESTAMP_PROVISIONAL_RECHECK_SECONDS
+                        )
+                    else:
+                        provisional.pop(key, None)
         for symbol, value in first_timestamps.items():
-            if (inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
-                    and inception_timestamp_ms(value) is not None):
-                self.first_timestamps[symbol] = value
+            if inception_timestamp_ms(value) is not None:
+                old_value = inception_timestamp_ms(self.first_timestamps.get(symbol))
+                self.first_timestamps[symbol] = value if old_value is None else min(value, old_value)
         self._repair_first_timestamp_aliases()
         for symbol in symbols:
             if symbol not in self.first_timestamps:
                 logging.info(
-                    f"warning: unable to get first timestamp for {symbol}. Setting to zero."
+                    "[age] inception unavailable | symbol=%s action=retry_unknown",
+                    Passivbot._log_symbol(symbol),
                 )
-                self.first_timestamps[symbol] = 0.0
+                self.first_timestamps[symbol] = None
 
     async def audit_required_candle_disk_coverage(
         self, symbols: Optional[Iterable[str]] = None

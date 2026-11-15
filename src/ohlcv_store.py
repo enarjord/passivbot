@@ -406,25 +406,43 @@ class OhlcvStore:
                 del body
                 del valid
 
-    def _compute_chunk_checksum(self, paths: MonthChunkPaths) -> str:
+    @staticmethod
+    def _chunk_array_checksum(body: np.ndarray, valid: np.ndarray) -> str:
         hasher = hashlib.sha256()
+        for array in (body, valid):
+            contiguous = np.ascontiguousarray(array)
+            hasher.update(str(contiguous.dtype).encode("utf-8"))
+            hasher.update(str(contiguous.shape).encode("utf-8"))
+            hasher.update(contiguous.data)
+        return hasher.hexdigest()
+
+    def _compute_chunk_checksum(self, paths: MonthChunkPaths) -> str:
         body = np.load(paths.body_path, mmap_mode="r")
         valid = np.load(paths.valid_path, mmap_mode="r")
-        try:
-            body_arr = np.ascontiguousarray(body)
-            valid_arr = np.ascontiguousarray(valid)
-            # C-contiguous buffers hash byte-identically to tobytes(order="C")
-            # without materializing a copy of the chunk.
-            hasher.update(str(body_arr.dtype).encode("utf-8"))
-            hasher.update(str(body_arr.shape).encode("utf-8"))
-            hasher.update(body_arr.data)
-            hasher.update(str(valid_arr.dtype).encode("utf-8"))
-            hasher.update(str(valid_arr.shape).encode("utf-8"))
-            hasher.update(valid_arr.data)
-        finally:
-            del body
-            del valid
-        return hasher.hexdigest()
+        return self._chunk_array_checksum(body, valid)
+
+    def read_verified_chunk(self, chunk: ChunkRecord) -> tuple[np.ndarray, np.ndarray]:
+        """Read a bounded immutable chunk copy without creating a store lock.
+
+        A catalog checksum must match the arrays in this snapshot, so a partial
+        concurrent write can only make the evidence unavailable.
+        """
+        body = np.load(chunk.body_path)
+        valid = np.load(chunk.valid_path)
+        expected_rows = rows_in_month(chunk.year, chunk.month, chunk.timeframe)
+        if (
+            chunk.rows != expected_rows
+            or chunk.start_ts != month_start_ts(chunk.year, chunk.month)
+            or chunk.end_ts != month_end_ts(chunk.year, chunk.month, chunk.timeframe)
+            or body.shape != (expected_rows, len(BACKTEST_OHLCV_FIELDS))
+            or valid.shape != (expected_rows,)
+            or body.dtype != BACKTEST_OHLCV_DTYPE
+            or valid.dtype != np.bool_
+            or not chunk.checksum
+            or self._chunk_array_checksum(body, valid) != chunk.checksum
+        ):
+            raise ValueError("OHLCV chunk does not match its catalog snapshot")
+        return body, valid
 
     def _validate_chunk_files(self, chunk: ChunkRecord, paths: MonthChunkPaths) -> None:
         body = np.load(paths.body_path, mmap_mode="r")
