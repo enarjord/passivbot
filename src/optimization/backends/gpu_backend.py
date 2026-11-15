@@ -46,11 +46,12 @@ from optimization.gpu.search_budget import CudaMaxSearchBudget
 from optimization.gpu.search_sampling import max_starting_vectors
 
 
-def _open_cuda_preparation_workers(planner, lifetime, *, available_rows, interrupt_check):
-    from optimization.native_planner_capacity import cuda_plan_worker_count
+def _open_preparation_workers(planner, lifetime, *, device, available_rows, interrupt_check):
+    from optimization.native_planner_capacity import cuda_plan_worker_count, mps_plan_worker_count
 
     interrupt_check()
-    workers = cuda_plan_worker_count(planner, admission_slots=available_rows, available_rows=available_rows)
+    worker_count = cuda_plan_worker_count if device == "cuda" else mps_plan_worker_count
+    workers = worker_count(planner, admission_slots=available_rows, available_rows=available_rows)
     if not workers:
         return None
     from optimization.native_planner_workers import OrderedCandidateWorkers
@@ -59,7 +60,7 @@ def _open_cuda_preparation_workers(planner, lifetime, *, available_rows, interru
         planner, workers=workers, max_pending=min(2 * workers, available_rows),
         interrupt_check=interrupt_check,
     ))
-    logging.info("CUDA max CPU preparation | workers=%d", workers)
+    logging.info("%s max CPU preparation | workers=%d", "CUDA" if device == "cuda" else "Metal", workers)
     return pool
 
 
@@ -78,7 +79,7 @@ class _Search:
     def __init__(self, *, state, session, registry, recorder, template,
                  build_config_fn, overrides_fn, overrides_list, checkpoint_path,
                  checkpoint_interval, interrupt_check, screening_policy,
-                 preparation_lifetime=None):
+                 preparation_lifetime=None, preparation_device=None):
         self.state, self.session, self.registry = state, session, registry
         self.recorder, self.template = recorder, template
         self.build_config_fn, self.overrides_fn = build_config_fn, overrides_fn
@@ -95,6 +96,7 @@ class _Search:
         self._cadence = ResultCadence()
         self.screening_policy = screening_policy
         self._preparation_lifetime = preparation_lifetime
+        self._preparation_device = preparation_device
         self._preparation_workers = None
         self._largest_preparation_window = 0
         self._progress = OptimizerProgress(lambda: dict(
@@ -198,26 +200,32 @@ class _Search:
         # Speculative and admitted candidates share this phase's window.
         # Recheck live headroom against the new width before a pool can reuse it.
         available_rows = min(self.session.max_candidates, pending_count)
+        device = self._preparation_device
         workers = self._preparation_workers
         if workers is not None:
-            from optimization.native_planner_capacity import cuda_plan_pool_fits, cuda_plan_preparation_memory
+            from optimization import native_planner_capacity as capacity
 
             if workers.pending_count:
-                raise RuntimeError("CUDA CPU preparation left pending rows across cohorts")
-            parent_bytes, _ = cuda_plan_preparation_memory(self.registry.planner, available_rows)
-            if not cuda_plan_pool_fits(parent_bytes=parent_bytes, workers=workers.worker_count):
+                raise RuntimeError("GPU optimizer CPU preparation left pending rows across cohorts")
+            if device == "cuda":
+                estimate_memory, pool_fits = capacity.cuda_plan_preparation_memory, capacity.cuda_plan_pool_fits
+            else:
+                estimate_memory, pool_fits = capacity.mps_plan_preparation_memory, capacity.mps_plan_pool_fits
+            parent_bytes, _ = estimate_memory(self.registry.planner, available_rows)
+            if not pool_fits(parent_bytes=parent_bytes, workers=workers.worker_count):
                 self._preparation_lifetime.close()
                 self._preparation_workers = None
                 self._preparation_lifetime = None
-                logging.info("CUDA max CPU preparation | retiring workers under host pressure; continuing serially")
+                logging.info("%s max CPU preparation | retiring workers under host pressure, continuing serially",
+                             "CUDA" if device == "cuda" else "Metal")
                 return None
         if available_rows < 2:
             return None
         if self._preparation_workers is None and available_rows > self._largest_preparation_window:
             self._largest_preparation_window = available_rows
-            self._preparation_workers = _open_cuda_preparation_workers(
+            self._preparation_workers = _open_preparation_workers(
                 self.registry.planner, self._preparation_lifetime,
-                available_rows=available_rows, interrupt_check=self.interrupt_check,
+                device=device, available_rows=available_rows, interrupt_check=self.interrupt_check,
             )
         workers = self._preparation_workers
         return workers if workers is not None and available_rows >= workers.worker_count else None
@@ -374,7 +382,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 configs_to_individuals_streaming=None, optimization_shape=None,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
-    from optimization.gpu.native import NativeBacktestService, cuda_initial_candidate_width
+    from optimization.gpu.native import NativeBacktestService, max_candidate_widths
 
     base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
     problem = NativeSearchProblem(base)
@@ -397,6 +405,25 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     if screening_policy["scenarios"] and not callable(getattr(evaluator_for_pool, "score_scenario_results", None)):
         raise ValueError("GPU screening.scenarios requires a prepared scenario suite")
     batch_size = resolve_gpu_sizing(gpu.get("batch_size"), field="batch_size")
+    input_memory_budget = getattr(evaluator_for_pool, "_gpu_input_memory_budget", None)
+    device = None
+    candidate_limit = 1024
+    if max_throughput:
+        from optimization.gpu.residency import CudaInputMemoryBudget, MpsInputMemoryBudget
+        from optimization.gpu.runtime import gpu_device
+
+        if isinstance(input_memory_budget, CudaInputMemoryBudget):
+            device = "cuda"
+        elif isinstance(input_memory_budget, MpsInputMemoryBudget):
+            device = "mps"
+        else:
+            device = gpu_device()
+        if device == "cuda" and (resume or batch_size is not None):
+            # A restored or explicit width does not need a CUDA wave estimate.
+            candidate_limit = CUDA_MAX_BATCH_CANDIDATES
+        else:
+            initial_width, candidate_limit = max_candidate_widths(device)
+        device_label = "CUDA" if device == "cuda" else "Metal"
     dispatch_budget = resolve_gpu_sizing(
         gpu.get("max_dispatch_candidate_bars"), field="max_dispatch_candidate_bars",
     )
@@ -419,8 +446,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         )
         authored_seed_count = len(starts)
         if max_throughput:
-            target_width = (cuda_initial_candidate_width() if batch_size is None
-                            else min(batch_size, CUDA_MAX_BATCH_CANDIDATES))
+            target_width = initial_width if batch_size is None else min(batch_size, candidate_limit)
             plan = CudaMaxSearchBudget(population_size, target_width, cohort_limit)
             generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
             key_paths = getattr(optimization_shape, "key_paths", ())
@@ -436,12 +462,15 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                                      bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan,
                                      bounded_duplicates=max_throughput)
         from session_artifacts import record_optimizer_search
+        max_facts = (
+            {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
+             "generated_attempt_budget": iters}
+            if max_throughput else None
+        )
         record_optimizer_search(
             config, algorithm, population_plan, starting_individuals=authored_seed_count,
-            cuda_max_search=(
-                {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
-                 "generated_attempt_budget": iters} if max_throughput else None
-            ),
+            cuda_max_search=max_facts if device == "cuda" else None,
+            metal_max_search=max_facts if device == "mps" else None,
         )
         algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
         state = dict(backend="gpu", version=CHECKPOINT_VERSION, algorithm=algorithm,
@@ -450,9 +479,10 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         if max_throughput:
             state.update(max_search_budget=plan, max_search_allocated=len(starts) - authored_seed_count)
             logging.info(
-                "CUDA max search | survivors=%d cohort_target=%d bootstrap_seeds=%d "
+                "%s max search | survivors=%d cohort_target=%d bootstrap_seeds=%d "
                 "bootstrap_generated=%d proposal_budget=%d",
-                population_size, plan.cohort_width, authored_seed_count, state["max_search_allocated"], iters,
+                device_label, population_size, plan.cohort_width, authored_seed_count,
+                state["max_search_allocated"], iters,
             )
         state[CONTRACT_KEY] = build_evaluation_contract(config)
         state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
@@ -470,26 +500,26 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 [(binding.scenario, binding.dataset.exchange) for binding in registry.bindings
                  if binding.scenario in labels], "screening",
             )
-        input_memory_budget = getattr(evaluator_for_pool, "_gpu_input_memory_budget", None)
-        memory_options = ({"input_memory_budget": input_memory_budget}
-                          if input_memory_budget is not None else {})
+        service_options = ({"input_memory_budget": input_memory_budget}
+                           if input_memory_budget is not None else {})
         input_owner = getattr(base, "shared_array_manager", None)
         if getattr(input_owner, "file_backed", False):
-            memory_options["on_inputs_prepared"] = input_owner.discard_file_pages
+            service_options["on_inputs_prepared"] = input_owner.discard_file_pages
         # Seed survival waits for the complete seed cohort, so its available
         # work is independent of the later evolutionary population size. Keep
         # admission bounded while allowing the service to fill wider batches.
-        candidate_limit = CUDA_MAX_BATCH_CANDIDATES if max_throughput else 1024
         cohort_width = max_search_budget.cohort_width if max_search_budget is not None else population_size
         population_window = max(2, min(cohort_width, candidate_limit))
         pending_count = len(state["population"]) if (
             state["phase"] == "seeds" or (max_throughput and state["phase"] != "idle")
         ) else 0
         candidate_window = max(population_window, min(pending_count, candidate_limit))
+        if device == "mps":
+            service_options["max_pending"] = candidate_limit
         if max_throughput and batch_size is None:
-            memory_options["max_cohort_width"] = max_search_budget.target_width
+            service_options["max_cohort_width"] = max_search_budget.target_width
         service = NativeBacktestService(
-            batch_size=batch_size, **memory_options,
+            batch_size=batch_size, **service_options,
             max_dispatch_candidate_bars=dispatch_budget,
             interrupt_check=interrupt_check, tuning_mode=tuning_mode,
             auto_request_capacity=(candidate_limit if max_throughput else candidate_window)
@@ -505,6 +535,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
                          checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check,
                          screening_policy=screening_policy,
+                         preparation_device=device,
                          preparation_lifetime=worker_lifetime if max_throughput else None)
 
         def remember_accepted_width():
@@ -514,7 +545,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             budget = state["max_search_budget"]
             if width is not None and width != budget.target_width:
                 state["max_search_budget"] = replace(budget, target_width=width)
-                logging.info("CUDA max cohort target | width=%d", state["max_search_budget"].cohort_width)
+                logging.info("%s max cohort target | width=%d", device_label, state["max_search_budget"].cohort_width)
 
         try:
             registry.register(service)

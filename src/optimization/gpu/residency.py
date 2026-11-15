@@ -287,9 +287,10 @@ class MpsInputMemoryBudget:
 
     device_bytes: int
     host_bytes: int
+    max_throughput: bool = False
 
 
-def capture_mps_input_memory_budget(torch):
+def capture_mps_input_memory_budget(torch, *, max_throughput=False):
     """Sample device and system headroom once, before preparing input histories."""
     import psutil
 
@@ -299,7 +300,52 @@ def capture_mps_input_memory_budget(torch):
     return MpsInputMemoryBudget(
         device_bytes=int(max(0, recommended - driver) * 0.45),
         host_bytes=max(0, min(int(available * 0.7), available - 2**30)),
+        max_throughput=max_throughput,
     )
+
+
+class MetalReplayMemoryPressure(MemoryError):
+    """Valid telemetry refused a Metal max allocation before it started."""
+
+
+def mps_system_reserve_bytes(total):
+    """Keep space for macOS and the desktop in Metal max mode."""
+    return max(2**30, total // 10)
+
+
+def mps_system_headroom_bytes(*, pending_host_bytes=0, require_system_telemetry=True):
+    """Bytes available after the system reserve and as-yet-unallocated host work."""
+    if type(pending_host_bytes) is not int or pending_host_bytes < 0:
+        raise ValueError("Metal pending host memory must be a nonnegative byte count")
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        total, available = memory.total, memory.available
+        if type(total) is not int or type(available) is not int or not 0 <= available <= total or total == 0:
+            raise ValueError("Invalid system memory telemetry")
+    except Exception as exc:
+        if require_system_telemetry:
+            raise RuntimeError("Metal max admission requires valid system memory telemetry") from exc
+        # Optional observations may decline expansion. Live admission requires
+        # valid telemetry and does not convert probe errors into pressure.
+        return 0
+    return max(0, available - mps_system_reserve_bytes(total) - pending_host_bytes)
+
+
+def mps_max_available_bytes(torch, *, pending_host_bytes=0, require_system_telemetry=True):
+    """Additional device bytes that fit both MPS and system headroom."""
+    recommended = torch.mps.recommended_max_memory()
+    driver = torch.mps.driver_allocated_memory()
+    if type(recommended) is not int or recommended <= 0 or type(driver) is not int or driver < 0:
+        raise RuntimeError("Metal max admission requires valid MPS memory telemetry")
+    system_headroom = mps_system_headroom_bytes(
+        pending_host_bytes=pending_host_bytes, require_system_telemetry=require_system_telemetry,
+    )
+    device_headroom = max(0, recommended - driver - max(256 * 2**20, recommended // 5))
+    # Current MPS and worker allocations are already visible in system memory.
+    # Compare the two remaining limits instead of charging GPU allocations twice.
+    return min(device_headroom, system_headroom)
 
 
 @dataclass(frozen=True)
@@ -378,8 +424,31 @@ def discard_readonly_file_pages(values):
     return False
 
 
-def check_mps_invariant_memory(torch, invariant_bytes, *, working_set=None, require_free=True):
+def check_mps_invariant_memory(
+    torch, invariant_bytes, *, working_set=None, require_free=True, input_memory_budget=None,
+):
     """Check invariant admission, optionally deferring live device availability."""
+    if input_memory_budget is not None and input_memory_budget.max_throughput:
+        allowance = input_memory_budget.device_bytes
+        if invariant_bytes > allowance:
+            raise MemoryError(
+                f"Metal multicoin invariant tensors require {invariant_bytes / 2**20:.1f} MiB, "
+                f"above the initial max-mode input budget of {allowance / 2**20:.1f} MiB. "
+                "Rejected before packing or device allocation."
+            )
+        if require_free:
+            # Large active histories copy one bounded source slice at a time.
+            available = mps_max_available_bytes(
+                torch, pending_host_bytes=min(PREPARATION_CHUNK_BYTES, invariant_bytes),
+            )
+            if invariant_bytes > available:
+                raise MetalReplayMemoryPressure(
+                    f"Metal multicoin invariant tensors require {invariant_bytes / 2**20:.1f} MiB, "
+                    f"with {available / 2**20:.1f} MiB of live unified-memory headroom. "
+                    "Rejected before device allocation."
+                )
+        return
+
     recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
     if require_free or working_set is None:
         if not callable(recommended_fn):
@@ -652,6 +721,26 @@ class MetalSuiteResidency(CudaSuiteResidency):
 
     device = "mps"
 
+    def __init__(self, *, input_memory_budget=None):
+        super().__init__()
+        if input_memory_budget is not None and not isinstance(input_memory_budget, MpsInputMemoryBudget):
+            raise ValueError("Metal residency requires a Metal input memory budget")
+        self._input_memory_budget = input_memory_budget
+
+    def resolve_max_input_memory_budget(self, torch, input_memory_budget):
+        """Freeze one input allowance before the first max-mode dataset is packed."""
+        current = self._input_memory_budget
+        if input_memory_budget is None:
+            input_memory_budget = current or capture_mps_input_memory_budget(torch, max_throughput=True)
+        if (not isinstance(input_memory_budget, MpsInputMemoryBudget)
+                or not input_memory_budget.max_throughput):
+            raise ValueError("Metal input memory budget does not match the GPU tuning mode")
+        if current is None and not self._entries:
+            self._input_memory_budget = input_memory_budget
+        elif current != input_memory_budget:
+            raise ValueError("Metal max replay and its residency owner require the same input memory budget")
+        return self._input_memory_budget
+
     @staticmethod
     def _device_api(torch):
         return torch.mps
@@ -665,12 +754,22 @@ class MetalSuiteResidency(CudaSuiteResidency):
     def check_preparation_memory(self, torch, invariant_bytes):
         # Packing writes files only. The previous entry and its scratch remain
         # resident until activation, so they must not shrink the initial budget.
+        budget = self._input_memory_budget
+        if budget is not None and budget.max_throughput:
+            check_mps_invariant_memory(
+                torch, invariant_bytes, require_free=False, input_memory_budget=budget,
+            )
+            return
         check_mps_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
             require_free=False,
         )
 
     def _check_memory(self, torch, invariant_bytes):
+        budget = self._input_memory_budget
+        if budget is not None and budget.max_throughput:
+            check_mps_invariant_memory(torch, invariant_bytes, input_memory_budget=budget)
+            return
         check_mps_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
         )
@@ -758,9 +857,9 @@ class MetalSuiteResidency(CudaSuiteResidency):
 
 
 @contextmanager
-def metal_residency_scope():
+def metal_residency_scope(*, input_memory_budget=None):
     """Keep Metal preparation, replay and cleanup on the owning worker."""
-    residency = MetalSuiteResidency()
+    residency = MetalSuiteResidency(input_memory_budget=input_memory_budget)
     token = _current.set(residency)
     try:
         try:

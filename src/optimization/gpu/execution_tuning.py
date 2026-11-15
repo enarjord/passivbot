@@ -32,6 +32,7 @@ class ExecutionBatchTuner:
         self._allow_trial = False
         self._expandable_producer = expandable_producer
         self._max_throughput = max_throughput or expandable_producer
+        self.probe_inner_growth = False
         # The device owner publishes trial demand separately from the baseline
         # that the optimizer can use to restart with fresh observations.
         self.cohort_width = initial
@@ -117,6 +118,7 @@ class ExecutionBatchTuner:
                 shrink_min_rate_ratio=1.0,
                 growth_min_rate_ratio=1.03 if self._expandable_producer else 1.0,
                 require_repeatable_width=self._max_throughput,
+                probe_inner_growth=self.probe_inner_growth,
                 growth_limit=lambda: (
                     controller.ceiling
                     if (self._expandable_producer and controller.last_comparison_count == controller.width

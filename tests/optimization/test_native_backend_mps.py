@@ -28,6 +28,27 @@ async def test_metal_optimizer_persists_and_resumes_without_cpu(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_metal_max_bootstraps_fifty_seeds_and_resumes(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    if not torch.backends.mps.is_available():
+        pytest.skip("Apple Metal device required")
+    from optimization.gpu.mps_kernel import _MulticoinReplayRunner
+
+    observed_widths = []
+    original = _MulticoinReplayRunner._dispatch_replay
+
+    def dispatch(runner, *args, **kwargs):
+        original(runner, *args, **kwargs)
+        observed_widths.append(kwargs["batch_size"])
+
+    monkeypatch.setattr(_MulticoinReplayRunner, "_dispatch_replay", dispatch)
+    seed_values = tuple(0.012 + index * 0.0003 for index in range(50))
+    await cli_smoke(monkeypatch, tmp_path, True, True, True, device="mps",
+                    tuning_mode="max", seed_values=seed_values)
+    assert observed_widths[:2] == [58, 58]  # One full bootstrap dispatch per scenario.
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 async def test_metal_weighted_objectives_persist_and_resume(monkeypatch, tmp_path, strategy):
     await cli_smoke(monkeypatch, tmp_path, True, True, True, screening=True,

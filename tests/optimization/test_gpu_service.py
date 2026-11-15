@@ -2342,25 +2342,29 @@ def test_cuda_max_keeps_more_parallel_candidates_inside_temporal_work_budget(str
     assert _mps_multicoin_dispatch_plan(strategy, 4096, max_throughput=True, **kwargs) == (True, 3125, 1)
 
 
-@pytest.mark.parametrize("failure", [None, "device", "still_too_large"])
-def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkeypatch, failure):
+@pytest.mark.parametrize("failure", [None, "device", "still_too_large", "metal_moving"])
+def test_max_scratch_rejection_bounds_retries_and_preserves_atomic_results(monkeypatch, failure):
     from threading import Event
 
     from optimization.gpu import service
-    from optimization.gpu.autotune import CudaReplayScratchLimit
+    from optimization.gpu.autotune import CudaReplayScratchLimit, ReplayScratchLimit
     from optimization.gpu.executor import BacktestRequest, GpuBacktestService
 
     attempts, reduced = [], []
     preparing, release = Event(), Event()
     device_error = MemoryError("device allocation failed")
+    metal = failure == "metal_moving"
+
     def run(parameters, *, profile):
         rows = tuple(row[0] for row in parameters)
         attempts.append(rows)
+        if metal and len(rows) > 1:
+            raise ReplayScratchLimit(len(rows), 3 if len(rows) > 3 else 2, device="Metal")
         if len(rows) > 3:
             raise CudaReplayScratchLimit(len(rows), 3)
         if failure == "still_too_large":
             raise CudaReplayScratchLimit(len(rows), 2)
-        if rows[0] == 3:
+        if rows[0] == 3 and not metal:
             preparing.set()
             assert release.wait(3)
             if failure == "device":
@@ -2375,6 +2379,7 @@ def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkey
     replay = object.__new__(SharedAccountReplay)
     replay._torch = None
     replay._max_throughput = True
+    replay._cuda_max_throughput = not metal
     replay.batch_size = 7
     replay.profile_enabled = False
     replay.sides = ["long"]
@@ -2392,7 +2397,7 @@ def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkey
     executor.register_dataset("market", SimpleNamespace(evaluate=replay.evaluate_results))
     try:
         futures = [executor.submit(BacktestRequest(str(row), "market", {"value": row})) for row in range(7)]
-        if failure != "still_too_large":
+        if not metal and failure != "still_too_large":
             assert preparing.wait(3)
             assert not any(future.done() for future in futures)
             assert reduced == [(0, 1, 2)]
@@ -2407,8 +2412,12 @@ def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkey
         else:
             rows = [future.result(timeout=3) for future in futures]
             assert [(row.request_id, row.metrics["value"]) for row in rows] == [(str(i), i) for i in range(7)]
-            assert attempts == [tuple(range(7)), (0, 1, 2), (3, 4, 5), (6,)]
-            assert reduced == attempts[1:]
+            if metal:
+                assert attempts == [tuple(range(7)), (0, 1, 2), *((i,) for i in range(7))]
+                assert reduced == attempts[2:]
+            else:
+                assert attempts == [tuple(range(7)), (0, 1, 2), (3, 4, 5), (6,)]
+                assert reduced == attempts[1:]
             assert replay.last_evaluation_split
     finally:
         release.set()
@@ -2488,3 +2497,19 @@ def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypat
         else:
             assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4)), (True, (5, 6))]
     assert replay.last_evaluation_split and switches == 1
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+def test_metal_max_preserves_width_up_to_one_bar_budget(strategy):
+    from optimization.gpu.model import MPS_MAX_BATCH_CANDIDATES, MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+
+    kwargs = dict(n_bars=30_000, n_coins=40, n_sides=2, device="mps")
+    assert _mps_multicoin_dispatch_plan(
+        strategy, 8192, max_candidate_bars=500_000_000, **kwargs,
+    )[:2] == (True, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
+    assert _mps_multicoin_dispatch_plan(
+        strategy, 8192, max_candidate_bars=500_000_000, max_throughput=True, **kwargs,
+    )[:2] == (True, MPS_MAX_BATCH_CANDIDATES)
+    assert _mps_multicoin_dispatch_plan(
+        strategy, 8192, max_candidate_bars=240_000, max_throughput=True, **kwargs,
+    ) == (True, 3000, 1)

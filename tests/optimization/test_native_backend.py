@@ -104,6 +104,7 @@ def execute(base, recorder, checkpoint, *, resume=False, starts=(), interrupt_ch
 def guard_cpu(monkeypatch):
     import backtest
     import optimization.gpu.native as native
+    import optimization.gpu.runtime as runtime
     def forbidden(*_args, **_kwargs):
         pytest.fail("native search must never run CPU backtests or construct CPU worker pools")
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
@@ -113,6 +114,8 @@ def guard_cpu(monkeypatch):
     monkeypatch.setattr(optimize.multiprocessing, "Pool", forbidden)
     monkeypatch.setattr(optimize.multiprocessing, "Manager", forbidden)
     monkeypatch.setattr(native, "NativeBacktestService", FakeService)
+    # The mocked service has no device. Default to CUDA for legacy max tests.
+    monkeypatch.setattr(runtime, "gpu_device", lambda _torch=None: "cuda")
     FakeService.rows = []
     FakeService.failure = None
 
@@ -330,6 +333,71 @@ def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_
         assert done["phase"] == "idle" and done["max_search_allocated"] == 40
         assert done["max_search_budget"].target_width == 12
         assert len(records) == 40 and len(done["algorithm"].pop) == 4
+
+
+def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(monkeypatch, tmp_path):
+    from optimization.backends import gpu_backend
+    from optimization.gpu import native, runtime
+    from optimization.gpu.residency import MpsInputMemoryBudget
+
+    guard_cpu(monkeypatch)
+    lookups = []
+    capacities = []
+
+    def widths(device):
+        lookups.append(device)
+        return 64, 96
+
+    budget = MpsInputMemoryBudget(2**30, 2**30, max_throughput=True)
+
+    def service(**kwargs):
+        capacities.append((kwargs["max_cohort_width"], kwargs["max_pending"], kwargs["auto_request_capacity"]))
+        assert kwargs.pop("input_memory_budget") is budget
+        return FakeService(**{**kwargs, "batch_size": 64})
+
+    def forbidden(*_args):
+        pytest.fail("search should use the captured Metal budget and its device")
+
+    monkeypatch.setattr(native, "max_candidate_widths", widths)
+    monkeypatch.setattr(native, "cuda_initial_candidate_width", forbidden)
+    monkeypatch.setattr(runtime, "gpu_device", forbidden)
+    monkeypatch.setattr(native, "NativeBacktestService", service)
+    observed = []
+    evaluate = gpu_backend._Search.evaluate_population
+
+    def observe(self):
+        observed.append((self.state["phase"], len(self.state["population"]), self.session.max_candidates))
+        evaluate(self)
+        if self.state["phase"] == "seeds":
+            self.session.service.cohort_width = self.session.service.accepted_cohort_width = 32
+
+    monkeypatch.setattr(gpu_backend._Search, "evaluate_population", observe)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base._gpu_input_memory_budget = budget
+        base.config["optimize"]["iters"] = 80
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
+        template = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
+        keys = [key for key, _path in base.key_paths]
+        quantity = keys.index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
+        starts = []
+        for value in np.linspace(0.012, 0.03, 50):
+            vector = list(template)
+            vector[quantity] = float(value)
+            starts.append(vector)
+        records = []
+        checkpoint = tmp_path / "metal-max.pkl"
+        execute(base, SimpleNamespace(record=records.append), checkpoint, starts=starts)
+        state = load_checkpoint(checkpoint, base.config)
+
+    assert lookups == ["mps"]
+    assert capacities == [(64, 96, 96)]
+    assert observed == [("seeds", 64, 64), ("generation", 4, 64), ("generation", 32, 32), ("generation", 32, 32),
+                        ("generation", 2, 2)]
+    assert len(records) == 130
+    assert state["max_search_allocated"] == 80
+    assert state["max_search_budget"].target_width == 32
+    assert len(state["algorithm"].pop) == 4
 
 
 def test_cuda_max_tiny_budget_never_pads_evaluated_parents(monkeypatch, tmp_path):

@@ -306,15 +306,18 @@ retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md)
 can keep the `"auto"` alias. `"refresh"` uses the same policy and starts with fresh
 observations, as measurements are run-local.
 
-`"max"` is a CUDA-only opt-in for unattended runs. It allows wider automatic batches
-and more use of available host RAM and VRAM. Desktop graphics can become sluggish.
-The service bounds work by compatible demand, memory and dispatch limits.
+`"max"` is an opt-in for unattended runs on CUDA and Apple Metal. It allows wider
+automatic batches. CUDA checks host RAM and VRAM. Metal checks both shared system
+headroom and the MPS working set. Desktop graphics can become sluggish. The service
+bounds work by compatible demand, available memory and dispatch limits.
+See the [Metal qualification procedure](optimizer_benchmark.md#metal-complete-suite-qualification)
+and [synthetic benchmark](optimizer_benchmark.md#metal-max-synthetic-search).
 
 In `max`, `population_size` controls how many parents selection keeps. Startup and
 offspring cohorts can offer more candidates per generation. At startup the optimizer
 evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
 the cohort when the budget and search space allow. Without supplied seeds it samples
-the configured bounds. With automatic batch sizing, the selected CUDA device supplies
+the configured bounds. With automatic batch sizing, the selected device policy supplies
 the initial target, and warm per-scenario trials can move it during the run.
 
 Set `optimize.gpu.search_cohort_size` in CUDA `max` to limit how many candidates the

@@ -17,7 +17,7 @@ import pytest
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
                                                                     strategy_kind="trailing_martingale", additional_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False, device="cuda", prefilter=False,
-                                                                    tuning_mode="auto"):
+                                                                    tuning_mode="auto", seed_values=(0.012, 0.03)):
 
     torch = pytest.importorskip("torch")
     if device == "cuda" and not torch.cuda.is_available():
@@ -31,7 +31,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from config.param_paths import resolve_optimizer_key_path
     from config_utils import clean_config
     from optimization.evaluation_contract import CONTRACT_KEY
-    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, MPS_MAX_BATCH_CANDIDATES
     from optimization.gpu.search_budget import CudaMaxSearchBudget
     from suite_runner import ExchangeDataset
     from tools.gpu_parity import build_parser, fixture_inputs
@@ -147,7 +147,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     seeds_path = tmp_path / "seeds"
     seeds_path.mkdir()
     seed_side = "short" if sides == "short" else "long"
-    for index, value in enumerate((0.012, 0.03)):
+    for index, value in enumerate(seed_values):
         seed_config = deepcopy(config)
         if strategy_kind == "ema_anchor":
             seed_config["bot"][seed_side]["strategy"]["ema_anchor"]["base_qty_fraction"] = value
@@ -246,14 +246,20 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     manifest = json.loads(manifest_bytes)
     assert manifest["seed"] == 12
     assert manifest["setup"]["config"]["optimize"]["backend"] == "gpu"
-    assert manifest["starting_configs"]["count"] == 2
+    assert manifest["starting_configs"]["count"] == len(seed_values)
     assert manifest["setup"]["starting_configs"] == manifest["starting_configs"]
     assert "setup-" in directory.name and "run-" in directory.name
+    archive = directory / "all_results.bin"
+    interrupted_prefix = archive.read_bytes()
+
     def records():
-        with (directory / "all_results.bin").open("rb") as source:
+        with archive.open("rb") as source:
             return list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
     max_mode = tuning_mode == "max"
-    assert 0 < len(records()) <= (10 if max_mode else 8)
+    bootstrap_count = len(seed_values) + 8
+    resumed_count = len(seed_values) + 12
+    max_batch_candidates = MPS_MAX_BATCH_CANDIDATES if device == "mps" else CUDA_MAX_BATCH_CANDIDATES
+    assert 0 < len(records()) <= (bootstrap_count if max_mode else 8)
     if not interrupted:
         assert len(records()) == (6 if screening else 8)
     with (directory / "checkpoint.pkl").open("rb") as source:
@@ -266,29 +272,35 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         budget = state["max_search_budget"]
         assert isinstance(budget, CudaMaxSearchBudget)
         assert budget.population_size == 4
+        from session_artifacts import SEARCH_MANIFEST
+
+        search_manifest = json.loads((directory / SEARCH_MANIFEST).read_text())
+        search_key = "metal_max_search" if device == "mps" else "cuda_max_search"
+        assert search_manifest["starting_individuals"] == len(seed_values)
+        assert search_manifest[search_key]["bootstrapped_individuals"] == bootstrap_count
         assert state["max_search_allocated"] == 8
         proposals = state["population"].get("X")
-        assert len(proposals) == len(set(map(tuple, proposals))) == 10
+        assert len(proposals) == len(set(map(tuple, proposals))) == bootstrap_count
         assert budget.cohort_width >= len(proposals) > budget.population_size
         for path in seeds_path.iterdir():
             path.unlink()
         seeds_path.rmdir()
 
         # Complete only the originally budgeted bootstrap after interruption.
-        # All ten proposals include two supplied seeds that are outside iters.
+        # Authored seeds are outside the budget for generated proposals.
         monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(config_path), "--offline", "y",
                                                     "--resume", str(directory)])
         with pytest.raises(SystemExit) as bootstrap:
             await optimize.main()
         assert bootstrap.value.code == 0
-        assert len(records()) == 10
+        assert len(records()) == bootstrap_count
         with (directory / "checkpoint.pkl").open("rb") as source:
             bootstrapped = pickle.load(source)
         assert bootstrapped["phase"] == "idle" and bootstrapped["population"] is None
         assert bootstrapped["max_search_budget"].population_size == budget.population_size
-        assert 1 <= bootstrapped["max_search_budget"].target_width <= CUDA_MAX_BATCH_CANDIDATES
+        assert 1 <= bootstrapped["max_search_budget"].target_width <= max_batch_candidates
         assert bootstrapped["max_search_allocated"] == 8
-        assert bootstrapped["completed"] == 10
+        assert bootstrapped["completed"] == bootstrap_count
         assert len(bootstrapped["algorithm"].pop) == 4
     if anchors:
         assert len(state["anchor_plan"]["anchors"]) == 2
@@ -303,15 +315,16 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     assert resumed.value.code == 0
     assert list((tmp_path / "optimize_results").iterdir()) == [directory]
     assert (directory / "session.json").read_bytes() == manifest_bytes
-    assert len(records()) == (14 if max_mode else 8 if screening else 12)
+    assert archive.read_bytes().startswith(interrupted_prefix)
+    assert len(records()) == (resumed_count if max_mode else 8 if screening else 12)
     if max_mode:
         with (directory / "checkpoint.pkl").open("rb") as source:
             final = pickle.load(source)
         assert final["phase"] == "idle" and final["population"] is None
         assert final["max_search_budget"].population_size == budget.population_size
-        assert 1 <= final["max_search_budget"].target_width <= CUDA_MAX_BATCH_CANDIDATES
+        assert 1 <= final["max_search_budget"].target_width <= max_batch_candidates
         assert final["max_search_allocated"] == 12
-        assert final["completed"] == 14
+        assert final["completed"] == resumed_count
         assert len(final["algorithm"].pop) == 4
         assert final["algorithm"].n_offsprings == 4
 
@@ -327,10 +340,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             scalars = expanded["suite_metrics"]["metrics"]["cagr_fraction_strategy_equity"]["scenarios"]
             assert set(scalars) - {"metric_status"} == {"base", "window"}
             quantities.append((quantity(expanded, "long"), quantity(expanded, "short")))
-        assert len(set(quantities[:10])) == 10
+        assert len(set(quantities[:bootstrap_count])) == bootstrap_count
         # Offspring are duplicate-checked against selected parents and one
         # another. Discarded bootstrap candidates are eligible again.
-        assert len(set(quantities[10:])) == 4
+        assert len(set(quantities[bootstrap_count:])) == 4
 
         before = (directory / "all_results.bin").read_bytes()
         from optimization.gpu.native import NativeBacktestService

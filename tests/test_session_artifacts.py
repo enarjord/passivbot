@@ -28,18 +28,20 @@ def test_search_manifest_records_actual_population_without_overwriting_initial_f
     assert (tmp_path / artifacts.SEARCH_MANIFEST).read_bytes() == before
 
 
-def test_search_manifest_records_max_bootstrap_and_cohort_separately(tmp_path):
+@pytest.mark.parametrize("device", ["cuda", "metal"])
+def test_search_manifest_records_max_bootstrap_and_cohort_separately(tmp_path, device):
     config = {"results_dir": str(tmp_path), "optimize": {
         "backend": "gpu", "pymoo": {"algorithm": "nsga2"}, "seed": 19,
     }}
     algorithm = SimpleNamespace(pop_size=128)
     plan = {"algorithm_name": "nsga2", "requested_population_size": 128}
     search = dict(bootstrapped_individuals=512, initial_cohort_target=512, generated_attempt_budget=2048)
-    artifacts.record_optimizer_search(config, algorithm, plan, starting_individuals=50, cuda_max_search=search)
+    key = f"{device}_max_search"
+    artifacts.record_optimizer_search(config, algorithm, plan, starting_individuals=50, **{key: search})
     saved = json.loads((tmp_path / artifacts.SEARCH_MANIFEST).read_text())
     assert saved["population_size"] == 128
     assert saved["starting_individuals"] == 50
-    assert saved["cuda_max_search"] == search
+    assert saved[key] == search
 
 
 from config_utils import get_template_config

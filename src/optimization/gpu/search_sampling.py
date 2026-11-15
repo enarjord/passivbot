@@ -1,4 +1,4 @@
-"""CPU-side bootstrap sampling for wide CUDA optimizer cohorts."""
+"""CPU-side bootstrap sampling for wide GPU optimizer cohorts."""
 
 from collections import deque
 

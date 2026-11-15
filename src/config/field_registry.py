@@ -330,7 +330,7 @@ def get_field_registry() -> FieldRegistry:
     add("optimize.gpu.tuning_mode", FieldType.STRING,
         domain=FieldDomain(choices=GPU_TUNING_INPUTS,
                            string_pattern=case_insensitive_control_pattern(GPU_TUNING_INPUTS)),
-        description="GPU resource tuning policy. Max is CUDA-only. Auto aliases conservative.")
+        description="GPU resource tuning policy for CUDA and Metal. Auto aliases conservative.")
     for kind, paths in _NULLABLE_FIELDS.items():
         for path in paths:
             add(path, kind, nullable=True)

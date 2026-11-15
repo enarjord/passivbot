@@ -10,7 +10,7 @@ from optimization.gpu import residency
 
 
 def _telemetry(monkeypatch, *, recommended=12 * 2**30, driver=2**30, available=8 * 2**30):
-    values = dict(recommended=recommended, driver=driver, available=available)
+    values = dict(recommended=recommended, driver=driver, available=available, total=16 * 2**30)
     calls = dict(recommended=0, driver=0, available=0)
     def read(name):
         calls[name] += 1
@@ -20,7 +20,7 @@ def _telemetry(monkeypatch, *, recommended=12 * 2**30, driver=2**30, available=8
         driver_allocated_memory=lambda: read("driver"),
     ))
     monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(
-        virtual_memory=lambda: SimpleNamespace(available=read("available")),
+        virtual_memory=lambda: SimpleNamespace(available=read("available"), total=values["total"]),
     ))
     return torch, values, calls
 
@@ -39,6 +39,68 @@ def test_budget_captures_device_and_host_once_with_reserved_headroom(monkeypatch
 def test_budget_clamps_negative_device_headroom(monkeypatch):
     torch, _values, _calls = _telemetry(monkeypatch, recommended=1, driver=2)
     assert residency.capture_mps_input_memory_budget(torch).device_bytes == 0
+
+
+def test_max_input_preflight_uses_frozen_allowance_without_live_probes(monkeypatch):
+    torch, values, calls = _telemetry(monkeypatch)
+    budget = residency.capture_mps_input_memory_budget(torch, max_throughput=True)
+    assert budget.max_throughput
+    values.update(driver=values["recommended"], available=0)
+
+    residency.check_mps_invariant_memory(
+        torch, budget.device_bytes, input_memory_budget=budget, require_free=False,
+    )
+    with pytest.raises(MemoryError, match="initial max-mode input budget") as failure:
+        residency.check_mps_invariant_memory(
+            torch, budget.device_bytes + 1, input_memory_budget=budget, require_free=False,
+        )
+    assert type(failure.value) is MemoryError
+    assert calls == dict(recommended=1, driver=1, available=1)
+
+
+@pytest.mark.parametrize(
+    "driver,available,pending,expected",
+    [
+        (7, 10, 1, 1 * 2**30),  # MPS working set has only a GiB left above reserve.
+        (1, 3, 1, 2 * 2**30 - (16 * 2**30) // 10),  # macOS reserve and pending host work.
+        (1, 1, 1, 0),
+    ],
+)
+def test_max_live_admission_uses_tighter_of_mps_and_system_headroom(
+    monkeypatch, driver, available, pending, expected,
+):
+    torch, _values, calls = _telemetry(
+        monkeypatch, recommended=10 * 2**30, driver=driver * 2**30, available=available * 2**30,
+    )
+    assert residency.mps_max_available_bytes(torch, pending_host_bytes=pending * 2**30) == expected
+    assert calls == dict(recommended=1, driver=1, available=1)
+
+
+def test_unavailable_system_telemetry_only_declines_optional_expansion(monkeypatch):
+    torch, values, _calls = _telemetry(monkeypatch)
+    values["available"] = -1
+    assert residency.mps_max_available_bytes(torch, require_system_telemetry=False) == 0
+    with pytest.raises(RuntimeError, match="requires valid system memory telemetry"):
+        residency.mps_max_available_bytes(torch)
+
+    def broken_device():
+        raise RuntimeError("driver unavailable")
+
+    torch.mps.driver_allocated_memory = broken_device
+    with pytest.raises(RuntimeError, match="driver unavailable"):
+        residency.mps_max_available_bytes(torch, require_system_telemetry=False)
+
+
+def test_max_invariant_live_admission_counts_upload_source_pages(monkeypatch):
+    torch, values, _calls = _telemetry(monkeypatch)
+    budget = residency.capture_mps_input_memory_budget(torch, max_throughput=True)
+    resident = 2**30
+    values["available"] = residency.mps_system_reserve_bytes(values["total"]) + resident
+    with pytest.raises(residency.MetalReplayMemoryPressure, match="live unified-memory headroom"):
+        residency.check_mps_invariant_memory(torch, resident, input_memory_budget=budget)
+
+    values["available"] += residency.PREPARATION_CHUNK_BYTES
+    residency.check_mps_invariant_memory(torch, resident, input_memory_budget=budget)
 
 
 @pytest.mark.parametrize("candles", [1, 8192, 8194])

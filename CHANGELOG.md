@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
+  It evaluates wider seed and offspring cohorts, retains the configured parent
+  population size, and checks shared memory before allocating replay scratch.
+
 - Let CUDA max users cap generated search cohorts independently of GPU dispatch sizing.
 
 - Use more CUDA lanes for wide temporal replay batches in GPU optimizer max mode.

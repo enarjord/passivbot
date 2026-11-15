@@ -217,7 +217,7 @@ Automatic runs stop after at most 10,000 cohorts. The sweep finds the best measu
 safe setting, not a globally optimal GPU configuration. Use separate runs with
 `--dispatch-budget` to compare dispatch work budgets.
 
-Use `--gpu-tuning-mode LABEL MODE` to compare CUDA policies on the same frozen
+Use `--gpu-tuning-mode LABEL MODE` to compare GPU policies on the same frozen
 workload. For example, add `--gpu-tuning-mode baseline auto` and
 `--gpu-tuning-mode candidate max` to compare an older checkout against `max`.
 The overrides apply to `gpu` and `search-gpu` runs for the named labels. An
@@ -253,6 +253,108 @@ complete histories. Compare completed suites per wall hour for runs with equal
 completed work. Check the logs for actual replay widths and memory fallback.
 Use frozen candidates for result parity, since the larger seed and offspring
 cohorts in `max` can change which candidates the search evaluates.
+
+### Metal max synthetic search
+
+Use a clean Apple Silicon checkout and the Metal extra from
+[GPU setup](optimizing.md#gpu-backend-experimental). Rebuild and verify its Rust extension
+before timing. The synthetic tool generates deterministic arrays locally, verifies
+their content hash, and runs the production optimizer backend, evaluator, scoring,
+checkpoint and result recorder. Each synthetic case is one exchange and one
+scenario. It uses no market cache, so there is no market-data provenance to supply.
+
+This smoke uses 50 frozen authored seeds and a 16-candidate survivor population.
+`conservative` requests four generations including initial survival. Each of
+the next three generations can produce 16 candidates. `max` requests a budget
+of 48 additional proposals. Both arms target 98 complete distinct candidates.
+Duplicate repair or unavailable metrics can reduce the actual count. Check the
+observed count before using either timing. Divide the completed distinct count
+by elapsed seconds for suite throughput. The generic search summary counts
+persisted result records, which can include duplicates and incomplete histories.
+
+```sh
+PB_METAL_CHECKOUT="$PWD"
+PB_METAL_PYTHON="$(command -v python)"
+PB_METAL_RUN="$(mktemp -d)"
+
+passivbot tool optimizer-benchmark freeze --profile smoke \
+  --case '*/both/forager/base/*' --seeds 7 --coins 4 --bars 2880 --candidates 50 \
+  --output "$PB_METAL_RUN/frozen"
+
+passivbot tool optimizer-benchmark run --workload "$PB_METAL_RUN/frozen" \
+  --backend conservative "$PB_METAL_CHECKOUT" "$PB_METAL_PYTHON" \
+  --backend max "$PB_METAL_CHECKOUT" "$PB_METAL_PYTHON" \
+  --gpu-tuning-mode conservative conservative --gpu-tuning-mode max max \
+  --modes search-gpu:auto --search-population-size 16 --search-workers 4 \
+  --search-iters 64 --search-iters-override max 48 --dispatch-budget 500000000 \
+  --timeout 300 --output "$PB_METAL_RUN/search"
+
+"$PB_METAL_PYTHON" - "$PB_METAL_RUN/search/report.json" <<'PY'
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text())
+pairs = defaultdict(set)
+for run in report["runs"]:
+    label, result = run["label"], run["result"]
+    if result["status"] != "completed":
+        raise SystemExit(f"{label} failed for {run['entry']}")
+    search = result["search"]
+    if search["population_size"] != 16 or search["starting_individuals"] != 50:
+        raise SystemExit(f"Unexpected population or seed count in {label}")
+    if result["completed_distinct_authored_candidates"] != 50:
+        raise SystemExit(f"{label} did not complete all 50 authored seeds")
+    completed = result["completed_distinct_candidates"]
+    if completed != 98:
+        raise SystemExit(f"{label} completed {completed} distinct candidates, expected 98")
+    if label == "max":
+        bootstrap = search["metal_max_search"]
+        expected = 50 + min(48, max(0, bootstrap["initial_cohort_target"] - 50))
+        if bootstrap["bootstrapped_individuals"] != expected:
+            raise SystemExit("Metal max bootstrapped an unexpected candidate count")
+    pairs[run["entry"]].add(label)
+    print(label, completed, result["samples"][0]["seconds"],
+          result["rust_reference_verification"]["status"])
+if len(pairs) != 2 or any(labels != {"conservative", "max"} for labels in pairs.values()):
+    raise SystemExit("Expected both Metal modes for both synthetic strategy cases")
+PY
+```
+
+The source-verified Rust reference checks run outside the search timer. Review
+their per-candidate results and the actual Metal width observations in the
+worker logs before interpreting the timing. Run a separate frozen replay
+comparison with `gpu:1` and a fixed batch width using the same workload.
+This isolates replay parity from changes in search trajectory. To test wider
+physical dispatches, freeze enough candidates to fill each target width and
+inspect the observed widths. A width in the command is a request.
+
+### Metal complete-suite qualification
+
+Use the [offline preparation procedure](backtesting.md#offline-preparation)
+for representative real data and run both configurations through
+`passivbot optimize --offline y --suite y`. Use the same verified data,
+strategy, bounds, scoring and seed files for both modes. Set
+`optimize.write_all_results` to true, disable prefilters and scenario screening,
+and keep `optimize.gpu.batch_size` null to measure automatic width. Adjust
+each configured iteration budget to match the durable full-suite count.
+Repeat warm pairs in both orders. Record actual dispatch widths, completed
+histories, wall time, preparation, memory pressure, swap growth and thermal
+state. A short profiled run can locate idle time. Use separate unprofiled runs
+for throughput.
+
+Use a representative suite and a budget extending beyond the interruption
+point for the four-hour soak. Start one fresh process, prove it made durable
+progress throughout the run, and send SIGINT to that optimizer PID. Check for
+exit 130. Save a copy or hash and length of the durable result stream. Start a
+fresh `passivbot optimize` with the same policy and
+`--resume "$RUN_DIRECTORY" --offline y --suite y`. After it appends new complete
+candidate suites, SIGINT that PID and check for exit 130 again. Verify that the
+original result-stream prefix matches byte for byte and that the new rows cover
+all required scenarios and exchanges. Consult
+[optimizer resume](optimizing.md#session-identity-and-output-names) for changes
+that invalidate the checkpoint.
 
 ## Ordinary-account economics and useful discoveries
 

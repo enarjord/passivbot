@@ -21,7 +21,7 @@ from tools.optimizer_benchmark.catalogue import (Case, PAIRWISE_FLAGS, catalogue
     declared_gpu_support, pairwise_rows, select_cases)
 from tools.optimizer_benchmark.workloads import array_digest, digest, freeze, load_manifest
 from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison, validate_policies
-from tools.optimizer_benchmark.__main__ import gpu_tuning_overrides, modes, read_worker_report
+from tools.optimizer_benchmark.__main__ import gpu_tuning_overrides, modes, read_worker_report, search_iteration_overrides
 from tools.optimizer_benchmark.worker import strict_json, instrument_replay, cohort_digest
 from tools.optimizer_benchmark import worker
 
@@ -755,12 +755,14 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
     subprocess.run([*invocation,
                     "--backend", str(root), "--workload", str(directory),
                     "--entry", entry["id"], "--engine", "search-cpu", "--workers", "1",
-                    "--search-iters", "8", "--output", str(output)],
+                    "--search-iters", "8", "--search-population-size", "4", "--output", str(output)],
                    cwd=root, env=dict(os.environ, PYTHONPATH=str(root / "src")),
                    check=True, timeout=60)
     report = json.loads(output.read_text())
     assert report["status"] == "completed", report
-    assert report["samples"][0]["completed"] == 8
+    assert report["samples"][0]["completed"] == report["completed_distinct_candidates"] == 12
+    assert report["completed_distinct_authored_candidates"] == report["search"]["starting_individuals"] == 8
+    assert report["search"]["population_size"] == 4
     assert report["persisted_bytes"] > 0
     assert report["rust_reference_verification"]["status"] == "passed"
 
@@ -820,7 +822,9 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
 
     def bounded(command, **kwargs):
         dispatched.append((command[command.index("--entry") + 1],
-                           command[command.index("--gpu-tuning-mode") + 1]))
+                           command[command.index("--gpu-tuning-mode") + 1],
+                           command[command.index("--search-iters") + 1],
+                           command[command.index("--search-population-size") + 1]))
         output = Path(command[command.index("--output") + 1])
         output.write_text(json.dumps(dict(status="unsupported", reason="test worker")))
         return dict(exit_code=0, termination_reason=None, wall_seconds=0.0)
@@ -831,7 +835,8 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
                "--backend", "before", str(tmp_path), sys.executable,
                "--backend", "after", str(tmp_path), sys.executable,
                "--gpu-tuning-mode", "before", "auto", "--gpu-tuning-mode", "after", "max",
-               "--modes", "gpu:auto", "--output", str(destination)]
+               "--modes", "search-gpu:auto", "--search-population-size", "4", "--search-iters", "20",
+               "--search-iters-override", "after", "16", "--output", str(destination)]
     if expected_status == 0:
         assert cli.main(command) == 0
     else:
@@ -841,15 +846,30 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     assert (directory / "manifest.json").read_bytes() == original
     expected_ids = [entry["id"] for entry in manifest["entries"]
                     if entry["seed"] == selected_seed]
-    assert dispatched == [(identity, mode) for identity in expected_ids for mode in ("auto", "max")]
+    assert dispatched == [(identity, mode, budget, "4")
+                          for identity in expected_ids for mode, budget in (("auto", "20"), ("max", "16"))]
     if expected_status == 0:
         report = json.loads((destination / "report.json").read_text())
         assert report["workload_sha256"] == manifest["sha256"]
         assert report["selection"]["entry_ids"] == expected_ids
         assert report["selection"]["seeds"] == [selected_seed]
         assert report["gpu_tuning_overrides"] == {"before": "auto", "after": "max"}
+        assert report["search_iteration_overrides"] == {"after": 16}
+        assert report["search_population_size"] == 4
     else:
         assert not destination.exists()
+
+
+@pytest.mark.parametrize("overrides", [
+    [("missing", "64")],
+    [("max", "64"), ("max", "48")],
+    [("max", "0")],
+    [("max", "-1")],
+    [("max", "1.0")],
+])
+def test_invalid_search_iteration_overrides_are_rejected(overrides):
+    with pytest.raises(ValueError):
+        search_iteration_overrides(overrides, {"conservative", "max"})
 
 
 def test_retired_v7_is_absent_from_catalogue_and_rejected_by_public_freeze(tmp_path):

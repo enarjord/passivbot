@@ -1,4 +1,4 @@
-"""Choose how many host processes can prepare candidates for CUDA max."""
+"""Bound CPU candidate preparation using device-specific host headroom."""
 
 from math import prod
 import os
@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 
-from optimization.gpu.residency import multicoin_invariant_bytes
+from optimization.gpu.residency import mps_system_headroom_bytes, multicoin_invariant_bytes
 
 
 _MIB = 2**20
@@ -16,6 +16,9 @@ _MIB = 2**20
 # counts exercised in throughput qualification.
 _CPU_RESERVE = 2
 _WORKER_COUNTS = (8, 4)
+# Start with serial preparation before selecting a parallel Metal policy from
+# complete-suite measurements. CPU workers and MPS share this host's memory.
+_MPS_WORKER_COUNTS = ()
 _MINIMUM_CANDIDATES_PER_WORKER = 16
 
 
@@ -114,8 +117,8 @@ def _host_capacity():
         return None
 
 
-def cuda_plan_preparation_memory(planner, admission_slots):
-    # Input packing is owned by one CUDA worker. Use the largest input span,
+def _plan_preparation_memory(planner, admission_slots, *, device):
+    # Input packing is owned by one replay worker. Use the largest input span,
     # including its source pages and full packed view, across registered datasets.
     packing = 0
     dataset_metadata = 0
@@ -124,7 +127,7 @@ def cuda_plan_preparation_memory(planner, admission_slots):
         rows = dataset.time_range[1] - dataset.time_range[0]
         coins = len(dataset.coin_indices)
         source = rows * prod(dataset.hlcvs.shape[1:]) * np.dtype(dataset.hlcvs.dtype).itemsize
-        packed = multicoin_invariant_bytes(rows, coins, device="cuda")
+        packed = multicoin_invariant_bytes(rows, coins, device=device)
         packing = max(packing, source + packed)
         dataset_metadata += len(dataset.config_json) + len(dataset.markets_json)
     # Account for parent request/config/result objects and each worker's
@@ -133,6 +136,14 @@ def cuda_plan_preparation_memory(planner, admission_slots):
     parent_bytes = packing + admission_slots * candidate_bytes + 1024 * _MIB
     worker_bytes = 320 * _MIB + dataset_metadata * 8 + candidate_bytes * 4
     return parent_bytes, worker_bytes
+
+
+def cuda_plan_preparation_memory(planner, admission_slots):
+    return _plan_preparation_memory(planner, admission_slots, device="cuda")
+
+
+def mps_plan_preparation_memory(planner, admission_slots):
+    return _plan_preparation_memory(planner, admission_slots, device="mps")
 
 
 def cuda_plan_worker_count(planner, *, admission_slots, available_rows):
@@ -159,4 +170,29 @@ def cuda_plan_pool_fits(*, parent_bytes, workers):
     cpus, available = capacity
     # Available memory already excludes resident worker pages. Reserve the
     # remaining parent/replay budget without charging those pages a second time.
+    return workers <= cpus - _CPU_RESERVE and available >= parent_bytes
+
+
+def mps_plan_worker_count(planner, *, admission_slots, available_rows):
+    """Admit Metal's measured batch preparers against shared host headroom."""
+    if not _MPS_WORKER_COUNTS or available_rows < min(_MPS_WORKER_COUNTS) * _MINIMUM_CANDIDATES_PER_WORKER:
+        return 0
+    capacity = _host_capacity()
+    if capacity is None:
+        return 0
+    cpus, _ = capacity
+    parent_bytes, worker_bytes = mps_plan_preparation_memory(planner, admission_slots)
+    available = mps_system_headroom_bytes(require_system_telemetry=False)
+    memory_workers = max(0, available - parent_bytes) // worker_bytes
+    demand_workers = available_rows // _MINIMUM_CANDIDATES_PER_WORKER
+    feasible = min(memory_workers, cpus - _CPU_RESERVE, demand_workers)
+    return next((workers for workers in _MPS_WORKER_COUNTS if workers <= feasible), 0)
+
+
+def mps_plan_pool_fits(*, parent_bytes, workers):
+    capacity = _host_capacity()
+    if capacity is None:
+        return False
+    cpus, _ = capacity
+    available = mps_system_headroom_bytes(require_system_telemetry=False)
     return workers <= cpus - _CPU_RESERVE and available >= parent_bytes
