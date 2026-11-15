@@ -418,6 +418,7 @@
             "checkpoint_interval_seconds": 5.0,
             "max_dispatch_candidate_bars": null,
             "screening": {"min_survivors": 64, "scenarios": [], "survival_fraction": 0.1},
+            "search_cohort_size": null,
             "tuning_mode": "conservative"
         },
         "iters": 2048,

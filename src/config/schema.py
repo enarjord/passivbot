@@ -243,6 +243,7 @@ def _build_template_config():
                     "gpu": {
                         "tuning_mode": GPU_TUNING_DEFAULT,
                         "batch_size": None,
+                        "search_cohort_size": None,
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
                         "screening": deepcopy(GPU_SCREENING_DEFAULTS),

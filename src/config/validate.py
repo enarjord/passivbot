@@ -9,7 +9,7 @@ from .bot import (
     validate_forager_config,
 )
 from .coerce import normalize_hsl_signal_mode
-from .gpu import resolve_gpu_tuning_mode
+from .gpu import resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from .param_paths import require_existing_config_path
 from .shared_bot import get_grouped_bot_value
 from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
@@ -122,6 +122,11 @@ def validate_config(
     gpu["tuning_mode"] = canonical_mode
     if tracker is not None and mode != canonical_mode:
         tracker.update("optimize.gpu.tuning_mode", mode, canonical_mode)
+    cohort_size = gpu.get("search_cohort_size")
+    canonical_cohort_size = resolve_gpu_search_cohort_size(cohort_size, tuning_mode=canonical_mode)
+    gpu["search_cohort_size"] = canonical_cohort_size
+    if tracker is not None and cohort_size != canonical_cohort_size:
+        tracker.update("optimize.gpu.search_cohort_size", cohort_size, canonical_cohort_size)
     policy = resolve_prefilter(config["optimize"].get("prefilter"))
     if prefilter_enabled(policy) and config['bot']["portfolio"]['strategy_kind'] != "trailing_martingale":
         raise ValueError("enabled config prefilters currently require trailing_martingale")

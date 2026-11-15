@@ -61,9 +61,10 @@ def test_format_config_accepts_gpu_backend():
     assert out["optimize"]["backend"] == "gpu"
     assert out["optimize"]["gpu"]["batch_size"] is None
     assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
+    assert out["optimize"]["gpu"]["search_cohort_size"] is None
     assert set(out["optimize"]["gpu"]) == {
         "batch_size", "max_dispatch_candidate_bars", "tuning_mode",
-        "checkpoint_interval_seconds", "screening",
+        "checkpoint_interval_seconds", "screening", "search_cohort_size",
     }
 
 

@@ -6420,6 +6420,20 @@
                   },
                   "additionalProperties": false
                 },
+                "search_cohort_size": {
+                  "type": [
+                    "integer",
+                    "string",
+                    "null"
+                  ],
+                  "default": null,
+                  "description": "CUDA max search cohort limit above the survivor population, independent of dispatch sizing.",
+                  "minimum": 1,
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[aA][uU][tT][oO])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "x-passivbot-consumers": [
+                    "optimize"
+                  ]
+                },
                 "tuning_mode": {
                   "type": "string",
                   "default": "conservative",
@@ -19486,6 +19500,9 @@
         "optimize.gpu.screening.survival_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/screening/properties/survival_fraction"
         },
+        "optimize.gpu.search_cohort_size": {
+          "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/search_cohort_size"
+        },
         "optimize.gpu.tuning_mode": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/tuning_mode"
         },
@@ -24977,6 +24994,9 @@
         "gpu.screening.survival_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/screening/properties/survival_fraction"
         },
+        "gpu.search_cohort_size": {
+          "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/search_cohort_size"
+        },
         "gpu.tuning_mode": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/tuning_mode"
         },
@@ -25814,6 +25834,9 @@
         },
         "screening.survival_fraction": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/screening/properties/survival_fraction"
+        },
+        "search_cohort_size": {
+          "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/search_cohort_size"
         },
         "tuning_mode": {
           "$ref": "#/$defs/config/properties/optimize/properties/gpu/properties/tuning_mode"

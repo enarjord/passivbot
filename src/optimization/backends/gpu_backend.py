@@ -19,7 +19,13 @@ from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
-from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_screening, resolve_gpu_sizing, resolve_gpu_tuning_mode
+from config.gpu import (
+    GPU_TUNING_DEFAULT,
+    resolve_gpu_screening,
+    resolve_gpu_search_cohort_size,
+    resolve_gpu_sizing,
+    resolve_gpu_tuning_mode,
+)
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -380,6 +386,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     gpu = options.get("gpu", {})
     tuning_mode = resolve_gpu_tuning_mode(gpu.get("tuning_mode", GPU_TUNING_DEFAULT))
     max_throughput = tuning_mode == "max"
+    cohort_limit = resolve_gpu_search_cohort_size(gpu.get("search_cohort_size"), tuning_mode=tuning_mode)
     if max_throughput:
         iters = CudaMaxSearchBudget.remaining(iters=iters, allocated=0)
     # Max budgets candidate proposals directly. This is an upper bound for
@@ -414,7 +421,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         if max_throughput:
             target_width = (cuda_initial_candidate_width() if batch_size is None
                             else min(batch_size, CUDA_MAX_BATCH_CANDIDATES))
-            plan = CudaMaxSearchBudget(population_size, target_width)
+            plan = CudaMaxSearchBudget(population_size, target_width, cohort_limit)
             generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
             key_paths = getattr(optimization_shape, "key_paths", ())
             anchors = tuple(i for i, (key, _path) in enumerate(key_paths) if key == ANCHOR_GENE_KEY)

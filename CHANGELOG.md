@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Let CUDA max users cap generated search cohorts independently of GPU dispatch sizing.
+
 - Use more CUDA lanes for wide temporal replay batches in GPU optimizer max mode.
 
 - Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations.

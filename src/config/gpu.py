@@ -27,6 +27,13 @@ def resolve_gpu_sizing(value, *, field):
     return int(value)
 
 
+def resolve_gpu_search_cohort_size(value, *, tuning_mode):
+    size = resolve_gpu_sizing(value, field="search_cohort_size")
+    if size is not None and tuning_mode != "max":
+        raise ValueError("optimize.gpu.search_cohort_size requires tuning_mode='max'")
+    return size
+
+
 def resolve_gpu_screening(value=None) -> dict:
     screening = dict(GPU_SCREENING_DEFAULTS)
     configured_screening = value

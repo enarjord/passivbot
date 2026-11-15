@@ -222,7 +222,8 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
 
 
 @pytest.mark.parametrize("authored", [False, True])
-def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path, authored):
+@pytest.mark.parametrize("cohort_limit", [None, 6])
+def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path, authored, cohort_limit):
     import optimization.backends.gpu_backend as backend
 
     guard_cpu(monkeypatch)
@@ -237,7 +238,8 @@ def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path,
     with managed_arrays() as manager:
         base = inputs(manager)
         base.config["optimize"]["iters"] = 21
-        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=8)
+        gpu = base.config["optimize"]["gpu"]
+        gpu.update(tuning_mode="max", batch_size=8, search_cohort_size=cohort_limit)
         vector = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
         starts = [vector] if authored else []
         checkpoint = tmp_path / "checkpoint.pkl"
@@ -246,15 +248,23 @@ def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path,
 
         execute(base, recorder, checkpoint, starts=starts)
         state = load_checkpoint(checkpoint, base.config)
+        assert state["max_search_budget"].target_width == 8
+        assert state["max_search_budget"].cohort_limit == cohort_limit
         assert state["max_search_allocated"] == 21
         assert len(state["algorithm"].pop) == base.config["optimize"]["population_size"] == 4
-        assert phases[:3] == [("seeds", 8, 8), ("generation", 4, 8), ("generation", 8, 8)]
-        assert phases[3:] == [("generation", 6 if authored else 5, 6 if authored else 5)]
+        width = cohort_limit or 8
+        assert phases[:2] == [("seeds", width, width), ("generation", 4, width)]
+        full, tail = divmod(21 - width + authored, width)
+        assert phases[2:] == [("generation", width, width)] * full + [("generation", tail, tail)]
         assert len(records) == 21 + authored
         assert len(FakeService.rows) == len(records)
 
         execute(base, recorder, checkpoint, resume=True)
         assert len(records) == 21 + authored
+        gpu["search_cohort_size"] = width + 1
+        with pytest.raises(ValueError, match="search_cohort_size"):
+            execute(base, recorder, checkpoint, resume=True)
+        gpu["search_cohort_size"] = cohort_limit
         base.config["optimize"]["iters"] = 20
         with pytest.raises(ValueError, match="iters below already allocated search attempts"):
             execute(base, recorder, checkpoint, resume=True)

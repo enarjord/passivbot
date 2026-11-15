@@ -1,6 +1,7 @@
 """Max mode budgets wider work independently of the kept parent population."""
 
 import pickle
+from dataclasses import replace
 
 import pytest
 
@@ -16,6 +17,14 @@ def test_wider_cohort_respects_target_width_and_parent_population(target_width, 
     assert plan.population_size == 128
     assert plan.target_width == target_width
     assert plan.cohort_width == cohort_width
+
+
+def test_search_cap_survives_target_growth_and_population_floor():
+    plan = CudaMaxSearchBudget(population_size=128, target_width=512, cohort_limit=256)
+    assert plan.bootstrap_size(iters=2048, authored_seed_count=128) == 128
+    assert replace(plan, target_width=4096).offspring_size(iters=2048, allocated=128) == 256
+    assert replace(plan, target_width=192).cohort_width == 192
+    assert replace(plan, cohort_limit=64).cohort_width == 128
 
 
 @pytest.mark.parametrize("iters,authored,expected", [

@@ -292,6 +292,7 @@ retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md)
   "batch_size": null,
   "checkpoint_interval_seconds": 5.0,
   "max_dispatch_candidate_bars": null,
+  "search_cohort_size": null,
   "screening": {
     "scenarios": [],
     "survival_fraction": 0.1,
@@ -315,6 +316,14 @@ evaluates all distinct supplied seeds and generates distinct bounded mutations t
 the cohort when the budget and search space allow. Without supplied seeds it samples
 the configured bounds. With automatic batch sizing, the selected CUDA device supplies
 the initial target, and warm per-scenario trials can move it during the run.
+
+Set `optimize.gpu.search_cohort_size` in CUDA `max` to limit how many candidates the
+optimizer offers before the next selection step. This applies to generated startup
+and offspring cohorts, with the resolved survivor population as a lower bound.
+Supplied seeds are still all evaluated. A smaller cohort can yield more selection
+steps for the same proposal budget, with fewer candidates available to fill each
+GPU dispatch. The dispatch limit and memory policy still use the existing GPU
+settings. Null or `"auto"` follows the existing width policy.
 
 CUDA `max` can prepare candidates in several CPU processes while the GPU
 replays queued work. The optimizer applies plans in candidate order and retains

@@ -85,7 +85,7 @@ from config import (
 )
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
-from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -940,6 +940,12 @@ def _canonicalize_resume_optimize(section: dict) -> dict:
     gpu = normalized.get("gpu")
     if isinstance(gpu, dict) and "tuning_mode" in gpu:
         gpu["tuning_mode"] = resolve_gpu_tuning_mode(gpu["tuning_mode"])
+    if isinstance(gpu, dict) and "search_cohort_size" in gpu:
+        cohort_size = resolve_gpu_search_cohort_size(
+            gpu.pop("search_cohort_size"), tuning_mode=gpu.get("tuning_mode", GPU_TUNING_DEFAULT),
+        )
+        if cohort_size is not None:
+            gpu["search_cohort_size"] = cohort_size
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
