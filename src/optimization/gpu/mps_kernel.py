@@ -55,6 +55,7 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
+    CUDA_MAX_PACKED_REPLAY_THREADS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -1854,8 +1855,8 @@ class _MulticoinReplayRunner:
         # device with two waves before choosing a wider block.
         sm_count = torch.cuda.get_device_properties(self.bars.device).multi_processor_count
         max_block_size = batch_size // max(128, 2 * sm_count)
-        if max_block_size >= 8:
-            return 8
+        if max_block_size >= CUDA_MAX_PACKED_REPLAY_THREADS:
+            return CUDA_MAX_PACKED_REPLAY_THREADS
         return 4 if max_block_size >= 4 else 1
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
@@ -1953,7 +1954,9 @@ class _MulticoinReplayRunner:
         while True:
             self.interrupt_check()
             dispatch_bars = controller.bars if controller is not None else chunk_bars
-            completed_k = min(begin_k + dispatch_bars, stop_k)
+            warming_up = trading_start is not None and begin_k < trading_start
+            phase_end = min(trading_start, stop_k) if warming_up else stop_k
+            completed_k = min(begin_k + dispatch_bars, phase_end)
             started = time.perf_counter()
             with _metal_tick_window_arguments(
                 kernel_args, tick_paths, begin=begin_k, stop=completed_k, available=self.n,
@@ -1985,7 +1988,6 @@ class _MulticoinReplayRunner:
                 submission_seconds += submitted - started
                 synchronization_wait_seconds += completed - submitted
             max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
-            completed_k = min(begin_k + dispatch_bars, stop_k)
             processed_bars = completed_k - begin_k
             min_processed_bars = min(min_processed_bars, processed_bars)
             max_processed_bars = max(max_processed_bars, processed_bars)
@@ -2013,11 +2015,13 @@ class _MulticoinReplayRunner:
             if completed_k >= stop_k:
                 break
             if controller is not None:
-                if trading_start is None:
-                    controller.observe(processed_bars, dispatch_seconds)
-                else:
-                    # Faster pre-trade work cannot grow the first active dispatch.
-                    controller.observe(processed_bars, dispatch_seconds, allow_growth=begin_k >= trading_start)
+                controller.observe(processed_bars, dispatch_seconds)
+                if warming_up and completed_k == trading_start:
+                    # Warmup may run faster than trading. Start the active
+                    # phase within the original cold-launch work allowance.
+                    controller = ReplayDurationController(
+                        chunk_bars, initial_bars=min(initial_bars, controller.bars)
+                    )
                 adaptive_adjustments += int(controller.bars != dispatch_bars)
             begin_k = completed_k
         self.interrupt_check()

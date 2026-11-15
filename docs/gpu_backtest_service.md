@@ -386,8 +386,9 @@ tensors and mutable scratch.
 
 Automatic Metal widths start at the replay cap of 1,024 candidates, clamped by the
 prepared memory/history ceiling and service admission limit. The default CUDA policy starts
-at 64. CUDA `max` in the optimizer starts near one hardware wave of single-candidate blocks,
-rounded down to a power of two. Prepared memory and dispatch bounds still apply. The GPU
+at 64. CUDA `max` in the optimizer estimates startup demand for two waves of eight-candidate
+blocks from the device's maximum resident block count, rounded down to a power of two and
+limited by the service's maximum width. Prepared memory and dispatch bounds still apply. The GPU
 owner creates a controller for each prepared dataset. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
@@ -457,7 +458,8 @@ Native CUDA temporal replay separately adapts history-chunk length from complete
 durations, targeting one second within existing candle/work/history ceilings. It shrinks
 slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
 CUDA `max` starts with up to 128 candles at widths of 256 or below and reduces the initial
-range for wider launches. Fast warmup commands cannot increase the first trading chunk.
+range for wider launches. Warmup adapts within its own candle range. The first trading
+chunk uses the cold-launch range or a narrower range if warmup had to shrink below it.
 The controller resets for each physical replay and submits no extra simulations. Replay
 state survives each boundary, and only complete accepted simulations produce results.
 This internal duration control remains active with `tuning_mode: "off"`; that setting fixes

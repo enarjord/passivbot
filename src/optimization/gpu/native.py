@@ -19,21 +19,22 @@ _DEFAULT = object()
 
 
 def cuda_initial_candidate_width():
-    """Start near one wave of one-candidate CUDA blocks on the selected GPU.
+    """Seed the CUDA max search with work for packed replay blocks.
 
-    The hardware ceiling is an upper estimate before kernel register and
-    shared-memory limits. Warm replays tune the width for each dataset.
+    This is a startup demand estimate. The worker admits only compatible work
+    within its prepared memory limits and tunes each dataset from warm replays.
     """
     import cupy
     import torch
-    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_PACKED_REPLAY_THREADS
     from optimization.gpu.runtime import gpu_device
 
     if gpu_device(torch) != "cuda":
         raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
     attributes = cupy.cuda.Device(torch.cuda.current_device()).attributes
     blocks = attributes["MultiProcessorCount"] * attributes["MaxBlocksPerMultiprocessor"]
-    return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (blocks.bit_length() - 1))
+    candidates = 2 * blocks * CUDA_MAX_PACKED_REPLAY_THREADS
+    return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (candidates.bit_length() - 1))
 
 
 def _metal_system_headroom():
