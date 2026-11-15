@@ -50,6 +50,51 @@ class Clock:
         return self.seconds
 
 
+def test_cuda_max_tunes_warmup_without_growing_first_trading_chunk(monkeypatch):
+    clock, ranges = Clock(), []
+    width, trading_start = 256, 72
+
+    def dispatch(*_args, **_kwargs):
+        clock.seconds += 0.125
+
+    def make_range(values, **_kwargs):
+        ranges.append(values)
+        return tuple(values)
+
+    runner = mps_kernel._MulticoinReplayRunner.__new__(mps_kernel._MulticoinReplayRunner)
+    runner.replay_kernel_name = "replay"
+    runner.native_factual_hsl = True
+    runner.bars = SimpleNamespace(device=SimpleNamespace(type="cuda"))
+    runner.initial_cuda_chunk_bars = 2
+    runner.requested_start_idx = trading_start
+    runner.run_config = SimpleNamespace(warmup_bars=60)
+    runner.temporal_chunk_bar_limit = 16
+    runner.max_dispatch_candidate_bars = 100_000
+    runner.n = 93
+    runner.n_coins = runner.replay_sides = 1
+    runner._history_batch_bytes = lambda _: 0
+    runner.hsl_scratch_budget_bytes = 1024
+    runner._replay_state_bytes = 32
+    runner._replay_states = {(width, 32): "state"}
+    runner.interrupt_check = lambda: None
+    runner._cuda_temporal_block_size = lambda _: 1
+    monkeypatch.setattr(mps_kernel.time, "perf_counter", clock)
+    monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: "cuda")
+    monkeypatch.setattr(mps_kernel, "torch", SimpleNamespace(tensor=make_range, int32="int32"))
+    monkeypatch.setattr(mps_kernel, "synchronize", lambda: None)
+    monkeypatch.setattr(mps_kernel, "_require_available_held_valuation", lambda _: None)
+    scalars = SimpleNamespace(detach=lambda: SimpleNamespace(cpu=lambda: None))
+    runner._dispatch_replay(
+        SimpleNamespace(replay=dispatch), ("input",),
+        torch.full((width,), 92, dtype=torch.int32), batch_size=width, scalars=scalars,
+    )
+
+    assert max(end - start for start, end in ranges if end <= trading_start) == 16
+    first_trading = next(i for i, (start, _) in enumerate(ranges) if start >= trading_start)
+    assert ranges[first_trading - 1][1] == trading_start
+    assert ranges[first_trading:first_trading + 4] == [[72, 74], [74, 76], [76, 78], [78, 82]]
+
+
 @pytest.mark.parametrize("profile", [False, True])
 def test_temporal_host_split_keeps_dispatches_waits_and_tuner_samples(monkeypatch, profile):
     clock, launches, ranges, waits, samples, metadata_reads = Clock(), [], [], [], [], []
