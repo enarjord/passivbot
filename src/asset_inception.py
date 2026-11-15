@@ -472,7 +472,7 @@ def _collect_local_evidence(bound, candidates, cache_dir, allow_remote, now_ms):
                 eligible_requests.append(
                     (key, (exchange, market, floor, f"venue_candle:{binding}", identity))
                 )
-        if not candidates[key]:
+        if all(evidence.is_provisional for evidence in candidates[key]):
             requests.extend(eligible_requests)
 
     return requests

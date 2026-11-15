@@ -188,6 +188,26 @@ async def test_venue_fallback_uses_completed_positive_volume_after_conversion(tm
     assert evidence == await age.resolve_asset_inception(request, allow_remote=False, cache_dir=tmp_path)
 
 
+async def test_venue_recheck_preserves_then_improves_provisional_age(tmp_path, monkeypatch):
+    request = {"TEST": [("okx", okx_market())]}
+    earliest = START + age.MINUTE_MS
+    observations = iter([START + DAY, age.ccxt.NetworkError("temporary"), earliest, START + DAY])
+
+    async def fetch(*args):
+        observation = next(observations)
+        if isinstance(observation, Exception):
+            raise observation
+        return observation
+
+    monkeypatch.setattr(age, "_fetch_venue_candle", fetch)
+    expected = [START + DAY, START + DAY, earliest, earliest]
+    for timestamp in expected:
+        result = await age.resolve_asset_inception(request, cache_dir=tmp_path)
+        assert result["TEST"] == age.InceptionEvidence(timestamp, "venue_candle:okx", None, True)
+    offline = await age.resolve_asset_inception(request, allow_remote=False, cache_dir=tmp_path)
+    assert offline["TEST"].timestamp_ms == earliest
+
+
 async def test_cross_venue_local_earlier_evidence_is_verified_and_fingerprinted(tmp_path, monkeypatch):
     ident = AssetIdentity("Test", 11, "TEST", START, START + 2 * DAY, "https://example.com/price")
     market = okx_market(preMktSwTime=str(START + age.MINUTE_MS))
